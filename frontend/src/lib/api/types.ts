@@ -70,3 +70,110 @@ export interface PaginatedResponse<T> {
   previous: string | null;
   results: T[];
 }
+
+/* ==========================================================================
+ * Phase 3 — Platform owner DTOs (mirror /api/v1/platform/ responses).
+ * ======================================================================== */
+
+export type HotelStatus = "setup" | "active" | "suspended";
+export type BillingCycle = "monthly" | "yearly" | "custom";
+export type SubscriptionStatus =
+  | "trial"
+  | "active"
+  | "past_due"
+  | "expired"
+  | "cancelled";
+
+export interface PrimaryManagerSummary {
+  id: number;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+}
+
+export interface HotelSubscriptionSummary {
+  id: number;
+  plan_id: number;
+  plan_name: string;
+  status: SubscriptionStatus;
+  starts_at: string | null;
+  ends_at: string | null;
+  trial_ends_at: string | null;
+}
+
+export interface Hotel {
+  id: number;
+  name: string;
+  slug: string;
+  status: HotelStatus;
+  primary_manager: PrimaryManagerSummary | null;
+  current_subscription: HotelSubscriptionSummary | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionPlan {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  price: string;
+  currency: string;
+  billing_cycle: BillingCycle;
+  trial_days: number;
+  room_limit: number | null;
+  user_limit: number | null;
+  feature_codes: string[];
+  is_active: boolean;
+  sort_order: number;
+  is_in_use: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HotelSubscription {
+  id: number;
+  hotel: number;
+  hotel_name: string;
+  plan: number;
+  plan_name: string;
+  status: SubscriptionStatus;
+  starts_at: string | null;
+  ends_at: string | null;
+  trial_ends_at: string | null;
+  cancelled_at: string | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformSettings {
+  platform_name: string;
+  support_email: string;
+  support_phone: string;
+  support_whatsapp: string;
+  website_url: string;
+  default_language: "ar" | "en" | "tr";
+  default_currency: string;
+  default_trial_days: number;
+  allow_public_registration: boolean;
+  maintenance_mode: boolean;
+  updated_at: string;
+}
+
+export interface PlatformOverview {
+  hotels: {
+    total: number;
+    active: number;
+    setup: number;
+    suspended: number;
+  };
+  subscriptions: {
+    active_trials: number;
+    active: number;
+    expiring_soon: number;
+    expired: number;
+  };
+  recent_hotels: Hotel[];
+  recent_subscriptions: HotelSubscription[];
+}

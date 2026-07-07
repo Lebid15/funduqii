@@ -51,6 +51,8 @@ LOCAL_APPS = [
     "apps.rbac",
     "apps.realtime",
     "apps.integrations",
+    "apps.subscriptions",
+    "apps.platform",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

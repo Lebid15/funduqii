@@ -1,34 +1,49 @@
 /**
  * Design tokens — the single source of truth for visual style.
  * Components and pages reference these variables; they never hardcode values.
- * This is the initial Phase 1 set and will grow with the design system.
+ * Extended in Phase 3 for the platform-owner console (layout, feedback, forms).
  */
 :root {
   /* Brand & primary */
   --color-primary: #0f766e;
   --color-primary-soft: #ccfbf1;
   --color-primary-strong: #115e59;
+  --color-primary-contrast: #ffffff;
 
   /* Neutrals / surfaces */
-  --color-bg: #f8fafc;
+  --color-bg: #f1f5f9;
   --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
   --color-fg: #0f172a;
   --color-fg-muted: #64748b;
+  --color-fg-subtle: #94a3b8;
   --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
 
   /* Feedback */
   --color-success: #16a34a;
-  --color-warning: #d97706;
+  --color-success-soft: #dcfce7;
+  --color-warning: #b45309;
+  --color-warning-soft: #fef3c7;
   --color-danger: #dc2626;
+  --color-danger-soft: #fee2e2;
   --color-info: #2563eb;
+  --color-info-soft: #dbeafe;
+  --color-neutral-soft: #f1f5f9;
+
+  /* Focus ring */
+  --focus-ring: 0 0 0 3px rgba(15, 118, 110, 0.28);
 
   /* Spacing scale (4px base) */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
+  --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
 
   /* Radius */
   --radius-sm: 0.25rem;
@@ -39,6 +54,7 @@
   /* Typography (system fonts; includes an Arabic-capable fallback) */
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Arabic",
     Arial, sans-serif;
+  --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
   --font-size-lg: 1.125rem;
@@ -47,8 +63,21 @@
   --line-normal: 1.5;
 
   /* Layout */
-  --container-max: 72rem;
+  --container-max: 80rem;
+  --sidebar-width: 16rem;
+  --topbar-height: 3.5rem;
 
   /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.16);
+
+  /* Motion */
+  --transition-fast: 120ms ease;
+
+  /* Z-index scale */
+  --z-sidebar: 40;
+  --z-overlay: 50;
+  --z-modal: 60;
+  --z-toast: 70;
 }

@@ -40,6 +40,13 @@ these rules is a defect, not a shortcut.
   rejected by the backend even if the API is called directly.
 - Every sensitive operation is checked on the backend and, where relevant,
   written to the audit log.
+- **Session tokens live only in HttpOnly Secure cookies (from Phase 3).** JWTs
+  (access/refresh) are **never** stored in `localStorage`, `sessionStorage`, or
+  any JS-readable place, and are never logged. The browser talks to same-origin
+  Backend-for-Frontend (BFF) route handlers that attach the token server-side;
+  token refresh (with refresh-token rotation) happens only in route handlers so
+  the rotated pair is always persisted. Server-side gates (layout + `proxy.ts`)
+  are UX/defense-in-depth only — the backend stays the source of truth.
 
 ## 7. Multi-Tenant isolation (from Phase 4 onward)
 - Multi-tenant isolation is a foundational rule: one hotel can **never** read or

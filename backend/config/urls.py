@@ -4,6 +4,10 @@ Phase 2 exposes authentication, a platform-scope probe, and a permission
 probe. The probes under ``/api/platform/`` and ``/api/foundation/`` are
 FOUNDATION endpoints used to verify auth/permission wiring — they are NOT
 operational business features.
+
+Phase 3 adds the platform owner's first real feature surface under the
+versioned prefix ``/api/v1/platform/`` (apps.platform). Every endpoint there is
+restricted to the platform owner.
 """
 from django.contrib import admin
 from django.urls import include, path
@@ -16,4 +20,5 @@ urlpatterns = [
     path("api/auth/", include("apps.accounts.urls")),
     path("api/platform/ping/", PlatformPingView.as_view(), name="platform-ping"),
     path("api/foundation/", include("apps.rbac.urls")),
+    path("api/v1/platform/", include("apps.platform.urls")),
 ]

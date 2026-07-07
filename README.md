@@ -4,13 +4,15 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 1.8 — Legacy Reference Insights & Product Enhancements Alignment (pending review).**
-> Prior foundations are approved: Phase 1 (technical), Phase 2 (auth/tenancy/
-> permissions), Phase 1.5 (scalability/realtime/production readiness), Phase 1.6
-> (maps/messaging/integrations), Phase 1.7 (governance/QA/release). Phase 1.8
-> captures useful ideas from the legacy reference into a backlog + docs, mapped
-> to phases — no code ported. The foundation stage is otherwise complete; next
-> up is Phase 3. No business features or UI exist yet. See
+> **Current status: Phase 3 — Platform Owner Panel basics (pending review).**
+> All foundation phases are approved (0, 1, 1.5, 1.6, 1.7, 1.8, 2). Phase 3 is
+> the **first real feature stage**: the platform owner's console only — a secure
+> login, a central App Shell, an overview dashboard, hotels-as-tenants
+> management (limited), subscription plans, hotel subscriptions, and basic
+> platform settings. All new operational APIs live under `/api/v1/platform/` and
+> are restricted to the platform owner (`IsPlatformOwner`). **No hotel panel,
+> public website, reservations, rooms, guests, money, messaging or maps** — those
+> are later phases. See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
 > [PROGRESS_LOG.md](PROGRESS_LOG.md) for per-phase status, and
@@ -22,15 +24,24 @@ public website for visitors and bookings.
 
 ```
 funduqii/
-├─ backend/            # Django + Django REST Framework API
-│  ├─ config/          # project config + split settings (base/dev/prod)
-│  ├─ apps/core/       # infrastructure app (health endpoint)
-│  └─ requirements/    # base / development / production dependencies
-├─ frontend/           # Next.js + TypeScript app
-│  └─ src/             # app, lib (api/i18n), components, styles
-├─ docs/               # project documentation
-├─ docker-compose.yml  # local PostgreSQL for development
-├─ .env.example        # reference for all environment variables
+├─ backend/                 # Django + Django REST Framework API
+│  ├─ config/               # project config + split settings (base/dev/prod)
+│  ├─ apps/core/            # infrastructure app (health endpoint)
+│  ├─ apps/accounts/        # custom user + JWT auth (Phase 2)
+│  ├─ apps/tenancy/         # hotels (tenants) + memberships (Phase 2)
+│  ├─ apps/rbac/            # permission registry + enforcement (Phase 2)
+│  ├─ apps/subscriptions/   # SubscriptionPlan + HotelSubscription (Phase 3)
+│  ├─ apps/platform/        # platform-owner API /api/v1/platform/ (Phase 3)
+│  └─ requirements/         # base / development / production dependencies
+├─ frontend/                # Next.js + TypeScript app
+│  └─ src/
+│     ├─ app/               # routes: /login, /platform/*, BFF /api/session,/api/platform
+│     ├─ components/        # central UI library + layout (AppShell/Sidebar/Topbar)
+│     ├─ lib/               # api client, session (BFF), i18n (ar/en/tr), format
+│     └─ styles/            # design tokens + global component styles
+├─ docs/                    # project documentation
+├─ docker-compose.yml       # local PostgreSQL for development
+├─ .env.example             # reference for all environment variables
 ├─ PROJECT_BLUEPRINT.md
 ├─ DEVELOPMENT_RULES.md
 └─ README.md
@@ -131,7 +142,18 @@ npm install
 npm run dev
 ```
 
-- App: http://localhost:3000 (shows a translated "foundation ready" page)
+- App: http://localhost:3000 — redirects to `/login`; after signing in as a
+  platform owner you land on the console at `/platform`.
+- The frontend talks to the API through same-origin **Backend-for-Frontend
+  (BFF)** route handlers under `/api/session/*` and `/api/platform/*`. JWTs are
+  stored only in **HttpOnly Secure cookies** — never in `localStorage` or any
+  JS-readable place. Point the server at the API with `API_INTERNAL_BASE_URL`
+  (server-side) and `NEXT_PUBLIC_API_BASE_URL`; both default to
+  `http://localhost:8000/api`.
+- The console is **platform-owner only**. Non-owners and unauthenticated users
+  are rejected by the backend on every call and gated server-side by the
+  platform layout; `proxy.ts` additionally redirects to `/login` when no session
+  cookie is present.
 
 ---
 
@@ -237,6 +259,23 @@ lives in `backend/apps/rbac/registry.py`.
 > The `/api/platform/ping/` and `/api/foundation/...` endpoints are **foundation
 > probes** used to verify wiring — they are not business features.
 
+### Platform-owner endpoints (Phase 3)
+
+All under `/api/v1/platform/`, every one restricted to the platform owner
+(`IsPlatformOwner`). Hotel users, staff and unauthenticated requests are rejected.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/platform/overview/` | Dashboard counters + recent activity |
+| `GET/POST /api/v1/platform/hotels/` | List / create hotel tenants (limited) |
+| `GET/PATCH /api/v1/platform/hotels/{id}/` | Hotel detail / update name·slug·status |
+| `POST /api/v1/platform/hotels/{id}/manager/` | Create or link the primary manager |
+| `GET/POST /api/v1/platform/plans/` | List / create subscription plans |
+| `GET/PATCH/DELETE /api/v1/platform/plans/{id}/` | Detail / update / delete (blocked if in use) |
+| `GET/POST /api/v1/platform/subscriptions/` | List / create (start trial or activate paid) |
+| `GET/PATCH /api/v1/platform/subscriptions/{id}/` | Detail / cancel·expire |
+| `GET/PATCH /api/v1/platform/settings/` | Read / update basic platform settings |
+
 ### Running tests on PostgreSQL
 
 The suite runs on SQLite by default. To run it against PostgreSQL, point
@@ -327,13 +366,37 @@ and [docs/HETZNER_PRODUCTION_READINESS.md](docs/HETZNER_PRODUCTION_READINESS.md)
   [docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md](docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md),
   [docs/NOTIFICATION_EVENTS_CATALOG.md](docs/NOTIFICATION_EVENTS_CATALOG.md).
 
+## What is implemented so far
+
+Through **Phase 3 (pending review)**, the **platform owner's console basics**:
+
+- Platform owner panel basics
+- Login UI
+- Platform dashboard
+- Hotels-as-tenants management (limited: name/slug/status + primary manager)
+- Subscription plans
+- Hotel subscriptions
+- Basic platform settings
+
 ## What is NOT implemented yet (later phases)
 
-Platform-owner panel, hotel panel, public website, and all business features
-(hotel management/settings, rooms, reservations, guests, payments/finance,
-restaurant, housekeeping, maintenance, shifts, daily close, subscriptions,
-reports, notifications, full audit log). No login/dashboard UI yet. Delivered
-phase by phase per the blueprint:
+Everything below is a later phase, delivered per the blueprint:
 
-- **Phase 3** — Platform Owner Panel basics
+- Hotel panel
+- Public website
+- Public booking
+- Hotel detailed settings (logo/cover/gallery, address, maps)
+- Rooms / floors
+- Reservations
+- Guests
+- Check-in / check-out
+- Payments / expenses / folio / invoices
+- Restaurant / cafeteria
+- Housekeeping / maintenance / lost & found
+- Shifts / daily close
+- Reports / notifications / full audit log
+- Real WhatsApp / maps / search / payment gateway
+
+Roughly:
+
 - **Phase 4+** — Hotels, rooms, reservations, finance, and beyond
