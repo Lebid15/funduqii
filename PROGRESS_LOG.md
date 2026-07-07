@@ -56,7 +56,7 @@
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
-| 6 | Reservations + Availability Engine | بانتظار الاعتماد 🔎 | 2026-07-07 |
+| 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
@@ -713,9 +713,10 @@
 ---
 
 ## Phase 6 — Reservations + Availability Engine
-- الحالة: 🔎 **بانتظار الاعتماد** (منفَّذة ومُختبَرة — لم تُعتمد ذاتيًا)
-- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07
+- الحالة: **مكتملة ✅** (معتمدة ومقبولة فنيًا من المالك — تشمل التصحيح Phase 6.1)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · **اعتُمدت 2026-07-07**
 - الهدف: نظام الحجوزات الداخلي للفندق + **محرك توفر مركزي يمنع overbooking**، **بلا** check-in/out ولا نزلاء كاملين ولا مال ولا موقع عام.
+- **ملاحظة الاعتماد:** «تم اعتماد Phase 6 بعد تنفيذ Phase 6.1 لدعم تعيين غرفة محددة داخل الحجز، مع منع تضارب نفس الغرفة ودعم assigned/unassigned availability. لا تشمل هذه المرحلة check-in/check-out أو Guest module كامل أو payments/folio/invoices أو public booking.»
 
 ### ما نُفّذ (Backend)
 - **تطبيق مستقل `apps/reservations`** (منفصل عن rooms/hotels)، بثلاثة نماذج مربوطة بالـ tenant:
@@ -771,4 +772,49 @@
 - **بلا:** check-in/out، Guest module كامل، payments/folio/invoices. **لم تبدأ Phase 7.**
 
 ### الاعتماد
-- **بانتظار اعتماد المالك** عبر مراجعة PR #5 (Phase 6 + 6.1). **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 7.
+- **معتمدة ومقبولة فنيًا من المالك بتاريخ 2026-07-07** عبر مراجعة PR #5 (Phase 6 + 6.1). الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 7** — يبدأ برسالته الرسمية فقط.
+
+#### ملاحظات الاعتماد (من المالك)
+1. التأكد أن Phase 4 موجودة ومكتملة في `origin/main`.
+2. التأكد أن Phase 5 موجودة ومكتملة في `origin/main`.
+3. التأكد من وجود: `backend/apps/hotels` · `backend/apps/rooms` · `frontend/src/app/hotel/settings` · `frontend/src/app/hotel/rooms`.
+4. قبول بناء `apps/reservations`.
+5. قبول Model `Reservation`.
+6. قبول Model `ReservationRoomLine`.
+7. قبول Model `ReservationStatusLog`.
+8. قبول `AvailabilityService` كمصدر مركزي لحساب التوفر.
+9. قبول قاعدة التداخل نصف المفتوحة `[check_in, check_out)`.
+10. قبول السماح بحجوزات back-to-back.
+11. قبول منع overbooking من الباكند.
+12. قبول الحالات: draft / held / confirmed / cancelled / expired / no_show حسب التنفيذ (نُفِّذت held/confirmed/cancelled/expired؛ لم يُنفَّذ draft/no_show عمدًا — مؤجّلة لـ Phase 7 حسب التوثيق).
+13. قبول أن confirmed يحجز التوفر.
+14. قبول أن held يحجز التوفر فقط إذا لم ينتهِ.
+15. قبول أن cancelled/expired لا تحجز التوفر.
+16. قبول دعم unassigned room type availability.
+17. قبول دعم assigned room availability بعد Phase 6.1.
+18. قبول إضافة `room` اختياري إلى `ReservationRoomLine`.
+19. قبول منع same-room overlap.
+20. قبول السماح بـ back-to-back لنفس الغرفة.
+21. قبول أن اختيار غرفة محددة يتطلب `reservations.assign_room`.
+22. قبول منع تعيين غرفة من فندق آخر.
+23. قبول منع تعيين غرفة من نوع خاطئ.
+24. قبول منع تعيين غرفة maintenance/out_of_service/archived.
+25. قبول عزل tenant.
+26. قبول حماية endpoints بالصلاحيات.
+27. قبول read-only للفندق المعلّق ومنع الكتابة.
+28. قبول صفحة `/hotel/reservations`.
+29. قبول الترجمة ar/en/tr.
+30. قبول responsive وRTL/LTR.
+31. قبول عدم بناء check-in/check-out.
+32. قبول عدم بناء Guest module كامل.
+33. قبول عدم بناء payments/folio/invoices.
+34. قبول عدم بناء public booking.
+35. قبول عدم بدء Phase 7.
+36. قبول نتائج backend tests: 214/214.
+37. قبول نتائج frontend lint/typecheck/build.
+
+#### ملاحظة حول `main` المحلي (قرار موثّق)
+- ظهر أن **الفرع المحلي `main`** يحتوي تاريخًا مختلفًا وغير مطابق لـ `origin/main`. **`origin/main` هو المصدر الصحيح للحقيقة.** ممنوع دفع الفرع المحلي المختلف إلى `origin/main`، وممنوع reset مدمّر دون موافقة صريحة. أي عمل قادم يبدأ من branch نظيف مبني على `origin/main` (fetch/checkout آمن).
+
+#### ملاحظة مستقبلية
+- قبل الإنتاج النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من التزامن الحقيقي، الأداء، pagination، الفلاتر، محرك التوفر، ومنع overbooking تحت ضغط أعلى. لا يمنع اعتماد Phase 6 الآن.
