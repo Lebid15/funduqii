@@ -57,7 +57,7 @@
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
 | 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
-| 7 | Guests + Check-in + Check-out | بانتظار الاعتماد 🔎 | 2026-07-07 |
+| 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
 | 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
@@ -822,10 +822,11 @@
 ---
 
 ## Phase 7 — Guests + Check-in + Check-out
-- الحالة: 🔎 **بانتظار الاعتماد** (منفَّذة ومُختبَرة — لم تُعتمد ذاتيًا)
-- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07
+- الحالة: **مكتملة ✅** (معتمدة ومقبولة فنيًا من المالك)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · **اعتُمدت 2026-07-07**
 - الهدف: سجل النزلاء + دورة الاستقبال التشغيلية (check-in لحجز مؤكد داخل غرفة، المقيمون الحاليون، وصول/مغادرة اليوم، check-out تشغيلي). **بلا أي مال.**
 - الأساس: بُنيت من **`origin/main`** (c690801، يحوي Phase 4/5/6+6.1) بعد التحقق منه — لم يُستخدم الفرع المحلي المختلف.
+- **ملاحظة الاعتماد:** «تم اعتماد Phase 7 كمرحلة استقبال تشغيلية: سجل النزلاء، الإقامة الفعلية، check-in، current residents، arrivals today، departures today، وcheck-out تشغيلي. لا تشمل هذه المرحلة payments أو folio أو invoices أو أي تسوية مالية، ولا public booking.»
 
 ### ما نُفّذ (Backend)
 - **تطبيقان مستقلان فوق المراحل السابقة:** `apps/guests` (سجل النزلاء) و`apps/stays` (طبقة الإقامة + خدمات check-in/out) — لم يُوضع check-in داخل `apps/reservations`.
@@ -870,4 +871,45 @@
 - **لا مال إطلاقًا (payments/expenses/folio/invoices/taxes) · لا تسوية عند الخروج · لا مطعم/كافتيريا · لا housekeeping/maintenance workflows كاملة · لا lost&found · لا ورديات/إغلاق يومي · لا موقع/حجز عام · لا واتساب/خرائط فعلية · لا تقارير متقدمة · لا مرفقات وثائق النزلاء.** **لم تبدأ Phase 8.**
 
 ### الاعتماد
-- **بانتظار اعتماد المالك** عبر مراجعة PR. **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 8.
+- **معتمدة ومقبولة فنيًا من المالك بتاريخ 2026-07-07** عبر مراجعة PR #6. الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 8** — يبدأ برسالته الرسمية فقط.
+
+#### ملاحظات الاعتماد (من المالك)
+1. إنشاء `apps/guests`.
+2. إنشاء `apps/stays`.
+3. قبول Model `Guest`.
+4. قبول Model `Stay`.
+5. قبول Model `StayGuest`.
+6. قبول Model `StayStatusLog`.
+7. قبول `CheckInService` كخدمة مركزية.
+8. قبول `CheckOutService` كخدمة مركزية.
+9. قبول أن الإشغال مشتق من `Stay` وليس من `room.status`.
+10. قبول عدم إضافة `occupied` كحالة يدوية للغرفة.
+11. قبول منع check-in لغرفة مشغولة.
+12. قبول منع check-in لغرفة maintenance/out_of_service/archived.
+13. قبول منع check-in لغرف dirty/cleaning في هذه المرحلة.
+14. قبول استخدام الغرفة المثبتة على سطر الحجز أو اختيار غرفة عند check-in.
+15. قبول منع duplicate check-in.
+16. قبول إنشاء Stay وStayGuest primary عند check-in.
+17. قبول current residents من `Stay.status = in_house`.
+18. قبول arrivals today من الحجوزات المؤكدة غير المدخلة.
+19. قبول departures today من الإقامات in_house ذات خروج مخطط اليوم.
+20. قبول check-out كتشغيل فقط بدون مال.
+21. قبول تحويل الغرفة إلى dirty بعد check-out.
+22. قبول أن checkout لا ينشئ folio أو invoice أو payment.
+23. قبول صلاحيات: `guests.view/create/update/delete` و`stays.view/check_in/check_out/update`.
+24. قبول tenant isolation.
+25. قبول read-only للفندق المعلّق ومنع الكتابة.
+26. قبول صفحات: `/hotel/guests` و`/hotel/front-desk`.
+27. قبول الترجمة ar/en/tr.
+28. قبول RTL/LTR والـ responsive.
+29. قبول عدم بناء payments/folio/invoices.
+30. قبول عدم بناء public booking.
+31. قبول عدم بدء Phase 8.
+32. قبول نتائج backend tests: 264/264.
+33. قبول نتائج frontend lint/typecheck/build.
+
+#### ملاحظة مستقبلية غير مانعة (سياسة الخروج المبكر)
+- يجب لاحقًا توثيق ومراجعة سياسة **الخروج المبكر**: هل يبقى الحجز حاجزًا للغرفة حتى تاريخ الخروج المخطط، أم يُحرَّر التوفر بعد check-out الفعلي، وكيف يؤثر ذلك على الحسابات المالية لاحقًا. تُرحَّل إلى Phase 8 أو مرحلة تحسين تشغيل الحجوزات. **لا تمنع اعتماد Phase 7 الآن.**
+
+#### ملاحظة Git
+- `origin/main` هو مصدر الحقيقة الوحيد. ممنوع استخدام الفرع المحلي `main` المختلف أو دفعه إلى origin، وممنوع reset مدمّر دون موافقة صريحة.
