@@ -55,7 +55,7 @@
 | 3 | Platform Owner Panel basics | مكتملة ✅ | 2026-07-07 |
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
-| 5 | Floors + Room Types + Rooms | بانتظار الاعتماد 🔎 | 2026-07-07 |
+| 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
@@ -630,8 +630,8 @@
 ---
 
 ## Phase 5 — Floors + Room Types + Rooms
-- الحالة: 🔎 **بانتظار الاعتماد** (منفَّذة ومُختبَرة — لم تُعتمد ذاتيًا)
-- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07
+- الحالة: **مكتملة ✅** (معتمدة ومقبولة فنيًا من المالك)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · **اعتُمدت 2026-07-07**
 - الهدف: أول مرحلة تشغيلية — **المخزون الفيزيائي للفندق** (طوابق + أنواع غرف + غرف بحالة يدوية أساسية)، **بلا** حجوزات/توفر/نزلاء/مال.
 
 ### ما نُفّذ (Backend)
@@ -676,4 +676,36 @@
 - **لا حجوزات/توفر/نزلاء/دخول-مغادرة/مدفوعات/مصروفات/فوليو/فواتير/مطعم/تنظيف-صيانة (workflows)/ورديات/إغلاق يومي/تقارير.** لا موقع عام/حجز عام. لا حالتَي `reserved`/`occupied`. **لم تبدأ Phase 6.**
 
 ### الاعتماد
-- **بانتظار اعتماد المالك** عبر مراجعة PR. **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 6.
+- **معتمدة ومقبولة فنيًا من المالك بتاريخ 2026-07-07** عبر مراجعة PR #4. الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 6** — يبدأ برسالته الرسمية فقط.
+
+#### ملاحظات الاعتماد (من المالك)
+1. قبول إنشاء app مستقل `apps/rooms`.
+2. قبول فصل الغرف والطوابق وأنواع الغرف عن `apps/hotels`.
+3. قبول Model `Floor`.
+4. قبول Model `RoomType`.
+5. قبول Model `Room`.
+6. قبول Model `RoomStatusLog` كسجلّ حالة غرفة فقط، وليس audit log عام.
+7. قبول حالات الغرف اليدوية: `available` · `dirty` · `cleaning` · `maintenance` · `out_of_service` · `archived`.
+8. قبول عدم إضافة `reserved`/`occupied` لأنها ستُشتق لاحقًا من الحجوزات وcheck-in/check-out.
+9. قبول صلاحيات: `rooms.view` · `rooms.create` · `rooms.update` · `rooms.delete` · `rooms.status_update`.
+10. قبول tenant isolation.
+11. قبول منع cross-tenant floor/room_type references.
+12. قبول unique room number داخل الفندق.
+13. قبول unique room type code داخل الفندق.
+14. قبول capacity validation.
+15. قبول منع حذف floor/room type مستخدم.
+16. قبول إلزام الملاحظة لحالات `maintenance` و`out_of_service`.
+17. قبول إخفاء `archived` افتراضيًا.
+18. قبول read-only للفندق المعلّق ومنع الكتابة.
+19. قبول APIs تحت `/api/v1/hotel/`.
+20. قبول صفحة `/hotel/rooms`.
+21. قبول تبويبات: Overview · Floors · Room Types · Rooms.
+22. قبول الترجمة ar/en/tr.
+23. قبول RTL/LTR والـ responsive.
+24. قبول عدم بناء حجوزات أو محرك توفر.
+25. قبول عدم بناء نزلاء أو مال أو تنظيف/صيانة workflows.
+26. فحوصات backend ناجحة: 140/140.
+27. فحوصات frontend lint/typecheck/build ناجحة.
+
+#### ملاحظة مستقبلية
+- قبل الإنتاج/الإطلاق النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من الأداء والفلاتر وpagination وسلامة العلاقات. لا يمنع اعتماد Phase 5 الآن.
