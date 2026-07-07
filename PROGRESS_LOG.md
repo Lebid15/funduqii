@@ -50,9 +50,9 @@
 | 1.5 | Production-Ready Scalability, Performance, Realtime & Hetzner Readiness | مكتملة ✅ | 2026-07-07 |
 | 1.6 | Maps, Messaging & External Integrations Foundation | مكتملة ✅ | 2026-07-07 |
 | 1.7 | Governance, Compliance, QA & Release Foundation | مكتملة ✅ | 2026-07-07 |
-| 1.8 | Legacy Reference Insights & Product Enhancements Alignment | بانتظار الاعتماد 🔎 | 2026-07-07 |
+| 1.8 | Legacy Reference Insights & Product Enhancements Alignment | مكتملة ✅ | 2026-07-07 |
 | 2 | Authentication + Users + Permissions | مكتملة ✅ | 2026-07-07 |
-| 3 | Platform Owner Panel basics | لم تبدأ ⏳ | — |
+| 3 | Platform Owner Panel basics | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | لم تبدأ ⏳ | — |
 | 5 | Floors + Room Types + Rooms | لم تبدأ ⏳ | — |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
@@ -398,8 +398,8 @@
 ---
 
 ## Phase 1.8 — Legacy Reference Insights & Product Enhancements Alignment
-- الحالة: بانتظار الاعتماد 🔎 (منفَّذة ومُختبَرة؛ لم تُعتمد ذاتيًا)
-- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: —
+- الحالة: مكتملة ✅ (معتمدة من المالك — أُقرّت مع اعتماد بدء Phase 3، 2026-07-07)
+- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: 2026-07-07
 - الهدف: استخلاص الأفكار المفيدة من المرجع القديم (`script1.md`/MVP السابق) وتوثيقها رسميًا وربطها بالمراحل — **بلا نقل كود، بلا Models/APIs/واجهات، بلا تغيير البنية المعتمدة**.
 - ترتيب: بعد اعتماد Phase 1.7 وقبل Phase 3.
 
@@ -433,3 +433,51 @@
 
 ### الاعتماد
 - لم تُعتمد ذاتيًا. بانتظار مراجعة المالك واعتماده. **لم يُغيَّر وضع Phase 3.**
+
+---
+
+## Phase 3 — Platform Owner Panel basics
+- الحالة: بانتظار الاعتماد 🔎 (منفَّذة ومُختبَرة؛ **لم تُعتمد ذاتيًا**)
+- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: —
+- الهدف: بناء الأساس الأول **للوحة صاحب المنصة فقط** — دخول آمن، App Shell مركزي، لوحة أولية، إدارة الفنادق كـ tenants (محدود)، الباقات، اشتراكات الفنادق، إعدادات منصة أساسية — تحت `/api/v1/platform/` ومحميّة بـ `IsPlatformOwner`.
+- ترتيب: أول مرحلة ميزات حقيقية، بعد اعتماد كل مراحل التأسيس (0/1/1.5/1.6/1.7/1.8/2).
+
+### ما نُفّذ (Backend)
+- **تطبيق `apps.subscriptions`** — أول Models أعمال: `SubscriptionPlan` (باقة قابلة للبيع) و`HotelSubscription` (اشتراك فندق). قيد قاعدة بيانات: **اشتراك حيّ واحد فقط لكل فندق** (`UniqueConstraint` على `hotel` بشرط `status ∈ {trial, active, past_due}`). خدمات lifecycle داخل transactions: `start_trial` (تجربة مرة واحدة)، `activate_subscription` (تفعيل مدفوع + ترقية التجربة)، `cancel`/`expire`.
+- **تطبيق `apps.platform`** (label `platform_owner`) — طبقة API لصاحب المنصة: `PlatformSettings` (Singleton pk=1)، Serializers (DRF `ModelSerializer` — أول استخدام)، Views (generics + APIView) كلها بـ `permission_classes=[IsPlatformOwner]`، خدمة `create_hotel` + `set_primary_manager`.
+- **URLs** تحت `/api/v1/platform/`: `overview/`، `hotels/`(+`{id}/`، +`{id}/manager/`)، `plans/`(+`{id}/`)، `subscriptions/`(+`{id}/`)، `settings/`.
+- **قاعدة التجربة المجانية مرة واحدة** مُنفَّذة: `hotel_has_used_trial` يفحص وجود أي اشتراك سبق أن كان تجربة (عبر `trial_ends_at`)، فلا تُعاد بعد انتهائها.
+- **حماية حذف الباقة المستخدَمة**: `perform_destroy` يرفض الحذف بـ 409 `plan_in_use` إن كانت مرتبطة باشتراكات (+ `on_delete=PROTECT` كخط دفاع ثانٍ).
+
+### ما نُفّذ (Frontend)
+- **نظام i18n مركزي فعّال**: `I18nProvider` (client context) + قواميس ar/en/tr مكتملة (نوع `Dictionary` مشتق من الإنجليزية → أي مفتاح ناقص = خطأ بناء)، تبديل لغة فوري مع RTL/LTR، وقراءة اللغة من كوكي في الـ root layout (بلا وميض).
+- **جلسة آمنة (BFF)**: تسجيل الدخول عبر Next route handlers يخزّن JWT في **HttpOnly Secure cookies** — **لا localStorage إطلاقًا**. Proxy مصادَق (`/api/platform/[...]`) يرفق التوكن من الكوكي مع تجديد تلقائي عند 401 (يحفظ التوكن المُدوَّر). `proxy.ts` (middleware) + gate في `platform/layout.tsx` (تحقق owner من الخادم).
+- **App Shell مركزي**: `AppShell`/`Sidebar`/`Topbar`/`ContentContainer`/`PageContainer` + Language switcher + Logout + حالة المستخدم، sidebar متجاوب (drawer على الشاشات الصغيرة).
+- **مكتبة مكونات مركزية** على design tokens: Button/IconButton/Card/StatCard/Badge/Input/Select/Textarea/Switch/PasswordInput/Modal/ConfirmDialog/DataTable/EmptyState/LoadingState/ErrorState/PageHeader/SectionHeader/FilterBar/Pagination/FormField/Alert/Toast.
+- **صفحات**: `/login`، `/platform` (Dashboard)، `/platform/hotels`، `/platform/hotels/[id]`، `/platform/plans`، `/platform/subscriptions`، `/platform/settings`. حالات loading/empty/error موحّدة في كل مكان.
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check --dry-run` | ✅ No changes detected |
+| `manage.py test` (SQLite) | ✅ **82/82 OK** (46 سابقة + 36 جديدة لـ subscriptions/platform) |
+| فحص حيّ End-to-End (Django+Next) | ✅ login (HttpOnly cookies) · proxy overview/plans/hotels · trial ثم رفض التكرار 409 · unauth 401 · non-owner 403 · `/platform` بلا كوكي → 307 `/login` · تجديد التوكن التلقائي عند 401 |
+| Frontend `lint` | ✅ exit 0 |
+| Frontend `tsc --noEmit` | ✅ لا أخطاء أنواع |
+| Frontend `build` | ✅ نجح (14 مسار + Proxy) |
+
+### ملاحظات وقرارات معمارية
+- **جلسة الكوكيز (BFF)**: قرار مقصود لتلبية «لا JWT في localStorage». Next route handlers هي الطبقة الوحيدة التي تقرأ/تكتب كوكيز التوكن؛ التجديد (مع تدوير refresh) يحدث فقط داخل route handlers ليُحفظ التوكن المُدوَّر دائمًا.
+- **DRF `ModelSerializer`**: أُدخل هنا (أول CRUD حقيقي) بدل دوال الـ dict اليدوية في Phase 2 — للتحقّق و partial updates وأظرف الأخطاء الموحّدة.
+- **تعطيل قاعدة lint واحدة** `react-hooks/set-state-in-effect` (heuristic من React 19) لأنها تعلّم أنماط جلب البيانات عند التحميل وإعادة ضبط نماذج المودال عند الفتح — وهي استخدامات صحيحة للـ effects؛ بقية قواعد react-hooks فعّالة. موثّق في `eslint.config.mjs`.
+- **بدون action log**: لم يُبنَ (اختياري في نطاق المرحلة) — مؤجّل لمرحلة التقارير/التدقيق.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا لوحة فندق، لا موقع عام، لا حجوزات/غرف/طوابق/نزلاء/دخول/مغادرة/مال/فوليو/فواتير/مطعم/تنظيف/صيانة/ورديات/إغلاق يومي/تقارير تشغيلية.**
+- **لا إرسال فعلي**: لا واتساب، لا بريد، لا خرائط، لا Meilisearch، لا Command Palette/Activity Feed/Reservation Timeline.
+- **لا دفع إلكتروني/بوابة/فواتير اشتراك/تحصيل**. إعدادات المنصة أساسية فقط (لا إعدادات موقع عام/SEO/مفاتيح حقيقية).
+- إدارة الفنادق **tenant-only** (name/slug/status + مدير رئيسي) — بلا إعدادات فندق تفصيلية/صور/خرائط.
+
+### الاعتماد
+- **لم تُعتمد ذاتيًا.** بانتظار مراجعة المالك واعتماده. الحالة تبقى «بانتظار الاعتماد 🔎» حتى قرار المالك.

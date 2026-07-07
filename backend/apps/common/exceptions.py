@@ -66,6 +66,33 @@ class UnknownPermission(FunduqiiAPIException):
     default_code = "unknown_permission"
 
 
+# --- Subscriptions / platform (Phase 3) ------------------------------------
+
+
+class TrialAlreadyUsed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This hotel has already used its one-time free trial."
+    default_code = "trial_already_used"
+
+
+class ConflictingSubscription(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This hotel already has an active subscription."
+    default_code = "conflicting_subscription"
+
+
+class PlanInUse(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This plan is in use by one or more hotels and cannot be deleted."
+    default_code = "plan_in_use"
+
+
+class InvalidSubscriptionTransition(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This subscription status change is not allowed."
+    default_code = "invalid_subscription_transition"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)
