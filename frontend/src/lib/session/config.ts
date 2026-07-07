@@ -14,6 +14,8 @@ export const DJANGO_API_BASE =
 
 export const ACCESS_COOKIE = "funduqii_access";
 export const REFRESH_COOKIE = "funduqii_refresh";
+/** Current hotel context (X-Hotel-ID) for hotel-side users. HttpOnly. */
+export const HOTEL_COOKIE = "funduqii_hotel";
 
 /** Cookie lifetime (7 days) — matches the refresh-token lifetime in the API. */
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 7;

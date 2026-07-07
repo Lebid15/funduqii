@@ -15,6 +15,7 @@ import type { CurrentUser, MeResponse } from "@/lib/api/types";
 import {
   ACCESS_COOKIE,
   DJANGO_API_BASE,
+  HOTEL_COOKIE,
   REFRESH_COOKIE,
   sessionCookieOptions,
 } from "./config";
@@ -41,6 +42,15 @@ export async function clearSession(): Promise<void> {
   const store = await cookies();
   store.delete(ACCESS_COOKIE);
   store.delete(REFRESH_COOKIE);
+  store.delete(HOTEL_COOKIE);
+}
+
+export async function getHotelId(): Promise<string | null> {
+  return (await cookies()).get(HOTEL_COOKIE)?.value ?? null;
+}
+
+export async function setHotelId(hotelId: number | string): Promise<void> {
+  (await cookies()).set(HOTEL_COOKIE, String(hotelId), sessionCookieOptions());
 }
 
 /** Exchange email/password for tokens; persists them. Returns ok + status. */
@@ -156,4 +166,20 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   }
   const data = (await res.json()) as MeResponse;
   return data.user;
+}
+
+/** Full current-identity payload (user + memberships), or null. */
+export async function getMe(): Promise<MeResponse | null> {
+  const access = await getAccessToken();
+  if (!access) {
+    return null;
+  }
+  const res = await fetch(`${DJANGO_API_BASE}/auth/me/`, {
+    headers: { Authorization: `Bearer ${access}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    return null;
+  }
+  return (await res.json()) as MeResponse;
 }

@@ -10,15 +10,19 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
 /**
- * Central layout shell for the platform-owner console. One shell wraps every
- * platform page — pages never build their own layout. Responsive: on small
- * screens the sidebar becomes an off-canvas drawer.
+ * Central layout shell for both consoles (platform-owner and hotel-side). One
+ * shell wraps every page — pages never build their own layout. Responsive: on
+ * small screens the sidebar becomes an off-canvas drawer.
  */
 export function AppShell({
+  variant = "platform",
   user,
+  hotelName,
   children,
 }: {
+  variant?: "platform" | "hotel";
   user: CurrentUser;
+  hotelName?: string;
   children: ReactNode;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -27,7 +31,12 @@ export function AppShell({
   return (
     <div className="app-shell">
       <aside className="app-sidebar" data-open={sidebarOpen}>
-        <Sidebar user={user} onNavigate={close} />
+        <Sidebar
+          variant={variant}
+          user={user}
+          hotelName={hotelName}
+          onNavigate={close}
+        />
       </aside>
       <button
         type="button"
@@ -38,7 +47,7 @@ export function AppShell({
         onClick={close}
       />
       <div className="app-main">
-        <Topbar onMenuToggle={() => setSidebarOpen((v) => !v)} />
+        <Topbar variant={variant} onMenuToggle={() => setSidebarOpen((v) => !v)} />
         <ContentContainer>
           <CurrentUserProvider user={user}>{children}</CurrentUserProvider>
         </ContentContainer>

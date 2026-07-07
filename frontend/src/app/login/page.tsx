@@ -41,14 +41,19 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       if (response.ok) {
-        router.replace("/platform");
+        const data = (await response.json().catch(() => ({}))) as {
+          redirect?: string;
+        };
+        router.replace(data.redirect ?? "/platform");
         router.refresh();
         return;
       }
       const body = (await response.json().catch(() => ({}))) as {
         code?: string;
       };
-      if (body.code === "not_platform_owner") {
+      if (body.code === "no_hotel_access") {
+        setError(t.auth.noHotelAccess);
+      } else if (body.code === "not_platform_owner") {
         setError(t.auth.forbiddenNotOwner);
       } else if (response.status === 401) {
         setError(t.auth.invalidCredentials);

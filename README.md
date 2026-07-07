@@ -4,15 +4,14 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 3 — Platform Owner Panel basics (pending review).**
-> All foundation phases are approved (0, 1, 1.5, 1.6, 1.7, 1.8, 2). Phase 3 is
-> the **first real feature stage**: the platform owner's console only — a secure
-> login, a central App Shell, an overview dashboard, hotels-as-tenants
-> management (limited), subscription plans, hotel subscriptions, and basic
-> platform settings. All new operational APIs live under `/api/v1/platform/` and
-> are restricted to the platform owner (`IsPlatformOwner`). **No hotel panel,
-> public website, reservations, rooms, guests, money, messaging or maps** — those
-> are later phases. See
+> **Current status: Phase 4 — Hotels + Hotel Settings (pending review).**
+> Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
+> (platform-owner console) and Phase 3.1 (premium UI). Phase 4 adds the **hotel's
+> own settings & media** — identity, contact, location, policies, operational
+> defaults, and logo/cover/gallery — under `/api/v1/hotel/`, plus a hotel-side
+> console at `/hotel/settings`, all scoped by hotel membership and permissions.
+> **Still no floors, rooms, reservations, guests, money, public website, or real
+> maps/WhatsApp** — those are later phases. See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
 > [PROGRESS_LOG.md](PROGRESS_LOG.md) for per-phase status, and
@@ -32,6 +31,7 @@ funduqii/
 │  ├─ apps/rbac/            # permission registry + enforcement (Phase 2)
 │  ├─ apps/subscriptions/   # SubscriptionPlan + HotelSubscription (Phase 3)
 │  ├─ apps/platform/        # platform-owner API /api/v1/platform/ (Phase 3)
+│  ├─ apps/hotels/          # hotel settings + media /api/v1/hotel/ (Phase 4)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -262,6 +262,24 @@ lives in `backend/apps/rbac/registry.py`.
 
 > The `/api/platform/ping/` and `/api/foundation/...` endpoints are **foundation
 > probes** used to verify wiring — they are not business features.
+
+### Hotel-side endpoints (Phase 4)
+
+All under `/api/v1/hotel/`, scoped to the caller's hotel context (`X-Hotel-ID`)
+and guarded by hotel membership + the `settings.view` / `settings.update`
+permission. A user of one hotel cannot access another; a platform owner is not a
+hotel member unless explicitly added; a suspended hotel is read-only.
+
+| Method & path | Purpose |
+|---|---|
+| `GET/PATCH /api/v1/hotel/settings/` | Read / update the hotel's text settings |
+| `GET /api/v1/hotel/profile/` | Compact current-hotel view (settings + active logo/cover + gallery count) |
+| `GET/POST /api/v1/hotel/media/` | List media / upload one image (multipart; logo/cover/gallery) |
+| `PATCH/DELETE /api/v1/hotel/media/{id}/` | Update image metadata / delete |
+
+Text and media are strictly separate — a settings `PATCH` never touches images.
+Images are stored files (never base64); responses return URLs + metadata. See
+[docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md](docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

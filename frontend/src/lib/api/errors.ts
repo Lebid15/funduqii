@@ -22,6 +22,19 @@ export function messageForError(error: unknown, t: Dictionary): string {
     return t.errors.generic;
   }
   switch (error.code) {
+    case "invalid_media_file": {
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      return reason === "size"
+        ? t.hotel.settings.fileSizeError
+        : t.hotel.settings.fileTypeError;
+    }
+    case "media_limit_reached":
+      return t.hotel.settings.galleryFullError;
+    case "hotel_suspended":
+      return t.hotel.settings.readOnlySuspended;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

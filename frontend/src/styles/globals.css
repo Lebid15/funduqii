@@ -963,6 +963,102 @@ a {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* --- Hotel media ---------------------------------------------------------- */
+.media-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-5);
+}
+.media-slot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.media-slot__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.media-slot__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.media-preview {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.media-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.media-preview--logo {
+  width: 6.5rem;
+  height: 6.5rem;
+  border-radius: var(--radius-xl);
+}
+.media-preview--cover {
+  aspect-ratio: 16 / 7;
+  width: 100%;
+}
+.media-preview__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-fg-subtle);
+  font-size: var(--font-size-xs);
+}
+.media-upload {
+  align-self: flex-start;
+  cursor: pointer;
+}
+.media-upload[data-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.media-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: var(--space-4);
+}
+.gallery-item {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+}
+.gallery-item img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+}
+.gallery-item__bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+}
+
 /* --- Tables --------------------------------------------------------------- */
 .table-scroll {
   width: 100%;

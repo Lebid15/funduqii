@@ -9,6 +9,7 @@ import { LanguageSwitcher } from "./LanguageSwitcher";
 import { LogoutButton } from "./LogoutButton";
 
 interface TopbarProps {
+  variant?: "platform" | "hotel";
   onMenuToggle: () => void;
 }
 
@@ -17,8 +18,10 @@ interface TopbarProps {
  * language switcher and logout on the end. The current user lives in the
  * sidebar user card.
  */
-export function Topbar({ onMenuToggle }: TopbarProps) {
+export function Topbar({ variant = "platform", onMenuToggle }: TopbarProps) {
   const { t } = useI18n();
+  const scopeLabel =
+    variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
   return (
     <header className="app-topbar">
       <div className="app-topbar__start">
@@ -28,7 +31,7 @@ export function Topbar({ onMenuToggle }: TopbarProps) {
           className="app-sidebar__toggle"
           onClick={onMenuToggle}
         />
-        <span className="app-topbar__title">{t.nav.platformOwner}</span>
+        <span className="app-topbar__title">{scopeLabel}</span>
       </div>
       <div className="app-topbar__end">
         <LanguageSwitcher />
