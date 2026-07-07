@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Building2, Plus, Search } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
@@ -101,7 +102,7 @@ export default function HotelsPage() {
       key: "name",
       header: t.hotels.name,
       render: (row) => (
-        <Link className="btn btn--ghost btn--sm" href={`/platform/hotels/${row.id}`}>
+        <Link className="table__link" href={`/platform/hotels/${row.id}`}>
           {row.name}
         </Link>
       ),
@@ -153,7 +154,9 @@ export default function HotelsPage() {
         title={t.hotels.title}
         subtitle={t.hotels.subtitle}
         actions={
-          <Button onClick={() => setModalOpen(true)}>{t.hotels.create}</Button>
+          <Button icon={Plus} onClick={() => setModalOpen(true)}>
+            {t.hotels.create}
+          </Button>
         }
       />
 
@@ -181,8 +184,8 @@ export default function HotelsPage() {
                 }}
               />
             </FormField>
-            <div className="cluster">
-              <Button type="submit" variant="secondary">
+            <div className="filter-bar__actions">
+              <Button type="submit" variant="secondary" icon={Search}>
                 {t.common.search}
               </Button>
             </div>
@@ -209,8 +212,11 @@ export default function HotelsPage() {
           <EmptyState
             title={t.hotels.empty}
             hint={t.hotels.emptyHint}
+            icon={Building2}
             action={
-              <Button onClick={() => setModalOpen(true)}>{t.hotels.create}</Button>
+              <Button icon={Plus} onClick={() => setModalOpen(true)}>
+                {t.hotels.create}
+              </Button>
             }
           />
         ) : (

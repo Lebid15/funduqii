@@ -7,8 +7,15 @@
 >
 > Builds on: central i18n (Phase 1), permissions (Phase 2), feature flags
 > (Phase 1.7 — [FEATURE_FLAGS_STRATEGY.md](FEATURE_FLAGS_STRATEGY.md)), and the
-> unified API client. No operational UI is built yet — these are the rules the
-> UI phases follow.
+> unified API client.
+>
+> **Premium visual layer (Phase 3.1):** the concrete visual language — design
+> tokens, the single icon system (**lucide-react**, via the central `Icon`
+> wrapper; **no emoji as icons**), premium component/table/form/dashboard rules,
+> motion, and RTL specifics — lives in
+> [PREMIUM_UI_DESIGN_SYSTEM.md](PREMIUM_UI_DESIGN_SYSTEM.md). These guidelines
+> remain the engineering gate; that document is the visual standard. Both are
+> binding.
 
 ---
 

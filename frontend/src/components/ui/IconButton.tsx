@@ -1,19 +1,25 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes } from "react";
+import type { LucideIcon } from "lucide-react";
 
 import { cx } from "@/lib/utils";
+
+import { Icon } from "./Icon";
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Accessible label — required, since the button shows only an icon. */
   label: string;
-  children: ReactNode;
+  /** Icon from the central lucide set. */
+  icon: LucideIcon;
+  size?: "sm" | "md" | "lg";
 }
 
 /** Icon-only button. `label` is applied as aria-label (never hardcoded text). */
 export function IconButton({
   label,
+  icon,
+  size = "md",
   className,
   type = "button",
-  children,
   ...rest
 }: IconButtonProps) {
   return (
@@ -24,7 +30,7 @@ export function IconButton({
       className={cx("icon-btn", className)}
       {...rest}
     >
-      {children}
+      <Icon icon={icon} size={size} />
     </button>
   );
 }

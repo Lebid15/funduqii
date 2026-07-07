@@ -1,5 +1,8 @@
 "use client";
 
+import { Languages } from "lucide-react";
+
+import { Icon } from "@/components/ui";
 import { locales, type Locale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -7,11 +10,11 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 export function LanguageSwitcher() {
   const { locale, setLocale, t } = useI18n();
   return (
-    <label className="cluster">
+    <label className="lang-switcher">
+      <Icon icon={Languages} size="sm" />
       <span className="sr-only">{t.language.label}</span>
       <select
-        className="select"
-        style={{ width: "auto" }}
+        className="lang-switcher__select"
         value={locale}
         aria-label={t.language.label}
         onChange={(event) => setLocale(event.target.value as Locale)}

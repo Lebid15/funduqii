@@ -2,6 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import {
+  Building2,
+  CircleCheck,
+  CirclePause,
+  CircleX,
+  Clock,
+  CreditCard,
+  Gift,
+  TriangleAlert,
+} from "lucide-react";
 
 import {
   Badge,
@@ -9,9 +19,9 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
-  LoadingState,
   PageHeader,
   SectionHeader,
+  Skeleton,
   StatCard,
   type Column,
 } from "@/components/ui";
@@ -100,7 +110,7 @@ export default function DashboardPage() {
     <PageContainer>
       <PageHeader title={t.dashboard.title} subtitle={t.dashboard.subtitle} />
 
-      {loading ? <LoadingState label={t.common.loading} /> : null}
+      {loading ? <DashboardSkeleton /> : null}
 
       {!loading && error ? (
         <ErrorState
@@ -114,28 +124,53 @@ export default function DashboardPage() {
       {!loading && !error && overview ? (
         <>
           <section className="stat-grid">
-            <StatCard label={t.dashboard.hotelsTotal} value={overview.hotels.total} />
-            <StatCard label={t.dashboard.hotelsActive} value={overview.hotels.active} />
-            <StatCard label={t.dashboard.hotelsSetup} value={overview.hotels.setup} />
+            <StatCard
+              label={t.dashboard.hotelsTotal}
+              value={overview.hotels.total}
+              icon={Building2}
+              tone="primary"
+            />
+            <StatCard
+              label={t.dashboard.hotelsActive}
+              value={overview.hotels.active}
+              icon={CircleCheck}
+              tone="success"
+            />
+            <StatCard
+              label={t.dashboard.hotelsSetup}
+              value={overview.hotels.setup}
+              icon={Clock}
+              tone="neutral"
+            />
             <StatCard
               label={t.dashboard.hotelsSuspended}
               value={overview.hotels.suspended}
+              icon={CirclePause}
+              tone="danger"
             />
             <StatCard
               label={t.dashboard.activeTrials}
               value={overview.subscriptions.active_trials}
+              icon={Gift}
+              tone="info"
             />
             <StatCard
               label={t.dashboard.activeSubscriptions}
               value={overview.subscriptions.active}
+              icon={CreditCard}
+              tone="success"
             />
             <StatCard
               label={t.dashboard.expiringSoon}
               value={overview.subscriptions.expiring_soon}
+              icon={TriangleAlert}
+              tone="warning"
             />
             <StatCard
               label={t.dashboard.expired}
               value={overview.subscriptions.expired}
+              icon={CircleX}
+              tone="neutral"
             />
           </section>
 
@@ -186,5 +221,32 @@ export default function DashboardPage() {
         </>
       ) : null}
     </PageContainer>
+  );
+}
+
+/** Loading placeholder that mirrors the dashboard layout. */
+function DashboardSkeleton() {
+  return (
+    <>
+      <div className="skeleton-stat-grid">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div className="skeleton-card" key={i}>
+            <Skeleton width="2.75rem" height="2.75rem" radius="var(--radius-md)" />
+            <div className="stack" style={{ gap: "var(--space-2)", flex: 1 }}>
+              <Skeleton width="60%" height="0.75rem" />
+              <Skeleton width="40%" height="1.25rem" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <Card>
+        <div className="stack">
+          <Skeleton width="14rem" height="1.25rem" />
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} height="1.5rem" />
+          ))}
+        </div>
+      </Card>
+    </>
   );
 }

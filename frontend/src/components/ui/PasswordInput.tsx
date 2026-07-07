@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, type InputHTMLAttributes } from "react";
+import { Eye, EyeOff } from "lucide-react";
 
 import { cx } from "@/lib/utils";
+
+import { Icon } from "./Icon";
 
 interface PasswordInputProps
   extends Omit<InputHTMLAttributes<HTMLInputElement>, "type"> {
@@ -33,8 +36,10 @@ export function PasswordInput({
         className="input-group__action"
         onClick={() => setVisible((v) => !v)}
         aria-pressed={visible}
+        aria-label={visible ? hideLabel : showLabel}
+        title={visible ? hideLabel : showLabel}
       >
-        {visible ? hideLabel : showLabel}
+        <Icon icon={visible ? EyeOff : Eye} size="sm" />
       </button>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Package, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
@@ -121,7 +122,12 @@ export default function PlansPage() {
       align: "end",
       render: (row) => (
         <div className="table__actions">
-          <Button variant="secondary" size="sm" onClick={() => setEditing(row)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Pencil}
+            onClick={() => setEditing(row)}
+          >
             {t.common.edit}
           </Button>
           <Button variant="secondary" size="sm" onClick={() => toggleActive(row)}>
@@ -130,6 +136,7 @@ export default function PlansPage() {
           <Button
             variant="danger"
             size="sm"
+            icon={Trash2}
             disabled={row.is_in_use}
             title={row.is_in_use ? t.plans.inUseCannotDelete : undefined}
             onClick={() => setDeleteTarget(row)}
@@ -147,7 +154,9 @@ export default function PlansPage() {
         title={t.plans.title}
         subtitle={t.plans.subtitle}
         actions={
-          <Button onClick={() => setCreating(true)}>{t.plans.create}</Button>
+          <Button icon={Plus} onClick={() => setCreating(true)}>
+            {t.plans.create}
+          </Button>
         }
       />
 
@@ -167,8 +176,11 @@ export default function PlansPage() {
           <EmptyState
             title={t.plans.empty}
             hint={t.plans.emptyHint}
+            icon={Package}
             action={
-              <Button onClick={() => setCreating(true)}>{t.plans.create}</Button>
+              <Button icon={Plus} onClick={() => setCreating(true)}>
+                {t.plans.create}
+              </Button>
             }
           />
         ) : (

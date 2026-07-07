@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { Hotel } from "lucide-react";
 
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import {
@@ -9,6 +10,7 @@ import {
   Button,
   Card,
   FormField,
+  Icon,
   Input,
   PasswordInput,
 } from "@/components/ui";
@@ -64,6 +66,9 @@ export default function LoginPage() {
     <main className="auth">
       <Card className="auth__card">
         <div className="auth__brand">
+          <span className="auth__brand-mark">
+            <Icon icon={Hotel} size="lg" />
+          </span>
           <div className="auth__brand-name">{t.app.name}</div>
           <div className="auth__brand-sub">{t.auth.loginSubtitle}</div>
         </div>
@@ -96,7 +101,7 @@ export default function LoginPage() {
             />
           </FormField>
 
-          <Button type="submit" block disabled={busy}>
+          <Button type="submit" block loading={busy}>
             {busy ? t.auth.submitting : t.auth.submit}
           </Button>
         </form>

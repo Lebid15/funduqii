@@ -46,6 +46,7 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 ## Frontend UI standard (mandatory from Phase 3)
 
 - [FRONTEND_DESIGN_SYSTEM_GUIDELINES.md](FRONTEND_DESIGN_SYSTEM_GUIDELINES.md) — central design system, components, i18n/RTL, responsive, layout, unified states, accessibility, and the page acceptance checklist. **Binding for all UI from Phase 3 onward.**
+- [PREMIUM_UI_DESIGN_SYSTEM.md](PREMIUM_UI_DESIGN_SYSTEM.md) — premium visual direction, design tokens, the single icon system (lucide-react), component/table/form/dashboard rules, motion, and RTL rules. **In force from Phase 3.1 onward.**
 
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.

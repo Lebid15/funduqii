@@ -53,6 +53,7 @@
 | 1.8 | Legacy Reference Insights & Product Enhancements Alignment | مكتملة ✅ | 2026-07-07 |
 | 2 | Authentication + Users + Permissions | مكتملة ✅ | 2026-07-07 |
 | 3 | Platform Owner Panel basics | مكتملة ✅ | 2026-07-07 |
+| 3.1 | Premium UI Design System & Visual Polish | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | لم تبدأ ⏳ | — |
 | 5 | Floors + Room Types + Rooms | لم تبدأ ⏳ | — |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
@@ -503,3 +504,44 @@
 18. تم تصحيح README وإزالة التناقض القديم.
 19. فحوصات backend ناجحة: 82/82.
 20. فحوصات frontend lint/typecheck/build ناجحة.
+
+---
+
+## Phase 3.1 — Premium UI Design System & Visual Polish
+- الحالة: بانتظار الاعتماد 🔎 (منفَّذة ومُختبَرة؛ **لم تُعتمد ذاتيًا**)
+- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: —
+- الهدف: رفع جودة واجهات Phase 3 إلى مستوى **Premium SaaS** وتثبيت نظام تصميم مركزي (tokens + أيقونات + مكوّنات + حركة + responsive + RTL) لكل المراحل القادمة. **UI polish فقط** — بلا ميزات، بلا Models، بلا APIs تشغيلية، بلا تغيير business logic.
+
+### ما نُفّذ
+- **Design tokens مركزية مُطوّرة** (`styles/tokens.css`): لوحة teal فاخرة هادئة، طبقات خلفيات/أسطح، حدود، ألوان نص/muted، feedback + soft، مقياس مسافات/radius/shadow/typography، focus ring، transitions/easing، أحجام أيقونات، z-index. لا قيم عشوائية في الصفحات.
+- **نظام أيقونات مركزي واحد**: `lucide-react` عبر مكوّن `Icon` مركزي (توحيد الحجم + stroke 1.75). **أُزيلت كل الإيموجي** من الواجهة (☰ → Menu، × → X، إلخ). أيقونات في Sidebar وstat cards والأزرار وempty/error states والتنبيهات وإظهار كلمة المرور والـ pagination ومبدّل اللغة.
+- **مكتبة مكوّنات محسّنة**: Button (icon + loading)، IconButton، StatCard (icon chip + tone)، Badge، Inputs/Select (chevron مخصّص RTL-aware)/Textarea/Switch/PasswordInput (Eye/EyeOff)، Modal (fade+scale + X)، ConfirmDialog، DataTable، Pagination (chevrons تنعكس RTL)، FilterBar، FormField، Alert (أيقونة حسب النوع)، Toast (slide)، **Skeleton** جديد، وحالات loading/empty/error بأيقونات دائرية.
+- **AppShell/Sidebar/Topbar Premium**: brand mark، nav بأيقونات + active pill بشريط accent (inline-start)، topbar شفاف لاصق + avatar بالأحرف الأولى + هوية المستخدم، drawer متجاوب على ≤900px مع overlay.
+- **Login Premium**: brand mark، خلفية radial هادئة، card بظل، حالة loading على الزر.
+- **Dashboard Premium**: stat cards بأيقونات + tones، **loading skeleton** يحاكي التخطيط، empty states.
+- **Motion**: transitions موحّدة + fade/scale/slide/shimmer، مع احترام `prefers-reduced-motion` عالميًا.
+
+### الملفات
+- **جديدة:** `components/ui/Icon.tsx` · `components/ui/Skeleton.tsx` · `docs/PREMIUM_UI_DESIGN_SYSTEM.md`.
+- **معدّلة (تصميم فقط):** `styles/tokens.css` · `styles/globals.css` · كل مكوّنات `components/ui/*` وlayout ذات الصلة · صفحات `login` و`platform/*` (أيقونات + skeletons + classes، بلا تغيير منطق) · `package.json` (+lucide-react) · `eslint.config.mjs` (كما هو) · التوثيق (README, DEVELOPMENT_RULES §16, docs/README, FRONTEND_DESIGN_SYSTEM_GUIDELINES).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| Frontend `lint` | ✅ exit 0 |
+| Frontend `tsc --noEmit` | ✅ لا أخطاء أنواع |
+| Frontend `build` | ✅ نجح (14 مسار + Proxy) |
+| `manage.py check` | ✅ لا مشاكل |
+| `manage.py test` | ✅ **82/82 OK** (لا تغيير backend) |
+| فحص بصري حيّ (Playwright، Chromium) | ✅ login/dashboard/hotels/plans بالإنجليزية والعربية + موبايل — Premium، RTL سليم، responsive، بلا كسر جداول، بلا إيموجي |
+
+### ملاحظات وقرارات
+- لا Models جديدة، لا APIs تشغيلية، لا تغيير في business logic أو قواعد الاشتراكات/الصلاحيات. الباكند لم يُلمس (الفحوصات للتأكد فقط).
+- أُضيفت مكتبة خفيفة واحدة `lucide-react` كنظام أيقونات معتمد (مسموح صراحةً في نطاق المرحلة).
+- كل النصوص من قواميس الترجمة المركزية (ar/en/tr)؛ لا نصوص hardcoded؛ RTL/LTR عبر logical properties.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا ميزات جديدة**، لا لوحة فندق/موقع عام/غرف/حجوزات/نزلاء/مال/خرائط/واتساب فعلي، لا Models، لا APIs تشغيلية، لم تبدأ Phase 4.
+
+### الاعتماد
+- **لم تُعتمد ذاتيًا.** بانتظار مراجعة المالك واعتماده. الحالة تبقى «بانتظار الاعتماد 🔎» حتى قرار المالك. **لم يُغيَّر وضع Phase 4.**

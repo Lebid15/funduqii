@@ -161,8 +161,13 @@ See [docs/LEGACY_REFERENCE_INSIGHTS.md](docs/LEGACY_REFERENCE_INSIGHTS.md) and
   data.
 
 ## 16. Centralized UI / UX / responsive / translation (MANDATORY from Phase 3)
-Full rules: [docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md](docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md).
+Full rules: [docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md](docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md)
+and the premium visual standard [docs/PREMIUM_UI_DESIGN_SYSTEM.md](docs/PREMIUM_UI_DESIGN_SYSTEM.md).
 From Phase 3 onward, **no page/component/button/table/form is built ad-hoc**.
+- **Premium look is the baseline (from Phase 3.1):** the product must read as a
+  finished, sellable SaaS — calm, clean, consistent — never prototype-grade.
+- **One icon system only:** `lucide-react` through the central `Icon` wrapper
+  (standard size + stroke). **No emoji as icons, no mixing icon sources.**
 - **Design tokens only** for colors/fonts/spacing/sizes/shadows/borders/radius/
   states/z-index — no random colors or repeated ad-hoc CSS.
 - **Central components only** (Button, Table/DataTable, Input/Select, Modal/

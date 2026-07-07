@@ -1,81 +1,121 @@
 /**
  * Design tokens — the single source of truth for visual style.
- * Components and pages reference these variables; they never hardcode values.
- * Extended in Phase 3 for the platform-owner console (layout, feedback, forms).
+ *
+ * Premium direction (Phase 3.1): calm, trustworthy SaaS. Refined teal brand,
+ * warm-cool neutral canvas, crisp white surfaces, subtle layered shadows,
+ * generous radii, restrained motion. Components and pages reference these
+ * variables only — never hardcode colors, spacing, radii, or shadows.
  */
 :root {
-  /* Brand & primary */
+  /* --- Brand ---------------------------------------------------------- */
   --color-primary: #0f766e;
-  --color-primary-soft: #ccfbf1;
-  --color-primary-strong: #115e59;
+  --color-primary-hover: #0c625b;
+  --color-primary-active: #0a544e;
+  --color-primary-strong: #0a544e;
+  --color-primary-soft: #ecfdf7;
+  --color-primary-soft-hover: #d6f7ee;
   --color-primary-contrast: #ffffff;
 
-  /* Neutrals / surfaces */
-  --color-bg: #f1f5f9;
+  /* --- Canvas & surfaces --------------------------------------------- */
+  --color-bg: #f6f8fb;
+  --color-bg-subtle: #eef1f6;
   --color-surface: #ffffff;
-  --color-surface-muted: #f8fafc;
-  --color-fg: #0f172a;
-  --color-fg-muted: #64748b;
-  --color-fg-subtle: #94a3b8;
-  --color-border: #e2e8f0;
-  --color-border-strong: #cbd5e1;
+  --color-surface-raised: #ffffff;
+  --color-surface-muted: #f7f9fc;
+  --color-surface-sunken: #f2f5f9;
 
-  /* Feedback */
-  --color-success: #16a34a;
-  --color-success-soft: #dcfce7;
-  --color-warning: #b45309;
-  --color-warning-soft: #fef3c7;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fee2e2;
-  --color-info: #2563eb;
-  --color-info-soft: #dbeafe;
-  --color-neutral-soft: #f1f5f9;
+  /* --- Borders ------------------------------------------------------- */
+  --color-border: #e6e9ef;
+  --color-border-subtle: #eef1f6;
+  --color-border-strong: #d4dae3;
 
-  /* Focus ring */
-  --focus-ring: 0 0 0 3px rgba(15, 118, 110, 0.28);
+  /* --- Text ---------------------------------------------------------- */
+  --color-fg: #111827;
+  --color-fg-muted: #5b6573;
+  --color-fg-subtle: #97a1b1;
+  --color-fg-inverse: #ffffff;
 
-  /* Spacing scale (4px base) */
+  /* --- Feedback (calm, not neon) ------------------------------------- */
+  --color-success: #0f9d6e;
+  --color-success-soft: #e7f7f0;
+  --color-warning: #b7791f;
+  --color-warning-soft: #fbf3e2;
+  --color-danger: #d64545;
+  --color-danger-hover: #c23b3b;
+  --color-danger-soft: #fdecec;
+  --color-info: #2f6feb;
+  --color-info-soft: #eaf1fe;
+  --color-neutral-soft: #eef1f6;
+
+  /* --- Focus ring ---------------------------------------------------- */
+  --ring-color: rgba(15, 118, 110, 0.35);
+  --focus-ring: 0 0 0 3px var(--ring-color);
+  --focus-ring-offset: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--ring-color);
+
+  /* --- Spacing scale (4px base) -------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
   --space-5: 1.25rem;
   --space-6: 1.5rem;
+  --space-7: 1.75rem;
   --space-8: 2rem;
   --space-10: 2.5rem;
   --space-12: 3rem;
+  --space-16: 4rem;
 
-  /* Radius */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
+  /* --- Radius -------------------------------------------------------- */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
   --radius-full: 999px;
 
-  /* Typography (system fonts; includes an Arabic-capable fallback) */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Arabic",
-    Arial, sans-serif;
+  /* --- Typography ---------------------------------------------------- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Noto Sans Arabic", "Noto Kufi Arabic", Arial, sans-serif;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
   --font-size-lg: 1.125rem;
   --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.75rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 1.875rem;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-tight: 1.25;
   --line-normal: 1.5;
+  --tracking-tight: -0.011em;
+  --tracking-wide: 0.04em;
 
-  /* Layout */
-  --container-max: 80rem;
-  --sidebar-width: 16rem;
-  --topbar-height: 3.5rem;
+  /* --- Layout -------------------------------------------------------- */
+  --container-max: 82rem;
+  --sidebar-width: 16.5rem;
+  --topbar-height: 4rem;
+  --page-pad: var(--space-8);
 
-  /* Elevation */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.16);
+  /* --- Elevation (subtle, layered) ---------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 6px 16px -6px rgba(16, 24, 40, 0.1),
+    0 2px 6px -2px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 16px 40px -12px rgba(16, 24, 40, 0.18),
+    0 6px 14px -6px rgba(16, 24, 40, 0.1);
 
-  /* Motion */
-  --transition-fast: 120ms ease;
+  /* --- Motion -------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
+  --transition-fast: 120ms var(--ease-out);
+  --transition-base: 200ms var(--ease-out);
 
-  /* Z-index scale */
+  /* --- Icons --------------------------------------------------------- */
+  --icon-sm: 16px;
+  --icon-md: 18px;
+  --icon-lg: 22px;
+  --icon-stroke: 1.75;
+
+  /* --- Z-index scale ------------------------------------------------- */
   --z-sidebar: 40;
   --z-overlay: 50;
   --z-modal: 60;

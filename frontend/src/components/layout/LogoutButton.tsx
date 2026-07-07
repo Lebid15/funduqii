@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { LogOut } from "lucide-react";
 
 import { Button } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -21,7 +22,13 @@ export function LogoutButton() {
   }
 
   return (
-    <Button variant="secondary" size="sm" onClick={handleLogout} disabled={busy}>
+    <Button
+      variant="secondary"
+      size="sm"
+      icon={LogOut}
+      onClick={handleLogout}
+      disabled={busy}
+    >
       {busy ? t.auth.loggingOut : t.auth.logout}
     </Button>
   );

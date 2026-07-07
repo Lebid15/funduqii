@@ -1,3 +1,5 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
 import { Button } from "./Button";
 
 interface PaginationProps {
@@ -12,7 +14,10 @@ interface PaginationProps {
   };
 }
 
-/** Central server-driven pagination control. */
+/**
+ * Central server-driven pagination. The chevrons mirror automatically in RTL
+ * via the `.icon-flip` utility.
+ */
 export function Pagination({
   page,
   totalPages,
@@ -29,6 +34,7 @@ export function Pagination({
         <Button
           variant="secondary"
           size="sm"
+          icon={ChevronLeft}
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
         >
@@ -37,6 +43,7 @@ export function Pagination({
         <Button
           variant="secondary"
           size="sm"
+          iconEnd={ChevronRight}
           disabled={page >= totalPages}
           onClick={() => onPageChange(page + 1)}
         >
