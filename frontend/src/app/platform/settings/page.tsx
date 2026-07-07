@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Globe, LifeBuoy, SlidersHorizontal, ToggleRight } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
@@ -107,8 +108,12 @@ export default function SettingsPage() {
         <form className="stack" onSubmit={submit} noValidate>
           {saveError ? <Alert tone="error">{saveError}</Alert> : null}
 
-          <Card>
-            <SectionHeader title={t.settings.sectionGeneral} />
+          <Card className="settings-section">
+            <SectionHeader
+              title={t.settings.sectionGeneral}
+              description={t.settings.descGeneral}
+              icon={Globe}
+            />
             <div className="form-grid">
               <FormField label={t.settings.platformName} htmlFor="set-name">
                 <Input
@@ -128,8 +133,12 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          <Card>
-            <SectionHeader title={t.settings.sectionSupport} />
+          <Card className="settings-section">
+            <SectionHeader
+              title={t.settings.sectionSupport}
+              description={t.settings.descSupport}
+              icon={LifeBuoy}
+            />
             <div className="form-grid">
               <FormField label={t.settings.supportEmail} htmlFor="set-email">
                 <Input
@@ -156,8 +165,12 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          <Card>
-            <SectionHeader title={t.settings.sectionDefaults} />
+          <Card className="settings-section">
+            <SectionHeader
+              title={t.settings.sectionDefaults}
+              description={t.settings.descDefaults}
+              icon={SlidersHorizontal}
+            />
             <div className="form-grid">
               <FormField label={t.settings.defaultLanguage} htmlFor="set-lang">
                 <Select
@@ -200,11 +213,12 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          <Card>
-            <SectionHeader title={t.settings.sectionSwitches} />
-            <p className="field__hint" style={{ marginBottom: "var(--space-3)" }}>
-              {t.settings.switchesHint}
-            </p>
+          <Card className="settings-section">
+            <SectionHeader
+              title={t.settings.sectionSwitches}
+              description={t.settings.descSwitches}
+              icon={ToggleRight}
+            />
             <div className="stack">
               <Switch
                 id="set-reg"

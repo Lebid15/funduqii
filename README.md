@@ -154,6 +154,10 @@ npm run dev
   are rejected by the backend on every call and gated server-side by the
   platform layout; `proxy.ts` additionally redirects to `/login` when no session
   cookie is present.
+- The UI follows a **premium design system** (Phase 3.1): centralized design
+  tokens, a single icon set (`lucide-react` via the central `Icon` wrapper — no
+  emoji), unified components, and full RTL/LTR support. See
+  [docs/PREMIUM_UI_DESIGN_SYSTEM.md](docs/PREMIUM_UI_DESIGN_SYSTEM.md).
 
 ---
 

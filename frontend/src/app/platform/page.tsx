@@ -2,6 +2,17 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import {
+  Building2,
+  CircleCheck,
+  CirclePause,
+  CircleX,
+  Clock,
+  CreditCard,
+  Gift,
+  Hotel as HotelIcon,
+  TriangleAlert,
+} from "lucide-react";
 
 import {
   Badge,
@@ -9,12 +20,13 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
-  LoadingState,
-  PageHeader,
+  Icon,
   SectionHeader,
+  Skeleton,
   StatCard,
   type Column,
 } from "@/components/ui";
+import { useCurrentUser } from "@/lib/session/CurrentUserContext";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { fetchOverview } from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
@@ -30,6 +42,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 
 export default function DashboardPage() {
   const { t, locale } = useI18n();
+  const user = useCurrentUser();
   const [overview, setOverview] = useState<PlatformOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,11 +109,24 @@ export default function DashboardPage() {
     },
   ];
 
+  const firstName = (user?.full_name ?? "").trim().split(/\s+/)[0] || t.app.name;
+
   return (
     <PageContainer>
-      <PageHeader title={t.dashboard.title} subtitle={t.dashboard.subtitle} />
+      <section className="hero">
+        <div className="hero__content">
+          <span className="hero__eyebrow">{t.dashboard.eyebrow}</span>
+          <h1 className="hero__title">
+            {t.dashboard.welcome.replace("{name}", firstName)}
+          </h1>
+          <p className="hero__subtitle">{t.dashboard.welcomeHint}</p>
+        </div>
+        <span className="hero__mark" aria-hidden="true">
+          <Icon icon={HotelIcon} size="lg" />
+        </span>
+      </section>
 
-      {loading ? <LoadingState label={t.common.loading} /> : null}
+      {loading ? <DashboardSkeleton /> : null}
 
       {!loading && error ? (
         <ErrorState
@@ -114,34 +140,68 @@ export default function DashboardPage() {
       {!loading && !error && overview ? (
         <>
           <section className="stat-grid">
-            <StatCard label={t.dashboard.hotelsTotal} value={overview.hotels.total} />
-            <StatCard label={t.dashboard.hotelsActive} value={overview.hotels.active} />
-            <StatCard label={t.dashboard.hotelsSetup} value={overview.hotels.setup} />
+            <StatCard
+              label={t.dashboard.hotelsTotal}
+              value={overview.hotels.total}
+              caption={t.dashboard.captions.hotelsTotal}
+              icon={Building2}
+              tone="primary"
+            />
+            <StatCard
+              label={t.dashboard.hotelsActive}
+              value={overview.hotels.active}
+              caption={t.dashboard.captions.hotelsActive}
+              icon={CircleCheck}
+              tone="success"
+            />
+            <StatCard
+              label={t.dashboard.hotelsSetup}
+              value={overview.hotels.setup}
+              caption={t.dashboard.captions.hotelsSetup}
+              icon={Clock}
+              tone="neutral"
+            />
             <StatCard
               label={t.dashboard.hotelsSuspended}
               value={overview.hotels.suspended}
+              caption={t.dashboard.captions.hotelsSuspended}
+              icon={CirclePause}
+              tone="danger"
             />
             <StatCard
               label={t.dashboard.activeTrials}
               value={overview.subscriptions.active_trials}
+              caption={t.dashboard.captions.activeTrials}
+              icon={Gift}
+              tone="info"
             />
             <StatCard
               label={t.dashboard.activeSubscriptions}
               value={overview.subscriptions.active}
+              caption={t.dashboard.captions.activeSubscriptions}
+              icon={CreditCard}
+              tone="success"
             />
             <StatCard
               label={t.dashboard.expiringSoon}
               value={overview.subscriptions.expiring_soon}
+              caption={t.dashboard.captions.expiringSoon}
+              icon={TriangleAlert}
+              tone="warning"
             />
             <StatCard
               label={t.dashboard.expired}
               value={overview.subscriptions.expired}
+              caption={t.dashboard.captions.expired}
+              icon={CircleX}
+              tone="neutral"
             />
           </section>
 
           <Card>
             <SectionHeader
               title={t.dashboard.recentHotels}
+              icon={Building2}
               actions={
                 <Link className="btn btn--ghost btn--sm" href="/platform/hotels">
                   {t.hotels.title}
@@ -163,6 +223,7 @@ export default function DashboardPage() {
           <Card>
             <SectionHeader
               title={t.dashboard.recentSubscriptions}
+              icon={CreditCard}
               actions={
                 <Link
                   className="btn btn--ghost btn--sm"
@@ -186,5 +247,32 @@ export default function DashboardPage() {
         </>
       ) : null}
     </PageContainer>
+  );
+}
+
+/** Loading placeholder that mirrors the dashboard layout. */
+function DashboardSkeleton() {
+  return (
+    <>
+      <div className="skeleton-stat-grid">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div className="skeleton-card" key={i}>
+            <Skeleton width="2.75rem" height="2.75rem" radius="var(--radius-md)" />
+            <div className="stack" style={{ gap: "var(--space-2)", flex: 1 }}>
+              <Skeleton width="60%" height="0.75rem" />
+              <Skeleton width="40%" height="1.25rem" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <Card>
+        <div className="stack">
+          <Skeleton width="14rem" height="1.25rem" />
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} height="1.5rem" />
+          ))}
+        </div>
+      </Card>
+    </>
   );
 }

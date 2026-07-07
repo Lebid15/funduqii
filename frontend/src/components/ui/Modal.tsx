@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 
 import { IconButton } from "./IconButton";
 
@@ -52,9 +53,7 @@ export function Modal({
       <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal__header">
           <h2 className="modal__title">{title}</h2>
-          <IconButton label={closeLabel} onClick={onClose}>
-            ×
-          </IconButton>
+          <IconButton label={closeLabel} icon={X} onClick={onClose} />
         </div>
         <div className="modal__body">{children}</div>
         {footer ? <div className="modal__footer">{footer}</div> : null}

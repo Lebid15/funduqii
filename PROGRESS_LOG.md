@@ -53,6 +53,7 @@
 | 1.8 | Legacy Reference Insights & Product Enhancements Alignment | مكتملة ✅ | 2026-07-07 |
 | 2 | Authentication + Users + Permissions | مكتملة ✅ | 2026-07-07 |
 | 3 | Platform Owner Panel basics | مكتملة ✅ | 2026-07-07 |
+| 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | لم تبدأ ⏳ | — |
 | 5 | Floors + Room Types + Rooms | لم تبدأ ⏳ | — |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
@@ -503,3 +504,57 @@
 18. تم تصحيح README وإزالة التناقض القديم.
 19. فحوصات backend ناجحة: 82/82.
 20. فحوصات frontend lint/typecheck/build ناجحة.
+
+---
+
+## Phase 3.1 — Premium UI Design System & Visual Polish
+- الحالة: مكتملة ✅ (معتمدة من المالك مبدئيًا وتشغيليًا عبر PR #2)
+- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: 2026-07-07
+- **ملاحظة اعتماد:** تم اعتماد Phase 3.1 مبدئيًا وتشغيليًا، مع تأجيل أي refinements بصرية إضافية إلى مرحلة نهائية لاحقة بعد اكتمال باقي الواجهات (مرحلة قادمة باسم قريب من **Final Visual Identity & UI Refinement Pass** تراجع الألوان والهوية البصرية والفخامة واللمسات النهائية والموبايل والجداول والنماذج والصور وتجربة المستخدم والتناسق بين كل الصفحات).
+- الهدف: رفع جودة واجهات Phase 3 إلى مستوى **Premium SaaS** وتثبيت نظام تصميم مركزي (tokens + أيقونات + مكوّنات + حركة + responsive + RTL) لكل المراحل القادمة. **UI polish فقط** — بلا ميزات، بلا Models، بلا APIs تشغيلية، بلا تغيير business logic.
+
+### ما نُفّذ
+- **Design tokens مركزية مُطوّرة** (`styles/tokens.css`): لوحة teal فاخرة هادئة، طبقات خلفيات/أسطح، حدود، ألوان نص/muted، feedback + soft، مقياس مسافات/radius/shadow/typography، focus ring، transitions/easing، أحجام أيقونات، z-index. لا قيم عشوائية في الصفحات.
+- **نظام أيقونات مركزي واحد**: `lucide-react` عبر مكوّن `Icon` مركزي (توحيد الحجم + stroke 1.75). **أُزيلت كل الإيموجي** من الواجهة (☰ → Menu، × → X، إلخ). أيقونات في Sidebar وstat cards والأزرار وempty/error states والتنبيهات وإظهار كلمة المرور والـ pagination ومبدّل اللغة.
+- **مكتبة مكوّنات محسّنة**: Button (icon + loading)، IconButton، StatCard (icon chip + tone)، Badge، Inputs/Select (chevron مخصّص RTL-aware)/Textarea/Switch/PasswordInput (Eye/EyeOff)، Modal (fade+scale + X)، ConfirmDialog، DataTable، Pagination (chevrons تنعكس RTL)، FilterBar، FormField، Alert (أيقونة حسب النوع)، Toast (slide)، **Skeleton** جديد، وحالات loading/empty/error بأيقونات دائرية.
+- **AppShell/Sidebar/Topbar Premium**: brand mark، nav بأيقونات + active pill بشريط accent (inline-start)، topbar شفاف لاصق + avatar بالأحرف الأولى + هوية المستخدم، drawer متجاوب على ≤900px مع overlay.
+- **Login Premium**: brand mark، خلفية radial هادئة، card بظل، حالة loading على الزر.
+- **Dashboard Premium**: stat cards بأيقونات + tones، **loading skeleton** يحاكي التخطيط، empty states.
+- **Motion**: transitions موحّدة + fade/scale/slide/shimmer، مع احترام `prefers-reduced-motion` عالميًا.
+
+### الملفات
+- **جديدة:** `components/ui/Icon.tsx` · `components/ui/Skeleton.tsx` · `docs/PREMIUM_UI_DESIGN_SYSTEM.md`.
+- **معدّلة (تصميم فقط):** `styles/tokens.css` · `styles/globals.css` · كل مكوّنات `components/ui/*` وlayout ذات الصلة · صفحات `login` و`platform/*` (أيقونات + skeletons + classes، بلا تغيير منطق) · `package.json` (+lucide-react) · `eslint.config.mjs` (كما هو) · التوثيق (README, DEVELOPMENT_RULES §16, docs/README, FRONTEND_DESIGN_SYSTEM_GUIDELINES).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| Frontend `lint` | ✅ exit 0 |
+| Frontend `tsc --noEmit` | ✅ لا أخطاء أنواع |
+| Frontend `build` | ✅ نجح (14 مسار + Proxy) |
+| `manage.py check` | ✅ لا مشاكل |
+| `manage.py test` | ✅ **82/82 OK** (لا تغيير backend) |
+| فحص بصري حيّ (Playwright، Chromium) | ✅ login/dashboard/hotels/plans بالإنجليزية والعربية + موبايل — Premium، RTL سليم، responsive، بلا كسر جداول، بلا إيموجي |
+
+### ملاحظات وقرارات
+- لا Models جديدة، لا APIs تشغيلية، لا تغيير في business logic أو قواعد الاشتراكات/الصلاحيات. الباكند لم يُلمس (الفحوصات للتأكد فقط).
+- أُضيفت مكتبة خفيفة واحدة `lucide-react` كنظام أيقونات معتمد (مسموح صراحةً في نطاق المرحلة).
+- كل النصوص من قواميس الترجمة المركزية (ar/en/tr)؛ لا نصوص hardcoded؛ RTL/LTR عبر logical properties.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا ميزات جديدة**، لا لوحة فندق/موقع عام/غرف/حجوزات/نزلاء/مال/خرائط/واتساب فعلي، لا Models، لا APIs تشغيلية، لم تبدأ Phase 4.
+
+### جولة تحسين بصري ثانية (بطلب المالك — مراجعة بصرية 2026-07-07)
+بعد المراجعة البصرية الأولى رأى المالك أن التنفيذ نظيف لكنه لم يبلغ مستوى Premium المطلوب لهوية Funduqii. نُفّذ **رفع بصري قوي داخل نفس المرحلة ونفس PR** (بلا أي تغيير منطقي):
+- **هوية بصرية أعمق في tokens:** teal عميق + accent بحري/emerald + خلفيات warm neutral + تدرجات هادئة (`--gradient-brand/-hero/-surface`) + ظلال brand مموّهة + مقاييس typography أقوى (حتى 4xl، extrabold، tracking).
+- **Login إعادة تصميم:** لوحتان — panel جانبي فاخر (gradient hero + نمط نقاط + brand mark + عنوان + 3 مزايا) وكرت دخول أرقى (brand mark أكبر، زر gradient، حقول أنعم).
+- **AppShell:** brand block أقوى بفاصل، active nav بحبّة gradient مملوءة + ظل، **بطاقة مستخدم أسفل الـ sidebar** (avatar + اسم + بريد)، topbar فيه scope label + فاصل + logout (لم يعد فارغًا).
+- **Dashboard:** **hero ترحيبي** (gradient + eyebrow + «Welcome back, {name}» + subtitle + glass mark)، stat cards أقوى (رقم بارز + icon chip مموّه للأساسي + caption وصفي صادق)، section headers بأيقونات chip.
+- **Settings:** كل قسم بطاقة premium (icon + عنوان + وصف) بمسافات أوضح.
+- **Tables/Forms/States:** أسطح أنعم، hover بلون العلامة، badges بحدود، modals 2xl مع blur، empty states مصممة داخل بطاقة، أزرار gradient.
+- **مفاتيح ترجمة جديدة** (ar/en/tr) لكل النصوص المضافة (aside، welcome، captions، أوصاف الأقسام) — لا hardcoded.
+- **لقطات جديدة** التُقطت عبر Playwright/Chromium لكل الصفحات المطلوبة (login/dashboard/settings/hotels/plans بالإنجليزية والعربية + موبايل + drawer + empty + modal) وأُرسلت للمالك للمراجعة البصرية.
+- **الفحوصات بعد الجولة الثانية:** frontend lint/tsc/build ✅ · backend check + **82/82** ✅ (الباكند لم يُلمس).
+
+### الاعتماد
+- **معتمدة من المالك بتاريخ 2026-07-07** (مبدئيًا وتشغيليًا) عبر مراجعة PR #2، مع تأجيل أي تحسينات بصرية إضافية إلى مرحلة **Final Visual Identity & UI Refinement Pass** لاحقًا. الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 4** — يبدأ برسالته الرسمية فقط.

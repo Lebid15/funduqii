@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { CreditCard, Plus } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
@@ -165,7 +166,7 @@ export default function SubscriptionsPage() {
         title={t.subscriptions.title}
         subtitle={t.subscriptions.subtitle}
         actions={
-          <Button onClick={() => setCreating(true)}>
+          <Button icon={Plus} onClick={() => setCreating(true)}>
             {t.subscriptions.create}
           </Button>
         }
@@ -208,8 +209,9 @@ export default function SubscriptionsPage() {
           <EmptyState
             title={t.subscriptions.empty}
             hint={t.subscriptions.emptyHint}
+            icon={CreditCard}
             action={
-              <Button onClick={() => setCreating(true)}>
+              <Button icon={Plus} onClick={() => setCreating(true)}>
                 {t.subscriptions.create}
               </Button>
             }
