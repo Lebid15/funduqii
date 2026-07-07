@@ -43,7 +43,8 @@
     "settings": "Ayarlar",
     "platformOwner": "Platform sahibi",
     "openMenu": "Menüyü aç",
-    "closeMenu": "Menüyü kapat"
+    "closeMenu": "Menüyü kapat",
+    "mainSection": "Ana"
   },
   "auth": {
     "loginTitle": "Giriş yap",
@@ -60,7 +61,12 @@
     "forbiddenNotOwner": "Bu konsol yalnızca platform sahipleri içindir.",
     "genericError": "Giriş yapılamadı. Lütfen tekrar deneyin.",
     "logout": "Çıkış yap",
-    "loggingOut": "Çıkış yapılıyor…"
+    "loggingOut": "Çıkış yapılıyor…",
+    "asideHeadline": "Her oteli tek şık bir konsoldan yönetin.",
+    "asideSubtitle": "Funduqii, modern konaklamanın işletim sistemidir — abonelikler, kiracılar ve platform kontrolü tek yerde.",
+    "feature1": "Otelleri izole kiracılar olarak yönetin",
+    "feature2": "Paketler, denemeler ve abonelikler",
+    "feature3": "Güvenli, yetki tabanlı erişim"
   },
   "language": {
     "label": "Dil",
@@ -83,6 +89,19 @@
   "dashboard": {
     "title": "Panel",
     "subtitle": "Platform genel görünümü",
+    "eyebrow": "Platform genel görünümü",
+    "welcome": "Tekrar hoş geldin, {name}",
+    "welcomeHint": "Bugün platformunda olup bitenler burada.",
+    "captions": {
+      "hotelsTotal": "Tüm kayıtlı oteller",
+      "hotelsActive": "Canlı ve aktif",
+      "hotelsSetup": "Etkinleştirme bekliyor",
+      "hotelsSuspended": "Geçici olarak devre dışı",
+      "activeTrials": "Süren ücretsiz denemeler",
+      "activeSubscriptions": "Ücretli ve aktif",
+      "expiringSoon": "Önümüzdeki 14 gün içinde",
+      "expired": "Artık aktif değil"
+    },
     "hotelsTotal": "Toplam otel",
     "hotelsActive": "Aktif oteller",
     "hotelsSetup": "Kurulum bekliyor",
@@ -203,6 +222,10 @@
     "sectionSupport": "Destek iletişimi",
     "sectionDefaults": "Varsayılanlar",
     "sectionSwitches": "Özellik anahtarları",
+    "descGeneral": "Platformunuzun adı ve genel web adresi.",
+    "descSupport": "Otellerin destek için size nasıl ulaştığı.",
+    "descDefaults": "Otel ve deneme oluştururken uygulanan varsayılanlar.",
+    "descSwitches": "Ayrılmış kontroller, sonraki aşamalarda uygulanır.",
     "platformName": "Platform adı",
     "supportEmail": "Destek e-postası",
     "supportPhone": "Destek telefonu",

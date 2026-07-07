@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { Hotel } from "lucide-react";
+import { Building2, CreditCard, Hotel, ShieldCheck } from "lucide-react";
 
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import {
@@ -62,16 +62,46 @@ export default function LoginPage() {
     }
   }
 
+  const features = [
+    { icon: Building2, label: t.auth.feature1 },
+    { icon: CreditCard, label: t.auth.feature2 },
+    { icon: ShieldCheck, label: t.auth.feature3 },
+  ];
+
   return (
     <main className="auth">
-      <Card className="auth__card">
-        <div className="auth__brand">
-          <span className="auth__brand-mark">
+      <aside className="auth__aside">
+        <div className="auth__aside-brand">
+          <span className="brand-mark">
             <Icon icon={Hotel} size="lg" />
           </span>
-          <div className="auth__brand-name">{t.app.name}</div>
-          <div className="auth__brand-sub">{t.auth.loginSubtitle}</div>
+          <span className="auth__aside-brand-name">{t.app.name}</span>
         </div>
+        <div>
+          <h1 className="auth__aside-headline">{t.auth.asideHeadline}</h1>
+          <p className="auth__aside-sub">{t.auth.asideSubtitle}</p>
+        </div>
+        <ul className="auth__features">
+          {features.map((f) => (
+            <li className="auth__feature" key={f.label}>
+              <span className="auth__feature-icon">
+                <Icon icon={f.icon} size="sm" />
+              </span>
+              {f.label}
+            </li>
+          ))}
+        </ul>
+      </aside>
+
+      <div className="auth__main">
+        <Card className="auth__card">
+          <div className="auth__brand">
+            <span className="brand-mark">
+              <Icon icon={Hotel} size="lg" />
+            </span>
+            <div className="auth__brand-name">{t.auth.loginTitle}</div>
+            <div className="auth__brand-sub">{t.auth.loginSubtitle}</div>
+          </div>
 
         <form className="auth__form" onSubmit={handleSubmit} noValidate>
           {error ? <Alert tone="error">{error}</Alert> : null}
@@ -106,10 +136,11 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <div className="auth__lang">
-          <LanguageSwitcher />
-        </div>
-      </Card>
+          <div className="auth__lang">
+            <LanguageSwitcher />
+          </div>
+        </Card>
+      </div>
     </main>
   );
 }

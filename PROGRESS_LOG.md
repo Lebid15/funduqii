@@ -543,5 +543,17 @@
 ### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
 - **لا ميزات جديدة**، لا لوحة فندق/موقع عام/غرف/حجوزات/نزلاء/مال/خرائط/واتساب فعلي، لا Models، لا APIs تشغيلية، لم تبدأ Phase 4.
 
+### جولة تحسين بصري ثانية (بطلب المالك — مراجعة بصرية 2026-07-07)
+بعد المراجعة البصرية الأولى رأى المالك أن التنفيذ نظيف لكنه لم يبلغ مستوى Premium المطلوب لهوية Funduqii. نُفّذ **رفع بصري قوي داخل نفس المرحلة ونفس PR** (بلا أي تغيير منطقي):
+- **هوية بصرية أعمق في tokens:** teal عميق + accent بحري/emerald + خلفيات warm neutral + تدرجات هادئة (`--gradient-brand/-hero/-surface`) + ظلال brand مموّهة + مقاييس typography أقوى (حتى 4xl، extrabold، tracking).
+- **Login إعادة تصميم:** لوحتان — panel جانبي فاخر (gradient hero + نمط نقاط + brand mark + عنوان + 3 مزايا) وكرت دخول أرقى (brand mark أكبر، زر gradient، حقول أنعم).
+- **AppShell:** brand block أقوى بفاصل، active nav بحبّة gradient مملوءة + ظل، **بطاقة مستخدم أسفل الـ sidebar** (avatar + اسم + بريد)، topbar فيه scope label + فاصل + logout (لم يعد فارغًا).
+- **Dashboard:** **hero ترحيبي** (gradient + eyebrow + «Welcome back, {name}» + subtitle + glass mark)، stat cards أقوى (رقم بارز + icon chip مموّه للأساسي + caption وصفي صادق)، section headers بأيقونات chip.
+- **Settings:** كل قسم بطاقة premium (icon + عنوان + وصف) بمسافات أوضح.
+- **Tables/Forms/States:** أسطح أنعم، hover بلون العلامة، badges بحدود، modals 2xl مع blur، empty states مصممة داخل بطاقة، أزرار gradient.
+- **مفاتيح ترجمة جديدة** (ar/en/tr) لكل النصوص المضافة (aside، welcome، captions، أوصاف الأقسام) — لا hardcoded.
+- **لقطات جديدة** التُقطت عبر Playwright/Chromium لكل الصفحات المطلوبة (login/dashboard/settings/hotels/plans بالإنجليزية والعربية + موبايل + drawer + empty + modal) وأُرسلت للمالك للمراجعة البصرية.
+- **الفحوصات بعد الجولة الثانية:** frontend lint/tsc/build ✅ · backend check + **82/82** ✅ (الباكند لم يُلمس).
+
 ### الاعتماد
-- **لم تُعتمد ذاتيًا.** بانتظار مراجعة المالك واعتماده. الحالة تبقى «بانتظار الاعتماد 🔎» حتى قرار المالك. **لم يُغيَّر وضع Phase 4.**
+- **لم تُعتمد ذاتيًا.** بانتظار **المراجعة البصرية الجديدة** واعتماد المالك. الحالة تبقى «بانتظار الاعتماد 🔎». **لم يُغيَّر وضع Phase 4.**

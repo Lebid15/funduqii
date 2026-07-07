@@ -43,7 +43,8 @@
     "settings": "Settings",
     "platformOwner": "Platform owner",
     "openMenu": "Open menu",
-    "closeMenu": "Close menu"
+    "closeMenu": "Close menu",
+    "mainSection": "Main"
   },
   "auth": {
     "loginTitle": "Sign in",
@@ -60,7 +61,12 @@
     "forbiddenNotOwner": "This console is for platform owners only.",
     "genericError": "Could not sign in. Please try again.",
     "logout": "Sign out",
-    "loggingOut": "Signing out…"
+    "loggingOut": "Signing out…",
+    "asideHeadline": "Run every hotel from one refined console.",
+    "asideSubtitle": "Funduqii is the operating system for modern hospitality — subscriptions, tenants, and platform control in one place.",
+    "feature1": "Manage hotels as isolated tenants",
+    "feature2": "Plans, trials & subscriptions",
+    "feature3": "Secure, permission-driven access"
   },
   "language": {
     "label": "Language",
@@ -83,6 +89,19 @@
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Platform overview",
+    "eyebrow": "Platform overview",
+    "welcome": "Welcome back, {name}",
+    "welcomeHint": "Here's what's happening across your platform today.",
+    "captions": {
+      "hotelsTotal": "All registered hotels",
+      "hotelsActive": "Live and operating",
+      "hotelsSetup": "Awaiting activation",
+      "hotelsSuspended": "Temporarily disabled",
+      "activeTrials": "Free trials running",
+      "activeSubscriptions": "Paid & active",
+      "expiringSoon": "Within the next 14 days",
+      "expired": "No longer active"
+    },
     "hotelsTotal": "Total hotels",
     "hotelsActive": "Active hotels",
     "hotelsSetup": "Pending setup",
@@ -203,6 +222,10 @@
     "sectionSupport": "Support contact",
     "sectionDefaults": "Defaults",
     "sectionSwitches": "Feature switches",
+    "descGeneral": "Your platform's name and public website address.",
+    "descSupport": "How hotels reach you for help.",
+    "descDefaults": "Defaults applied when creating hotels and trials.",
+    "descSwitches": "Reserved controls, enforced in later phases.",
     "platformName": "Platform name",
     "supportEmail": "Support email",
     "supportPhone": "Support phone",

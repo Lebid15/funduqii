@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 
 import type { CurrentUser } from "@/lib/api/types";
+import { CurrentUserProvider } from "@/lib/session/CurrentUserContext";
 
 import { ContentContainer } from "./ContentContainer";
 import { Sidebar } from "./Sidebar";
@@ -26,7 +27,7 @@ export function AppShell({
   return (
     <div className="app-shell">
       <aside className="app-sidebar" data-open={sidebarOpen}>
-        <Sidebar onNavigate={close} />
+        <Sidebar user={user} onNavigate={close} />
       </aside>
       <button
         type="button"
@@ -37,8 +38,10 @@ export function AppShell({
         onClick={close}
       />
       <div className="app-main">
-        <Topbar user={user} onMenuToggle={() => setSidebarOpen((v) => !v)} />
-        <ContentContainer>{children}</ContentContainer>
+        <Topbar onMenuToggle={() => setSidebarOpen((v) => !v)} />
+        <ContentContainer>
+          <CurrentUserProvider user={user}>{children}</CurrentUserProvider>
+        </ContentContainer>
       </div>
     </div>
   );

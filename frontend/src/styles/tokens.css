@@ -1,56 +1,67 @@
 /**
  * Design tokens — the single source of truth for visual style.
  *
- * Premium direction (Phase 3.1): calm, trustworthy SaaS. Refined teal brand,
- * warm-cool neutral canvas, crisp white surfaces, subtle layered shadows,
- * generous radii, restrained motion. Components and pages reference these
- * variables only — never hardcode colors, spacing, radii, or shadows.
+ * Premium visual identity (Phase 3.1): a deep, refined teal brand with a calm
+ * sea accent on a warm-neutral canvas, crisp layered surfaces, tinted brand
+ * shadows, soft gradients used sparingly, generous radii, restrained motion.
+ * Components and pages reference these variables only — never hardcode values.
  */
 :root {
-  /* --- Brand ---------------------------------------------------------- */
-  --color-primary: #0f766e;
-  --color-primary-hover: #0c625b;
-  --color-primary-active: #0a544e;
-  --color-primary-strong: #0a544e;
-  --color-primary-soft: #ecfdf7;
-  --color-primary-soft-hover: #d6f7ee;
+  /* --- Brand (deep teal) --------------------------------------------- */
+  --color-primary: #0d6e64;
+  --color-primary-hover: #0a5a52;
+  --color-primary-active: #084b45;
+  --color-primary-strong: #063f3a;
+  --color-primary-soft: #e7f6f2;
+  --color-primary-soft-hover: #d3efe8;
   --color-primary-contrast: #ffffff;
 
-  /* --- Canvas & surfaces --------------------------------------------- */
-  --color-bg: #f6f8fb;
-  --color-bg-subtle: #eef1f6;
+  /* --- Sea / emerald accent (used sparingly) ------------------------- */
+  --color-accent: #0e7c8b;
+  --color-accent-soft: #e2f4f6;
+
+  /* --- Canvas & surfaces (warm neutral) ----------------------------- */
+  --color-bg: #f4f5f3;
+  --color-bg-subtle: #eceeea;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-muted: #f7f9fc;
-  --color-surface-sunken: #f2f5f9;
+  --color-surface-muted: #f8f9f7;
+  --color-surface-sunken: #f2f4f1;
 
-  /* --- Borders ------------------------------------------------------- */
-  --color-border: #e6e9ef;
-  --color-border-subtle: #eef1f6;
-  --color-border-strong: #d4dae3;
+  /* --- Borders (soft) ----------------------------------------------- */
+  --color-border: #e6e8e2;
+  --color-border-subtle: #eef0ea;
+  --color-border-strong: #d6dad1;
 
-  /* --- Text ---------------------------------------------------------- */
-  --color-fg: #111827;
-  --color-fg-muted: #5b6573;
-  --color-fg-subtle: #97a1b1;
+  /* --- Text --------------------------------------------------------- */
+  --color-fg: #15211d;
+  --color-fg-muted: #566159;
+  --color-fg-subtle: #909a90;
   --color-fg-inverse: #ffffff;
 
-  /* --- Feedback (calm, not neon) ------------------------------------- */
+  /* --- Feedback (calm, not neon) ------------------------------------ */
   --color-success: #0f9d6e;
-  --color-success-soft: #e7f7f0;
-  --color-warning: #b7791f;
-  --color-warning-soft: #fbf3e2;
-  --color-danger: #d64545;
-  --color-danger-hover: #c23b3b;
-  --color-danger-soft: #fdecec;
+  --color-success-soft: #e5f6ef;
+  --color-warning: #b5771c;
+  --color-warning-soft: #faf1e0;
+  --color-danger: #d24a44;
+  --color-danger-hover: #bd3d38;
+  --color-danger-soft: #fcecea;
   --color-info: #2f6feb;
   --color-info-soft: #eaf1fe;
-  --color-neutral-soft: #eef1f6;
+  --color-neutral-soft: #eef0ea;
+
+  /* --- Gradients (soft, premium) ------------------------------------ */
+  --gradient-brand: linear-gradient(135deg, #0e7c72 0%, #0a544e 100%);
+  --gradient-hero:
+    radial-gradient(80% 120% at 15% 0%, rgba(23, 140, 128, 0.55), transparent 55%),
+    radial-gradient(70% 120% at 100% 100%, rgba(14, 124, 139, 0.5), transparent 55%),
+    linear-gradient(150deg, #0d6e64 0%, #0a4f49 55%, #073f3a 100%);
+  --gradient-surface: linear-gradient(180deg, #ffffff 0%, #fbfcfa 100%);
 
   /* --- Focus ring ---------------------------------------------------- */
-  --ring-color: rgba(15, 118, 110, 0.35);
+  --ring-color: rgba(13, 110, 100, 0.35);
   --focus-ring: 0 0 0 3px var(--ring-color);
-  --focus-ring-offset: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--ring-color);
 
   /* --- Spacing scale (4px base) -------------------------------------- */
   --space-1: 0.25rem;
@@ -70,6 +81,7 @@
   --radius-md: 0.625rem;
   --radius-lg: 0.875rem;
   --radius-xl: 1.25rem;
+  --radius-2xl: 1.75rem;
   --radius-full: 999px;
 
   /* --- Typography ---------------------------------------------------- */
@@ -82,32 +94,37 @@
   --font-size-xl: 1.25rem;
   --font-size-2xl: 1.5rem;
   --font-size-3xl: 1.875rem;
+  --font-size-4xl: 2.25rem;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --line-tight: 1.25;
-  --line-normal: 1.5;
-  --tracking-tight: -0.011em;
-  --tracking-wide: 0.04em;
+  --font-weight-extrabold: 800;
+  --line-tight: 1.2;
+  --line-snug: 1.35;
+  --line-normal: 1.55;
+  --tracking-tight: -0.02em;
+  --tracking-snug: -0.01em;
+  --tracking-wide: 0.06em;
 
   /* --- Layout -------------------------------------------------------- */
-  --container-max: 82rem;
-  --sidebar-width: 16.5rem;
+  --container-max: 84rem;
+  --sidebar-width: 16.75rem;
   --topbar-height: 4rem;
   --page-pad: var(--space-8);
 
   /* --- Elevation (subtle, layered) ---------------------------------- */
-  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 6px 16px -6px rgba(16, 24, 40, 0.1),
-    0 2px 6px -2px rgba(16, 24, 40, 0.05);
-  --shadow-lg: 0 16px 40px -12px rgba(16, 24, 40, 0.18),
-    0 6px 14px -6px rgba(16, 24, 40, 0.1);
+  --shadow-xs: 0 1px 2px rgba(20, 33, 29, 0.05);
+  --shadow-sm: 0 1px 3px rgba(20, 33, 29, 0.07), 0 1px 2px rgba(20, 33, 29, 0.04);
+  --shadow-md: 0 8px 20px -8px rgba(20, 33, 29, 0.12),
+    0 2px 6px -2px rgba(20, 33, 29, 0.06);
+  --shadow-lg: 0 20px 48px -16px rgba(20, 33, 29, 0.22),
+    0 8px 18px -8px rgba(20, 33, 29, 0.12);
+  --shadow-brand: 0 10px 26px -8px rgba(13, 110, 100, 0.45);
 
   /* --- Motion -------------------------------------------------------- */
   --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
-  --transition-fast: 120ms var(--ease-out);
-  --transition-base: 200ms var(--ease-out);
+  --transition-fast: 130ms var(--ease-out);
+  --transition-base: 220ms var(--ease-out);
 
   /* --- Icons --------------------------------------------------------- */
   --icon-sm: 16px;

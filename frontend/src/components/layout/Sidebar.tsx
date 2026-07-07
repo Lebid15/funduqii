@@ -13,7 +13,9 @@ import {
 } from "lucide-react";
 
 import { Icon } from "@/components/ui";
+import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { initials } from "@/lib/format";
 
 interface NavItem {
   href: string;
@@ -22,8 +24,14 @@ interface NavItem {
   exact?: boolean;
 }
 
-/** Central platform navigation. Rendered inside the AppShell sidebar. */
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+/** Central platform navigation with brand block, icon nav, and a user card. */
+export function Sidebar({
+  user,
+  onNavigate,
+}: {
+  user: CurrentUser;
+  onNavigate?: () => void;
+}) {
   const { t } = useI18n();
   const pathname = usePathname();
 
@@ -43,7 +51,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       <div className="app-sidebar__brand">
-        <span className="app-sidebar__brand-mark">
+        <span className="brand-mark">
           <Icon icon={Hotel} size="lg" />
         </span>
         <span className="app-sidebar__brand-text">
@@ -51,7 +59,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <span className="app-sidebar__brand-sub">{t.nav.platformOwner}</span>
         </span>
       </div>
+
       <nav className="app-nav" aria-label={t.nav.platformOwner}>
+        <span className="app-nav__section">{t.nav.mainSection}</span>
         {items.map((item) => (
           <Link
             key={item.href}
@@ -65,6 +75,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           </Link>
         ))}
       </nav>
+
+      <div className="app-sidebar__user">
+        <span className="avatar avatar--md" aria-hidden="true">
+          {initials(user.full_name)}
+        </span>
+        <span className="app-sidebar__user-meta">
+          <span className="app-sidebar__user-name">{user.full_name}</span>
+          <span className="app-sidebar__user-email">{user.email}</span>
+        </span>
+      </div>
     </>
   );
 }

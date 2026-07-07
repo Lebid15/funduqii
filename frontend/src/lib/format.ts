@@ -4,6 +4,14 @@ import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
 import type { HotelStatus, SubscriptionStatus } from "@/lib/api/types";
 
+/** Two-letter initials from a full name (for avatars). */
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 /** Locale-aware date formatting; returns an em dash for missing values. */
 export function formatDate(iso: string | null, locale: Locale): string {
   if (!iso) return "—";
