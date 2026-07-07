@@ -72,6 +72,19 @@ these rules is a defect, not a shortcut.
   is stored; keep at most one active logo/cover per hotel.
 - Full rules: [docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md](docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md).
 
+### 8b. Rooms inventory & manual status (from Phase 5)
+- **Room status is manual ops state only** — `available`, `dirty`, `cleaning`,
+  `maintenance`, `out_of_service`, `archived`. **Never** add `reserved` or
+  `occupied` here; those are **system-derived** from reservations/check-in in
+  later phases.
+- **Controlled status path:** all status changes go through one service that
+  validates, records a `RoomStatusLog` row, and stamps who/when. A note is
+  **required** for `maintenance` / `out_of_service`.
+- **Inventory integrity:** room number unique per hotel; room-type code unique
+  per hotel; a room's floor and room type must belong to the **same** hotel; a
+  floor/room type with rooms **cannot be deleted** — deactivate it instead.
+- Full rules: [docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

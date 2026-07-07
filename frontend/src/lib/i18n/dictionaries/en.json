@@ -159,6 +159,112 @@
       "loadError": "Could not load hotel settings."
     }
   },
+  "rooms": {
+    "nav": "Rooms",
+    "title": "Rooms",
+    "subtitle": "Floors, room types and rooms",
+    "saved": "Saved.",
+    "tabs": {
+      "overview": "Overview",
+      "floors": "Floors",
+      "types": "Room types",
+      "rooms": "Rooms"
+    },
+    "overview": {
+      "total": "Total rooms",
+      "available": "Available",
+      "needsCleaning": "Needs cleaning",
+      "cleaning": "Cleaning",
+      "maintenance": "Maintenance",
+      "outOfService": "Out of service"
+    },
+    "status": {
+      "available": "Available",
+      "dirty": "Needs cleaning",
+      "cleaning": "Cleaning",
+      "maintenance": "Maintenance",
+      "out_of_service": "Out of service",
+      "archived": "Archived"
+    },
+    "bedTypes": {
+      "none": "—",
+      "single": "Single",
+      "double": "Double",
+      "twin": "Twin",
+      "king": "King",
+      "queen": "Queen",
+      "suite": "Suite"
+    },
+    "floors": {
+      "add": "Add floor",
+      "createTitle": "Add a floor",
+      "editTitle": "Edit floor",
+      "name": "Name",
+      "number": "Number",
+      "description": "Description",
+      "sortOrder": "Order",
+      "active": "Active",
+      "roomCount": "Rooms",
+      "empty": "No floors yet",
+      "emptyHint": "Add a floor to start organizing rooms.",
+      "nameRequired": "A floor name is required.",
+      "deleteTitle": "Delete this floor?",
+      "deleteBody": "Floors with rooms cannot be deleted — deactivate instead."
+    },
+    "types": {
+      "add": "Add room type",
+      "createTitle": "Add a room type",
+      "editTitle": "Edit room type",
+      "name": "Name",
+      "code": "Code",
+      "description": "Description",
+      "baseCapacity": "Base capacity",
+      "maxCapacity": "Max capacity",
+      "bedType": "Bed type",
+      "amenities": "Amenities",
+      "amenitiesHint": "Comma-separated, e.g. wifi, tv, minibar",
+      "baseRate": "Reference rate",
+      "baseRateHint": "Reference only — not billing.",
+      "active": "Active",
+      "sortOrder": "Order",
+      "roomCount": "Rooms",
+      "empty": "No room types yet",
+      "emptyHint": "Define the types of rooms this hotel offers.",
+      "deleteTitle": "Delete this room type?",
+      "deleteBody": "Types used by rooms cannot be deleted — deactivate instead."
+    },
+    "list": {
+      "add": "Add room",
+      "createTitle": "Add a room",
+      "editTitle": "Edit room",
+      "number": "Room number",
+      "displayName": "Display name",
+      "floor": "Floor",
+      "roomType": "Room type",
+      "capacity": "Capacity",
+      "selectFloor": "Select a floor",
+      "selectType": "Select a room type",
+      "searchPlaceholder": "Search by number or name",
+      "filterFloor": "Floor",
+      "filterType": "Room type",
+      "filterStatus": "Status",
+      "includeArchived": "Show archived",
+      "changeStatus": "Change status",
+      "changeStatusTitle": "Change room status",
+      "newStatus": "New status",
+      "statusNote": "Note",
+      "statusNoteHint": "Required for maintenance / out of service.",
+      "empty": "No rooms yet",
+      "emptyHint": "Add rooms to this hotel to get started.",
+      "deleteTitle": "Delete this room?",
+      "deleteBody": "The room will be permanently removed."
+    },
+    "errors": {
+      "inUse": "This item is in use and cannot be deleted; deactivate it instead.",
+      "crossTenant": "The selected floor or room type belongs to another hotel.",
+      "noteRequired": "A note is required for this status change."
+    }
+  },
   "language": {
     "label": "Language",
     "ar": "العربية",

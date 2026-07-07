@@ -246,3 +246,64 @@ export interface HotelProfile {
   cover: HotelMedia | null;
   gallery_count: number;
 }
+
+/* ==========================================================================
+ * Phase 5 — Floors / room types / rooms DTOs (mirror /api/v1/hotel/).
+ * ======================================================================== */
+
+export type RoomStatus =
+  | "available"
+  | "dirty"
+  | "cleaning"
+  | "maintenance"
+  | "out_of_service"
+  | "archived";
+
+export interface Floor {
+  id: number;
+  name: string;
+  number: string;
+  description: string;
+  sort_order: number;
+  is_active: boolean;
+  room_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoomType {
+  id: number;
+  name: string;
+  code: string;
+  description: string;
+  base_capacity: number;
+  max_capacity: number;
+  bed_type: string;
+  amenities: string[];
+  base_rate: string | null;
+  is_active: boolean;
+  sort_order: number;
+  room_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Room {
+  id: number;
+  number: string;
+  display_name: string;
+  floor: number;
+  floor_name: string;
+  room_type: number;
+  room_type_name: string;
+  room_type_code: string;
+  base_capacity: number;
+  max_capacity: number;
+  status: RoomStatus;
+  status_note: string;
+  status_changed_at: string | null;
+  status_changed_by: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}

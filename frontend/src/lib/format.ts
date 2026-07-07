@@ -2,7 +2,11 @@
 import type { BadgeTone } from "@/components/ui";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
-import type { HotelStatus, SubscriptionStatus } from "@/lib/api/types";
+import type {
+  HotelStatus,
+  RoomStatus,
+  SubscriptionStatus,
+} from "@/lib/api/types";
 
 /** Two-letter initials from a full name (for avatars). */
 export function initials(name: string): string {
@@ -79,6 +83,25 @@ export function subscriptionStatusLabel(
     default:
       return status;
   }
+}
+
+export function roomStatusTone(status: RoomStatus): BadgeTone {
+  switch (status) {
+    case "available":
+      return "success";
+    case "dirty":
+      return "warning";
+    case "cleaning":
+      return "info";
+    case "maintenance":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function roomStatusLabel(status: RoomStatus, t: Dictionary): string {
+  return t.rooms.status[status];
 }
 
 export function billingCycleLabel(cycle: string, t: Dictionary): string {

@@ -159,6 +159,112 @@
       "loadError": "Otel ayarları yüklenemedi."
     }
   },
+  "rooms": {
+    "nav": "Odalar",
+    "title": "Odalar",
+    "subtitle": "Katlar, oda türleri ve odalar",
+    "saved": "Kaydedildi.",
+    "tabs": {
+      "overview": "Genel bakış",
+      "floors": "Katlar",
+      "types": "Oda türleri",
+      "rooms": "Odalar"
+    },
+    "overview": {
+      "total": "Toplam oda",
+      "available": "Müsait",
+      "needsCleaning": "Temizlik gerekiyor",
+      "cleaning": "Temizleniyor",
+      "maintenance": "Bakımda",
+      "outOfService": "Hizmet dışı"
+    },
+    "status": {
+      "available": "Müsait",
+      "dirty": "Temizlik gerekiyor",
+      "cleaning": "Temizleniyor",
+      "maintenance": "Bakımda",
+      "out_of_service": "Hizmet dışı",
+      "archived": "Arşivlendi"
+    },
+    "bedTypes": {
+      "none": "—",
+      "single": "Tek kişilik",
+      "double": "Çift kişilik",
+      "twin": "İki tek yatak",
+      "king": "King",
+      "queen": "Queen",
+      "suite": "Suit"
+    },
+    "floors": {
+      "add": "Kat ekle",
+      "createTitle": "Kat ekle",
+      "editTitle": "Katı düzenle",
+      "name": "Ad",
+      "number": "Numara",
+      "description": "Açıklama",
+      "sortOrder": "Sıra",
+      "active": "Aktif",
+      "roomCount": "Oda",
+      "empty": "Henüz kat yok",
+      "emptyHint": "Odaları düzenlemeye başlamak için bir kat ekleyin.",
+      "nameRequired": "Kat adı zorunludur.",
+      "deleteTitle": "Bu kat silinsin mi?",
+      "deleteBody": "Odası olan katlar silinemez — bunun yerine devre dışı bırakın."
+    },
+    "types": {
+      "add": "Oda türü ekle",
+      "createTitle": "Oda türü ekle",
+      "editTitle": "Oda türünü düzenle",
+      "name": "Ad",
+      "code": "Kod",
+      "description": "Açıklama",
+      "baseCapacity": "Temel kapasite",
+      "maxCapacity": "Maksimum kapasite",
+      "bedType": "Yatak türü",
+      "amenities": "Olanaklar",
+      "amenitiesHint": "Virgülle ayrılmış, örn. wifi, tv, minibar",
+      "baseRate": "Referans fiyat",
+      "baseRateHint": "Yalnızca referans — faturalama değil.",
+      "active": "Aktif",
+      "sortOrder": "Sıra",
+      "roomCount": "Oda",
+      "empty": "Henüz oda türü yok",
+      "emptyHint": "Bu otelin sunduğu oda türlerini tanımlayın.",
+      "deleteTitle": "Bu oda türü silinsin mi?",
+      "deleteBody": "Odalarca kullanılan türler silinemez — devre dışı bırakın."
+    },
+    "list": {
+      "add": "Oda ekle",
+      "createTitle": "Oda ekle",
+      "editTitle": "Odayı düzenle",
+      "number": "Oda numarası",
+      "displayName": "Görünen ad",
+      "floor": "Kat",
+      "roomType": "Oda türü",
+      "capacity": "Kapasite",
+      "selectFloor": "Bir kat seçin",
+      "selectType": "Bir oda türü seçin",
+      "searchPlaceholder": "Numara veya adla ara",
+      "filterFloor": "Kat",
+      "filterType": "Oda türü",
+      "filterStatus": "Durum",
+      "includeArchived": "Arşivlenenleri göster",
+      "changeStatus": "Durumu değiştir",
+      "changeStatusTitle": "Oda durumunu değiştir",
+      "newStatus": "Yeni durum",
+      "statusNote": "Not",
+      "statusNoteHint": "Bakım / hizmet dışı için zorunlu.",
+      "empty": "Henüz oda yok",
+      "emptyHint": "Başlamak için bu otele oda ekleyin.",
+      "deleteTitle": "Bu oda silinsin mi?",
+      "deleteBody": "Oda kalıcı olarak kaldırılacak."
+    },
+    "errors": {
+      "inUse": "Bu öğe kullanımda ve silinemez; bunun yerine devre dışı bırakın.",
+      "crossTenant": "Seçilen kat veya oda türü başka bir otele ait.",
+      "noteRequired": "Bu durum değişikliği için bir not gereklidir."
+    }
+  },
   "language": {
     "label": "Dil",
     "ar": "العربية",

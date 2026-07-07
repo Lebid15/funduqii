@@ -52,5 +52,9 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 
 - [HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md](HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md) — `HotelSettings` and `HotelMedia` structure, the settings/media separation, image rules (types/sizes/limits/validation), tenant isolation, permissions, and what is deferred to later phases.
 
+## Phase 5 — Floors, room types & rooms
+
+- [FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md) — the `apps/rooms` app (`Floor`, `RoomType`, `Room`, `RoomStatusLog`), the manual room-status model (no `reserved`/`occupied`), business rules (tenant isolation, uniqueness, capacity, deletion guards, suspended read-only), permissions (`rooms.*`), the `/api/v1/hotel/` API surface, the tabbed rooms console, and what is deferred to later phases.
+
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.
