@@ -93,6 +93,27 @@ class InvalidSubscriptionTransition(FunduqiiAPIException):
     default_code = "invalid_subscription_transition"
 
 
+# --- Hotel settings & media (Phase 4) --------------------------------------
+
+
+class HotelSuspended(FunduqiiAPIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "This hotel is suspended; settings are read-only."
+    default_code = "hotel_suspended"
+
+
+class InvalidMediaFile(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The uploaded file is not a valid image."
+    default_code = "invalid_media_file"
+
+
+class MediaLimitReached(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The maximum number of gallery images has been reached."
+    default_code = "media_limit_reached"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

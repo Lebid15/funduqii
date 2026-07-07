@@ -177,3 +177,72 @@ export interface PlatformOverview {
   recent_hotels: Hotel[];
   recent_subscriptions: HotelSubscription[];
 }
+
+/* ==========================================================================
+ * Phase 4 — Hotel settings & media DTOs (mirror /api/v1/hotel/ responses).
+ * ======================================================================== */
+
+export type MediaKind = "logo" | "cover" | "gallery";
+
+export interface HotelSettings {
+  display_name: string;
+  legal_name: string;
+  short_description: string;
+  description: string;
+  star_rating: number | null;
+  default_language: "ar" | "en" | "tr";
+  default_currency: string;
+  timezone: string;
+  phone: string;
+  whatsapp_number: string;
+  email: string;
+  website_url: string;
+  facebook_url: string;
+  instagram_url: string;
+  social_links: Record<string, string>;
+  country: string;
+  city: string;
+  area: string;
+  address_line: string;
+  latitude: string | null;
+  longitude: string | null;
+  map_url: string;
+  google_place_id: string;
+  location_notes: string;
+  check_in_time: string | null;
+  check_out_time: string | null;
+  cancellation_policy: string;
+  child_policy: string;
+  pet_policy: string;
+  smoking_policy: string;
+  extra_bed_policy: string;
+  important_notes: string;
+  default_booking_status: string;
+  allow_public_booking: boolean;
+  require_guest_phone: boolean;
+  require_guest_document: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HotelMedia {
+  id: number;
+  kind: MediaKind;
+  url: string | null;
+  alt_text: string;
+  sort_order: number;
+  is_active: boolean;
+  uploaded_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HotelProfile {
+  hotel: { id: number; name: string; slug: string; status: HotelStatus };
+  display_name: string;
+  city: string;
+  country: string;
+  logo: HotelMedia | null;
+  cover: HotelMedia | null;
+  gallery_count: number;
+}

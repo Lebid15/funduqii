@@ -9,12 +9,11 @@
  */
 import { NextResponse } from "next/server";
 
-import type { MeResponse } from "@/lib/api/types";
 import { clearSession, djangoRequest } from "@/lib/session/server";
 
 function safeNext(raw: string | null): string {
-  // Only allow internal platform paths to prevent open redirects.
-  if (raw && raw.startsWith("/platform")) {
+  // Only allow internal console paths to prevent open redirects.
+  if (raw && (raw.startsWith("/platform") || raw.startsWith("/hotel"))) {
     return raw;
   }
   return "/platform";
@@ -30,10 +29,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  const data = (await res.json()) as MeResponse;
-  if (!data.user.is_platform_owner) {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
-
+  // The refresh persisted rotated tokens; the target layout (platform/hotel)
+  // performs the role/membership gate. Just bounce back.
   return NextResponse.redirect(new URL(next, request.url));
 }

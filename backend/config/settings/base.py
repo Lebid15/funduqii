@@ -53,6 +53,7 @@ LOCAL_APPS = [
     "apps.integrations",
     "apps.subscriptions",
     "apps.platform",
+    "apps.hotels",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -245,3 +246,17 @@ WHATSAPP_WEBHOOK_VERIFY_TOKEN = env("WHATSAPP_WEBHOOK_VERIFY_TOKEN", default="")
 DEFAULT_COUNTRY_CODE = env("DEFAULT_COUNTRY_CODE", default="")
 PLATFORM_SUPPORT_WHATSAPP = env("PLATFORM_SUPPORT_WHATSAPP", default="")
 PLATFORM_SUPPORT_PHONE = env("PLATFORM_SUPPORT_PHONE", default="")
+
+# ===========================================================================
+# Hotel media upload limits (Phase 4)
+#
+# Raster images only (jpg/jpeg/png/webp) — SVG is rejected for security. Limits
+# are overridable via env. See docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md.
+# ===========================================================================
+HOTEL_MEDIA_ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "webp"]
+HOTEL_MEDIA_LOGO_MAX_BYTES = env.int("HOTEL_MEDIA_LOGO_MAX_BYTES", default=1 * 1024 * 1024)
+HOTEL_MEDIA_COVER_MAX_BYTES = env.int("HOTEL_MEDIA_COVER_MAX_BYTES", default=5 * 1024 * 1024)
+HOTEL_MEDIA_GALLERY_MAX_BYTES = env.int(
+    "HOTEL_MEDIA_GALLERY_MAX_BYTES", default=5 * 1024 * 1024
+)
+HOTEL_MEDIA_GALLERY_MAX_COUNT = env.int("HOTEL_MEDIA_GALLERY_MAX_COUNT", default=10)

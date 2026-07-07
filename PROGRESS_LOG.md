@@ -54,7 +54,7 @@
 | 2 | Authentication + Users + Permissions | مكتملة ✅ | 2026-07-07 |
 | 3 | Platform Owner Panel basics | مكتملة ✅ | 2026-07-07 |
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
-| 4 | Hotels + Hotel Settings | لم تبدأ ⏳ | — |
+| 4 | Hotels + Hotel Settings | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | لم تبدأ ⏳ | — |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
@@ -558,3 +558,50 @@
 
 ### الاعتماد
 - **معتمدة من المالك بتاريخ 2026-07-07** (مبدئيًا وتشغيليًا) عبر مراجعة PR #2، مع تأجيل أي تحسينات بصرية إضافية إلى مرحلة **Final Visual Identity & UI Refinement Pass** لاحقًا. الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 4** — يبدأ برسالته الرسمية فقط.
+
+---
+
+## Phase 4 — Hotels + Hotel Settings
+- الحالة: بانتظار الاعتماد 🔎 (منفَّذة ومُختبَرة؛ **لم تُعتمد ذاتيًا**)
+- التاريخ: بدأت 2026-07-07 · اكتمل التنفيذ 2026-07-07 · الاعتماد: —
+- الهدف: بناء **إعدادات الفندق ووسائطه فقط** (الهوية/التواصل/الموقع/السياسات/الإعدادات الافتراضية + الشعار/الغلاف/المعرض) وربطها بالـ tenant (Phase 3)، تحت `/api/v1/hotel/` بعزل tenant وصلاحيات كاملة. **ليست مرحلة تشغيل الفندق** — لا غرف/طوابق/حجوزات/نزلاء/مال/موقع عام.
+
+### ما نُفّذ (Backend)
+- **تطبيق `apps/hotels`** منفصل عن `tenancy` (الذي يبقى tenant minimal): 
+  - **`HotelSettings`** (OneToOne مع `tenancy.Hotel`، يُنشأ تلقائيًا عند أول قراءة) — Identity/Contact/Location/Policies/Operational-defaults. حقول الخرائط/واتساب **قيم فقط** (لا اتصال).
+  - **`HotelMedia`** — صور logo/cover/gallery كملفّات storage (لا DB، لا base64)، مع قيود قاعدة بيانات: **شعار نشط واحد + غلاف نشط واحد** لكل فندق.
+- **تحقّق صور دفاعي متعدد الطبقات** (`validators.py`): امتداد + content-type + magic bytes، **رفض SVG**، وحدود حجم/عدد قابلة للتهيئة من env (logo≤1MB · cover≤5MB · gallery≤5MB لكل صورة · ≤10 صور).
+- **خدمات آمنة** (`services.py`): الاستبدال يتحقّق أولًا ثم يعطّل القديم وينشئ الجديد داخل transaction (لا يُحذف القديم قبل نجاح الجديد)؛ حدّ المعرض؛ حذف يزيل الملف.
+- **APIs تحت `/api/v1/hotel/`**: `settings/`(GET/PATCH) · `profile/`(GET) · `media/`(GET/POST multipart) · `media/{id}/`(PATCH metadata/DELETE) — **النصوص والصور منفصلة تمامًا**.
+- **صلاحيات وعزل**: كل endpoint يستخدم `HasHotelPermission("settings.view"/"settings.update")` (المسجّلة أصلًا) → JWT + عضوية نشطة + X-Hotel-ID + الصلاحية. الفندق المعلّق **للقراءة فقط** (`403 hotel_suspended` عند التعديل). أخطاء موحّدة جديدة: `hotel_suspended`, `invalid_media_file`, `media_limit_reached`.
+
+### ما نُفّذ (Frontend)
+- **جلسة جانب الفندق (BFF)**: تسجيل الدخول يوجّه حسب النوع — مالك المنصة → `/platform`، مستخدم فندق بعضوية نشطة → `/hotel` (يُخزَّن معرّف الفندق في **كوكي HttpOnly** ويُرفق كـ `X-Hotel-ID` عبر proxy `/api/hotel/[...]` الذي يمرّر multipart للرفع). لا توكن/معرّف فندق في JS.
+- **Hotel AppShell محدود** (نفس نظام التصميم Premium عبر `variant`): sidebar باسم الفندق + عضو، topbar، صفحة **`/hotel/settings`** فقط (و`/hotel` → redirect).
+- **صفحة إعدادات احترافية**: أقسام (الهوية/التواصل/الموقع/السياسات/الإعدادات الافتراضية/الهوية البصرية)، حفظ نصّي واحد + **إدارة وسائط منفصلة** (رفع/استبدال logo وcover، معرض برفع/حذف/إعادة ترتيب up-down)، حالات loading/empty/error/success، confirm dialog للحذف، وضع read-only عند التعليق.
+- ترجمات ar/en/tr كاملة لكل نصوص القسم، RTL/LTR، responsive.
+
+### الملفات
+- **جديدة (Backend):** `apps/hotels/{__init__,apps,models,validators,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/api/hotel/[...path]/route.ts` · `app/hotel/{layout,page}.tsx` · `app/hotel/settings/page.tsx` · `components/hotel/HotelMediaSection.tsx` · `lib/api/hotel.ts` · `lib/session/CurrentUserContext.tsx` (سابقًا) — والوثيقة `docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md`.
+- **معدّلة:** `config/settings/base.py` (+app +حدود media) · `config/urls.py` (+`/api/v1/hotel/` +خدمة media في dev) · `apps/common/exceptions.py` (أخطاء Phase 4) · Frontend: `session/{config,server}.ts`, `api/session/login`/`refresh` routes, `proxy.ts`, `api/{types,errors}.ts`, `components/layout/{AppShell,Sidebar,Topbar}.tsx`, `app/login/page.tsx`, قواميس ar/en/tr، `styles/globals.css` (media) + التوثيق (README, DEVELOPMENT_RULES §8a, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **110/110 OK** (82 سابقة + 28 لـ hotels) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/settings` مبني) |
+| فحص حيّ End-to-End (Django+Next، رفع media فعلي) | ✅ دخول مدير فندق → `/hotel` + كوكي HttpOnly · GET/PATCH settings · رفع logo (multipart، URL بلا base64) · شعار نشط واحد · **PATCH نصّي لا يلمس الصور** · رفض SVG (400) · unauth 401 · لقطات `/hotel/settings` EN/AR/موبايل Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- media list بلا pagination (مجموعة صغيرة محدودة) لإرجاع قائمة مباشرة.
+- بلا Pillow — تحقّق الصور عبر التوقيع/الامتداد/الحجم يكفي ويتجنّب اعتمادية ثقيلة.
+- لم تُكسَر صفحات Phase 3؛ AppShell/Sidebar أُعيد تعميمها عبر `variant` دون تغيير سلوك لوحة المنصة.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا غرف/طوابق/أنواع غرف/حجوزات/توفر/نزلاء/دخول-مغادرة/مدفوعات/مصروفات/فوليو/فواتير/مطعم/تنظيف/صيانة/ورديات/إغلاق يومي/تقارير.** لا موقع عام/حجز عام. لا تكامل خرائط/واتساب فعلي، لا Search/Activity Feed/Command Palette. لم تبدأ Phase 5.
+
+### الاعتماد
+- **لم تُعتمد ذاتيًا.** بانتظار مراجعة المالك واعتماده. الحالة تبقى «بانتظار الاعتماد 🔎». **لم يُغيَّر وضع Phase 5.**

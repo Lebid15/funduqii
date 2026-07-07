@@ -60,6 +60,18 @@ these rules is a defect, not a shortcut.
 - Configuration comes from the environment, with development and production
   settings kept separate.
 
+### 8a. Media / file uploads (from Phase 4)
+- **Files are stored via the storage backend, never in the DB and never as
+  base64.** API responses return URLs + metadata only.
+- **Media is separate from text.** Image upload/replace/delete have their own
+  endpoints; a text `PATCH` must never touch, re-send, or re-validate existing
+  images.
+- **Validate every upload** by extension + content-type + magic-byte signature,
+  reject SVG, and enforce per-kind size and count limits (configurable via env).
+- **Safe replace:** validate first; never remove the old file before the new one
+  is stored; keep at most one active logo/cover per hotel.
+- Full rules: [docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md](docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

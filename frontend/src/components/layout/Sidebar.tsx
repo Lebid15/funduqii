@@ -17,6 +17,8 @@ import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { initials } from "@/lib/format";
 
+type ShellVariant = "platform" | "hotel";
+
 interface NavItem {
   href: string;
   label: string;
@@ -24,24 +26,39 @@ interface NavItem {
   exact?: boolean;
 }
 
-/** Central platform navigation with brand block, icon nav, and a user card. */
+/** Central navigation with brand block, icon nav, and a user card. Serves both
+ * the platform-owner and hotel-side shells via the `variant` prop. */
 export function Sidebar({
+  variant,
   user,
+  hotelName,
   onNavigate,
 }: {
+  variant: ShellVariant;
   user: CurrentUser;
+  hotelName?: string;
   onNavigate?: () => void;
 }) {
   const { t } = useI18n();
   const pathname = usePathname();
 
-  const items: NavItem[] = [
+  const platformItems: NavItem[] = [
     { href: "/platform", label: t.nav.dashboard, icon: LayoutDashboard, exact: true },
     { href: "/platform/hotels", label: t.nav.hotels, icon: Building2 },
     { href: "/platform/plans", label: t.nav.plans, icon: Package },
     { href: "/platform/subscriptions", label: t.nav.subscriptions, icon: CreditCard },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
+  const hotelItems: NavItem[] = [
+    { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
+  ];
+
+  const items = variant === "hotel" ? hotelItems : platformItems;
+  const brandSubtitle =
+    variant === "hotel"
+      ? hotelName || t.hotel.nav.subtitle
+      : t.nav.platformOwner;
+  const navLabel = variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
 
   function isActive(item: NavItem): boolean {
     if (item.exact) return pathname === item.href;
@@ -56,11 +73,11 @@ export function Sidebar({
         </span>
         <span className="app-sidebar__brand-text">
           <span className="app-sidebar__brand-name">{t.app.name}</span>
-          <span className="app-sidebar__brand-sub">{t.nav.platformOwner}</span>
+          <span className="app-sidebar__brand-sub">{brandSubtitle}</span>
         </span>
       </div>
 
-      <nav className="app-nav" aria-label={t.nav.platformOwner}>
+      <nav className="app-nav" aria-label={navLabel}>
         <span className="app-nav__section">{t.nav.mainSection}</span>
         {items.map((item) => (
           <Link

@@ -8,7 +8,12 @@ operational business features.
 Phase 3 adds the platform owner's first real feature surface under the
 versioned prefix ``/api/v1/platform/`` (apps.platform). Every endpoint there is
 restricted to the platform owner.
+
+Phase 4 adds the hotel's own settings & media under ``/api/v1/hotel/``
+(apps.hotels), scoped to the caller's hotel context and permissions.
 """
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
@@ -21,4 +26,10 @@ urlpatterns = [
     path("api/platform/ping/", PlatformPingView.as_view(), name="platform-ping"),
     path("api/foundation/", include("apps.rbac.urls")),
     path("api/v1/platform/", include("apps.platform.urls")),
+    path("api/v1/hotel/", include("apps.hotels.urls")),
 ]
+
+# Serve uploaded media in development only. In production the media files are
+# served by the web server / object storage (see the deployment docs).
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
