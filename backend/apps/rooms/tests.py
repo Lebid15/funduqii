@@ -364,7 +364,7 @@ class RoomTests(APITestCase):
 class RegressionTests(APITestCase):
     def test_health_and_forbidden_routes(self):
         self.assertEqual(self.client.get(reverse("health")).status_code, 200)
-        for path in ("/api/v1/reservations/", "/api/v1/guests/", "/api/v1/payments/"):
+        for path in ("/api/v1/guests/", "/api/v1/payments/"):
             self.assertEqual(self.client.get(path).status_code, 404, path)
 
     def test_hotel_settings_still_works(self):
@@ -379,5 +379,6 @@ class RegressionTests(APITestCase):
         from django.apps import apps as django_apps
 
         tables = {m._meta.db_table for m in django_apps.get_models()}
-        for forbidden in ("guests", "reservations", "payments", "invoices", "folios"):
+        # `reservations` is legitimately introduced in Phase 6; guests/money are not.
+        for forbidden in ("guests", "payments", "invoices", "folios", "expenses"):
             self.assertNotIn(forbidden, tables)

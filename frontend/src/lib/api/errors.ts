@@ -41,6 +41,12 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.rooms.errors.crossTenant;
     case "status_note_required":
       return t.rooms.errors.noteRequired;
+    case "no_availability":
+      return t.reservations.errors.noAvailability;
+    case "cancellation_reason_required":
+      return t.reservations.errors.reasonRequired;
+    case "invalid_reservation_transition":
+      return t.reservations.errors.invalidTransition;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

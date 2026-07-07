@@ -307,3 +307,79 @@ export interface Room {
   created_at: string;
   updated_at: string;
 }
+
+/* ==========================================================================
+ * Phase 6 — Reservations & availability DTOs (mirror /api/v1/hotel/).
+ * ======================================================================== */
+
+export type ReservationStatus = "held" | "confirmed" | "cancelled" | "expired";
+export type ReservationSource = "direct" | "phone" | "walk_in" | "other";
+
+export interface ReservationLine {
+  id: number;
+  room_type: number;
+  room_type_name: string;
+  room_type_code: string;
+  max_capacity: number;
+  quantity: number;
+  adults: number | null;
+  children: number | null;
+  notes: string;
+}
+
+export interface Reservation {
+  id: number;
+  reservation_number: string;
+  status: ReservationStatus;
+  source: ReservationSource;
+  check_in_date: string;
+  check_out_date: string;
+  nights: number;
+  primary_guest_name: string;
+  primary_guest_phone: string;
+  primary_guest_email: string;
+  adults: number;
+  children: number;
+  total_guests: number;
+  notes: string;
+  special_requests: string;
+  cancellation_reason: string;
+  cancelled_at: string | null;
+  hold_expires_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  lines: ReservationLine[];
+}
+
+export interface TypeAvailability {
+  room_type: number;
+  room_type_name: string;
+  room_type_code: string;
+  base_capacity: number;
+  max_capacity: number;
+  total_rooms: number;
+  blocked_rooms: number;
+  reserved_quantity: number;
+  available_quantity: number;
+  can_book: boolean;
+  reason: string | null;
+}
+
+export interface ReservationOverview {
+  total: number;
+  held: number;
+  confirmed: number;
+  cancelled: number;
+  expired: number;
+  arrivals: Reservation[];
+  departures: Reservation[];
+}
+
+export interface ReservationStatusLogEntry {
+  previous_status: string;
+  new_status: string;
+  note: string;
+  changed_by: string | null;
+  created_at: string;
+}

@@ -4,6 +4,7 @@ import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
 import type {
   HotelStatus,
+  ReservationStatus,
   RoomStatus,
   SubscriptionStatus,
 } from "@/lib/api/types";
@@ -102,6 +103,26 @@ export function roomStatusTone(status: RoomStatus): BadgeTone {
 
 export function roomStatusLabel(status: RoomStatus, t: Dictionary): string {
   return t.rooms.status[status];
+}
+
+export function reservationStatusTone(status: ReservationStatus): BadgeTone {
+  switch (status) {
+    case "confirmed":
+      return "success";
+    case "held":
+      return "warning";
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function reservationStatusLabel(
+  status: ReservationStatus,
+  t: Dictionary,
+): string {
+  return t.reservations.status[status];
 }
 
 export function billingCycleLabel(cycle: string, t: Dictionary): string {

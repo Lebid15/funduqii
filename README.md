@@ -4,17 +4,20 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 5 — Floors + Room Types + Rooms (pending review).**
+> **Current status: Phase 6 — Reservations + Availability Engine (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
-> (platform-owner console), Phase 3.1 (premium UI) and Phase 4 (hotel settings &
-> media). Phase 5 adds the hotel's **physical inventory** — floors, room types,
-> and rooms with a basic **manual** operational status (available/dirty/cleaning/
-> maintenance/out_of_service/archived) — under `/api/v1/hotel/`, plus a tabbed
-> hotel-side console at `/hotel/rooms`, all scoped by hotel membership and
-> permissions (`rooms.*`).
-> **Still no reservations, availability, guests, check-in/out, money, public
-> website, or real maps/WhatsApp** — and no `reserved`/`occupied` statuses (those
-> are system-derived in later phases). See
+> (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
+> media) and Phase 5 (floors/room types/rooms). Phase 6 adds the hotel's
+> **internal booking system** and a central **availability engine** that
+> prevents overbooking — reservations by room type and quantity
+> (held/confirmed/cancelled/expired), a date-overlap rule that allows
+> back-to-back stays, and backend-enforced availability — under
+> `/api/v1/hotel/`, plus a tabbed hotel-side console at `/hotel/reservations`,
+> all scoped by hotel membership and permissions (`reservations.*`,
+> `availability.view`).
+> **Still no check-in/out, no `occupied` state, no full guest profile, no money
+> (payments/folio/invoices), no public website/booking, and no real maps/WhatsApp**
+> — those are later phases. See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
 > [PROGRESS_LOG.md](PROGRESS_LOG.md) for per-phase status, and
@@ -36,6 +39,7 @@ funduqii/
 │  ├─ apps/platform/        # platform-owner API /api/v1/platform/ (Phase 3)
 │  ├─ apps/hotels/          # hotel settings + media /api/v1/hotel/ (Phase 4)
 │  ├─ apps/rooms/           # floors + room types + rooms /api/v1/hotel/ (Phase 5)
+│  ├─ apps/reservations/    # reservations + availability engine /api/v1/hotel/ (Phase 6)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -303,6 +307,27 @@ Room status is manual ops state only (available/dirty/cleaning/maintenance/
 out_of_service/archived) — there is no `reserved`/`occupied` (system-derived
 later). See
 [docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md).
+
+### Reservations & availability endpoints (Phase 6)
+
+Also under `/api/v1/hotel/`, scoped to the caller's hotel and guarded by
+`reservations.*` / `availability.view`. Bookings are by room type + quantity;
+overbooking is prevented on the backend (transaction + row locks). A suspended
+hotel is read-only; there is **no hard-delete** — cancelling is the only path.
+
+| Method & path | Purpose |
+|---|---|
+| `GET/POST /api/v1/hotel/reservations/` | List (filters: status/type/date range/search) / create |
+| `GET /api/v1/hotel/reservations/overview/` | Counts + upcoming arrivals/departures (view only) |
+| `GET/PATCH /api/v1/hotel/reservations/{id}/` | Read / update (re-checks availability) |
+| `POST .../reservations/{id}/confirm/` · `/cancel/` · `/hold/` | Confirm / cancel (reason required) / refresh hold |
+| `GET .../reservations/{id}/logs/` | Reservation status history |
+| `GET /api/v1/hotel/availability/` · `/availability/calendar/` | Availability by dates (per room type / per day) |
+
+Reservation status is `held`/`confirmed`/`cancelled`/`expired` — no
+check-in/out, no `occupied`, no guest profile, no money. Back-to-back stays are
+allowed; overlapping ones are blocked. See
+[docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

@@ -56,7 +56,7 @@
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
-| 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
+| 6 | Reservations + Availability Engine | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
@@ -709,3 +709,57 @@
 
 #### ملاحظة مستقبلية
 - قبل الإنتاج/الإطلاق النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من الأداء والفلاتر وpagination وسلامة العلاقات. لا يمنع اعتماد Phase 5 الآن.
+
+---
+
+## Phase 6 — Reservations + Availability Engine
+- الحالة: 🔎 **بانتظار الاعتماد** (منفَّذة ومُختبَرة — لم تُعتمد ذاتيًا)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07
+- الهدف: نظام الحجوزات الداخلي للفندق + **محرك توفر مركزي يمنع overbooking**، **بلا** check-in/out ولا نزلاء كاملين ولا مال ولا موقع عام.
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/reservations`** (منفصل عن rooms/hotels)، بثلاثة نماذج مربوطة بالـ tenant:
+  - **`Reservation`** (رأس الحجز): `reservation_number` (**فريد لكل فندق**، تسلسل مستقل `R00001…`)، `status`، `source`، `check_in_date`/`check_out_date` (قيد `check_out > check_in`)، **snapshot ضيف رئيسي** (name مطلوب/phone/email — **لا Guest profile**)، adults/children/notes/special_requests، حقول الإلغاء، `hold_expires_at`، created_by/updated_by؛ `nights`/`total_guests` properties.
+  - **`ReservationRoomLine`**: `room_type` (**PROTECT**) + `quantity>0` (+adults/children/notes) — الحجز **حسب نوع الغرفة والكمية**.
+  - **`ReservationStatusLog`**: سجلّ حالة الحجز فقط (النموذج المفضّل، نُفِّذ) — ليس audit log عام.
+- **حالات الحجز**: `held`/`confirmed`/`cancelled`/`expired`. **لا `checked_in`/`checked_out`/`occupied`/`no_show`** (مؤجّلة لـ Phase 7).
+- **محرك التوفر `AvailabilityService`** (مركزي، لا يُكرَّر في serializers/views):
+  - **قاعدة التداخل نصف-مفتوحة** `[in, out)` → back-to-back **مسموح**، والتداخل الفعلي **ممنوع**.
+  - **ما يحجز المخزون**: `confirmed` + `held` غير المنتهي فقط؛ cancelled/expired والـ held المنتهي **لا يحجزان** (انتهاء الحجز المؤقت **lazy** بلا Celery).
+  - **حساب المخزون** من Phase 5: غرف active + طابق active + نوع active وليست maintenance/out_of_service/archived. **قرار موثّق:** dirty/cleaning تُحتسب ضمن المخزون.
+  - **منع overbooking** داخل transaction مع `select_for_update` على أنواع الغرف بترتيب ثابت ثم إعادة حساب التوفر → `409 no_availability`. **الباكند مصدر الحقيقة.**
+  - **إعادة الفحص عند التعديل/التأكيد** مع استثناء الحجز نفسه من الحساب.
+- **صلاحيات**: `reservations.view/create/update/confirm/cancel` + `availability.view` (و`reservations.assign_room` محجوزة لـ Phase 7). مفروضة على الباكند لكل endpoint. الفندق المعلّق للقراءة فقط. **لا hard-delete** — الإلغاء (بسبب إلزامي) هو المسار.
+- **APIs تحت `/api/v1/hotel/`**: `reservations/`(+overview/) · `reservations/{id}/`(GET/PATCH) · `{id}/confirm|cancel|hold|logs/` · `availability/`(+calendar/). أخطاء جديدة: `no_availability` (409) · `invalid_reservation_transition` (400) · `cancellation_reason_required` (400).
+- **قرار موثّق:** `ReservationRoomAssignment` **مؤجّل إلى Phase 7** (تعيين غرفة فعلية جزء من check-in، ولا واجهة له في Phase 6؛ صحة المخزون مضمونة على مستوى نوع الغرفة).
+
+### ما نُفّذ (Frontend)
+- **عنصر «الحجوزات»** في sidebar الفندق، وصفحة **`/hotel/reservations`** بتبويبات: نظرة عامة / التوفر / الحجوزات.
+- **نظرة عامة**: بطاقات ملخّص + قوائم الوصول/المغادرة القادمة (عرض فقط — **بلا أزرار check-in/out**). **التوفر**: مدقّق مدفوع من الباكند (تواريخ/ضيوف/نوع → بطاقات توفر لكل نوع). **الحجوزات**: قائمة مفلترة/مرقّمة + نافذة إنشاء/تعديل (أسطر غرف ديناميكية + snapshot ضيف + held/confirmed) + نافذة تفاصيل (الأسطر/سجل الحالة/تأكيد/إلغاء/تعديل) + نافذة إلغاء (سبب إلزامي).
+- نظام التصميم المركزي + أيقونات lucide، ترجمات **ar/en/tr** كاملة مع RTL/LTR، حالات موحّدة، responsive حقيقي، لا نصوص مكتوبة مباشرة، لا توكن في localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/reservations/{__init__,apps,models,availability,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/hotel/reservations/page.tsx` · `components/hotel/reservations/{OverviewTab,AvailabilityTab,ReservationsTab,index}.tsx` · `lib/api/reservations.ts` · والوثيقة `docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+confirm/assign_room + قسم availability) · `apps/common/exceptions.py` (3 أخطاء) · `config/settings/base.py` (+app) · `config/urls.py` (+urls) · اختبارات regression في hotels/rooms (السماح بجدول reservations).
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` · قواميس ar/en/tr · `styles/globals.css` · التوثيق (README, DEVELOPMENT_RULES §8c, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **198/198 OK** (140 سابقة + 58 لـ reservations) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/reservations` مبني) |
+| فحص حيّ End-to-End (Django+Next، SQLite) | ✅ توفر 3/3 → حجز مؤكد 2×STD + مؤقت 1×DLX · **overbooking → 409** · **back-to-back → 201** · **overlap → 409** · held بلا expiry → 400 · overview صحيح · لقطات overview/availability/list/AR/موبايل/نافذة الإنشاء Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- تحديث اختبارَي regression في Phase 4/5 للسماح بجدول `reservations` (مشروع في Phase 6)، مع بقاء منع guests/payments/invoices/folios/expenses.
+- انتهاء الحجز المؤقت يُحسب lazily وقت القراءة — لا حاجة لـ Celery لصحة الحساب (يمكن إضافة مهمة تنظيف لاحقًا).
+- قفل أنواع الغرف بترتيب ثابت (pk) لتقليل deadlocks عند التزامن.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا check-in/check-out · لا `occupied` · لا Guest profile/وثائق · لا payments/folio/invoices/expenses · لا مطعم/تنظيف-صيانة workflows · لا ورديات/إغلاق يومي/تقارير · لا موقع عام/حجز عام · لا واتساب/خرائط فعلية.** `ReservationRoomAssignment` مؤجّل لـ Phase 7. **لم تبدأ Phase 7.**
+
+### الاعتماد
+- **بانتظار اعتماد المالك** عبر مراجعة PR. **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 7.

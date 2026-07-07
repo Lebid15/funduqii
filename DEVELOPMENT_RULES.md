@@ -85,6 +85,22 @@ these rules is a defect, not a shortcut.
   floor/room type with rooms **cannot be deleted** — deactivate it instead.
 - Full rules: [docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md).
 
+### 8c. Reservations & availability (from Phase 6)
+- **The backend is the source of truth for availability.** Overbooking is
+  prevented on the server inside a transaction that locks the involved room
+  types before re-computing availability; the frontend only renders the answer.
+- **One availability engine.** All overlap/inventory logic lives in a central
+  service (`AvailabilityService`) — never re-implemented in serializers/views.
+- **Date overlap is half-open** (`[check_in, check_out)`): back-to-back stays do
+  not overlap and are allowed; genuinely overlapping stays are blocked.
+- **Blocking statuses:** `confirmed` and non-expired `held` consume inventory;
+  `cancelled`/`expired`/lapsed holds do not. Holds expire **lazily** at read
+  time (no background job needed for correctness).
+- **No `reserved`/`occupied`/`checked_in`/`checked_out`** statuses, **no guest
+  profile**, and **no money** in Phase 6. Store only a primary-guest snapshot on
+  the booking. Cancelling is a soft action (reason required) — **no hard-delete**.
+- Full rules: [docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.
