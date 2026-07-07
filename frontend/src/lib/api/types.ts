@@ -321,6 +321,8 @@ export interface ReservationLine {
   room_type_name: string;
   room_type_code: string;
   max_capacity: number;
+  room: number | null;
+  room_number: string | null;
   quantity: number;
   adults: number | null;
   children: number | null;

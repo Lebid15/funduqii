@@ -762,3 +762,145 @@ class RegressionTests(APITestCase):
                 self.fail(f"{name} should not exist in Phase 6")
             except NoReverseMatch:
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6.1 — Minimal room assignment                                         #
+# --------------------------------------------------------------------------- #
+
+
+class RoomAssignmentTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)  # rooms 101, 102
+
+    def _create(self, **over):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            res_payload(self.rtype, **over),
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _assigned_line(self, room, **extra):
+        return {"room_type": self.rtype.id, "room": room.id, "quantity": 1, **extra}
+
+    def test_assign_room_success(self):
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 201)
+        line = res.data["lines"][0]
+        self.assertEqual(line["room"], self.rooms[0].id)
+        self.assertEqual(line["room_number"], self.rooms[0].number)
+
+    def test_room_must_match_room_type(self):
+        other_type = make_type(self.hotel, code="DLX", name="Deluxe")
+        other_room = make_rooms(self.hotel, other_type, 1, start=301)[0]
+        res = self._create(lines=[self._assigned_line(other_room)])
+        self.assertEqual(res.status_code, 400)
+
+    def test_room_from_other_hotel_rejected(self):
+        other = make_hotel(slug="o")
+        ot = make_type(other)
+        oroom = make_rooms(other, ot, 1)[0]
+        res = self._create(lines=[{"room_type": self.rtype.id, "room": oroom.id, "quantity": 1}])
+        self.assertEqual(res.status_code, 400)
+
+    def test_inactive_room_not_assignable(self):
+        self.rooms[0].is_active = False
+        self.rooms[0].save()
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 400)
+
+    def test_maintenance_room_not_assignable(self):
+        self.rooms[0].status = RoomStatus.MAINTENANCE
+        self.rooms[0].save()
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 400)
+
+    def test_out_of_service_and_archived_not_assignable(self):
+        for st in (RoomStatus.OUT_OF_SERVICE, RoomStatus.ARCHIVED):
+            self.rooms[0].status = st
+            self.rooms[0].save()
+            res = self._create(lines=[self._assigned_line(self.rooms[0])])
+            self.assertEqual(res.status_code, 400, st)
+
+    def test_assigned_room_requires_quantity_one(self):
+        res = self._create(lines=[{"room_type": self.rtype.id, "room": self.rooms[0].id, "quantity": 2}])
+        self.assertEqual(res.status_code, 400)
+
+    def test_same_room_overlap_blocked(self):
+        self.assertEqual(self._create(lines=[self._assigned_line(self.rooms[0])]).status_code, 201)
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "room_assignment_conflict")
+
+    def test_back_to_back_same_room_allowed(self):
+        self.assertEqual(self._create(lines=[self._assigned_line(self.rooms[0])]).status_code, 201)
+        res = self._create(
+            check_in_date=D2.isoformat(),
+            check_out_date=D3.isoformat(),
+            lines=[self._assigned_line(self.rooms[0])],
+        )
+        self.assertEqual(res.status_code, 201)
+
+    def test_duplicate_same_room_in_request_rejected(self):
+        res = self._create(
+            lines=[self._assigned_line(self.rooms[0]), self._assigned_line(self.rooms[0])]
+        )
+        self.assertEqual(res.status_code, 409)
+
+    def test_assigned_room_reduces_availability(self):
+        self._create(lines=[self._assigned_line(self.rooms[0])])
+        a = AvailabilityService.availability_for_type(self.hotel, self.rtype, D1, D2)
+        self.assertEqual(a.reserved_quantity, 1)
+        self.assertEqual(a.available_quantity, 1)
+
+    def test_mixed_assigned_and_unassigned_availability(self):
+        # 2 rooms: assign room 101 + 1 unassigned -> both consumed; a 3rd fails.
+        res = self._create(
+            lines=[
+                self._assigned_line(self.rooms[0]),
+                {"room_type": self.rtype.id, "quantity": 1},
+            ],
+        )
+        self.assertEqual(res.status_code, 201)
+        a = AvailabilityService.availability_for_type(self.hotel, self.rtype, D1, D2)
+        self.assertEqual(a.available_quantity, 0)
+        # Another overlapping request (assigned or unassigned) must fail.
+        self.assertEqual(self._create(lines=[self._assigned_line(self.rooms[1])]).status_code, 409)
+        self.assertEqual(self._create(lines=[{"room_type": self.rtype.id, "quantity": 1}]).status_code, 409)
+
+    def test_cancel_frees_assigned_room(self):
+        r = self._create(lines=[self._assigned_line(self.rooms[0])])
+        rid = r.data["id"]
+        # Same room overlapping now blocked.
+        self.assertEqual(self._create(lines=[self._assigned_line(self.rooms[0])]).status_code, 409)
+        self.client.post(
+            reverse("reservations:reservation-cancel", args=[rid]),
+            {"reason": "x"}, format="json", **HDR(self.hotel),
+        )
+        # After cancel, the room is free again.
+        self.assertEqual(self._create(lines=[self._assigned_line(self.rooms[0])]).status_code, 201)
+
+    def test_staff_needs_assign_room_permission(self):
+        staff = add_member(self.hotel, "s@x.com", perms=["reservations.view", "reservations.create"])
+        self.client.force_authenticate(staff)
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 403)
+
+    def test_staff_with_assign_room_permission_can_assign(self):
+        staff = add_member(
+            self.hotel, "s2@x.com",
+            perms=["reservations.view", "reservations.create", "reservations.assign_room"],
+        )
+        self.client.force_authenticate(staff)
+        res = self._create(lines=[self._assigned_line(self.rooms[0])])
+        self.assertEqual(res.status_code, 201)
+
+    def test_unassigned_booking_still_works(self):
+        # Phase 6 behaviour is unchanged when no room is assigned.
+        res = self._create(lines=[{"room_type": self.rtype.id, "quantity": 2}])
+        self.assertEqual(res.status_code, 201)

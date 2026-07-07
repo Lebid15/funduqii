@@ -148,6 +148,16 @@ class ReservationRoomLine(models.Model):
     room_type = models.ForeignKey(
         "rooms.RoomType", on_delete=models.PROTECT, related_name="reservation_lines"
     )
+    # Phase 6.1: an OPTIONAL specific room assignment. Assigning a room does NOT
+    # mean the guest has arrived — check-in is Phase 7. When set, the room must
+    # belong to `room_type`, be bookable, and `quantity` must be 1.
+    room = models.ForeignKey(
+        "rooms.Room",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reservation_lines",
+    )
     quantity = models.PositiveSmallIntegerField(default=1)
     adults = models.PositiveSmallIntegerField(null=True, blank=True)
     children = models.PositiveSmallIntegerField(null=True, blank=True)

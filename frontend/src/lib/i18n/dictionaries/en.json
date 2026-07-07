@@ -370,7 +370,10 @@
       "holdExpiryHint": "Required for a temporary hold.",
       "nameRequired": "A guest name is required.",
       "linesRequired": "Add at least one room.",
-      "availabilityHint": "Availability is re-checked on the server before saving."
+      "availabilityHint": "Availability is re-checked on the server before saving.",
+      "room": "Assign room (optional)",
+      "roomAny": "Any available room",
+      "roomHint": "Pin a specific room, or leave as any."
     },
     "details": {
       "title": "Reservation",
@@ -390,7 +393,8 @@
       "noHistory": "No status changes yet",
       "confirm": "Confirm",
       "cancel": "Cancel",
-      "edit": "Edit"
+      "edit": "Edit",
+      "room": "Room"
     },
     "cancelDialog": {
       "title": "Cancel reservation",
@@ -406,7 +410,8 @@
     "errors": {
       "noAvailability": "Not enough rooms are available for the selected dates.",
       "reasonRequired": "A cancellation reason is required.",
-      "invalidTransition": "This reservation status change is not allowed."
+      "invalidTransition": "This reservation status change is not allowed.",
+      "roomConflict": "This room is already assigned for the selected dates."
     }
   },
   "language": {

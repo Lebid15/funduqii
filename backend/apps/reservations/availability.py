@@ -20,8 +20,14 @@ Core rules
   ``maintenance`` / ``out_of_service`` / ``archived``. Transient housekeeping
   states (``dirty`` / ``cleaning``) are still counted as bookable, because a
   future stay is unaffected by today's housekeeping state.
+* **Room assignment (Phase 6.1)** — a line may optionally pin a *specific* room.
+  A room type's consumed inventory over a range is therefore
+  ``(distinct specifically-assigned bookable rooms) + (unassigned quantity)``.
+  A specific room cannot be assigned to two overlapping blocking reservations
+  (back-to-back is fine); an assignment never exceeds the type's capacity.
 * **Overbooking is prevented on the backend**, inside a transaction that locks
-  the involved room types before re-computing availability.
+  the involved room types (and any specifically-requested rooms) before
+  re-computing availability.
 """
 from __future__ import annotations
 
@@ -90,9 +96,9 @@ class AvailabilityService:
     """Central availability calculations. Stateless — call the classmethods."""
 
     @staticmethod
-    def bookable_rooms_count(hotel, room_type) -> int:
-        """Physical rooms of ``room_type`` that can currently hold a booking."""
-        return (
+    def bookable_room_ids(hotel, room_type) -> set[int]:
+        """IDs of physical rooms of ``room_type`` that can currently be booked."""
+        return set(
             Room.objects.filter(
                 hotel=hotel,
                 room_type=room_type,
@@ -101,11 +107,64 @@ class AvailabilityService:
                 room_type__is_active=True,
             )
             .exclude(status__in=NON_BOOKABLE_ROOM_STATUSES)
-            .count()
+            .values_list("id", flat=True)
         )
 
+    @classmethod
+    def bookable_rooms_count(cls, hotel, room_type) -> int:
+        """Physical rooms of ``room_type`` that can currently hold a booking."""
+        return len(cls.bookable_room_ids(hotel, room_type))
+
     @staticmethod
+    def _blocking_overlapping(hotel, check_in, check_out, *, exclude_reservation_id, now):
+        qs = (
+            Reservation.objects.filter(hotel=hotel)
+            .filter(overlap_q(check_in, check_out))
+            .filter(blocking_q(now))
+        )
+        if exclude_reservation_id is not None:
+            qs = qs.exclude(pk=exclude_reservation_id)
+        return qs
+
+    @classmethod
+    def existing_usage(
+        cls,
+        hotel,
+        room_type,
+        check_in,
+        check_out,
+        *,
+        bookable_ids=None,
+        exclude_reservation_id=None,
+        now=None,
+    ) -> tuple[set[int], int]:
+        """Return ``(assigned_room_ids, unassigned_quantity)`` for a room type.
+
+        ``assigned_room_ids`` is the set of *specific* bookable rooms already
+        pinned by blocking, overlapping lines; ``unassigned_quantity`` is the
+        summed quantity of blocking, overlapping lines with no specific room.
+        """
+        if bookable_ids is None:
+            bookable_ids = cls.bookable_room_ids(hotel, room_type)
+        blocking = cls._blocking_overlapping(
+            hotel, check_in, check_out,
+            exclude_reservation_id=exclude_reservation_id, now=now,
+        )
+        lines = ReservationRoomLine.objects.filter(
+            hotel=hotel, room_type=room_type, reservation__in=blocking
+        )
+        assigned = set(
+            lines.filter(room__isnull=False).values_list("room_id", flat=True)
+        ) & bookable_ids
+        unassigned = (
+            lines.filter(room__isnull=True).aggregate(total=Sum("quantity"))["total"]
+            or 0
+        )
+        return assigned, unassigned
+
+    @classmethod
     def reserved_quantity(
+        cls,
         hotel,
         room_type,
         check_in,
@@ -114,27 +173,30 @@ class AvailabilityService:
         exclude_reservation_id=None,
         now=None,
     ) -> int:
-        """Rooms of ``room_type`` already blocked for the given range.
+        """Rooms of ``room_type`` already consumed for the given range.
 
-        Sums the quantities of every blocking, overlapping reservation line,
-        optionally excluding one reservation (used when re-checking an edit of
-        that same reservation so it does not conflict with itself).
+        = distinct specifically-assigned bookable rooms + unassigned quantity,
+        over every blocking, overlapping line (optionally excluding one
+        reservation, so a self-edit does not conflict with itself).
         """
-        blocking_overlapping = (
-            Reservation.objects.filter(hotel=hotel)
-            .filter(overlap_q(check_in, check_out))
-            .filter(blocking_q(now))
+        assigned, unassigned = cls.existing_usage(
+            hotel, room_type, check_in, check_out,
+            exclude_reservation_id=exclude_reservation_id, now=now,
         )
-        if exclude_reservation_id is not None:
-            blocking_overlapping = blocking_overlapping.exclude(
-                pk=exclude_reservation_id
-            )
-        qs = ReservationRoomLine.objects.filter(
-            hotel=hotel,
-            room_type=room_type,
-            reservation__in=blocking_overlapping,
+        return len(assigned) + unassigned
+
+    @classmethod
+    def room_is_assigned_in_range(
+        cls, hotel, room, check_in, check_out, *, exclude_reservation_id=None, now=None
+    ) -> bool:
+        """True if ``room`` is specifically assigned to a blocking, overlapping line."""
+        blocking = cls._blocking_overlapping(
+            hotel, check_in, check_out,
+            exclude_reservation_id=exclude_reservation_id, now=now,
         )
-        return qs.aggregate(total=Sum("quantity"))["total"] or 0
+        return ReservationRoomLine.objects.filter(
+            hotel=hotel, room=room, reservation__in=blocking
+        ).exists()
 
     @classmethod
     def availability_for_type(
@@ -215,49 +277,93 @@ class AvailabilityService:
     def ensure_can_book(
         cls,
         hotel,
-        requested,
+        requested_lines,
         check_in,
         check_out,
         *,
         exclude_reservation_id=None,
     ) -> None:
-        """Raise :class:`NoAvailability` unless every requested line fits.
+        """Raise unless every requested line fits (capacity + room assignment).
 
-        MUST be called inside a transaction. Locks the involved room types (in a
-        stable id order to avoid deadlocks) before re-computing availability, so
-        two concurrent bookings of the same type cannot both pass this check and
-        overbook the hotel.
+        MUST be called inside a transaction. Locks the involved room types and
+        any specifically-requested rooms (in a stable id order to avoid
+        deadlocks) before re-computing availability, so two concurrent bookings
+        of the same type/room cannot both pass and overbook the hotel.
 
-        ``requested`` maps ``room_type_id -> quantity``.
+        ``requested_lines`` is a list of dicts:
+        ``{"room_type_id": int, "quantity": int, "room_id": int|None}``.
+        Raises :class:`NoAvailability` on insufficient capacity and
+        :class:`RoomAssignmentConflict` on a same-room overlap.
         """
-        from apps.common.exceptions import NoAvailability
+        from apps.common.exceptions import NoAvailability, RoomAssignmentConflict
 
         now = timezone.now()
-        # Lock the room type rows in a deterministic order (serialization point).
-        locked_ids = sorted(requested.keys())
+
+        # Serialization points: lock the room types, then any specific rooms,
+        # each in a deterministic id order.
+        type_ids = sorted({ln["room_type_id"] for ln in requested_lines})
+        room_ids = sorted(
+            {ln["room_id"] for ln in requested_lines if ln.get("room_id")}
+        )
         list(
             RoomType.objects.select_for_update()
-            .filter(hotel=hotel, pk__in=locked_ids)
+            .filter(hotel=hotel, pk__in=type_ids)
             .order_by("pk")
         )
-        for rt in RoomType.objects.filter(hotel=hotel, pk__in=locked_ids):
-            qty = requested[rt.id]
-            avail = cls.availability_for_type(
-                hotel,
-                rt,
-                check_in,
-                check_out,
-                requested_quantity=qty,
-                exclude_reservation_id=exclude_reservation_id,
+        if room_ids:
+            list(
+                Room.objects.select_for_update()
+                .filter(hotel=hotel, pk__in=room_ids)
+                .order_by("pk")
+            )
+
+        # Group the request by room type.
+        by_type: dict[int, list] = {}
+        for ln in requested_lines:
+            by_type.setdefault(ln["room_type_id"], []).append(ln)
+
+        types = {rt.id: rt for rt in RoomType.objects.filter(hotel=hotel, pk__in=type_ids)}
+        for rt_id, lines in by_type.items():
+            rt = types.get(rt_id)
+            if rt is None:
+                raise NoAvailability({"room_type": rt_id, "reason": "unknown_room_type"})
+            bookable = cls.bookable_room_ids(hotel, rt)
+            n = len(bookable)
+            existing_assigned, existing_unassigned = cls.existing_usage(
+                hotel, rt, check_in, check_out,
+                bookable_ids=bookable, exclude_reservation_id=exclude_reservation_id,
                 now=now,
             )
-            if not avail.can_book:
+            existing_reserved = len(existing_assigned) + existing_unassigned
+
+            req_rooms = [ln["room_id"] for ln in lines if ln.get("room_id")]
+            req_unassigned = sum(
+                ln["quantity"] for ln in lines if not ln.get("room_id")
+            )
+
+            # Duplicate specific rooms within the same request are a conflict.
+            if len(req_rooms) != len(set(req_rooms)):
+                raise RoomAssignmentConflict(
+                    {"room_type": rt.id, "reason": "duplicate_room_in_request"}
+                )
+            for rid in req_rooms:
+                if rid not in bookable:
+                    raise NoAvailability(
+                        {"room_type": rt.id, "room": rid, "reason": "room_not_bookable"}
+                    )
+                if rid in existing_assigned:
+                    raise RoomAssignmentConflict(
+                        {"room_type": rt.id, "room": rid, "reason": "room_overlap"}
+                    )
+
+            new_demand = len(req_rooms) + req_unassigned
+            if existing_reserved + new_demand > n:
                 raise NoAvailability(
                     {
                         "room_type": rt.id,
                         "room_type_name": rt.name,
-                        "requested": qty,
-                        "available": avail.available_quantity,
-                        "reason": avail.reason,
+                        "requested": new_demand,
+                        "available": max(0, n - existing_reserved),
+                        "reason": "insufficient_rooms" if n else "no_bookable_rooms",
                     }
                 )

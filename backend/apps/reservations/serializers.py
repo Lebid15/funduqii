@@ -12,7 +12,7 @@ import re
 from rest_framework import serializers
 
 from apps.common.exceptions import CrossTenantReference
-from apps.rooms.models import RoomType
+from apps.rooms.models import Room, RoomStatus, RoomType
 
 from .availability import TypeAvailability
 from .models import (
@@ -24,6 +24,12 @@ from .models import (
 
 _PHONE_RE = re.compile(r"^[0-9+\-\s()]{4,32}$")
 _WRITE_STATUSES = (ReservationStatus.HELD, ReservationStatus.CONFIRMED)
+# Room statuses that cannot receive a specific assignment (Phase 6.1).
+_NON_ASSIGNABLE_ROOM_STATUSES = (
+    RoomStatus.MAINTENANCE,
+    RoomStatus.OUT_OF_SERVICE,
+    RoomStatus.ARCHIVED,
+)
 
 
 class ReservationLineReadSerializer(serializers.ModelSerializer):
@@ -32,6 +38,7 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
     max_capacity = serializers.IntegerField(
         source="room_type.max_capacity", read_only=True
     )
+    room_number = serializers.SerializerMethodField()
 
     class Meta:
         model = ReservationRoomLine
@@ -41,12 +48,17 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
             "room_type_name",
             "room_type_code",
             "max_capacity",
+            "room",
+            "room_number",
             "quantity",
             "adults",
             "children",
             "notes",
         ]
         read_only_fields = fields
+
+    def get_room_number(self, obj):
+        return obj.room.number if obj.room_id else None
 
 
 class ReservationSerializer(serializers.ModelSerializer):
@@ -91,6 +103,8 @@ class ReservationSerializer(serializers.ModelSerializer):
 
 class ReservationLineWriteSerializer(serializers.Serializer):
     room_type = serializers.IntegerField()
+    # Phase 6.1: an optional specific room assignment.
+    room = serializers.IntegerField(required=False, allow_null=True)
     quantity = serializers.IntegerField(min_value=1)
     adults = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     children = serializers.IntegerField(min_value=0, required=False, allow_null=True)
@@ -152,9 +166,11 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
     # --- object-level --------------------------------------------------------
 
     def _resolve_lines(self, raw_lines):
-        """Turn ``[{room_type: id, ...}]`` into validated line dicts.
+        """Turn ``[{room_type: id, room: id?, ...}]`` into validated line dicts.
 
-        Enforces cross-tenant safety and that each room type is active.
+        Enforces cross-tenant safety, that each room type is active, and — when a
+        specific room is assigned (Phase 6.1) — that the room belongs to the same
+        hotel and room type, is bookable, and that quantity is 1.
         """
         hotel = self.context["request"].hotel
         resolved = []
@@ -170,9 +186,11 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"lines": f"Room type '{rt.code}' is not active."}
                 )
+            room = self._resolve_room(raw.get("room"), rt, raw.get("quantity"), hotel)
             resolved.append(
                 {
                     "room_type": rt,
+                    "room": room,
                     "quantity": raw["quantity"],
                     "adults": raw.get("adults"),
                     "children": raw.get("children"),
@@ -180,6 +198,29 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
                 }
             )
         return resolved
+
+    def _resolve_room(self, room_id, room_type, quantity, hotel):
+        """Validate an optional specific room assignment (Phase 6.1)."""
+        if not room_id:
+            return None
+        room = Room.objects.filter(pk=room_id).first()
+        if room is None:
+            raise serializers.ValidationError({"lines": "The assigned room does not exist."})
+        if room.hotel_id != hotel.id:
+            raise CrossTenantReference({"field": "room"})
+        if room.room_type_id != room_type.id:
+            raise serializers.ValidationError(
+                {"lines": "The assigned room does not match the room type."}
+            )
+        if not room.is_active or room.status in _NON_ASSIGNABLE_ROOM_STATUSES:
+            raise serializers.ValidationError(
+                {"lines": f"Room {room.number} is not assignable."}
+            )
+        if quantity != 1:
+            raise serializers.ValidationError(
+                {"lines": "A line with an assigned room must have quantity 1."}
+            )
+        return room
 
     def validate(self, attrs):
         creating = self.instance is None

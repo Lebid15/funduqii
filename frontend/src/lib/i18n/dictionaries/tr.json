@@ -370,7 +370,10 @@
       "holdExpiryHint": "Geçici bekletme için gereklidir.",
       "nameRequired": "Misafir adı gereklidir.",
       "linesRequired": "En az bir oda ekleyin.",
-      "availabilityHint": "Kaydetmeden önce müsaitlik sunucuda yeniden kontrol edilir."
+      "availabilityHint": "Kaydetmeden önce müsaitlik sunucuda yeniden kontrol edilir.",
+      "room": "Oda ata (isteğe bağlı)",
+      "roomAny": "Herhangi bir müsait oda",
+      "roomHint": "Belirli bir oda sabitleyin veya herhangi bırakın."
     },
     "details": {
       "title": "Rezervasyon",
@@ -390,7 +393,8 @@
       "noHistory": "Henüz durum değişikliği yok",
       "confirm": "Onayla",
       "cancel": "İptal",
-      "edit": "Düzenle"
+      "edit": "Düzenle",
+      "room": "Oda"
     },
     "cancelDialog": {
       "title": "Rezervasyonu iptal et",
@@ -406,7 +410,8 @@
     "errors": {
       "noAvailability": "Seçilen tarihler için yeterli oda yok.",
       "reasonRequired": "İptal nedeni gereklidir.",
-      "invalidTransition": "Bu rezervasyon durum değişikliğine izin verilmiyor."
+      "invalidTransition": "Bu rezervasyon durum değişikliğine izin verilmiyor.",
+      "roomConflict": "Bu oda seçilen tarihler için zaten atanmış."
     }
   },
   "language": {

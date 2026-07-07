@@ -105,6 +105,7 @@ export interface RoomListParams {
   search?: string;
   include_archived?: string;
   page?: number;
+  page_size?: number;
 }
 
 export function listRooms(

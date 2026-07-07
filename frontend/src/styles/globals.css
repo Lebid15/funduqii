@@ -1205,8 +1205,20 @@ a {
   gap: var(--space-3);
   align-items: end;
 }
+/* The assign variant carries four controls (type, room, quantity, remove);
+   inside the narrow modal a two-column grid keeps labels from wrapping. */
+.line-row--assign {
+  grid-template-columns: 1fr 1fr;
+  align-items: end;
+}
+.line-row--assign > *:last-child {
+  justify-self: start;
+}
 @media (max-width: 40rem) {
   .line-row {
+    grid-template-columns: 1fr;
+  }
+  .line-row--assign {
     grid-template-columns: 1fr;
   }
 }

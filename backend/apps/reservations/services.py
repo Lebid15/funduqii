@@ -76,8 +76,9 @@ def create_reservation(hotel, *, lines, status, user, **fields) -> Reservation:
     check_out = fields["check_out_date"]
 
     if status in (ReservationStatus.HELD, ReservationStatus.CONFIRMED):
-        requested = _aggregate_quantities(lines)
-        AvailabilityService.ensure_can_book(hotel, requested, check_in, check_out)
+        AvailabilityService.ensure_can_book(
+            hotel, _book_payload(lines), check_in, check_out
+        )
 
     actor = user if getattr(user, "is_authenticated", False) else None
     # Retry on the (rare) reservation-number race.
@@ -104,6 +105,7 @@ def create_reservation(hotel, *, lines, status, user, **fields) -> Reservation:
             hotel=hotel,
             reservation=reservation,
             room_type=line["room_type"],
+            room=line.get("room"),
             quantity=line["quantity"],
             adults=line.get("adults"),
             children=line.get("children"),
@@ -139,15 +141,14 @@ def update_reservation(reservation, *, lines=None, status=None, user=None, **fie
         and (lines is not None or _touches_dates(fields))
     )
     if inventory_affecting:
-        if effective_lines is None:
-            effective_lines = [
-                {"room_type": ln.room_type, "quantity": ln.quantity}
-                for ln in reservation.lines.all()
-            ]
-        requested = _aggregate_quantities(effective_lines)
+        payload = (
+            _book_payload(effective_lines)
+            if effective_lines is not None
+            else _db_lines(reservation)
+        )
         AvailabilityService.ensure_can_book(
             reservation.hotel,
-            requested,
+            payload,
             check_in,
             check_out,
             exclude_reservation_id=reservation.id,
@@ -166,6 +167,7 @@ def update_reservation(reservation, *, lines=None, status=None, user=None, **fie
                 hotel=reservation.hotel,
                 reservation=reservation,
                 room_type=line["room_type"],
+                room=line.get("room"),
                 quantity=line["quantity"],
                 adults=line.get("adults"),
                 children=line.get("children"),
@@ -183,12 +185,9 @@ def confirm_reservation(reservation, *, user=None) -> Reservation:
         raise InvalidReservationTransition(
             {"detail": "Only a held reservation can be confirmed."}
         )
-    requested = _aggregate_quantities(
-        [{"room_type": ln.room_type, "quantity": ln.quantity} for ln in reservation.lines.all()]
-    )
     AvailabilityService.ensure_can_book(
         reservation.hotel,
-        requested,
+        _db_lines(reservation),
         reservation.check_in_date,
         reservation.check_out_date,
         exclude_reservation_id=reservation.id,
@@ -228,12 +227,9 @@ def hold_reservation(reservation, *, hold_expires_at, user=None) -> Reservation:
             )
         hold_expires_at = parsed
 
-    requested = _aggregate_quantities(
-        [{"room_type": ln.room_type, "quantity": ln.quantity} for ln in reservation.lines.all()]
-    )
     AvailabilityService.ensure_can_book(
         reservation.hotel,
-        requested,
+        _db_lines(reservation),
         reservation.check_in_date,
         reservation.check_out_date,
         exclude_reservation_id=reservation.id,
@@ -271,14 +267,39 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
     return reservation
 
 
-def _aggregate_quantities(lines) -> dict[int, int]:
-    """Collapse lines into ``{room_type_id: total_quantity}``."""
-    totals: dict[int, int] = {}
+def _book_payload(lines) -> list[dict]:
+    """Normalize lines into ``ensure_can_book`` input dicts.
+
+    Accepts serializer lines (``room_type``/``room`` model instances) or DB-shaped
+    lines (``room_type_id``/``room_id``).
+    """
+    payload = []
     for line in lines:
-        rt = line["room_type"]
-        rt_id = rt.id if hasattr(rt, "id") else int(rt)
-        totals[rt_id] = totals.get(rt_id, 0) + int(line["quantity"])
-    return totals
+        rt = line.get("room_type")
+        rt_id = rt.id if hasattr(rt, "id") else line.get("room_type_id")
+        room = line.get("room")
+        if room is not None and hasattr(room, "id"):
+            room_id = room.id
+        elif room is not None:
+            room_id = room
+        else:
+            room_id = line.get("room_id")
+        payload.append(
+            {
+                "room_type_id": int(rt_id),
+                "quantity": int(line["quantity"]),
+                "room_id": room_id,
+            }
+        )
+    return payload
+
+
+def _db_lines(reservation) -> list[dict]:
+    """DB-shaped line dicts for a reservation (no extra queries)."""
+    return [
+        {"room_type_id": ln.room_type_id, "quantity": ln.quantity, "room_id": ln.room_id}
+        for ln in reservation.lines.all()
+    ]
 
 
 def _touches_dates(fields) -> bool:

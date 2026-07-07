@@ -326,7 +326,9 @@ hotel is read-only; there is **no hard-delete** — cancelling is the only path.
 
 Reservation status is `held`/`confirmed`/`cancelled`/`expired` — no
 check-in/out, no `occupied`, no guest profile, no money. Back-to-back stays are
-allowed; overlapping ones are blocked. See
+allowed; overlapping ones are blocked. A line may **optionally** pin a specific
+room (Phase 6.1, gated by `reservations.assign_room`); a room cannot be assigned
+to two overlapping bookings. See
 [docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)

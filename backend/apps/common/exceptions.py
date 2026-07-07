@@ -156,6 +156,15 @@ class CancellationReasonRequired(FunduqiiAPIException):
     default_code = "cancellation_reason_required"
 
 
+# --- Room assignment (Phase 6.1) -------------------------------------------
+
+
+class RoomAssignmentConflict(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room is already assigned for the selected dates."
+    default_code = "room_assignment_conflict"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

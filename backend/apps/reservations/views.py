@@ -14,8 +14,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import HotelSuspended
+from apps.common.exceptions import HotelSuspended, PermissionDenied
 from apps.rbac.permissions import HasHotelPermission
+from apps.rbac.services import has_hotel_permission
 from apps.tenancy.models import HotelStatus
 
 from . import services
@@ -41,6 +42,15 @@ CanAvailability = HasHotelPermission("availability.view")
 def _guard_write(request: Request) -> None:
     if request.hotel.status == HotelStatus.SUSPENDED:
         raise HotelSuspended()
+
+
+def _guard_assignment(request: Request, lines) -> None:
+    """Assigning a specific room (Phase 6.1) requires reservations.assign_room."""
+    if any(ln.get("room") for ln in lines):
+        if not has_hotel_permission(
+            request.user, request.hotel, "reservations.assign_room"
+        ):
+            raise PermissionDenied()
 
 
 def _get_reservation(request: Request, pk: int) -> Reservation:
@@ -98,6 +108,7 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines")
+        _guard_assignment(request, lines)
         res_status = data.pop("status")
         reservation = services.create_reservation(
             request.hotel, lines=lines, status=res_status, user=request.user, **data
@@ -132,6 +143,8 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines", None)
+        if lines is not None:
+            _guard_assignment(request, lines)
         data.pop("status", None)  # status is changed only via confirm/cancel/hold
         services.update_reservation(
             reservation, lines=lines, user=request.user, **data

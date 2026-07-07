@@ -33,11 +33,12 @@ import {
   type ReservationCreateBody,
   type ReservationLineBody,
 } from "@/lib/api/reservations";
-import { listRoomTypes } from "@/lib/api/rooms";
+import { listRoomTypes, listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type {
   Reservation,
   ReservationStatusLogEntry,
+  Room,
   RoomType,
 } from "@/lib/api/types";
 import { formatDate, reservationStatusLabel, reservationStatusTone } from "@/lib/format";
@@ -275,6 +276,7 @@ export function ReservationsTab() {
 
 interface LineDraft {
   room_type: string;
+  room: string;
   quantity: string;
 }
 
@@ -305,7 +307,8 @@ function ReservationModal({
   const [source, setSource] = useState("direct");
   const [initialStatus, setInitialStatus] = useState<"held" | "confirmed">("confirmed");
   const [holdExpires, setHoldExpires] = useState("");
-  const [lines, setLines] = useState<LineDraft[]>([{ room_type: "", quantity: "1" }]);
+  const [lines, setLines] = useState<LineDraft[]>([{ room_type: "", room: "", quantity: "1" }]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -325,20 +328,49 @@ function ReservationModal({
     setHoldExpires("");
     setLines(
       reservation && reservation.lines.length > 0
-        ? reservation.lines.map((l) => ({ room_type: String(l.room_type), quantity: String(l.quantity) }))
-        : [{ room_type: "", quantity: "1" }],
+        ? reservation.lines.map((l) => ({
+            room_type: String(l.room_type),
+            room: l.room ? String(l.room) : "",
+            quantity: String(l.quantity),
+          }))
+        : [{ room_type: "", room: "", quantity: "1" }],
     );
     setError(null);
+    // Bookable rooms for the optional per-line assignment (UX only — the
+    // backend re-validates assignability and conflicts).
+    listRooms({ page_size: 200 })
+      .then((r) => setRooms(r.results))
+      .catch(() => setRooms([]));
   }, [open, reservation]);
 
   function updateLine(i: number, patch: Partial<LineDraft>) {
-    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+    setLines((prev) =>
+      prev.map((l, idx) => {
+        if (idx !== i) return l;
+        const next = { ...l, ...patch };
+        // Changing the room type invalidates a specific room assignment.
+        if (patch.room_type !== undefined && patch.room_type !== l.room_type) {
+          next.room = "";
+        }
+        // A pinned room implies quantity 1.
+        if (patch.room) next.quantity = "1";
+        return next;
+      }),
+    );
   }
   function addLine() {
-    setLines((prev) => [...prev, { room_type: "", quantity: "1" }]);
+    setLines((prev) => [...prev, { room_type: "", room: "", quantity: "1" }]);
   }
   function removeLine(i: number) {
     setLines((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
+  }
+
+  const ASSIGNABLE = new Set(["available", "dirty", "cleaning"]);
+  function roomOptionsFor(typeId: string) {
+    if (!typeId) return [];
+    return rooms
+      .filter((r) => String(r.room_type) === typeId && r.is_active && ASSIGNABLE.has(r.status))
+      .map((r) => ({ value: String(r.id), label: r.number }));
   }
 
   async function submit(event: FormEvent) {
@@ -348,7 +380,11 @@ function ReservationModal({
     if (!checkIn || !checkOut) return setError(t.errors.validation);
     const cleanLines: ReservationLineBody[] = lines
       .filter((l) => l.room_type)
-      .map((l) => ({ room_type: Number(l.room_type), quantity: Number(l.quantity) || 1 }));
+      .map((l) => ({
+        room_type: Number(l.room_type),
+        room: l.room ? Number(l.room) : null,
+        quantity: l.room ? 1 : Number(l.quantity) || 1,
+      }));
     if (cleanLines.length === 0) return setError(t.reservations.form.linesRequired);
 
     setBusy(true);
@@ -456,7 +492,7 @@ function ReservationModal({
           <legend>{t.reservations.form.roomLines}</legend>
           <div className="stack-tight">
             {lines.map((line, i) => (
-              <div className="line-row" key={i}>
+              <div className="line-row line-row--assign" key={i}>
                 <FormField label={t.reservations.form.roomType} htmlFor={`line-type-${i}`}>
                   <Select
                     id={`line-type-${i}`}
@@ -466,8 +502,18 @@ function ReservationModal({
                     onChange={(e) => updateLine(i, { room_type: e.target.value })}
                   />
                 </FormField>
+                <FormField label={t.reservations.form.room} htmlFor={`line-room-${i}`} hint={t.reservations.form.roomHint}>
+                  <Select
+                    id={`line-room-${i}`}
+                    value={line.room}
+                    placeholder={t.reservations.form.roomAny}
+                    options={roomOptionsFor(line.room_type)}
+                    disabled={!line.room_type}
+                    onChange={(e) => updateLine(i, { room: e.target.value })}
+                  />
+                </FormField>
                 <FormField label={t.reservations.form.quantity} htmlFor={`line-qty-${i}`}>
-                  <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
+                  <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} disabled={Boolean(line.room)} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
                 </FormField>
                 <Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => removeLine(i)} disabled={lines.length === 1}>
                   {t.reservations.form.removeLine}
@@ -587,7 +633,13 @@ function DetailsModal({
             {r.lines.map((l) => (
               <li key={l.id} className="mini-list__row">
                 <span>{l.room_type_name} <span className="muted">({l.room_type_code})</span></span>
-                <span>× {l.quantity}</span>
+                <span>
+                  {l.room_number ? (
+                    <Badge tone="info">{t.reservations.details.room} {l.room_number}</Badge>
+                  ) : (
+                    `× ${l.quantity}`
+                  )}
+                </span>
               </li>
             ))}
           </ul>

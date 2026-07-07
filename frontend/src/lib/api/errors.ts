@@ -47,6 +47,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.reservations.errors.reasonRequired;
     case "invalid_reservation_transition":
       return t.reservations.errors.invalidTransition;
+    case "room_assignment_conflict":
+      return t.reservations.errors.roomConflict;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

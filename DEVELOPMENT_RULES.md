@@ -99,6 +99,10 @@ these rules is a defect, not a shortcut.
 - **No `reserved`/`occupied`/`checked_in`/`checked_out`** statuses, **no guest
   profile**, and **no money** in Phase 6. Store only a primary-guest snapshot on
   the booking. Cancelling is a soft action (reason required) — **no hard-delete**.
+- **Room assignment (Phase 6.1)** is an OPTIONAL specific room on a line
+  (`quantity` 1, same hotel + room type, bookable), gated by
+  `reservations.assign_room`. Assigning a room is **not** check-in. A specific
+  room cannot overlap two blocking reservations (back-to-back is fine).
 - Full rules: [docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
 
 ## 9. Database & migrations

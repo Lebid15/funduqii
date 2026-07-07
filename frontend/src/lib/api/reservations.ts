@@ -56,6 +56,7 @@ export function getReservationOverview(): Promise<ReservationOverview> {
 
 export interface ReservationLineBody {
   room_type: number;
+  room?: number | null;
   quantity: number;
   adults?: number | null;
   children?: number | null;

@@ -759,7 +759,16 @@
 - قفل أنواع الغرف بترتيب ثابت (pk) لتقليل deadlocks عند التزامن.
 
 ### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
-- **لا check-in/check-out · لا `occupied` · لا Guest profile/وثائق · لا payments/folio/invoices/expenses · لا مطعم/تنظيف-صيانة workflows · لا ورديات/إغلاق يومي/تقارير · لا موقع عام/حجز عام · لا واتساب/خرائط فعلية.** `ReservationRoomAssignment` مؤجّل لـ Phase 7. **لم تبدأ Phase 7.**
+- **لا check-in/check-out · لا `occupied` · لا Guest profile/وثائق · لا payments/folio/invoices/expenses · لا مطعم/تنظيف-صيانة workflows · لا ورديات/إغلاق يومي/تقارير · لا موقع عام/حجز عام · لا واتساب/خرائط فعلية.** **لم تبدأ Phase 7.**
+
+### تحديث Phase 6.1 — Minimal Room Assignment Support (2026-07-07)
+- **الأساس:** تأكّد رسميًا أن Phase 4 وPhase 5 مدموجتان في `main` (commits `ce8f6e9`/`a683393`، ووجود `apps/hotels`+`apps/rooms` وصفحتَي `/hotel/settings`+`/hotel/rooms`، وPROGRESS_LOG يذكرهما «مكتملة ✅») وأن فحوصات `main` ناجحة (backend 140/140، frontend lint/tsc/build) — ثم بدأ التنفيذ.
+- **تعيين غرفة محددة (اختياري) على مستوى السطر بدل نموذج منفصل:** حقل `room` اختياري (FK PROTECT) على `ReservationRoomLine`. عند تعيينه: نفس الفندق ونفس `room_type`، غرفة active وحالتها ليست maintenance/out_of_service/archived، و`quantity = 1`. التعيين **لا يعني** دخول الضيف (check-in يبقى Phase 7).
+- **محرك التوفر (6.1):** المخزون المستهلك = (غرف مُعيَّنة محددة distinct ضمن المخزون) + (كمية غير مُعيَّنة)؛ يدعم conflict الغرفة المُعيَّنة + كمية النوع غير المُعيَّنة + المزيج. منع overlap لنفس الغرفة (`409 room_assignment_conflict`)، والسماح بـ back-to-back لنفس الغرفة، وتجاهل cancelled/expired/held المنتهي. قفل أنواع الغرف **والغرف المحددة** بترتيب pk ثابت داخل transaction.
+- **الصلاحية:** استخدام `reservations.assign_room` — تعيين غرفة عند الإنشاء/التعديل يتطلبها على الباكند (بخلافها `403`).
+- **الواجهة:** مُحدِّد غرفة اختياري لكل سطر بعد اختيار نوع الغرفة (افتراضي «أي غرفة»)، وعرض رقم الغرفة المُعيَّنة في التفاصيل. **لا timeline/Gantt** (متسق مع منع Phase 6 للتقويم المتقدم). ترجمات ar/en/tr مضافة بتطابق مفاتيح.
+- **الاختبارات/الفحوصات:** backend **214/214** (198 + 16 لتعيين الغرف)، migration `0002` نظيفة؛ frontend lint/tsc/build خضراء؛ فحص حيّ: تعيين→201، same-room overlap→409، back-to-back→201، نوع خاطئ→400.
+- **بلا:** check-in/out، Guest module كامل، payments/folio/invoices. **لم تبدأ Phase 7.**
 
 ### الاعتماد
-- **بانتظار اعتماد المالك** عبر مراجعة PR. **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 7.
+- **بانتظار اعتماد المالك** عبر مراجعة PR #5 (Phase 6 + 6.1). **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 7.
