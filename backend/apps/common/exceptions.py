@@ -135,6 +135,36 @@ class StatusNoteRequired(FunduqiiAPIException):
     default_code = "status_note_required"
 
 
+# --- Reservations & availability (Phase 6) ---------------------------------
+
+
+class NoAvailability(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Not enough rooms are available for the selected dates."
+    default_code = "no_availability"
+
+
+class InvalidReservationTransition(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This reservation status change is not allowed."
+    default_code = "invalid_reservation_transition"
+
+
+class CancellationReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A cancellation reason is required."
+    default_code = "cancellation_reason_required"
+
+
+# --- Room assignment (Phase 6.1) -------------------------------------------
+
+
+class RoomAssignmentConflict(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room is already assigned for the selected dates."
+    default_code = "room_assignment_conflict"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

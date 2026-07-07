@@ -56,5 +56,9 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 
 - [FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md) — the `apps/rooms` app (`Floor`, `RoomType`, `Room`, `RoomStatusLog`), the manual room-status model (no `reserved`/`occupied`), business rules (tenant isolation, uniqueness, capacity, deletion guards, suspended read-only), permissions (`rooms.*`), the `/api/v1/hotel/` API surface, the tabbed rooms console, and what is deferred to later phases.
 
+## Phase 6 — Reservations & availability
+
+- [RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](RESERVATIONS_AND_AVAILABILITY_STRATEGY.md) — the `apps/reservations` app (`Reservation`, `ReservationRoomLine`, `ReservationStatusLog`; assignment deferred), the reservation status model (held/confirmed/cancelled/expired — no check-in/out), the central `AvailabilityService` (date-overlap rule, back-to-back, blocking statuses, held expiry, inventory math, overbooking prevention with transactions + row locks), permissions (`reservations.*`, `availability.view`), the `/api/v1/hotel/` API surface, the tabbed reservations console, and why guests/money/check-in/public-booking are deferred.
+
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BedDouble,
   Building2,
+  CalendarCheck,
   CreditCard,
   Hotel,
   LayoutDashboard,
@@ -51,6 +52,7 @@ export function Sidebar({
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
   const hotelItems: NavItem[] = [
+    { href: "/hotel/reservations", label: t.reservations.nav, icon: CalendarCheck },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];

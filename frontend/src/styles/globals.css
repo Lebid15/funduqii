@@ -1070,6 +1070,159 @@ a {
   padding-top: var(--space-2);
 }
 
+/* --- Reservations & availability (Phase 6) -------------------------------- */
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.small {
+  font-size: var(--font-size-sm);
+}
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--space-4);
+}
+.mini-list__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  color: var(--color-fg-muted);
+}
+.mini-list__head h3 {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+.mini-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mini-list__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+.mini-list__row:first-child {
+  border-top: none;
+}
+.mini-list__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mini-list__side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.avail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-4);
+}
+.avail-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--avail-accent, var(--color-border-strong));
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-xs);
+}
+.avail-card--ok {
+  --avail-accent: var(--color-success);
+}
+.avail-card--full {
+  --avail-accent: var(--color-danger);
+}
+.avail-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.avail-card__name {
+  font-weight: var(--font-weight-semibold);
+}
+.avail-card__figure {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.avail-card__available {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
+}
+.avail-card__stats {
+  display: flex;
+  gap: var(--space-4);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.avail-card__stats dt {
+  display: inline;
+}
+.avail-card__stats dd {
+  display: inline;
+  margin-inline-start: var(--space-1);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.avail-card__reason {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.field-group {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin: 0;
+}
+.field-group legend {
+  padding-inline: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+}
+.line-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+/* The assign variant carries four controls (type, room, quantity, remove);
+   inside the narrow modal a two-column grid keeps labels from wrapping. */
+.line-row--assign {
+  grid-template-columns: 1fr 1fr;
+  align-items: end;
+}
+.line-row--assign > *:last-child {
+  justify-self: start;
+}
+@media (max-width: 40rem) {
+  .line-row {
+    grid-template-columns: 1fr;
+  }
+  .line-row--assign {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Hotel media ---------------------------------------------------------- */
 .media-slots {
   display: grid;

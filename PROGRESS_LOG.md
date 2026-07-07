@@ -56,7 +56,7 @@
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
-| 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
+| 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
@@ -709,3 +709,112 @@
 
 #### ملاحظة مستقبلية
 - قبل الإنتاج/الإطلاق النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من الأداء والفلاتر وpagination وسلامة العلاقات. لا يمنع اعتماد Phase 5 الآن.
+
+---
+
+## Phase 6 — Reservations + Availability Engine
+- الحالة: **مكتملة ✅** (معتمدة ومقبولة فنيًا من المالك — تشمل التصحيح Phase 6.1)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · **اعتُمدت 2026-07-07**
+- الهدف: نظام الحجوزات الداخلي للفندق + **محرك توفر مركزي يمنع overbooking**، **بلا** check-in/out ولا نزلاء كاملين ولا مال ولا موقع عام.
+- **ملاحظة الاعتماد:** «تم اعتماد Phase 6 بعد تنفيذ Phase 6.1 لدعم تعيين غرفة محددة داخل الحجز، مع منع تضارب نفس الغرفة ودعم assigned/unassigned availability. لا تشمل هذه المرحلة check-in/check-out أو Guest module كامل أو payments/folio/invoices أو public booking.»
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/reservations`** (منفصل عن rooms/hotels)، بثلاثة نماذج مربوطة بالـ tenant:
+  - **`Reservation`** (رأس الحجز): `reservation_number` (**فريد لكل فندق**، تسلسل مستقل `R00001…`)، `status`، `source`، `check_in_date`/`check_out_date` (قيد `check_out > check_in`)، **snapshot ضيف رئيسي** (name مطلوب/phone/email — **لا Guest profile**)، adults/children/notes/special_requests، حقول الإلغاء، `hold_expires_at`، created_by/updated_by؛ `nights`/`total_guests` properties.
+  - **`ReservationRoomLine`**: `room_type` (**PROTECT**) + `quantity>0` (+adults/children/notes) — الحجز **حسب نوع الغرفة والكمية**.
+  - **`ReservationStatusLog`**: سجلّ حالة الحجز فقط (النموذج المفضّل، نُفِّذ) — ليس audit log عام.
+- **حالات الحجز**: `held`/`confirmed`/`cancelled`/`expired`. **لا `checked_in`/`checked_out`/`occupied`/`no_show`** (مؤجّلة لـ Phase 7).
+- **محرك التوفر `AvailabilityService`** (مركزي، لا يُكرَّر في serializers/views):
+  - **قاعدة التداخل نصف-مفتوحة** `[in, out)` → back-to-back **مسموح**، والتداخل الفعلي **ممنوع**.
+  - **ما يحجز المخزون**: `confirmed` + `held` غير المنتهي فقط؛ cancelled/expired والـ held المنتهي **لا يحجزان** (انتهاء الحجز المؤقت **lazy** بلا Celery).
+  - **حساب المخزون** من Phase 5: غرف active + طابق active + نوع active وليست maintenance/out_of_service/archived. **قرار موثّق:** dirty/cleaning تُحتسب ضمن المخزون.
+  - **منع overbooking** داخل transaction مع `select_for_update` على أنواع الغرف بترتيب ثابت ثم إعادة حساب التوفر → `409 no_availability`. **الباكند مصدر الحقيقة.**
+  - **إعادة الفحص عند التعديل/التأكيد** مع استثناء الحجز نفسه من الحساب.
+- **صلاحيات**: `reservations.view/create/update/confirm/cancel` + `availability.view` (و`reservations.assign_room` محجوزة لـ Phase 7). مفروضة على الباكند لكل endpoint. الفندق المعلّق للقراءة فقط. **لا hard-delete** — الإلغاء (بسبب إلزامي) هو المسار.
+- **APIs تحت `/api/v1/hotel/`**: `reservations/`(+overview/) · `reservations/{id}/`(GET/PATCH) · `{id}/confirm|cancel|hold|logs/` · `availability/`(+calendar/). أخطاء جديدة: `no_availability` (409) · `invalid_reservation_transition` (400) · `cancellation_reason_required` (400).
+- **قرار موثّق:** `ReservationRoomAssignment` **مؤجّل إلى Phase 7** (تعيين غرفة فعلية جزء من check-in، ولا واجهة له في Phase 6؛ صحة المخزون مضمونة على مستوى نوع الغرفة).
+
+### ما نُفّذ (Frontend)
+- **عنصر «الحجوزات»** في sidebar الفندق، وصفحة **`/hotel/reservations`** بتبويبات: نظرة عامة / التوفر / الحجوزات.
+- **نظرة عامة**: بطاقات ملخّص + قوائم الوصول/المغادرة القادمة (عرض فقط — **بلا أزرار check-in/out**). **التوفر**: مدقّق مدفوع من الباكند (تواريخ/ضيوف/نوع → بطاقات توفر لكل نوع). **الحجوزات**: قائمة مفلترة/مرقّمة + نافذة إنشاء/تعديل (أسطر غرف ديناميكية + snapshot ضيف + held/confirmed) + نافذة تفاصيل (الأسطر/سجل الحالة/تأكيد/إلغاء/تعديل) + نافذة إلغاء (سبب إلزامي).
+- نظام التصميم المركزي + أيقونات lucide، ترجمات **ar/en/tr** كاملة مع RTL/LTR، حالات موحّدة، responsive حقيقي، لا نصوص مكتوبة مباشرة، لا توكن في localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/reservations/{__init__,apps,models,availability,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/hotel/reservations/page.tsx` · `components/hotel/reservations/{OverviewTab,AvailabilityTab,ReservationsTab,index}.tsx` · `lib/api/reservations.ts` · والوثيقة `docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+confirm/assign_room + قسم availability) · `apps/common/exceptions.py` (3 أخطاء) · `config/settings/base.py` (+app) · `config/urls.py` (+urls) · اختبارات regression في hotels/rooms (السماح بجدول reservations).
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` · قواميس ar/en/tr · `styles/globals.css` · التوثيق (README, DEVELOPMENT_RULES §8c, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **198/198 OK** (140 سابقة + 58 لـ reservations) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/reservations` مبني) |
+| فحص حيّ End-to-End (Django+Next، SQLite) | ✅ توفر 3/3 → حجز مؤكد 2×STD + مؤقت 1×DLX · **overbooking → 409** · **back-to-back → 201** · **overlap → 409** · held بلا expiry → 400 · overview صحيح · لقطات overview/availability/list/AR/موبايل/نافذة الإنشاء Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- تحديث اختبارَي regression في Phase 4/5 للسماح بجدول `reservations` (مشروع في Phase 6)، مع بقاء منع guests/payments/invoices/folios/expenses.
+- انتهاء الحجز المؤقت يُحسب lazily وقت القراءة — لا حاجة لـ Celery لصحة الحساب (يمكن إضافة مهمة تنظيف لاحقًا).
+- قفل أنواع الغرف بترتيب ثابت (pk) لتقليل deadlocks عند التزامن.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا check-in/check-out · لا `occupied` · لا Guest profile/وثائق · لا payments/folio/invoices/expenses · لا مطعم/تنظيف-صيانة workflows · لا ورديات/إغلاق يومي/تقارير · لا موقع عام/حجز عام · لا واتساب/خرائط فعلية.** **لم تبدأ Phase 7.**
+
+### تحديث Phase 6.1 — Minimal Room Assignment Support (2026-07-07)
+- **الأساس:** تأكّد رسميًا أن Phase 4 وPhase 5 مدموجتان في `main` (commits `ce8f6e9`/`a683393`، ووجود `apps/hotels`+`apps/rooms` وصفحتَي `/hotel/settings`+`/hotel/rooms`، وPROGRESS_LOG يذكرهما «مكتملة ✅») وأن فحوصات `main` ناجحة (backend 140/140، frontend lint/tsc/build) — ثم بدأ التنفيذ.
+- **تعيين غرفة محددة (اختياري) على مستوى السطر بدل نموذج منفصل:** حقل `room` اختياري (FK PROTECT) على `ReservationRoomLine`. عند تعيينه: نفس الفندق ونفس `room_type`، غرفة active وحالتها ليست maintenance/out_of_service/archived، و`quantity = 1`. التعيين **لا يعني** دخول الضيف (check-in يبقى Phase 7).
+- **محرك التوفر (6.1):** المخزون المستهلك = (غرف مُعيَّنة محددة distinct ضمن المخزون) + (كمية غير مُعيَّنة)؛ يدعم conflict الغرفة المُعيَّنة + كمية النوع غير المُعيَّنة + المزيج. منع overlap لنفس الغرفة (`409 room_assignment_conflict`)، والسماح بـ back-to-back لنفس الغرفة، وتجاهل cancelled/expired/held المنتهي. قفل أنواع الغرف **والغرف المحددة** بترتيب pk ثابت داخل transaction.
+- **الصلاحية:** استخدام `reservations.assign_room` — تعيين غرفة عند الإنشاء/التعديل يتطلبها على الباكند (بخلافها `403`).
+- **الواجهة:** مُحدِّد غرفة اختياري لكل سطر بعد اختيار نوع الغرفة (افتراضي «أي غرفة»)، وعرض رقم الغرفة المُعيَّنة في التفاصيل. **لا timeline/Gantt** (متسق مع منع Phase 6 للتقويم المتقدم). ترجمات ar/en/tr مضافة بتطابق مفاتيح.
+- **الاختبارات/الفحوصات:** backend **214/214** (198 + 16 لتعيين الغرف)، migration `0002` نظيفة؛ frontend lint/tsc/build خضراء؛ فحص حيّ: تعيين→201، same-room overlap→409، back-to-back→201، نوع خاطئ→400.
+- **بلا:** check-in/out، Guest module كامل، payments/folio/invoices. **لم تبدأ Phase 7.**
+
+### الاعتماد
+- **معتمدة ومقبولة فنيًا من المالك بتاريخ 2026-07-07** عبر مراجعة PR #5 (Phase 6 + 6.1). الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 7** — يبدأ برسالته الرسمية فقط.
+
+#### ملاحظات الاعتماد (من المالك)
+1. التأكد أن Phase 4 موجودة ومكتملة في `origin/main`.
+2. التأكد أن Phase 5 موجودة ومكتملة في `origin/main`.
+3. التأكد من وجود: `backend/apps/hotels` · `backend/apps/rooms` · `frontend/src/app/hotel/settings` · `frontend/src/app/hotel/rooms`.
+4. قبول بناء `apps/reservations`.
+5. قبول Model `Reservation`.
+6. قبول Model `ReservationRoomLine`.
+7. قبول Model `ReservationStatusLog`.
+8. قبول `AvailabilityService` كمصدر مركزي لحساب التوفر.
+9. قبول قاعدة التداخل نصف المفتوحة `[check_in, check_out)`.
+10. قبول السماح بحجوزات back-to-back.
+11. قبول منع overbooking من الباكند.
+12. قبول الحالات: draft / held / confirmed / cancelled / expired / no_show حسب التنفيذ (نُفِّذت held/confirmed/cancelled/expired؛ لم يُنفَّذ draft/no_show عمدًا — مؤجّلة لـ Phase 7 حسب التوثيق).
+13. قبول أن confirmed يحجز التوفر.
+14. قبول أن held يحجز التوفر فقط إذا لم ينتهِ.
+15. قبول أن cancelled/expired لا تحجز التوفر.
+16. قبول دعم unassigned room type availability.
+17. قبول دعم assigned room availability بعد Phase 6.1.
+18. قبول إضافة `room` اختياري إلى `ReservationRoomLine`.
+19. قبول منع same-room overlap.
+20. قبول السماح بـ back-to-back لنفس الغرفة.
+21. قبول أن اختيار غرفة محددة يتطلب `reservations.assign_room`.
+22. قبول منع تعيين غرفة من فندق آخر.
+23. قبول منع تعيين غرفة من نوع خاطئ.
+24. قبول منع تعيين غرفة maintenance/out_of_service/archived.
+25. قبول عزل tenant.
+26. قبول حماية endpoints بالصلاحيات.
+27. قبول read-only للفندق المعلّق ومنع الكتابة.
+28. قبول صفحة `/hotel/reservations`.
+29. قبول الترجمة ar/en/tr.
+30. قبول responsive وRTL/LTR.
+31. قبول عدم بناء check-in/check-out.
+32. قبول عدم بناء Guest module كامل.
+33. قبول عدم بناء payments/folio/invoices.
+34. قبول عدم بناء public booking.
+35. قبول عدم بدء Phase 7.
+36. قبول نتائج backend tests: 214/214.
+37. قبول نتائج frontend lint/typecheck/build.
+
+#### ملاحظة حول `main` المحلي (قرار موثّق)
+- ظهر أن **الفرع المحلي `main`** يحتوي تاريخًا مختلفًا وغير مطابق لـ `origin/main`. **`origin/main` هو المصدر الصحيح للحقيقة.** ممنوع دفع الفرع المحلي المختلف إلى `origin/main`، وممنوع reset مدمّر دون موافقة صريحة. أي عمل قادم يبدأ من branch نظيف مبني على `origin/main` (fetch/checkout آمن).
+
+#### ملاحظة مستقبلية
+- قبل الإنتاج النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من التزامن الحقيقي، الأداء، pagination، الفلاتر، محرك التوفر، ومنع overbooking تحت ضغط أعلى. لا يمنع اعتماد Phase 6 الآن.
