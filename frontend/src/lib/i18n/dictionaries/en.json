@@ -553,6 +553,196 @@
       "alreadyCheckedIn": "This reservation room is already checked in."
     }
   },
+  "finance": {
+    "nav": "Finance",
+    "title": "Finance",
+    "subtitle": "Folios, payments, invoices and expenses",
+    "saved": "Saved",
+    "tabs": {
+      "overview": "Overview",
+      "folios": "Folios",
+      "payments": "Payments",
+      "invoices": "Invoices",
+      "expenses": "Expenses"
+    },
+    "overview": {
+      "openFolios": "Open folios",
+      "outstanding": "Outstanding balance",
+      "unpaidFolios": "Unpaid folios",
+      "paymentsToday": "Payments today",
+      "expensesToday": "Expenses today",
+      "netToday": "Net today",
+      "issuedInvoices": "Issued invoices"
+    },
+    "folioStatus": {
+      "open": "Open",
+      "closed": "Closed",
+      "voided": "Voided"
+    },
+    "invoiceStatus": {
+      "draft": "Draft",
+      "issued": "Issued",
+      "voided": "Voided"
+    },
+    "postingStatus": {
+      "posted": "Posted",
+      "voided": "Voided"
+    },
+    "chargeTypes": {
+      "room": "Room",
+      "service": "Service",
+      "tax": "Tax",
+      "adjustment": "Adjustment",
+      "discount": "Discount",
+      "other": "Other"
+    },
+    "methods": {
+      "cash": "Cash",
+      "card": "Card",
+      "bank_transfer": "Bank transfer",
+      "electronic": "Electronic",
+      "other": "Other"
+    },
+    "categories": {
+      "operations": "Operations",
+      "maintenance": "Maintenance",
+      "supplies": "Supplies",
+      "marketing": "Marketing",
+      "salary": "Salary",
+      "utilities": "Utilities",
+      "other": "Other"
+    },
+    "folios": {
+      "add": "New folio",
+      "empty": "No folios yet",
+      "emptyHint": "Open a folio to record charges and payments.",
+      "searchPlaceholder": "Search by number or customer",
+      "number": "Number",
+      "customer": "Customer",
+      "balance": "Balance",
+      "view": "Open",
+      "createTitle": "New folio",
+      "customerName": "Customer name",
+      "currency": "Currency",
+      "notes": "Notes"
+    },
+    "folio": {
+      "title": "Folio",
+      "charges": "Charges",
+      "payments": "Payments",
+      "totalCharges": "Total charges",
+      "totalPayments": "Total payments",
+      "balance": "Balance",
+      "addCharge": "Add charge",
+      "recordPayment": "Record payment",
+      "createInvoice": "Create invoice",
+      "close": "Close folio",
+      "void": "Void folio",
+      "noCharges": "No charges yet",
+      "noPayments": "No payments yet",
+      "voidCharge": "Void",
+      "voidPayment": "Void",
+      "printReceipt": "Receipt",
+      "voided": "Voided",
+      "invoices": "Invoices"
+    },
+    "chargeForm": {
+      "title": "Add charge",
+      "type": "Type",
+      "description": "Description",
+      "quantity": "Quantity",
+      "unitAmount": "Unit amount",
+      "taxRate": "Tax rate (%)",
+      "submit": "Add charge"
+    },
+    "paymentForm": {
+      "title": "Record payment",
+      "amount": "Amount",
+      "method": "Method",
+      "payerName": "Payer name",
+      "reference": "Reference",
+      "notes": "Notes",
+      "submit": "Record payment"
+    },
+    "invoiceForm": {
+      "createTitle": "Create invoice",
+      "dueDate": "Due date",
+      "customerName": "Customer name",
+      "customerPhone": "Phone",
+      "notes": "Notes",
+      "create": "Create draft"
+    },
+    "payments": {
+      "empty": "No payments yet",
+      "emptyHint": "Payments you record appear here.",
+      "receipt": "Receipt",
+      "void": "Void",
+      "number": "Receipt",
+      "amount": "Amount",
+      "method": "Method",
+      "date": "Date"
+    },
+    "invoices": {
+      "empty": "No invoices yet",
+      "emptyHint": "Invoices you create appear here.",
+      "issue": "Issue",
+      "void": "Void",
+      "print": "Print",
+      "number": "Number",
+      "customer": "Customer",
+      "total": "Total",
+      "issuedAt": "Issued",
+      "view": "View"
+    },
+    "expenses": {
+      "add": "New expense",
+      "empty": "No expenses yet",
+      "emptyHint": "Expenses you record appear here.",
+      "searchPlaceholder": "Search vendor, description or reference",
+      "number": "Voucher",
+      "category": "Category",
+      "description": "Description",
+      "amount": "Amount",
+      "method": "Method",
+      "vendor": "Vendor",
+      "reference": "Reference",
+      "date": "Date",
+      "void": "Void",
+      "voucher": "Voucher",
+      "createTitle": "New expense",
+      "submit": "Save expense"
+    },
+    "void": {
+      "title": "Void record",
+      "reason": "Reason",
+      "reasonPlaceholder": "Why is this being voided?",
+      "confirm": "Void"
+    },
+    "print": {
+      "print": "Print",
+      "close": "Close",
+      "date": "Date",
+      "total": "Total",
+      "subtotal": "Subtotal",
+      "tax": "Tax",
+      "amount": "Amount",
+      "method": "Method",
+      "thanks": "Thank you",
+      "receiptTitle": "Payment receipt",
+      "invoiceTitle": "Invoice",
+      "voucherTitle": "Payment voucher",
+      "customer": "Customer",
+      "vendor": "Vendor"
+    },
+    "financeNote": "All amounts are recorded internally only — no real payment is processed.",
+    "errors": {
+      "folioClosed": "This folio is closed or voided and cannot be modified.",
+      "folioNotBalanced": "A folio can only be closed when its balance is zero.",
+      "voidReasonRequired": "A reason is required to void this record.",
+      "invalidOperation": "This financial operation is not allowed.",
+      "invalidAmount": "The amount is not valid."
+    }
+  },
   "language": {
     "label": "Language",
     "ar": "العربية",

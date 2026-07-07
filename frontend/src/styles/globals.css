@@ -1244,6 +1244,90 @@ a {
   line-height: 1;
 }
 
+/* --- Finance (Phase 8) ---------------------------------------------------- */
+.balance-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+.balance-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+.balance-row strong {
+  font-size: var(--font-size-lg);
+}
+.balance-row__total {
+  border-color: var(--color-brand) !important;
+}
+@media (max-width: 40rem) {
+  .balance-row {
+    grid-template-columns: 1fr;
+  }
+}
+.receipt {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  background: var(--color-surface);
+}
+.receipt h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+.print-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-3);
+  margin-block: var(--space-4);
+}
+.print-grid dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.print-grid--totals {
+  grid-template-columns: 1fr;
+  max-width: 16rem;
+  margin-inline-start: auto;
+}
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-block: var(--space-3);
+}
+.print-table th,
+.print-table td {
+  text-align: start;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+.print-thanks {
+  margin-top: var(--space-4);
+  text-align: center;
+  color: var(--color-fg-muted);
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-doc,
+  .print-doc * {
+    visibility: visible;
+  }
+  .print-doc {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    width: 100%;
+  }
+}
+
 .field-group {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);

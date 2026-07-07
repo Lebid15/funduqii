@@ -25,9 +25,23 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     # above are vestigial blueprint entries and are NOT used; front-desk uses
     # these explicit stays.* codes instead.
     "stays": ["view", "check_in", "check_out", "update"],
-    "payments": ["view", "create", "void"],
-    "expenses": ["view", "create"],
-    "folio": ["view", "add_charge"],
+    # Internal finance (Phase 8). Folios/charges/payments/invoices live under
+    # one clear `finance` section; expenses have their own.
+    "finance": [
+        "view",
+        "create",
+        "update",
+        "close",
+        "void",
+        "charge_create",
+        "charge_void",
+        "payment_create",
+        "payment_void",
+        "invoice_create",
+        "invoice_issue",
+        "invoice_void",
+    ],
+    "expenses": ["view", "create", "update", "void"],
     "restaurant": ["view", "create_order"],
     "housekeeping": ["view", "update"],
     "maintenance": ["view", "update"],

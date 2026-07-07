@@ -553,6 +553,196 @@
       "alreadyCheckedIn": "غرفة هذا الحجز مسجَّل دخولها بالفعل."
     }
   },
+  "finance": {
+    "nav": "المالية",
+    "title": "المالية",
+    "subtitle": "الحسابات والدفعات والفواتير والمصروفات",
+    "saved": "تم الحفظ",
+    "tabs": {
+      "overview": "نظرة عامة",
+      "folios": "الحسابات",
+      "payments": "الدفعات",
+      "invoices": "الفواتير",
+      "expenses": "المصروفات"
+    },
+    "overview": {
+      "openFolios": "حسابات مفتوحة",
+      "outstanding": "الرصيد المستحق",
+      "unpaidFolios": "حسابات غير مسددة",
+      "paymentsToday": "دفعات اليوم",
+      "expensesToday": "مصروفات اليوم",
+      "netToday": "الصافي اليوم",
+      "issuedInvoices": "فواتير صادرة"
+    },
+    "folioStatus": {
+      "open": "مفتوح",
+      "closed": "مغلق",
+      "voided": "ملغى"
+    },
+    "invoiceStatus": {
+      "draft": "مسودة",
+      "issued": "صادرة",
+      "voided": "ملغاة"
+    },
+    "postingStatus": {
+      "posted": "مُرحَّل",
+      "voided": "ملغى"
+    },
+    "chargeTypes": {
+      "room": "غرفة",
+      "service": "خدمة",
+      "tax": "ضريبة",
+      "adjustment": "تسوية",
+      "discount": "خصم",
+      "other": "أخرى"
+    },
+    "methods": {
+      "cash": "نقدًا",
+      "card": "بطاقة",
+      "bank_transfer": "تحويل بنكي",
+      "electronic": "إلكتروني",
+      "other": "أخرى"
+    },
+    "categories": {
+      "operations": "تشغيل",
+      "maintenance": "صيانة",
+      "supplies": "مستلزمات",
+      "marketing": "تسويق",
+      "salary": "رواتب",
+      "utilities": "مرافق",
+      "other": "أخرى"
+    },
+    "folios": {
+      "add": "حساب جديد",
+      "empty": "لا حسابات بعد",
+      "emptyHint": "افتح حسابًا لتسجيل البنود والدفعات.",
+      "searchPlaceholder": "ابحث بالرقم أو العميل",
+      "number": "الرقم",
+      "customer": "العميل",
+      "balance": "الرصيد",
+      "view": "فتح",
+      "createTitle": "حساب جديد",
+      "customerName": "اسم العميل",
+      "currency": "العملة",
+      "notes": "ملاحظات"
+    },
+    "folio": {
+      "title": "الحساب",
+      "charges": "البنود",
+      "payments": "الدفعات",
+      "totalCharges": "إجمالي البنود",
+      "totalPayments": "إجمالي الدفعات",
+      "balance": "الرصيد",
+      "addCharge": "إضافة بند",
+      "recordPayment": "تسجيل دفعة",
+      "createInvoice": "إنشاء فاتورة",
+      "close": "إغلاق الحساب",
+      "void": "إلغاء الحساب",
+      "noCharges": "لا بنود بعد",
+      "noPayments": "لا دفعات بعد",
+      "voidCharge": "إلغاء",
+      "voidPayment": "إلغاء",
+      "printReceipt": "سند",
+      "voided": "ملغى",
+      "invoices": "الفواتير"
+    },
+    "chargeForm": {
+      "title": "إضافة بند",
+      "type": "النوع",
+      "description": "الوصف",
+      "quantity": "الكمية",
+      "unitAmount": "سعر الوحدة",
+      "taxRate": "نسبة الضريبة (%)",
+      "submit": "إضافة بند"
+    },
+    "paymentForm": {
+      "title": "تسجيل دفعة",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "payerName": "اسم الدافع",
+      "reference": "المرجع",
+      "notes": "ملاحظات",
+      "submit": "تسجيل دفعة"
+    },
+    "invoiceForm": {
+      "createTitle": "إنشاء فاتورة",
+      "dueDate": "تاريخ الاستحقاق",
+      "customerName": "اسم العميل",
+      "customerPhone": "الهاتف",
+      "notes": "ملاحظات",
+      "create": "إنشاء مسودة"
+    },
+    "payments": {
+      "empty": "لا دفعات بعد",
+      "emptyHint": "الدفعات التي تسجّلها تظهر هنا.",
+      "receipt": "سند",
+      "void": "إلغاء",
+      "number": "السند",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "date": "التاريخ"
+    },
+    "invoices": {
+      "empty": "لا فواتير بعد",
+      "emptyHint": "الفواتير التي تنشئها تظهر هنا.",
+      "issue": "إصدار",
+      "void": "إلغاء",
+      "print": "طباعة",
+      "number": "الرقم",
+      "customer": "العميل",
+      "total": "الإجمالي",
+      "issuedAt": "صدرت",
+      "view": "عرض"
+    },
+    "expenses": {
+      "add": "مصروف جديد",
+      "empty": "لا مصروفات بعد",
+      "emptyHint": "المصروفات التي تسجّلها تظهر هنا.",
+      "searchPlaceholder": "ابحث في المورّد أو الوصف أو المرجع",
+      "number": "السند",
+      "category": "التصنيف",
+      "description": "الوصف",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "vendor": "المورّد",
+      "reference": "المرجع",
+      "date": "التاريخ",
+      "void": "إلغاء",
+      "voucher": "سند صرف",
+      "createTitle": "مصروف جديد",
+      "submit": "حفظ المصروف"
+    },
+    "void": {
+      "title": "إلغاء السجل",
+      "reason": "السبب",
+      "reasonPlaceholder": "لماذا يُلغى هذا؟",
+      "confirm": "إلغاء"
+    },
+    "print": {
+      "print": "طباعة",
+      "close": "إغلاق",
+      "date": "التاريخ",
+      "total": "الإجمالي",
+      "subtotal": "المجموع الفرعي",
+      "tax": "الضريبة",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "thanks": "شكرًا لكم",
+      "receiptTitle": "سند قبض",
+      "invoiceTitle": "فاتورة",
+      "voucherTitle": "سند صرف",
+      "customer": "العميل",
+      "vendor": "المورّد"
+    },
+    "financeNote": "كل المبالغ تُسجَّل داخليًا فقط — لا تتم معالجة دفع فعلي.",
+    "errors": {
+      "folioClosed": "هذا الحساب مغلق أو ملغى ولا يمكن تعديله.",
+      "folioNotBalanced": "لا يمكن إغلاق الحساب إلا عندما يكون الرصيد صفرًا.",
+      "voidReasonRequired": "يلزم سبب لإلغاء هذا السجل.",
+      "invalidOperation": "هذه العملية المالية غير مسموحة.",
+      "invalidAmount": "المبلغ غير صالح."
+    }
+  },
   "language": {
     "label": "اللغة",
     "ar": "العربية",

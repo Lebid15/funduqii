@@ -118,6 +118,29 @@ these rules is a defect, not a shortcut.
   referenced by a stay **deactivates** it (preserves history).
 - Full rules: [docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md).
 
+### 8e. Finance — folios, payments, invoices, expenses (from Phase 8)
+- **Money is `Decimal` only — never a float.** Every amount is quantized to two
+  places (`money()`); a single service module (`apps/finance/services.py`) is the
+  only path that writes money — views never mutate money fields directly.
+- **No hard delete of posted financial records — `void` with a reason.** Charges,
+  payments, invoices, and expenses are voided (status + `void_reason` +
+  `voided_at`/`voided_by`); a blank reason is rejected. Folios hold their charges/
+  payments/invoices with `on_delete=PROTECT`.
+- **Balances are computed from posted records — never a stored number.**
+  `folio_balance = Σ posted charges − Σ posted payments`. A folio **cannot be
+  closed with a non-zero balance**; charges/payments are only allowed while it is
+  open.
+- **An issued invoice is an immutable snapshot** (frozen lines + totals +
+  `balance_at_issue`); later folio activity never changes it — correct by voiding
+  and re-issuing. Document numbers (folio/receipt/invoice/expense) are **per
+  hotel** and allocated under `select_for_update`.
+- **Internal layer only — no external payment gateway, no bank reconciliation,
+  no e-invoicing/government integration, no accounting ledger, no payroll.**
+  `card`/`electronic` methods are labels on an internal receipt, not a real
+  transaction. **Early-checkout settlement is manual** (void or adjustment
+  charge — no auto-refund).
+- Full rules: [docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md](docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

@@ -3,7 +3,10 @@ import type { BadgeTone } from "@/components/ui";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
 import type {
+  FolioStatus,
   HotelStatus,
+  InvoiceStatus,
+  PostingStatus,
   ReservationStatus,
   RoomStatus,
   StayStatus,
@@ -139,6 +142,49 @@ export function stayStatusTone(status: StayStatus): BadgeTone {
 
 export function stayStatusLabel(status: StayStatus, t: Dictionary): string {
   return t.frontDesk.status[status];
+}
+
+/** Format a decimal-string money amount with its currency, locale-aware. */
+export function formatMoney(
+  amount: string | number | null,
+  currency: string,
+  locale: Locale,
+): string {
+  const value = Number(amount ?? 0);
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: currency || "USD",
+    }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency || ""}`.trim();
+  }
+}
+
+export function folioStatusTone(status: FolioStatus): BadgeTone {
+  switch (status) {
+    case "open":
+      return "info";
+    case "closed":
+      return "success";
+    default:
+      return "danger";
+  }
+}
+
+export function invoiceStatusTone(status: InvoiceStatus): BadgeTone {
+  switch (status) {
+    case "issued":
+      return "success";
+    case "draft":
+      return "warning";
+    default:
+      return "danger";
+  }
+}
+
+export function postingStatusTone(status: PostingStatus): BadgeTone {
+  return status === "posted" ? "success" : "danger";
 }
 
 export function billingCycleLabel(cycle: string, t: Dictionary): string {

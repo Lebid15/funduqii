@@ -553,6 +553,196 @@
       "alreadyCheckedIn": "Bu rezervasyon odasına zaten giriş yapıldı."
     }
   },
+  "finance": {
+    "nav": "Finans",
+    "title": "Finans",
+    "subtitle": "Folyolar, ödemeler, faturalar ve giderler",
+    "saved": "Kaydedildi",
+    "tabs": {
+      "overview": "Genel bakış",
+      "folios": "Folyolar",
+      "payments": "Ödemeler",
+      "invoices": "Faturalar",
+      "expenses": "Giderler"
+    },
+    "overview": {
+      "openFolios": "Açık folyolar",
+      "outstanding": "Bekleyen bakiye",
+      "unpaidFolios": "Ödenmemiş folyolar",
+      "paymentsToday": "Bugünkü ödemeler",
+      "expensesToday": "Bugünkü giderler",
+      "netToday": "Bugünkü net",
+      "issuedInvoices": "Kesilen faturalar"
+    },
+    "folioStatus": {
+      "open": "Açık",
+      "closed": "Kapalı",
+      "voided": "İptal"
+    },
+    "invoiceStatus": {
+      "draft": "Taslak",
+      "issued": "Kesildi",
+      "voided": "İptal"
+    },
+    "postingStatus": {
+      "posted": "İşlendi",
+      "voided": "İptal"
+    },
+    "chargeTypes": {
+      "room": "Oda",
+      "service": "Hizmet",
+      "tax": "Vergi",
+      "adjustment": "Düzeltme",
+      "discount": "İndirim",
+      "other": "Diğer"
+    },
+    "methods": {
+      "cash": "Nakit",
+      "card": "Kart",
+      "bank_transfer": "Havale",
+      "electronic": "Elektronik",
+      "other": "Diğer"
+    },
+    "categories": {
+      "operations": "Operasyon",
+      "maintenance": "Bakım",
+      "supplies": "Malzeme",
+      "marketing": "Pazarlama",
+      "salary": "Maaş",
+      "utilities": "Faturalar",
+      "other": "Diğer"
+    },
+    "folios": {
+      "add": "Yeni folyo",
+      "empty": "Henüz folyo yok",
+      "emptyHint": "Ücret ve ödeme kaydetmek için bir folyo açın.",
+      "searchPlaceholder": "Numara veya müşteri ile ara",
+      "number": "Numara",
+      "customer": "Müşteri",
+      "balance": "Bakiye",
+      "view": "Aç",
+      "createTitle": "Yeni folyo",
+      "customerName": "Müşteri adı",
+      "currency": "Para birimi",
+      "notes": "Notlar"
+    },
+    "folio": {
+      "title": "Folyo",
+      "charges": "Ücretler",
+      "payments": "Ödemeler",
+      "totalCharges": "Toplam ücret",
+      "totalPayments": "Toplam ödeme",
+      "balance": "Bakiye",
+      "addCharge": "Ücret ekle",
+      "recordPayment": "Ödeme kaydet",
+      "createInvoice": "Fatura oluştur",
+      "close": "Folyoyu kapat",
+      "void": "Folyoyu iptal et",
+      "noCharges": "Henüz ücret yok",
+      "noPayments": "Henüz ödeme yok",
+      "voidCharge": "İptal",
+      "voidPayment": "İptal",
+      "printReceipt": "Makbuz",
+      "voided": "İptal",
+      "invoices": "Faturalar"
+    },
+    "chargeForm": {
+      "title": "Ücret ekle",
+      "type": "Tür",
+      "description": "Açıklama",
+      "quantity": "Adet",
+      "unitAmount": "Birim tutar",
+      "taxRate": "Vergi oranı (%)",
+      "submit": "Ücret ekle"
+    },
+    "paymentForm": {
+      "title": "Ödeme kaydet",
+      "amount": "Tutar",
+      "method": "Yöntem",
+      "payerName": "Ödeyen",
+      "reference": "Referans",
+      "notes": "Notlar",
+      "submit": "Ödeme kaydet"
+    },
+    "invoiceForm": {
+      "createTitle": "Fatura oluştur",
+      "dueDate": "Vade",
+      "customerName": "Müşteri adı",
+      "customerPhone": "Telefon",
+      "notes": "Notlar",
+      "create": "Taslak oluştur"
+    },
+    "payments": {
+      "empty": "Henüz ödeme yok",
+      "emptyHint": "Kaydettiğiniz ödemeler burada görünür.",
+      "receipt": "Makbuz",
+      "void": "İptal",
+      "number": "Makbuz",
+      "amount": "Tutar",
+      "method": "Yöntem",
+      "date": "Tarih"
+    },
+    "invoices": {
+      "empty": "Henüz fatura yok",
+      "emptyHint": "Oluşturduğunuz faturalar burada görünür.",
+      "issue": "Kes",
+      "void": "İptal",
+      "print": "Yazdır",
+      "number": "Numara",
+      "customer": "Müşteri",
+      "total": "Toplam",
+      "issuedAt": "Kesildi",
+      "view": "Görüntüle"
+    },
+    "expenses": {
+      "add": "Yeni gider",
+      "empty": "Henüz gider yok",
+      "emptyHint": "Kaydettiğiniz giderler burada görünür.",
+      "searchPlaceholder": "Tedarikçi, açıklama veya referans ara",
+      "number": "Fiş",
+      "category": "Kategori",
+      "description": "Açıklama",
+      "amount": "Tutar",
+      "method": "Yöntem",
+      "vendor": "Tedarikçi",
+      "reference": "Referans",
+      "date": "Tarih",
+      "void": "İptal",
+      "voucher": "Fiş",
+      "createTitle": "Yeni gider",
+      "submit": "Gideri kaydet"
+    },
+    "void": {
+      "title": "Kaydı iptal et",
+      "reason": "Neden",
+      "reasonPlaceholder": "Neden iptal ediliyor?",
+      "confirm": "İptal"
+    },
+    "print": {
+      "print": "Yazdır",
+      "close": "Kapat",
+      "date": "Tarih",
+      "total": "Toplam",
+      "subtotal": "Ara toplam",
+      "tax": "Vergi",
+      "amount": "Tutar",
+      "method": "Yöntem",
+      "thanks": "Teşekkürler",
+      "receiptTitle": "Ödeme makbuzu",
+      "invoiceTitle": "Fatura",
+      "voucherTitle": "Ödeme fişi",
+      "customer": "Müşteri",
+      "vendor": "Tedarikçi"
+    },
+    "financeNote": "Tüm tutarlar yalnızca dahili olarak kaydedilir — gerçek ödeme işlenmez.",
+    "errors": {
+      "folioClosed": "Bu folyo kapalı veya iptal edilmiş, değiştirilemez.",
+      "folioNotBalanced": "Folyo yalnızca bakiyesi sıfırken kapatılabilir.",
+      "voidReasonRequired": "Bu kaydı iptal etmek için bir neden gerekir.",
+      "invalidOperation": "Bu finansal işleme izin verilmiyor.",
+      "invalidAmount": "Tutar geçersiz."
+    }
+  },
   "language": {
     "label": "Dil",
     "ar": "العربية",

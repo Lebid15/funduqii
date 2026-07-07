@@ -58,7 +58,7 @@
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
 | 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
-| 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
+| 8 | Payments + Expenses + Folio + Invoices | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
 | 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
 | 11 | Shifts + Daily Close | لم تبدأ ⏳ | — |
@@ -910,6 +910,62 @@
 
 #### ملاحظة مستقبلية غير مانعة (سياسة الخروج المبكر)
 - يجب لاحقًا توثيق ومراجعة سياسة **الخروج المبكر**: هل يبقى الحجز حاجزًا للغرفة حتى تاريخ الخروج المخطط، أم يُحرَّر التوفر بعد check-out الفعلي، وكيف يؤثر ذلك على الحسابات المالية لاحقًا. تُرحَّل إلى Phase 8 أو مرحلة تحسين تشغيل الحجوزات. **لا تمنع اعتماد Phase 7 الآن.**
+
+#### ملاحظة Git
+- `origin/main` هو مصدر الحقيقة الوحيد. ممنوع استخدام الفرع المحلي `main` المختلف أو دفعه إلى origin، وممنوع reset مدمّر دون موافقة صريحة.
+
+---
+
+## Phase 8 — Payments + Expenses + Folio + Invoices
+- الحالة: **بانتظار الاعتماد 🔎** (مُنفَّذة ومُختبَرة — لم تُعتمد بعد من المالك)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · اعتُمدت —
+- الهدف: طبقة المال الداخلية للفندق — **Folio** لكل حجز/إقامة يجمّع **charges** (بضريبة لكل بند)، **payments** كإيصالات، **invoice** تُصدَر من الفوليو كلقطة ثابتة غير قابلة للتعديل، و**expenses** كسندات صرف مستقلة. المال **Decimal فقط**؛ **لا حذف نهائي** للسجلات المنشورة (void بسبب)؛ **الأرصدة محسوبة** من السجلات المنشورة؛ **لا يُغلق فوليو برصيد ≠ 0**.
+- الأساس: بُنيت من **`origin/main`** (752ea76، يحوي Phase 4/5/6+6.1/7) بعد التحقق منه — لم يُستخدم الفرع المحلي المختلف.
+- **طبقة داخلية فقط:** لا payment gateway فعلي (Stripe/PayPal/دفع أونلاين)، لا bank reconciliation، لا e-invoicing حكومي، لا ledger محاسبي متقدم، لا payroll، لا daily close/shifts.
+
+### ما نُفّذ (Backend)
+- **تطبيق واحد `apps/finance`** فوق المراحل السابقة، مع **وحدة خدمات واحدة** (`services.py`) هي المسار الوحيد الذي يكتب المال — الـ views لا تعدّل حقول المال مباشرة.
+- **النماذج:** `FinancialNumberSequence` (عدّاد لكل فندق+نوع، فريد hotel+kind) · `Folio` (روابط reservation/stay/guest اختيارية SET_NULL، `folio_number` فريد لكل فندق، status open/closed/voided، عملة، void triple) · `FolioCharge` (folio PROTECT، النوع room/service/tax/adjustment/discount/other، quantity/unit/amount/tax_rate/tax_amount/total، status posted/voided) · `Payment` (إيصال، folio PROTECT، `receipt_number` فريد لكل فندق، method cash/card/bank_transfer/electronic/other) · `Invoice` + `InvoiceLine` (folio PROTECT، draft/issued/voided، `invoice_number` فريد لكل فندق بين غير الفارغ، لقطة بنود+إجماليات+balance_at_issue مجمّدة عند الإصدار) · `Expense` (سند صرف مستقل، `expense_number` فريد لكل فندق، تصنيفات operations/maintenance/supplies/marketing/salary/utilities/other).
+- **قواعد المال (مفروضة كودًا):** `MONEY_KW(max_digits=12, decimal_places=2)` + `money()` يقرّب لخانتين ROUND_HALF_UP — **لا float**. **لا hard delete** للسجلات المنشورة → **void** (status + `void_reason` + `voided_at`/`voided_by`؛ سبب فارغ مرفوض). الفوليو يحمل charges/payments/invoices بـ `on_delete=PROTECT`.
+- **الرصيد محسوب دائمًا** (لا عمود مخزّن): `folio_balance = Σ posted charges − Σ posted payments`. **لا يُغلق فوليو برصيد ≠ 0.00** (`409 folio_not_balanced`)؛ الإضافة/الدفع فقط على فوليو `open` (`409 folio_closed`).
+- **الضريبة** نسبة مئوية لكل بند: `amount=qty×unit`، `tax=amount×rate/100`، `total=amount+tax`؛ البنود غير الائتمانية موجبة (`422 invalid_amount`)؛ لا بند بإجمالي صفر.
+- **لقطة الفاتورة (immutability):** الفاتورة تُنشأ **draft** (بلا رقم/بنود) ثم **issue**: نسخ كل charge منشور إلى `InvoiceLine`، تجميد subtotal/tax_total/total + `balance_at_issue`، تخصيص `invoice_number`. بعد الإصدار **لا يتغيّر شيء** بنشاط الفوليو اللاحق — التصحيح بـ void + إعادة إصدار.
+- **الترقيم** `next_number(hotel, kind)` بقفل الصف (`select_for_update`) → `FOL/RCP/INV/EXP/CHG{n:05d}`، **لكل فندق** وبلا فجوات؛ رقم الفاتورة يُصرف عند الإصدار فقط (لا فجوات من المسودات).
+- **سياسة الخروج المبكر (قرار موثّق):** يدوية لا تلقائية — لا auto-refund/auto-void؛ التخفيض عبر void charge أو adjustment/discount ثم تسوية وإغلاق؛ لا غرامة تلقائية (تُدخل كـ charge عادي).
+- **الصلاحيات:** `finance.view/create/update/close/void/charge_create/charge_void/payment_create/payment_void/invoice_create/invoice_issue/invoice_void` و`expenses.view/create/update/void` — مفروضة على الباكند لكل endpoint؛ **الفندق المعلّق للقراءة فقط** (كل كتابة → `403 hotel_suspended`)؛ عزل مستأجرين كامل؛ **فوليو مفتوح واحد لكل إقامة** (`409 open_folio_exists_for_stay`).
+- **APIs تحت `/api/v1/hotel/finance/`**: `overview/` · `folios/`(+`{id}/`,`close/`,`void/`,`charges/`,`payments/`,`invoices/`) · `charges/{id}/void/` · `payments/`(+`{id}/void/`,`{id}/receipt/`) · `invoices/`(+`{id}/`,`issue/`,`void/`,`print/`) · `expenses/`(+`{id}/`,`void/`,`voucher/`). أخطاء جديدة: `folio_closed`(409) · `folio_not_balanced`(409) · `void_reason_required`(422) · `invalid_finance_operation`(409) · `invalid_amount`(422). endpoints الطباعة (receipt/print/voucher) تُرجع payload صديق للطباعة بلا أي خدمة خارجية أو PDF على الخادم.
+
+### ما نُفّذ (Frontend)
+- عنصر **«المالية»** في sidebar الفندق ومسار **`/hotel/finance`** بتبويبات: **نظرة عامة** (بطاقات: حسابات مفتوحة/الرصيد المستحق/دفعات اليوم/مصروفات اليوم/الصافي اليوم/فواتير صادرة) · **الحسابات** (قائمة+إنشاء+نافذة تفاصيل بالـ charges/payments والرصيد الحيّ وإضافة رسم/تسجيل دفعة/إنشاء فاتورة/إغلاق/إبطال + إيصال قابل للطباعة) · **الدفعات** (إبطال + إيصال) · **الفواتير** (إصدار/إبطال/طباعة) · **المصروفات** (إنشاء/إبطال + سند قابل للطباعة).
+- الطباعة عبر `window.print()` على مستند طباعة فقط (`@media print` في `globals.css`) — بلا خادم. تنسيق المال عبر `Intl.NumberFormat` (عملة). نظام التصميم المركزي + أيقونات lucide، ترجمات **ar/en/tr** كاملة (namespace `finance`) مع RTL/LTR، حالات موحّدة، responsive حقيقي، لا نصوص مباشرة، لا توكن في localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/finance/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/hotel/finance/page.tsx` · `components/hotel/finance/{FinancePanel,OverviewTab,FoliosTab,PaymentsTab,InvoicesTab,ExpensesTab,shared}.tsx` · `lib/api/finance.ts` · والوثيقة `docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+قسم `finance` بـ12 رمزًا +توسيع `expenses`) · `apps/common/exceptions.py` (5 أخطاء) · `config/settings/base.py` (+app) · `config/urls.py` (+urls) · تحديث اختبارات regression في hotels/rooms/reservations/stays إلى `test_no_out_of_scope_models` (تمنع restaurant_orders/stock_items/daily_closes/shifts؛ stays تُبقي public_bookings).
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` (+formatMoney +tone helpers) · قواميس ar/en/tr · `styles/globals.css` (بطاقات رصيد + مستند طباعة) · التوثيق (README, DEVELOPMENT_RULES §8e, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **302/302 OK** (264 سابقة + 38 لـ finance) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/finance` مبني) |
+| فحص حيّ End-to-End (Django+Next، SQLite) | ✅ فوليو FOL00001 → رسم 2×100+15% = رصيد 230 → دفعة 130 = رصيد 100 → **إغلاق محظور 409** → دفعة 100 → مُغلق · فوليو جديد → رسم → إنشاء+إصدار فاتورة INV00001 (إجمالي 55، سطر لقطة واحد) · مصروف EXP00001 · overview: مفتوحة 1/مستحق 55/دفعات اليوم 230/مصروفات اليوم 75/صافي 155/فواتير صادرة 1 · لقطات overview/folios/invoice-print/expenses/AR/موبايل Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- **المال Decimal فقط** و**void بدل الحذف** و**الرصيد محسوب** — قرارات معمارية مفروضة كودًا.
+- **الفوليو لا يُغلق برصيد ≠ 0**؛ **الفاتورة المُصدَرة لقطة ثابتة** (تصحيح بإبطال+إعادة إصدار) — قرارات موثّقة.
+- **سياسة الخروج المبكر يدوية** (لا استرداد تلقائي) — استجابةً لملاحظة Phase 7 المستقبلية؛ موثّقة في §9 من وثيقة الاستراتيجية.
+- **card/electronic مجرّد وسم** على إيصال داخلي — لا معالجة فعلية.
+- تحديث اختبارات regression لمراحل 4/5/6/7 لأن جداول المال (folios/charges/payments/invoices/expenses) أصبحت مشروعة في Phase 8؛ تبقى تمنع أنطقة لاحقة (restaurant/stock/daily_close/shifts).
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا payment gateway فعلي · لا Stripe/PayPal · لا دفع أونلاين · لا bank reconciliation · لا e-invoicing حكومي · لا ledger محاسبي متقدم · لا payroll · لا daily close · لا shifts · لا مطعم/POS · لا مخزون · لا housekeeping/maintenance workflows · لا public booking payments · لا تقارير مالية متقدمة · لا تحويل عملات (FX) · لا خطط تقسيط · لا proration تلقائي للخروج المبكر.** **لم تبدأ Phase 9.**
+
+### الاعتماد
+- **لم تُعتمد بعد.** مُنفَّذة ومُختبَرة وبانتظار مراجعة المالك عبر PR الخاص بالمرحلة. **لا اعتماد ذاتيًا.**
 
 #### ملاحظة Git
 - `origin/main` هو مصدر الحقيقة الوحيد. ممنوع استخدام الفرع المحلي `main` المختلف أو دفعه إلى origin، وممنوع reset مدمّر دون موافقة صريحة.

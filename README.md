@@ -4,20 +4,26 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 7 — Guests + Check-in + Check-out (pending review).**
+> **Current status: Phase 8 — Payments + Expenses + Folio + Invoices (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
-> media), Phase 5 (floors/room types/rooms) and Phase 6 (reservations +
-> availability, incl. 6.1 room assignment). Phase 7 adds the **guest directory**
-> and the operational **front desk** — check-in of a confirmed reservation into a
-> room, current residents, arrivals/departures today, and operational check-out
-> — under `/api/v1/hotel/`, plus hotel-side consoles at `/hotel/guests` and
-> `/hotel/front-desk`, scoped by hotel membership and permissions (`guests.*`,
-> `stays.*`). Occupancy is **derived from active stays** — there is no manual
-> `occupied` room status.
-> **Still no money at all (payments/expenses/folio/invoices/taxes), no restaurant,
-> no housekeeping/maintenance workflows, no public website/booking, and no real
-> maps/WhatsApp** — those are later phases. Check-out here is operational only.
+> media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
+> availability, incl. 6.1 room assignment) and Phase 7 (guests + operational
+> check-in/out). Phase 8 adds the **internal finance layer** — a **folio** per
+> reservation/stay that accumulates **charges** (with per-line tax), **payments**
+> recorded as receipts, an **invoice** issued from the folio as an immutable
+> snapshot, and standalone **expense** vouchers — under
+> `/api/v1/hotel/finance/`, plus a hotel-side console at `/hotel/finance`
+> (Overview / Folios / Payments / Invoices / Expenses), scoped by hotel
+> membership and permissions (`finance.*`, `expenses.*`). All money is
+> **Decimal**; posted records are **never hard-deleted** (void with a reason);
+> **balances are computed** from posted line items; a folio **cannot be closed
+> with a non-zero balance**.
+> **This is an internal accounting layer only — no real payment gateway
+> (Stripe/PayPal/online payment), no bank reconciliation, no e-invoicing
+> government integration, no accounting ledger, no payroll, no daily close/shifts,
+> no restaurant, no public booking payments, and no advanced reports** — those are
+> out of scope or later phases.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -43,6 +49,7 @@ funduqii/
 │  ├─ apps/reservations/    # reservations + availability engine /api/v1/hotel/ (Phase 6)
 │  ├─ apps/guests/          # guest directory /api/v1/hotel/ (Phase 7)
 │  ├─ apps/stays/           # check-in/out + occupancy /api/v1/hotel/ (Phase 7)
+│  ├─ apps/finance/         # folios + charges + payments + invoices + expenses /api/v1/hotel/finance/ (Phase 8)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -352,6 +359,32 @@ suspended hotel is read-only.
 Occupancy is **derived from active stays** — there is no manual `occupied` room
 status. Check-out creates **no** folio/payment/invoice. See
 [docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md).
+
+### Finance endpoints (Phase 8)
+
+Under `/api/v1/hotel/finance/`, scoped to the caller's hotel and guarded by
+`finance.*` / `expenses.*`. This is the **internal money layer** — no external
+payment gateway is ever contacted. All money is **Decimal**; posted records are
+**voided** (with a reason), never hard-deleted; balances are **computed** from
+posted line items; a suspended hotel is read-only.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/finance/overview/` | Today's totals (open folios, outstanding, payments/expenses today, net, issued invoices) |
+| `GET/POST .../finance/folios/` · `GET/PATCH .../folios/{id}/` | Folios (PATCH = notes only) |
+| `POST .../folios/{id}/close/` · `/void/` | Close (blocked if balance ≠ 0) / void (reason required) |
+| `POST .../folios/{id}/charges/` · `POST .../charges/{id}/void/` | Add a charge (per-line tax) / void a charge |
+| `POST .../folios/{id}/payments/` · `POST .../payments/{id}/void/` | Record a receipt / void it |
+| `GET .../payments/` · `GET .../payments/{id}/receipt/` | Payments list / printable receipt |
+| `POST .../folios/{id}/invoices/` · `POST .../invoices/{id}/issue/` | Create a draft invoice / issue it (freezes an immutable snapshot) |
+| `GET .../invoices/` · `GET .../invoices/{id}/` · `.../print/` · `POST .../void/` | Invoices list / detail / printable / void |
+| `GET/POST .../finance/expenses/` · `GET/PATCH .../expenses/{id}/` · `.../void/` · `.../voucher/` | Expense vouchers (PATCH only while posted) |
+
+An **issued invoice is an immutable snapshot** — later folio activity never
+changes it; corrections are made by voiding and re-issuing. A folio **cannot be
+closed with a non-zero balance**. Early-checkout settlement is **manual** (void
+or adjustment charge — no auto-refund). See
+[docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md](docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

@@ -375,10 +375,10 @@ class RegressionTests(APITestCase):
             self.client.get(reverse("hotel:settings"), **HDR(hotel)).status_code, 200
         )
 
-    def test_no_payment_models(self):
+    def test_no_out_of_scope_models(self):
         from django.apps import apps as django_apps
 
         tables = {m._meta.db_table for m in django_apps.get_models()}
-        # reservations (Phase 6) and guests/stays (Phase 7) are legitimate; money is not.
-        for forbidden in ("payments", "invoices", "folios", "expenses"):
+        # Finance (Phase 8) is legitimate; restaurant/stock/daily-close/shifts are not.
+        for forbidden in ("restaurant_orders", "stock_items", "daily_closes", "shifts"):
             self.assertNotIn(forbidden, tables)

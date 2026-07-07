@@ -198,6 +198,39 @@ class AlreadyCheckedIn(FunduqiiAPIException):
     default_code = "already_checked_in"
 
 
+# --- Finance (Phase 8) ------------------------------------------------------
+
+
+class FolioClosed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This folio is closed or voided and cannot be modified."
+    default_code = "folio_closed"
+
+
+class FolioNotBalanced(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "A folio can only be closed when its balance is zero."
+    default_code = "folio_not_balanced"
+
+
+class VoidReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to void this record."
+    default_code = "void_reason_required"
+
+
+class InvalidFinanceOperation(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This financial operation is not allowed."
+    default_code = "invalid_finance_operation"
+
+
+class InvalidAmount(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The amount is not valid."
+    default_code = "invalid_amount"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

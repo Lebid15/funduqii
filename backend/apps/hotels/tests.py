@@ -307,11 +307,11 @@ class RegressionTests(APITestCase):
         for path in ("/api/v1/reservations/", "/api/v1/rooms/", "/api/v1/guests/"):
             self.assertEqual(self.client.get(path).status_code, 404, path)
 
-    def test_no_finance_models(self):
-        # Rooms (Phase 5), reservations (Phase 6) and guests/stays (Phase 7)
-        # exist; finance (folio, payments, invoices, expenses) remains out of scope.
+    def test_no_out_of_scope_models(self):
+        # Finance (Phase 8) exists; restaurant/stock/daily-close/shifts remain
+        # out of scope.
         from django.apps import apps as django_apps
 
         models = {m._meta.db_table for m in django_apps.get_models()}
-        for forbidden in ("invoices", "folios", "payments", "expenses"):
+        for forbidden in ("restaurant_orders", "stock_items", "daily_closes", "shifts"):
             self.assertNotIn(forbidden, models)
