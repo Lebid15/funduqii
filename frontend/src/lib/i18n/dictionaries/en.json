@@ -1,0 +1,11 @@
+{
+  "app": {
+    "name": "Funduqii",
+    "foundationReady": "The Funduqii platform foundation is ready.",
+    "phase": "Phase 1 · Foundation"
+  },
+  "common": {
+    "loading": "Loading…",
+    "error": "Something went wrong"
+  }
+}

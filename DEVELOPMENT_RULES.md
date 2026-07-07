@@ -1,0 +1,191 @@
+# Funduqii — Development Rules (قواعد التطوير الإلزامية)
+
+These rules are mandatory for every contributor and every phase. They exist to
+keep the project clean, correct, and faithful to the blueprint. Breaking one of
+these rules is a defect, not a shortcut.
+
+---
+
+## 1. The blueprint is the single source of truth
+- [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) governs scope, phases, and design.
+- If code and blueprint disagree, the blueprint wins until the blueprint is
+  formally updated.
+
+## 2. Phases are closed and sequential
+- No phase begins before the previous one is complete, tested, and reviewed.
+- No feature is built outside the current phase's scope.
+- "While I'm here" additions are not allowed.
+
+## 3. No random or throwaway code
+- No random test/seed data committed as if it were real.
+- No temporary hacks that quietly become permanent. If something is temporary,
+  it is tracked and removed before the phase closes.
+
+## 4. Data ownership & source of truth
+- The **backend is the source of truth**. The frontend renders backend results.
+- `localStorage` (or any client storage) is **never** a source of truth. It may
+  only cache non-authoritative, re-fetchable state.
+- **Financial figures are never computed on the frontend.** All money math is
+  done and validated on the backend.
+
+## 5. Internationalization
+- **No hardcoded user-facing strings** in the UI. Every string comes from the
+  central translation dictionaries (ar / en / tr).
+- Error and success messages are translatable (via keys/codes, not raw text).
+
+## 6. Permissions & security (from Phase 2 onward)
+- Permissions are the source of truth for what a user can do — not job titles.
+- **No cosmetic permissions.** Every permission is enforced on the backend.
+- Hiding a button is **not** protection. Any unauthorized operation must be
+  rejected by the backend even if the API is called directly.
+- Every sensitive operation is checked on the backend and, where relevant,
+  written to the audit log.
+
+## 7. Multi-Tenant isolation (from Phase 4 onward)
+- Multi-tenant isolation is a foundational rule: one hotel can **never** read or
+  write another hotel's data.
+- Isolation is enforced on the backend (query scoping + object-level checks),
+  not by frontend filtering.
+
+## 8. Secrets & configuration
+- **No secrets in Git.** Only `.env.example` files (with placeholder values) are
+  committed. Real `.env` / `.env.local` files are git-ignored.
+- Configuration comes from the environment, with development and production
+  settings kept separate.
+
+## 9. Database & migrations
+- No random/ad-hoc schema. Models follow the conceptual data model in the
+  blueprint.
+- Migrations are reviewed, not generated blindly in bulk.
+
+## 10. Design consistency
+- One central Design System. No bespoke, one-off styling per page.
+- Pages are composed from shared components, tokens, and layout primitives.
+
+## 11. Testing is part of "done"
+- No feature is complete without tests appropriate to it (unit, API, permission,
+  isolation, availability, financial, etc.).
+- Each phase must be tested and green before it is closed.
+
+## 12. Performance, scale, realtime & production (from Phase 1.5)
+See [docs/PERFORMANCE_AND_REALTIME_STRATEGY.md](docs/PERFORMANCE_AND_REALTIME_STRATEGY.md),
+[docs/DATABASE_INDEX_STRATEGY.md](docs/DATABASE_INDEX_STRATEGY.md), and the
+production-readiness set in [docs/](docs/) (Hetzner deploy, backup/restore,
+security/firewall, monitoring, media/object storage, scaling roadmap,
+environment matrix). Production uses `config.settings.production` with
+`DEBUG=False`; **real production secrets live only on the server, never in Git**.
+- **Every large list is paginated.** Never return all rows in one response.
+- **Every hotel-owned endpoint is tenant-scoped** by the current hotel; never
+  rely on the frontend to filter tenants.
+- **No unindexed queries on large tables.** Index for real query patterns
+  (tenant-first); no random indexes.
+- **No heavy report computation inside a direct request** once data is large —
+  move to background jobs (Celery) or precomputed snapshots.
+- **Do not store images or large files in the database** — use `media/` /
+  object storage; keep only references.
+- **No `localStorage` as a source of truth** (repeats Rule 4, applied to lists).
+- **Sensitive multi-step operations use transactions**; **payments and other
+  sensitive operations must support idempotency** to prevent double execution.
+- **Watch N+1 queries in development** (`select_related`/`prefetch_related`);
+  dashboards use summary endpoints, not full-table loads.
+- **Realtime updates patch targeted state** — they never reload the whole page,
+  and only foundation health sockets exist until a feature's phase adds events.
+
+## 13. External integrations, maps & messaging (from Phase 1.6)
+See [docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md](docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md),
+[docs/WHATSAPP_AND_MESSAGING_STRATEGY.md](docs/WHATSAPP_AND_MESSAGING_STRATEGY.md),
+[docs/MAPS_AND_LOCATION_STRATEGY.md](docs/MAPS_AND_LOCATION_STRATEGY.md), and
+[docs/NOTIFICATION_EVENTS_CATALOG.md](docs/NOTIFICATION_EVENTS_CATALOG.md).
+- **Official WhatsApp only** (WhatsApp Business Platform / Cloud API or an
+  approved BSP). **No** WhatsApp Web automation or unofficial solutions, ever.
+- **No API keys or tokens in Git** — only disabled placeholders in `*.example`
+  files; real values live on the server.
+- **Every external integration goes through a provider/adapter** — never couple
+  business code to a single vendor. The default provider is a disabled no-op.
+- **Non-critical messaging/integration work is async via Celery**, never inside a
+  direct request; a non-critical failure must not break the core operation.
+- **Guest messages respect consent** and use approved, multi-language templates.
+- **Every new notification event is added to the Notification Events Catalog
+  before it is implemented.**
+- **Location data stays provider-neutral** (coords + neutral `map_url`); map keys
+  are domain/permission-restricted, and secret keys stay in the backend env.
+
+## 14. Governance, compliance, QA & release (from Phase 1.7)
+See [docs/DATA_GOVERNANCE_STRATEGY.md](docs/DATA_GOVERNANCE_STRATEGY.md),
+[docs/AUDIT_LOG_STRATEGY.md](docs/AUDIT_LOG_STRATEGY.md),
+[docs/RATE_LIMITING_AND_ABUSE_PROTECTION.md](docs/RATE_LIMITING_AND_ABUSE_PROTECTION.md),
+[docs/FEATURE_FLAGS_STRATEGY.md](docs/FEATURE_FLAGS_STRATEGY.md),
+[docs/API_VERSIONING_STRATEGY.md](docs/API_VERSIONING_STRATEGY.md),
+[docs/QA_AND_TESTING_STRATEGY.md](docs/QA_AND_TESTING_STRATEGY.md),
+[docs/RELEASE_AND_DEPLOYMENT_WORKFLOW.md](docs/RELEASE_AND_DEPLOYMENT_WORKFLOW.md),
+[docs/SUPPORT_AND_INCIDENT_RESPONSE.md](docs/SUPPORT_AND_INCIDENT_RESPONSE.md).
+- **Any sensitive action must write an audit log entry** (who/what/when/which
+  hotel) when its phase is built.
+- **Any public/auth-facing endpoint must get rate limiting** (app-layer +
+  edge) in its phase.
+- **Any future operational API is versioned** under `/api/v1/` (breaking changes
+  → next version; keep backward compatibility within a version).
+- **Any sellable / package-gated capability goes through feature flags** — a
+  feature must be enabled for the hotel AND permitted for the user.
+- **Any production release requires the QA release checklist** and explicit
+  approval; back up before a significant release; keep migrations
+  backward-compatible with a known rollback.
+- **Any change to sensitive/tenant data requires a tenant-isolation test.**
+- **Financial records are voided, never hard-deleted**; prefer soft delete /
+  disable over hard delete for meaningful records.
+
+## 15. Legacy reference & enhancement backlog (from Phase 1.8)
+See [docs/LEGACY_REFERENCE_INSIGHTS.md](docs/LEGACY_REFERENCE_INSIGHTS.md) and
+[docs/PRODUCT_ENHANCEMENT_BACKLOG.md](docs/PRODUCT_ENHANCEMENT_BACKLOG.md).
+- **No code is ported from old projects** without review and approval; the
+  current project is the single source of technical truth.
+- **Every idea from an old reference enters the Product Enhancement Backlog
+  first**, before any implementation.
+- **Every WebSocket topic is protected** by membership + permission (+ tenant
+  isolation); never trust `hotel_id` alone.
+- **No optimistic updates** for financial or critical reservation operations
+  without a clear rollback path.
+- **No sequential IDs exposed** in public URLs / sensitive public APIs (use
+  UUID/`public_id`).
+- **A search index is never the source of truth** (PostgreSQL is).
+- **An Activity Feed never replaces the Audit Log.**
+- **Every Command Palette action respects permissions and feature flags.**
+- **Every booking token is access-limited/scoped** and exposes no sensitive
+  data.
+
+## 16. Centralized UI / UX / responsive / translation (MANDATORY from Phase 3)
+Full rules: [docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md](docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md).
+From Phase 3 onward, **no page/component/button/table/form is built ad-hoc**.
+- **Design tokens only** for colors/fonts/spacing/sizes/shadows/borders/radius/
+  states/z-index — no random colors or repeated ad-hoc CSS.
+- **Central components only** (Button, Table/DataTable, Input/Select, Modal/
+  ConfirmDialog, Toast, EmptyState/LoadingState/ErrorState, PageHeader, FilterBar,
+  Pagination, ResponsiveGrid, …); a bespoke variant needs a documented reason.
+- **No hardcoded strings** — all text via central i18n (ar/en/tr), with
+  automatic RTL/LTR and no breakage on text-length changes.
+- **Responsive** on mobile/tablet/laptop/desktop/large; large tables get a mobile
+  treatment (cards / controlled horizontal scroll / alt layout); controls wrap.
+- **Central layout only** (AppShell/Sidebar/Topbar/Content/PageContainer,
+  responsive sidebar) — no per-page layout.
+- **Unified states** on every data page: loading / empty / error / success /
+  permission-denied / feature-disabled / subscription-restricted (offline later)
+  — never a blank page.
+- **Accessibility:** focus states, field labels, contrast, not color-only,
+  keyboard nav.
+- **UI reflects permissions & feature flags but never replaces backend
+  enforcement**; UI uses the central API client; money is never computed on the
+  frontend.
+- **Page acceptance gate:** a new page is accepted only if it meets the checklist
+  in the guidelines doc (central components, translations, RTL/LTR, responsive,
+  central API client, loading/empty/error, permissions, feature flags, no ad-hoc
+  CSS, no hardcoded text, and green build/lint/typecheck).
+
+---
+
+### Quick checklist before closing any phase
+- [ ] Scope matches the phase in the blueprint (nothing extra).
+- [ ] Backend enforces all sensitive logic (permissions, money, isolation).
+- [ ] No hardcoded UI strings; translations present for ar/en/tr.
+- [ ] No secrets committed; `.env.example` up to date.
+- [ ] Tests written and passing.
+- [ ] Lint / type checks passing.

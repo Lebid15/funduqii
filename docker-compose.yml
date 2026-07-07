@@ -1,0 +1,34 @@
+# Local development services for Funduqii.
+# PostgreSQL (canonical DB) + Redis (cache / Celery broker / Channels layer).
+# This is NOT a production setup.
+#
+#   docker compose up -d db redis   # start both
+#   docker compose up -d redis      # start Redis only
+#   docker compose down             # stop (data kept in named volumes)
+
+services:
+  db:
+    image: postgres:16
+    container_name: funduqii-db
+    environment:
+      POSTGRES_DB: funduqii
+      POSTGRES_USER: funduqii
+      POSTGRES_PASSWORD: funduqii
+    ports:
+      - "5432:5432"
+    volumes:
+      - funduqii_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: funduqii-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - funduqii_redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  funduqii_db_data:
+  funduqii_redis_data:

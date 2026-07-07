@@ -1,0 +1,127 @@
+# =========================================================================
+# Funduqii — PRODUCTION docker-compose (EXAMPLE ONLY)
+#
+# This file documents the intended production service topology. It is a
+# TEMPLATE, not a ready-to-run stack:
+#   - Copy to docker-compose.prod.yml and adapt on the server.
+#   - Real secrets live ONLY in env files that are NOT committed
+#     (backend.env.prod, frontend.env.prod, db.env.prod). See *.env.example.
+#   - DEBUG is FALSE in production. Never enable debug mode here.
+#   - Dockerfiles for backend/frontend are added at the deployment phase; the
+#     `build:` stanzas below show where they plug in.
+#
+# See docs/HETZNER_PRODUCTION_READINESS.md for the full plan.
+# =========================================================================
+
+services:
+  # --- Django API (HTTP via Gunicorn) -------------------------------------
+  backend:
+    build: ./backend                      # Dockerfile added at deploy time
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    env_file:
+      - ./backend.env.prod                # NOT committed; DEBUG=False inside
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  # --- WebSockets (ASGI via Daphne) — separate process for Channels -------
+  ws:
+    build: ./backend
+    command: daphne -b 0.0.0.0 -p 9000 config.asgi:application
+    env_file:
+      - ./backend.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+    expose:
+      - "9000"
+
+  # --- Celery worker (background tasks) -----------------------------------
+  worker:
+    build: ./backend
+    command: celery -A config worker -l info
+    env_file:
+      - ./backend.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+
+  # --- Celery beat (scheduled tasks) — enable later when needed -----------
+  # beat:
+  #   build: ./backend
+  #   command: celery -A config beat -l info
+  #   env_file: [./backend.env.prod]
+  #   environment: { DJANGO_SETTINGS_MODULE: config.settings.production }
+  #   depends_on: [redis, db]
+  #   restart: unless-stopped
+
+  # --- Next.js frontend (production server) -------------------------------
+  frontend:
+    build: ./frontend                     # Dockerfile added at deploy time
+    command: npm run start
+    env_file:
+      - ./frontend.env.prod               # only NEXT_PUBLIC_* values
+    depends_on:
+      - backend
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+  # --- PostgreSQL (or use an external/managed DB later) -------------------
+  db:
+    image: postgres:16
+    env_file:
+      - ./db.env.prod                     # POSTGRES_* secrets, NOT committed
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    # Do NOT publish 5432 to the public internet (see security checklist).
+
+  # --- Redis (cache / Celery broker / Channels layer) ---------------------
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    # Do NOT publish 6379 to the public internet.
+
+  # --- Nginx reverse proxy + TLS (Let's Encrypt) --------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+      - ws
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro     # server blocks (added at deploy)
+      - ./nginx/certs:/etc/letsencrypt:ro       # certs (added at deploy)
+      - static_data:/var/www/static:ro
+      - media_data:/var/www/media:ro
+    restart: unless-stopped
+    # Routes:
+    #   funduqii.com      -> frontend (public site)
+    #   app.funduqii.com  -> frontend (app shell) / backend as needed
+    #   api.funduqii.com  -> backend (HTTP) + /ws/ -> ws (WebSocket upgrade)
+
+volumes:
+  db_data:
+  redis_data:
+  static_data:
+  media_data:

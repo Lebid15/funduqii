@@ -1,0 +1,58 @@
+# =========================================================================
+# Environment & secrets  (examples are kept, real env files are ignored)
+# =========================================================================
+.env
+.env.*
+!.env.example
+!**/.env.example
+!**/.env.local.example
+backend/.env
+frontend/.env.local
+# Production env files hold real secrets — never commit them; only *.example.
+*.env.prod
+!*.env.prod.example
+
+# =========================================================================
+# Python / Django
+# =========================================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+media/
+backend/staticfiles/
+backend/media/
+
+# =========================================================================
+# Node / Next.js
+# =========================================================================
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+.npm/
+
+# =========================================================================
+# Testing / coverage
+# =========================================================================
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+
+# =========================================================================
+# Editor / OS
+# =========================================================================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

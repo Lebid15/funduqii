@@ -1,0 +1,11 @@
+{
+  "app": {
+    "name": "Funduqii",
+    "foundationReady": "Funduqii platform altyapısı hazır.",
+    "phase": "Aşama 1 · Temel"
+  },
+  "common": {
+    "loading": "Yükleniyor…",
+    "error": "Bir şeyler ters gitti"
+  }
+}
