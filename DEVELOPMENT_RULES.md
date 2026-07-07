@@ -105,6 +105,19 @@ these rules is a defect, not a shortcut.
   room cannot overlap two blocking reservations (back-to-back is fine).
 - Full rules: [docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
 
+### 8d. Guests, check-in & check-out (from Phase 7)
+- **Occupancy is DERIVED from an active (`in_house`) stay — never a manual
+  `room.status = occupied`.** `Room.status` stays for housekeeping states only.
+- **Check-in and check-out go through central services** (`CheckInService` /
+  `CheckOutService`), never a view directly. Check-in requires a **confirmed**
+  reservation and an **available**, unoccupied room; a DB partial-unique index
+  enforces at most one in-house stay per room.
+- **Check-out is operational only — no money.** No folio, payment, or invoice is
+  created or closed. A vacated room becomes `dirty` (documented decision).
+- **No document images/attachments** on guests in this phase. Deleting a guest
+  referenced by a stay **deactivates** it (preserves history).
+- Full rules: [docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

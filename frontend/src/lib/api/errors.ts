@@ -49,6 +49,16 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.reservations.errors.invalidTransition;
     case "room_assignment_conflict":
       return t.reservations.errors.roomConflict;
+    case "invalid_check_in":
+      return t.frontDesk.errors.invalidCheckIn;
+    case "invalid_check_out":
+      return t.frontDesk.errors.invalidCheckOut;
+    case "room_occupied":
+      return t.frontDesk.errors.roomOccupied;
+    case "room_not_ready":
+      return t.frontDesk.errors.roomNotReady;
+    case "already_checked_in":
+      return t.frontDesk.errors.alreadyCheckedIn;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

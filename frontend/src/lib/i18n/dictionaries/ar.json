@@ -414,6 +414,145 @@
       "roomConflict": "هذه الغرفة مُعيَّنة بالفعل للتواريخ المختارة."
     }
   },
+  "guests": {
+    "nav": "النزلاء",
+    "title": "النزلاء",
+    "subtitle": "سجل النزلاء",
+    "saved": "تم الحفظ",
+    "list": {
+      "add": "نزيل جديد",
+      "empty": "لا نزلاء بعد",
+      "emptyHint": "النزلاء الذين تضيفهم يظهرون هنا.",
+      "searchPlaceholder": "ابحث بالاسم أو الهاتف أو الوثيقة",
+      "name": "الاسم",
+      "phone": "الهاتف",
+      "document": "الوثيقة",
+      "nationality": "الجنسية",
+      "status": "الحالة",
+      "showInactive": "إظهار غير النشط"
+    },
+    "form": {
+      "createTitle": "نزيل جديد",
+      "editTitle": "تعديل النزيل",
+      "fullName": "الاسم الكامل",
+      "phone": "الهاتف",
+      "email": "البريد الإلكتروني",
+      "nationality": "الجنسية",
+      "documentType": "نوع الوثيقة",
+      "documentNumber": "رقم الوثيقة",
+      "dateOfBirth": "تاريخ الميلاد",
+      "gender": "الجنس",
+      "address": "العنوان",
+      "notes": "ملاحظات",
+      "active": "نشط",
+      "nameRequired": "اسم النزيل مطلوب."
+    },
+    "documentTypes": {
+      "none": "—",
+      "national_id": "هوية وطنية",
+      "passport": "جواز سفر",
+      "driving_license": "رخصة قيادة",
+      "other": "أخرى"
+    },
+    "genders": {
+      "none": "—",
+      "male": "ذكر",
+      "female": "أنثى",
+      "other": "آخر",
+      "unspecified": "غير محدد"
+    },
+    "deleteTitle": "حذف النزيل",
+    "deleteBody": "النزيل المرتبط بإقامة يُعطَّل بدل الحذف.",
+    "active": "نشط",
+    "inactive": "غير نشط"
+  },
+  "frontDesk": {
+    "nav": "الاستقبال",
+    "title": "الاستقبال",
+    "subtitle": "الوصول والمقيمون والمغادرة",
+    "saved": "تم الحفظ",
+    "tabs": {
+      "arrivals": "وصول اليوم",
+      "current": "المقيمون الحاليون",
+      "departures": "مغادرة اليوم"
+    },
+    "status": {
+      "in_house": "مقيم",
+      "checked_out": "غادر",
+      "cancelled": "ملغى"
+    },
+    "arrivals": {
+      "empty": "لا وصول اليوم",
+      "emptyHint": "الحجوزات المؤكدة الواصلة اليوم تظهر هنا.",
+      "guest": "الضيف",
+      "dates": "التواريخ",
+      "rooms": "الغرف",
+      "checkIn": "تسجيل الدخول"
+    },
+    "current": {
+      "empty": "لا أحد مسجَّل الدخول",
+      "emptyHint": "من تسجّل دخولهم يظهرون هنا.",
+      "room": "الغرفة",
+      "guest": "الضيف",
+      "checkInDate": "تاريخ الدخول",
+      "checkOutDate": "المغادرة",
+      "nights": "الليالي",
+      "details": "التفاصيل",
+      "checkOut": "تسجيل الخروج"
+    },
+    "departures": {
+      "empty": "لا مغادرة اليوم",
+      "emptyHint": "الإقامات المغادِرة اليوم تظهر هنا."
+    },
+    "checkInModal": {
+      "title": "تسجيل الدخول",
+      "reservation": "الحجز",
+      "roomType": "نوع الغرفة",
+      "room": "الغرفة",
+      "selectRoom": "اختر غرفة",
+      "roomAssigned": "الغرفة المعيَّنة",
+      "primaryGuest": "الضيف الرئيسي",
+      "selectGuest": "اختر ضيفًا",
+      "companions": "المرافقون",
+      "notes": "ملاحظات",
+      "submit": "تسجيل الدخول",
+      "roomRequired": "اختر غرفة لتسجيل الدخول إليها.",
+      "guestRequired": "اختر الضيف الرئيسي.",
+      "noRooms": "لا غرف متاحة من هذا النوع."
+    },
+    "checkOutModal": {
+      "title": "تسجيل الخروج",
+      "body": "أكّد مغادرة الضيف. هذا يُفرِغ الغرفة (تصبح dirty للتنظيف).",
+      "notes": "ملاحظات",
+      "reason": "السبب",
+      "financeNote": "أي فوترة أو دفع يُعالَج في مرحلة لاحقة.",
+      "submit": "تسجيل الخروج"
+    },
+    "details": {
+      "title": "الإقامة",
+      "room": "الغرفة",
+      "guest": "الضيف",
+      "dates": "التواريخ",
+      "nights": "الليالي",
+      "status": "الحالة",
+      "checkedInAt": "وقت الدخول",
+      "checkedOutAt": "وقت الخروج",
+      "reservation": "الحجز",
+      "companions": "الضيوف",
+      "notes": "ملاحظات",
+      "history": "السجل",
+      "noHistory": "لا تغييرات بعد",
+      "checkedInBy": "سجّل الدخول",
+      "checkedOutBy": "سجّل الخروج"
+    },
+    "errors": {
+      "invalidCheckIn": "لا يمكن تسجيل دخول هذا الحجز.",
+      "invalidCheckOut": "لا يمكن تسجيل خروج هذه الإقامة.",
+      "roomOccupied": "هذه الغرفة مشغولة بالفعل.",
+      "roomNotReady": "هذه الغرفة غير جاهزة لتسجيل الدخول.",
+      "alreadyCheckedIn": "غرفة هذا الحجز مسجَّل دخولها بالفعل."
+    }
+  },
   "language": {
     "label": "اللغة",
     "ar": "العربية",

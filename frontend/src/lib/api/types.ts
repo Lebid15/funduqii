@@ -385,3 +385,76 @@ export interface ReservationStatusLogEntry {
   changed_by: string | null;
   created_at: string;
 }
+
+/* ==========================================================================
+ * Phase 7 — Guests, check-in & check-out DTOs (mirror /api/v1/hotel/).
+ * ======================================================================== */
+
+export type DocumentType =
+  | ""
+  | "national_id"
+  | "passport"
+  | "driving_license"
+  | "other";
+export type Gender = "" | "male" | "female" | "other" | "unspecified";
+
+export interface Guest {
+  id: number;
+  full_name: string;
+  phone: string;
+  email: string;
+  nationality: string;
+  document_type: DocumentType;
+  document_number: string;
+  date_of_birth: string | null;
+  gender: Gender;
+  address: string;
+  notes: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StayStatus = "in_house" | "checked_out" | "cancelled";
+export type StayGuestRole = "primary" | "companion";
+
+export interface StayGuestLink {
+  id: number;
+  guest: number;
+  guest_name: string;
+  role: StayGuestRole;
+}
+
+export interface Stay {
+  id: number;
+  reservation: number | null;
+  reservation_number: string | null;
+  reservation_line: number | null;
+  room: number;
+  room_number: string;
+  room_type_name: string;
+  primary_guest: number;
+  primary_guest_name: string;
+  status: StayStatus;
+  planned_check_in_date: string;
+  planned_check_out_date: string;
+  actual_check_in_at: string;
+  actual_check_out_at: string | null;
+  nights: number;
+  check_in_notes: string;
+  check_out_notes: string;
+  checkout_reason: string;
+  checked_in_by: string | null;
+  checked_out_by: string | null;
+  guests: StayGuestLink[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StayStatusLogEntry {
+  previous_status: string;
+  new_status: string;
+  note: string;
+  changed_by: string | null;
+  created_at: string;
+}

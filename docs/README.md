@@ -58,7 +58,11 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 
 ## Phase 6 — Reservations & availability
 
-- [RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](RESERVATIONS_AND_AVAILABILITY_STRATEGY.md) — the `apps/reservations` app (`Reservation`, `ReservationRoomLine`, `ReservationStatusLog`; assignment deferred), the reservation status model (held/confirmed/cancelled/expired — no check-in/out), the central `AvailabilityService` (date-overlap rule, back-to-back, blocking statuses, held expiry, inventory math, overbooking prevention with transactions + row locks), permissions (`reservations.*`, `availability.view`), the `/api/v1/hotel/` API surface, the tabbed reservations console, and why guests/money/check-in/public-booking are deferred.
+- [RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](RESERVATIONS_AND_AVAILABILITY_STRATEGY.md) — the `apps/reservations` app (`Reservation`, `ReservationRoomLine`, `ReservationStatusLog`; optional room assignment in 6.1), the reservation status model (held/confirmed/cancelled/expired — no check-in/out), the central `AvailabilityService` (date-overlap rule, back-to-back, blocking statuses, held expiry, inventory math, overbooking prevention with transactions + row locks), permissions (`reservations.*`, `availability.view`), the `/api/v1/hotel/` API surface, the tabbed reservations console, and why guests/money/check-in/public-booking are deferred.
+
+## Phase 7 — Guests, check-in & check-out
+
+- [GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](GUESTS_CHECKIN_CHECKOUT_STRATEGY.md) — the `apps/guests` (`Guest` directory) and `apps/stays` (`Stay`, `StayGuest`, `StayStatusLog`) apps, the central `CheckInService`/`CheckOutService`, derived occupancy (why there is no manual `room.status = occupied`), current residents / arrivals-today / departures-today, permissions (`guests.*`, `stays.*`), the `/api/v1/hotel/` API surface, the front-desk & guests console, why check-out creates no invoice, and what is deferred to Phase 8.
 
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.

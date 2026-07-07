@@ -414,6 +414,145 @@
       "roomConflict": "Bu oda seçilen tarihler için zaten atanmış."
     }
   },
+  "guests": {
+    "nav": "Misafirler",
+    "title": "Misafirler",
+    "subtitle": "Misafir rehberi",
+    "saved": "Kaydedildi",
+    "list": {
+      "add": "Yeni misafir",
+      "empty": "Henüz misafir yok",
+      "emptyHint": "Eklediğiniz misafirler burada görünür.",
+      "searchPlaceholder": "Ad, telefon veya belge ile ara",
+      "name": "Ad",
+      "phone": "Telefon",
+      "document": "Belge",
+      "nationality": "Uyruk",
+      "status": "Durum",
+      "showInactive": "Pasifleri göster"
+    },
+    "form": {
+      "createTitle": "Yeni misafir",
+      "editTitle": "Misafiri düzenle",
+      "fullName": "Ad soyad",
+      "phone": "Telefon",
+      "email": "E-posta",
+      "nationality": "Uyruk",
+      "documentType": "Belge türü",
+      "documentNumber": "Belge numarası",
+      "dateOfBirth": "Doğum tarihi",
+      "gender": "Cinsiyet",
+      "address": "Adres",
+      "notes": "Notlar",
+      "active": "Aktif",
+      "nameRequired": "Misafir adı gereklidir."
+    },
+    "documentTypes": {
+      "none": "—",
+      "national_id": "Kimlik",
+      "passport": "Pasaport",
+      "driving_license": "Ehliyet",
+      "other": "Diğer"
+    },
+    "genders": {
+      "none": "—",
+      "male": "Erkek",
+      "female": "Kadın",
+      "other": "Diğer",
+      "unspecified": "Belirtilmemiş"
+    },
+    "deleteTitle": "Misafiri sil",
+    "deleteBody": "Bir konaklamaya bağlı misafir silinmez, pasifleştirilir.",
+    "active": "Aktif",
+    "inactive": "Pasif"
+  },
+  "frontDesk": {
+    "nav": "Ön büro",
+    "title": "Ön büro",
+    "subtitle": "Girişler, konuklar ve çıkışlar",
+    "saved": "Kaydedildi",
+    "tabs": {
+      "arrivals": "Bugünkü girişler",
+      "current": "Mevcut konuklar",
+      "departures": "Bugünkü çıkışlar"
+    },
+    "status": {
+      "in_house": "Konaklıyor",
+      "checked_out": "Çıkış yapıldı",
+      "cancelled": "İptal"
+    },
+    "arrivals": {
+      "empty": "Bugün giriş yok",
+      "emptyHint": "Bugün gelen onaylı rezervasyonlar burada görünür.",
+      "guest": "Misafir",
+      "dates": "Tarihler",
+      "rooms": "Odalar",
+      "checkIn": "Giriş yap"
+    },
+    "current": {
+      "empty": "Giriş yapan yok",
+      "emptyHint": "Giriş yaptırdığınız konuklar burada görünür.",
+      "room": "Oda",
+      "guest": "Misafir",
+      "checkInDate": "Giriş",
+      "checkOutDate": "Çıkış",
+      "nights": "Gece",
+      "details": "Detaylar",
+      "checkOut": "Çıkış yap"
+    },
+    "departures": {
+      "empty": "Bugün çıkış yok",
+      "emptyHint": "Bugün ayrılan konaklamalar burada görünür."
+    },
+    "checkInModal": {
+      "title": "Giriş yap",
+      "reservation": "Rezervasyon",
+      "roomType": "Oda tipi",
+      "room": "Oda",
+      "selectRoom": "Bir oda seçin",
+      "roomAssigned": "Atanan oda",
+      "primaryGuest": "Ana misafir",
+      "selectGuest": "Bir misafir seçin",
+      "companions": "Refakatçiler",
+      "notes": "Notlar",
+      "submit": "Giriş yap",
+      "roomRequired": "Giriş yapılacak bir oda seçin.",
+      "guestRequired": "Ana misafiri seçin.",
+      "noRooms": "Bu tipte müsait oda yok."
+    },
+    "checkOutModal": {
+      "title": "Çıkış yap",
+      "body": "Misafirin ayrıldığını onaylayın. Bu odayı boşaltır (temizlik için kirli olur).",
+      "notes": "Notlar",
+      "reason": "Neden",
+      "financeNote": "Faturalama veya ödeme sonraki bir aşamada ele alınır.",
+      "submit": "Çıkış yap"
+    },
+    "details": {
+      "title": "Konaklama",
+      "room": "Oda",
+      "guest": "Misafir",
+      "dates": "Tarihler",
+      "nights": "Gece",
+      "status": "Durum",
+      "checkedInAt": "Giriş zamanı",
+      "checkedOutAt": "Çıkış zamanı",
+      "reservation": "Rezervasyon",
+      "companions": "Misafirler",
+      "notes": "Notlar",
+      "history": "Geçmiş",
+      "noHistory": "Henüz değişiklik yok",
+      "checkedInBy": "Giriş yapan",
+      "checkedOutBy": "Çıkış yapan"
+    },
+    "errors": {
+      "invalidCheckIn": "Bu rezervasyon için giriş yapılamaz.",
+      "invalidCheckOut": "Bu konaklama için çıkış yapılamaz.",
+      "roomOccupied": "Bu oda zaten dolu.",
+      "roomNotReady": "Bu oda girişe hazır değil.",
+      "alreadyCheckedIn": "Bu rezervasyon odasına zaten giriş yapıldı."
+    }
+  },
   "language": {
     "label": "Dil",
     "ar": "العربية",

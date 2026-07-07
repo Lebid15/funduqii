@@ -165,6 +165,39 @@ class RoomAssignmentConflict(FunduqiiAPIException):
     default_code = "room_assignment_conflict"
 
 
+# --- Guests, check-in & check-out (Phase 7) --------------------------------
+
+
+class InvalidCheckIn(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This reservation cannot be checked in."
+    default_code = "invalid_check_in"
+
+
+class InvalidCheckOut(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This stay cannot be checked out."
+    default_code = "invalid_check_out"
+
+
+class RoomOccupied(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room is already occupied by an in-house stay."
+    default_code = "room_occupied"
+
+
+class RoomNotReady(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room is not ready for check-in."
+    default_code = "room_not_ready"
+
+
+class AlreadyCheckedIn(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This reservation room has already been checked in."
+    default_code = "already_checked_in"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

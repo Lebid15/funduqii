@@ -414,6 +414,145 @@
       "roomConflict": "This room is already assigned for the selected dates."
     }
   },
+  "guests": {
+    "nav": "Guests",
+    "title": "Guests",
+    "subtitle": "Guest directory",
+    "saved": "Saved",
+    "list": {
+      "add": "New guest",
+      "empty": "No guests yet",
+      "emptyHint": "Guests you add appear here.",
+      "searchPlaceholder": "Search by name, phone or document",
+      "name": "Name",
+      "phone": "Phone",
+      "document": "Document",
+      "nationality": "Nationality",
+      "status": "Status",
+      "showInactive": "Show inactive"
+    },
+    "form": {
+      "createTitle": "New guest",
+      "editTitle": "Edit guest",
+      "fullName": "Full name",
+      "phone": "Phone",
+      "email": "Email",
+      "nationality": "Nationality",
+      "documentType": "Document type",
+      "documentNumber": "Document number",
+      "dateOfBirth": "Date of birth",
+      "gender": "Gender",
+      "address": "Address",
+      "notes": "Notes",
+      "active": "Active",
+      "nameRequired": "A guest name is required."
+    },
+    "documentTypes": {
+      "none": "—",
+      "national_id": "National ID",
+      "passport": "Passport",
+      "driving_license": "Driving license",
+      "other": "Other"
+    },
+    "genders": {
+      "none": "—",
+      "male": "Male",
+      "female": "Female",
+      "other": "Other",
+      "unspecified": "Unspecified"
+    },
+    "deleteTitle": "Delete guest",
+    "deleteBody": "A guest linked to a stay is deactivated instead of deleted.",
+    "active": "Active",
+    "inactive": "Inactive"
+  },
+  "frontDesk": {
+    "nav": "Front desk",
+    "title": "Front desk",
+    "subtitle": "Arrivals, residents and departures",
+    "saved": "Saved",
+    "tabs": {
+      "arrivals": "Arrivals today",
+      "current": "Current residents",
+      "departures": "Departures today"
+    },
+    "status": {
+      "in_house": "In house",
+      "checked_out": "Checked out",
+      "cancelled": "Cancelled"
+    },
+    "arrivals": {
+      "empty": "No arrivals today",
+      "emptyHint": "Confirmed reservations arriving today appear here.",
+      "guest": "Guest",
+      "dates": "Dates",
+      "rooms": "Rooms",
+      "checkIn": "Check in"
+    },
+    "current": {
+      "empty": "No one is checked in",
+      "emptyHint": "Guests you check in appear here.",
+      "room": "Room",
+      "guest": "Guest",
+      "checkInDate": "Checked in",
+      "checkOutDate": "Departure",
+      "nights": "Nights",
+      "details": "Details",
+      "checkOut": "Check out"
+    },
+    "departures": {
+      "empty": "No departures today",
+      "emptyHint": "In-house stays leaving today appear here."
+    },
+    "checkInModal": {
+      "title": "Check in",
+      "reservation": "Reservation",
+      "roomType": "Room type",
+      "room": "Room",
+      "selectRoom": "Select a room",
+      "roomAssigned": "Assigned room",
+      "primaryGuest": "Primary guest",
+      "selectGuest": "Select a guest",
+      "companions": "Companions",
+      "notes": "Notes",
+      "submit": "Check in",
+      "roomRequired": "Choose a room to check into.",
+      "guestRequired": "Choose the primary guest.",
+      "noRooms": "No available rooms of this type."
+    },
+    "checkOutModal": {
+      "title": "Check out",
+      "body": "Confirm the guest is leaving. This frees the room (it becomes dirty for housekeeping).",
+      "notes": "Notes",
+      "reason": "Reason",
+      "financeNote": "Any billing or payment is handled in a later phase.",
+      "submit": "Check out"
+    },
+    "details": {
+      "title": "Stay",
+      "room": "Room",
+      "guest": "Guest",
+      "dates": "Dates",
+      "nights": "Nights",
+      "status": "Status",
+      "checkedInAt": "Checked in at",
+      "checkedOutAt": "Checked out at",
+      "reservation": "Reservation",
+      "companions": "Guests",
+      "notes": "Notes",
+      "history": "History",
+      "noHistory": "No changes yet",
+      "checkedInBy": "Checked in by",
+      "checkedOutBy": "Checked out by"
+    },
+    "errors": {
+      "invalidCheckIn": "This reservation cannot be checked in.",
+      "invalidCheckOut": "This stay cannot be checked out.",
+      "roomOccupied": "This room is already occupied.",
+      "roomNotReady": "This room is not ready for check-in.",
+      "alreadyCheckedIn": "This reservation room is already checked in."
+    }
+  },
   "language": {
     "label": "Language",
     "ar": "العربية",

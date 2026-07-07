@@ -1,0 +1,34 @@
+"""Stays / front-desk API URLs (mounted under /api/v1/hotel/)."""
+from django.urls import path
+
+from .views import (
+    ArrivalsTodayView,
+    CheckInView,
+    CheckOutView,
+    CurrentResidentsView,
+    DeparturesTodayView,
+    StayDetailView,
+    StayListView,
+    StayLogsView,
+)
+
+app_name = "stays"
+
+urlpatterns = [
+    path("stays/", StayListView.as_view(), name="stay-list"),
+    path("stays/current/", CurrentResidentsView.as_view(), name="stay-current"),
+    path(
+        "stays/arrivals-today/",
+        ArrivalsTodayView.as_view(),
+        name="stay-arrivals-today",
+    ),
+    path(
+        "stays/departures-today/",
+        DeparturesTodayView.as_view(),
+        name="stay-departures-today",
+    ),
+    path("stays/check-in/", CheckInView.as_view(), name="stay-check-in"),
+    path("stays/<int:pk>/", StayDetailView.as_view(), name="stay-detail"),
+    path("stays/<int:pk>/check-out/", CheckOutView.as_view(), name="stay-check-out"),
+    path("stays/<int:pk>/logs/", StayLogsView.as_view(), name="stay-logs"),
+]

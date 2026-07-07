@@ -6,6 +6,7 @@ import type {
   HotelStatus,
   ReservationStatus,
   RoomStatus,
+  StayStatus,
   SubscriptionStatus,
 } from "@/lib/api/types";
 
@@ -123,6 +124,21 @@ export function reservationStatusLabel(
   t: Dictionary,
 ): string {
   return t.reservations.status[status];
+}
+
+export function stayStatusTone(status: StayStatus): BadgeTone {
+  switch (status) {
+    case "in_house":
+      return "success";
+    case "checked_out":
+      return "neutral";
+    default:
+      return "danger";
+  }
+}
+
+export function stayStatusLabel(status: StayStatus, t: Dictionary): string {
+  return t.frontDesk.status[status];
 }
 
 export function billingCycleLabel(cycle: string, t: Dictionary): string {
