@@ -6,11 +6,13 @@ import {
   BedDouble,
   Building2,
   CalendarCheck,
+  ConciergeBell,
   CreditCard,
   Hotel,
   LayoutDashboard,
   Package,
   Settings,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,7 +54,9 @@ export function Sidebar({
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
   const hotelItems: NavItem[] = [
+    { href: "/hotel/front-desk", label: t.frontDesk.nav, icon: ConciergeBell },
     { href: "/hotel/reservations", label: t.reservations.nav, icon: CalendarCheck },
+    { href: "/hotel/guests", label: t.guests.nav, icon: Users },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];

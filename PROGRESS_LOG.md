@@ -57,7 +57,7 @@
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
 | 5 | Floors + Room Types + Rooms | مكتملة ✅ | 2026-07-07 |
 | 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
-| 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
+| 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
 | 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
 | 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
@@ -818,3 +818,98 @@
 
 #### ملاحظة مستقبلية
 - قبل الإنتاج النهائي: فحص أوسع على PostgreSQL وبيانات أكبر للتأكد من التزامن الحقيقي، الأداء، pagination، الفلاتر، محرك التوفر، ومنع overbooking تحت ضغط أعلى. لا يمنع اعتماد Phase 6 الآن.
+
+---
+
+## Phase 7 — Guests + Check-in + Check-out
+- الحالة: **مكتملة ✅** (معتمدة ومقبولة فنيًا من المالك)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07 · **اعتُمدت 2026-07-07**
+- الهدف: سجل النزلاء + دورة الاستقبال التشغيلية (check-in لحجز مؤكد داخل غرفة، المقيمون الحاليون، وصول/مغادرة اليوم، check-out تشغيلي). **بلا أي مال.**
+- الأساس: بُنيت من **`origin/main`** (c690801، يحوي Phase 4/5/6+6.1) بعد التحقق منه — لم يُستخدم الفرع المحلي المختلف.
+- **ملاحظة الاعتماد:** «تم اعتماد Phase 7 كمرحلة استقبال تشغيلية: سجل النزلاء، الإقامة الفعلية، check-in، current residents، arrivals today، departures today، وcheck-out تشغيلي. لا تشمل هذه المرحلة payments أو folio أو invoices أو أي تسوية مالية، ولا public booking.»
+
+### ما نُفّذ (Backend)
+- **تطبيقان مستقلان فوق المراحل السابقة:** `apps/guests` (سجل النزلاء) و`apps/stays` (طبقة الإقامة + خدمات check-in/out) — لم يُوضع check-in داخل `apps/reservations`.
+- **`Guest`** مربوط بالفندق: الاسم(مطلوب)/الهاتف/البريد/الجنسية/نوع+رقم الوثيقة/تاريخ الميلاد/الجنس/العنوان/ملاحظات/is_active — **رقم الوثيقة فريد لكل فندق+نوع** (فارغ لا يتعارض). **لا مرفقات وثائق** (مؤجّلة).
+- **`Stay`** (إقامة فعلية): reservation/reservation_line (nullable)، room(PROTECT)، primary_guest(PROTECT)، status، تواريخ مخطّطة/فعلية، checked_in/out_by، ملاحظات — **قيد partial-unique: إقامة in_house واحدة كحدّ أقصى لكل غرفة** (منع الإشغال المزدوج على مستوى DB).
+- **`StayGuest`** (primary/companion): فريد (stay,guest) + **primary واحد لكل إقامة**. **`StayStatusLog`** سجلّ حالة الإقامة.
+- **الإشغال مشتق** من إقامة `in_house` — **لا** حالة `occupied` يدوية في `room.status` (يبقى للحالات اليدوية فقط).
+- **`CheckInService`** مركزي داخل transaction بقفل الغرفة: الحجز **confirmed** فقط؛ الغرفة **available** فقط (dirty/cleaning/maintenance/out_of_service/archived → `409 room_not_ready`)؛ غير مشغولة (`409 room_occupied`)؛ لا تكرار (`409 already_checked_in`)؛ لا تعارض مع حجز آخر يثبّت الغرفة (`409 room_assignment_conflict`)؛ النزيل/المرافقون من نفس الفندق. قرار موثّق: **لا تقييد تاريخ** (early/late مسموح، بلا رسوم)؛ سطر بكمية>1 يُدخَل غرفة-بغرفة.
+- **`CheckOutService`** مركزي: فقط لإقامة `in_house`؛ يختم الوقت/المستخدم؛ يحوّل الغرفة إلى **dirty** (قرار موثّق)؛ **بلا مال/فوليو/فاتورة**.
+- **العروض التشغيلية:** المقيمون الحاليون (`in_house`)، وصول اليوم (حجوزات confirmed لليوم غير مكتملة الدخول)، مغادرة اليوم (`in_house` بتاريخ خروج مخطّط = اليوم).
+- **الصلاحيات:** `guests.view/create/update/delete` و`stays.view/check_in/check_out/update` — مفروضة على الباكند لكل endpoint؛ الفندق المعلّق للقراءة فقط؛ حذف نزيل مرتبط بإقامة → **تعطيل** بدل حذف.
+- **APIs تحت `/api/v1/hotel/`**: `guests/`(+`{id}/`) · `stays/`(+`current/`,`arrivals-today/`,`departures-today/`) · `stays/check-in/` · `stays/{id}/`(GET/PATCH ملاحظات) · `stays/{id}/check-out/` · `stays/{id}/logs/`. أخطاء جديدة: `invalid_check_in`(400) · `invalid_check_out`(400) · `room_occupied`(409) · `room_not_ready`(409) · `already_checked_in`(409).
+
+### ما نُفّذ (Frontend)
+- عنصرا **«الاستقبال»** و**«النزلاء»** في sidebar الفندق.
+- **`/hotel/guests`**: قائمة نزلاء مع بحث/pagination + إنشاء/تعديل + حذف-أو-تعطيل.
+- **`/hotel/front-desk`**: تبويبات **وصول اليوم** (زر check-in → نافذة تستخدم الغرفة المثبّتة أو تطلب اختيارها + اختيار/إنشاء سريع لضيف + مرافقون + ملاحظات) · **المقيمون الحاليون** (بطاقات إشغال + تفاصيل + check-out) · **مغادرة اليوم** (check-out). نافذة الخروج تنبّه أن أي فوترة في مرحلة لاحقة. **بلا أزرار تلمح إلى مال.**
+- نظام التصميم المركزي + أيقونات lucide، ترجمات **ar/en/tr** كاملة (namespaces `guests` + `frontDesk`) مع RTL/LTR، حالات موحّدة، responsive حقيقي، لا نصوص مباشرة، لا توكن في localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/guests/{__init__,apps,models,serializers,views,urls,tests}.py` + migration · `apps/stays/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/hotel/guests/page.tsx` · `app/hotel/front-desk/page.tsx` · `components/hotel/guests/GuestsPanel.tsx` · `components/hotel/frontdesk/FrontDeskPanel.tsx` · `lib/api/{guests,stays}.ts` · والوثيقة `docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+guests.update/delete +قسم stays) · `apps/common/exceptions.py` (5 أخطاء) · `config/settings/base.py` (+appين) · `config/urls.py` (+urls) · تحديث اختبارات regression في hotels/rooms/reservations (السماح بجدولَي guests/stays).
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` · قواميس ar/en/tr · `styles/globals.css` · التوثيق (README, DEVELOPMENT_RULES §8d, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **264/264 OK** (214 سابقة + 50 لـ guests/stays) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسارا `/hotel/guests` و`/hotel/front-desk` مبنيان) |
+| فحص حيّ End-to-End (Django+Next، SQLite) | ✅ وصول اليوم · check-in (غرفة مثبّتة 101) → in_house · **الغرفة تبقى available (إشغال مشتق)** · المقيمون=1 · check-out → checked_out + **الغرفة dirty** · check-out ثانٍ → **400** · لقطات front-desk (وصول/نافذة دخول/مقيمون)/guests/AR/موبايل Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- تعيين غرفة الإدخال يُمنع لغير `available` (بما فيها dirty/cleaning) — قرار موثّق (يمكن إضافة override بصلاحية لاحقًا).
+- check-in غير مقيَّد بالتاريخ (early/late مسموح) — قرار موثّق.
+- الغرفة تصبح `dirty` بعد الخروج — قرار موثّق.
+- تحديث اختبارات regression لمراحل 4/5/6 لإزالة `guests` من المحظور (أصبح مشروعًا في Phase 7)، مع بقاء منع payments/invoices/folios/expenses.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا مال إطلاقًا (payments/expenses/folio/invoices/taxes) · لا تسوية عند الخروج · لا مطعم/كافتيريا · لا housekeeping/maintenance workflows كاملة · لا lost&found · لا ورديات/إغلاق يومي · لا موقع/حجز عام · لا واتساب/خرائط فعلية · لا تقارير متقدمة · لا مرفقات وثائق النزلاء.** **لم تبدأ Phase 8.**
+
+### الاعتماد
+- **معتمدة ومقبولة فنيًا من المالك بتاريخ 2026-07-07** عبر مراجعة PR #6. الحالة: **مكتملة ✅**. **لم يُغيَّر وضع Phase 8** — يبدأ برسالته الرسمية فقط.
+
+#### ملاحظات الاعتماد (من المالك)
+1. إنشاء `apps/guests`.
+2. إنشاء `apps/stays`.
+3. قبول Model `Guest`.
+4. قبول Model `Stay`.
+5. قبول Model `StayGuest`.
+6. قبول Model `StayStatusLog`.
+7. قبول `CheckInService` كخدمة مركزية.
+8. قبول `CheckOutService` كخدمة مركزية.
+9. قبول أن الإشغال مشتق من `Stay` وليس من `room.status`.
+10. قبول عدم إضافة `occupied` كحالة يدوية للغرفة.
+11. قبول منع check-in لغرفة مشغولة.
+12. قبول منع check-in لغرفة maintenance/out_of_service/archived.
+13. قبول منع check-in لغرف dirty/cleaning في هذه المرحلة.
+14. قبول استخدام الغرفة المثبتة على سطر الحجز أو اختيار غرفة عند check-in.
+15. قبول منع duplicate check-in.
+16. قبول إنشاء Stay وStayGuest primary عند check-in.
+17. قبول current residents من `Stay.status = in_house`.
+18. قبول arrivals today من الحجوزات المؤكدة غير المدخلة.
+19. قبول departures today من الإقامات in_house ذات خروج مخطط اليوم.
+20. قبول check-out كتشغيل فقط بدون مال.
+21. قبول تحويل الغرفة إلى dirty بعد check-out.
+22. قبول أن checkout لا ينشئ folio أو invoice أو payment.
+23. قبول صلاحيات: `guests.view/create/update/delete` و`stays.view/check_in/check_out/update`.
+24. قبول tenant isolation.
+25. قبول read-only للفندق المعلّق ومنع الكتابة.
+26. قبول صفحات: `/hotel/guests` و`/hotel/front-desk`.
+27. قبول الترجمة ar/en/tr.
+28. قبول RTL/LTR والـ responsive.
+29. قبول عدم بناء payments/folio/invoices.
+30. قبول عدم بناء public booking.
+31. قبول عدم بدء Phase 8.
+32. قبول نتائج backend tests: 264/264.
+33. قبول نتائج frontend lint/typecheck/build.
+
+#### ملاحظة مستقبلية غير مانعة (سياسة الخروج المبكر)
+- يجب لاحقًا توثيق ومراجعة سياسة **الخروج المبكر**: هل يبقى الحجز حاجزًا للغرفة حتى تاريخ الخروج المخطط، أم يُحرَّر التوفر بعد check-out الفعلي، وكيف يؤثر ذلك على الحسابات المالية لاحقًا. تُرحَّل إلى Phase 8 أو مرحلة تحسين تشغيل الحجوزات. **لا تمنع اعتماد Phase 7 الآن.**
+
+#### ملاحظة Git
+- `origin/main` هو مصدر الحقيقة الوحيد. ممنوع استخدام الفرع المحلي `main` المختلف أو دفعه إلى origin، وممنوع reset مدمّر دون موافقة صريحة.

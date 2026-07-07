@@ -20,7 +20,11 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     ],
     "availability": ["view"],
     "rooms": ["view", "create", "update", "delete", "status_update"],
-    "guests": ["view", "create"],
+    "guests": ["view", "create", "update", "delete"],
+    # Front-desk operations (Phase 7). The reservations.check_in/check_out codes
+    # above are vestigial blueprint entries and are NOT used; front-desk uses
+    # these explicit stays.* codes instead.
+    "stays": ["view", "check_in", "check_out", "update"],
     "payments": ["view", "create", "void"],
     "expenses": ["view", "create"],
     "folio": ["view", "add_charge"],

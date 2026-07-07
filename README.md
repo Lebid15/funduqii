@@ -4,20 +4,21 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 6 — Reservations + Availability Engine (pending review).**
+> **Current status: Phase 7 — Guests + Check-in + Check-out (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
-> media) and Phase 5 (floors/room types/rooms). Phase 6 adds the hotel's
-> **internal booking system** and a central **availability engine** that
-> prevents overbooking — reservations by room type and quantity
-> (held/confirmed/cancelled/expired), a date-overlap rule that allows
-> back-to-back stays, and backend-enforced availability — under
-> `/api/v1/hotel/`, plus a tabbed hotel-side console at `/hotel/reservations`,
-> all scoped by hotel membership and permissions (`reservations.*`,
-> `availability.view`).
-> **Still no check-in/out, no `occupied` state, no full guest profile, no money
-> (payments/folio/invoices), no public website/booking, and no real maps/WhatsApp**
-> — those are later phases. See
+> media), Phase 5 (floors/room types/rooms) and Phase 6 (reservations +
+> availability, incl. 6.1 room assignment). Phase 7 adds the **guest directory**
+> and the operational **front desk** — check-in of a confirmed reservation into a
+> room, current residents, arrivals/departures today, and operational check-out
+> — under `/api/v1/hotel/`, plus hotel-side consoles at `/hotel/guests` and
+> `/hotel/front-desk`, scoped by hotel membership and permissions (`guests.*`,
+> `stays.*`). Occupancy is **derived from active stays** — there is no manual
+> `occupied` room status.
+> **Still no money at all (payments/expenses/folio/invoices/taxes), no restaurant,
+> no housekeeping/maintenance workflows, no public website/booking, and no real
+> maps/WhatsApp** — those are later phases. Check-out here is operational only.
+> See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
 > [PROGRESS_LOG.md](PROGRESS_LOG.md) for per-phase status, and
@@ -40,6 +41,8 @@ funduqii/
 │  ├─ apps/hotels/          # hotel settings + media /api/v1/hotel/ (Phase 4)
 │  ├─ apps/rooms/           # floors + room types + rooms /api/v1/hotel/ (Phase 5)
 │  ├─ apps/reservations/    # reservations + availability engine /api/v1/hotel/ (Phase 6)
+│  ├─ apps/guests/          # guest directory /api/v1/hotel/ (Phase 7)
+│  ├─ apps/stays/           # check-in/out + occupancy /api/v1/hotel/ (Phase 7)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -330,6 +333,25 @@ allowed; overlapping ones are blocked. A line may **optionally** pin a specific
 room (Phase 6.1, gated by `reservations.assign_room`); a room cannot be assigned
 to two overlapping bookings. See
 [docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md](docs/RESERVATIONS_AND_AVAILABILITY_STRATEGY.md).
+
+### Guests & front-desk endpoints (Phase 7)
+
+Also under `/api/v1/hotel/`, scoped to the caller's hotel and guarded by
+`guests.*` / `stays.*`. Check-in/out are **operational only** — no money. A
+suspended hotel is read-only.
+
+| Method & path | Purpose |
+|---|---|
+| `GET/POST /api/v1/hotel/guests/` · `GET/PATCH/DELETE .../guests/{id}/` | Guest directory (delete of a referenced guest deactivates it) |
+| `GET /api/v1/hotel/stays/` · `.../stays/current/` | Stays list / current residents |
+| `GET .../stays/arrivals-today/` · `.../stays/departures-today/` | Operational arrivals / departures for today |
+| `POST /api/v1/hotel/stays/check-in/` | Admit a confirmed reservation into a room (creates a Stay) |
+| `POST .../stays/{id}/check-out/` | Operational check-out (room becomes dirty; no invoice) |
+| `GET/PATCH .../stays/{id}/` · `GET .../stays/{id}/logs/` | Stay details (PATCH = notes only) / status history |
+
+Occupancy is **derived from active stays** — there is no manual `occupied` room
+status. Check-out creates **no** folio/payment/invoice. See
+[docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](docs/GUESTS_CHECKIN_CHECKOUT_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

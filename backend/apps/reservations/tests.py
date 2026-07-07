@@ -746,11 +746,12 @@ class RegressionTests(APITestCase):
             self.client.get(reverse("hotel:settings"), **HDR(hotel)).status_code, 200
         )
 
-    def test_no_guest_money_or_checkin_models(self):
+    def test_no_money_models(self):
+        # Guests/stays arrive in Phase 7; money (payments/folio/invoices) does not.
         from django.apps import apps as django_apps
 
         tables = {m._meta.db_table for m in django_apps.get_models()}
-        for forbidden in ("guests", "payments", "invoices", "folios", "expenses"):
+        for forbidden in ("payments", "invoices", "folios", "expenses"):
             self.assertNotIn(forbidden, tables)
 
     def test_no_checkin_checkout_endpoints(self):
