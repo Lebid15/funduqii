@@ -366,13 +366,37 @@ and [docs/HETZNER_PRODUCTION_READINESS.md](docs/HETZNER_PRODUCTION_READINESS.md)
   [docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md](docs/EXTERNAL_INTEGRATIONS_ARCHITECTURE.md),
   [docs/NOTIFICATION_EVENTS_CATALOG.md](docs/NOTIFICATION_EVENTS_CATALOG.md).
 
+## What is implemented so far
+
+Through **Phase 3 (pending review)**, the **platform owner's console basics**:
+
+- Platform owner panel basics
+- Login UI
+- Platform dashboard
+- Hotels-as-tenants management (limited: name/slug/status + primary manager)
+- Subscription plans
+- Hotel subscriptions
+- Basic platform settings
+
 ## What is NOT implemented yet (later phases)
 
-Platform-owner panel, hotel panel, public website, and all business features
-(hotel management/settings, rooms, reservations, guests, payments/finance,
-restaurant, housekeeping, maintenance, shifts, daily close, subscriptions,
-reports, notifications, full audit log). No login/dashboard UI yet. Delivered
-phase by phase per the blueprint:
+Everything below is a later phase, delivered per the blueprint:
 
-- **Phase 3** — Platform Owner Panel basics
+- Hotel panel
+- Public website
+- Public booking
+- Hotel detailed settings (logo/cover/gallery, address, maps)
+- Rooms / floors
+- Reservations
+- Guests
+- Check-in / check-out
+- Payments / expenses / folio / invoices
+- Restaurant / cafeteria
+- Housekeeping / maintenance / lost & found
+- Shifts / daily close
+- Reports / notifications / full audit log
+- Real WhatsApp / maps / search / payment gateway
+
+Roughly:
+
 - **Phase 4+** — Hotels, rooms, reservations, finance, and beyond
