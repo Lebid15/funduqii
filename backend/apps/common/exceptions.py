@@ -114,6 +114,27 @@ class MediaLimitReached(FunduqiiAPIException):
     default_code = "media_limit_reached"
 
 
+# --- Floors / room types / rooms (Phase 5) ---------------------------------
+
+
+class ResourceInUse(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This item is in use and cannot be deleted; deactivate it instead."
+    default_code = "resource_in_use"
+
+
+class CrossTenantReference(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The referenced item belongs to a different hotel."
+    default_code = "cross_tenant_reference"
+
+
+class StatusNoteRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A note is required for this status change."
+    default_code = "status_note_required"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

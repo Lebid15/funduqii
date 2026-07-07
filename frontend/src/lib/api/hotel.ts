@@ -6,7 +6,7 @@
  * server-side. No tokens or hotel ids are handled here. Text settings and media
  * are separate calls — saving settings never re-sends images.
  */
-import type { ApiError } from "./client";
+import { hotelFetch, hotelJson } from "./hotelFetch";
 import type {
   HotelMedia,
   HotelProfile,
@@ -14,46 +14,8 @@ import type {
   MediaKind,
 } from "./types";
 
-const PROXY_BASE = "/api/hotel";
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${PROXY_BASE}${path}`, init);
-
-  if (response.status === 401 && typeof window !== "undefined") {
-    window.location.href = "/login";
-    throw { status: 401, code: "session_expired", message: "" } as ApiError;
-  }
-  if (!response.ok) {
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      // no JSON body
-    }
-    const record =
-      body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    throw {
-      status: response.status,
-      code: typeof record.code === "string" ? record.code : "error",
-      message:
-        typeof record.message === "string"
-          ? record.message
-          : response.statusText,
-      details: record.details,
-    } as ApiError;
-  }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
-}
-
-function jsonRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  return request<T>(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
-  });
-}
+const request = hotelFetch;
+const jsonRequest = hotelJson;
 
 // --- Settings ---------------------------------------------------------------
 

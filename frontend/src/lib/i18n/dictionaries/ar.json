@@ -159,6 +159,112 @@
       "loadError": "تعذّر تحميل إعدادات الفندق."
     }
   },
+  "rooms": {
+    "nav": "الغرف",
+    "title": "الغرف",
+    "subtitle": "الطوابق وأنواع الغرف والغرف",
+    "saved": "تم الحفظ.",
+    "tabs": {
+      "overview": "ملخّص",
+      "floors": "الطوابق",
+      "types": "أنواع الغرف",
+      "rooms": "الغرف"
+    },
+    "overview": {
+      "total": "إجمالي الغرف",
+      "available": "متاحة",
+      "needsCleaning": "تحتاج تنظيف",
+      "cleaning": "قيد التنظيف",
+      "maintenance": "تحت الصيانة",
+      "outOfService": "خارج الخدمة"
+    },
+    "status": {
+      "available": "متاحة",
+      "dirty": "تحتاج تنظيف",
+      "cleaning": "قيد التنظيف",
+      "maintenance": "تحت الصيانة",
+      "out_of_service": "خارج الخدمة",
+      "archived": "مؤرشفة"
+    },
+    "bedTypes": {
+      "none": "—",
+      "single": "فردي",
+      "double": "مزدوج",
+      "twin": "سريران",
+      "king": "كينغ",
+      "queen": "كوين",
+      "suite": "جناح"
+    },
+    "floors": {
+      "add": "إضافة طابق",
+      "createTitle": "إضافة طابق",
+      "editTitle": "تعديل الطابق",
+      "name": "الاسم",
+      "number": "الرقم",
+      "description": "الوصف",
+      "sortOrder": "الترتيب",
+      "active": "نشط",
+      "roomCount": "الغرف",
+      "empty": "لا توجد طوابق بعد",
+      "emptyHint": "أضِف طابقًا لتبدأ تنظيم الغرف.",
+      "nameRequired": "اسم الطابق مطلوب.",
+      "deleteTitle": "حذف هذا الطابق؟",
+      "deleteBody": "لا يمكن حذف طابق عليه غرف — عطّله بدلًا من ذلك."
+    },
+    "types": {
+      "add": "إضافة نوع غرفة",
+      "createTitle": "إضافة نوع غرفة",
+      "editTitle": "تعديل نوع الغرفة",
+      "name": "الاسم",
+      "code": "الرمز",
+      "description": "الوصف",
+      "baseCapacity": "السعة الأساسية",
+      "maxCapacity": "السعة القصوى",
+      "bedType": "نوع السرير",
+      "amenities": "المميزات",
+      "amenitiesHint": "مفصولة بفواصل، مثل: wifi, tv, minibar",
+      "baseRate": "السعر المرجعي",
+      "baseRateHint": "مرجعي فقط — ليس فوترة.",
+      "active": "نشط",
+      "sortOrder": "الترتيب",
+      "roomCount": "الغرف",
+      "empty": "لا توجد أنواع غرف بعد",
+      "emptyHint": "حدّد أنواع الغرف التي يقدّمها الفندق.",
+      "deleteTitle": "حذف هذا النوع؟",
+      "deleteBody": "لا يمكن حذف نوع تستخدمه غرف — عطّله بدلًا من ذلك."
+    },
+    "list": {
+      "add": "إضافة غرفة",
+      "createTitle": "إضافة غرفة",
+      "editTitle": "تعديل الغرفة",
+      "number": "رقم الغرفة",
+      "displayName": "الاسم المعروض",
+      "floor": "الطابق",
+      "roomType": "نوع الغرفة",
+      "capacity": "السعة",
+      "selectFloor": "اختر طابقًا",
+      "selectType": "اختر نوع غرفة",
+      "searchPlaceholder": "ابحث بالرقم أو الاسم",
+      "filterFloor": "الطابق",
+      "filterType": "نوع الغرفة",
+      "filterStatus": "الحالة",
+      "includeArchived": "عرض المؤرشفة",
+      "changeStatus": "تغيير الحالة",
+      "changeStatusTitle": "تغيير حالة الغرفة",
+      "newStatus": "الحالة الجديدة",
+      "statusNote": "ملاحظة",
+      "statusNoteHint": "مطلوبة للصيانة / خارج الخدمة.",
+      "empty": "لا توجد غرف بعد",
+      "emptyHint": "أضِف غرفًا لهذا الفندق للبدء.",
+      "deleteTitle": "حذف هذه الغرفة؟",
+      "deleteBody": "ستُحذف الغرفة نهائيًا."
+    },
+    "errors": {
+      "inUse": "هذا العنصر مستخدَم ولا يمكن حذفه؛ عطّله بدلًا من ذلك.",
+      "crossTenant": "الطابق أو نوع الغرفة المختار يخصّ فندقًا آخر.",
+      "noteRequired": "ملاحظة مطلوبة لتغيير الحالة هذا."
+    }
+  },
   "language": {
     "label": "اللغة",
     "ar": "العربية",

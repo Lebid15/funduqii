@@ -55,7 +55,7 @@
 | 3 | Platform Owner Panel basics | مكتملة ✅ | 2026-07-07 |
 | 3.1 | Premium UI Design System & Visual Polish | مكتملة ✅ | 2026-07-07 |
 | 4 | Hotels + Hotel Settings | مكتملة ✅ | 2026-07-07 |
-| 5 | Floors + Room Types + Rooms | لم تبدأ ⏳ | — |
+| 5 | Floors + Room Types + Rooms | بانتظار الاعتماد 🔎 | 2026-07-07 |
 | 6 | Reservations + Availability Engine | لم تبدأ ⏳ | — |
 | 7 | Guests + Check-in + Check-out | لم تبدأ ⏳ | — |
 | 8 | Payments + Expenses + Folio + Invoices | لم تبدأ ⏳ | — |
@@ -626,3 +626,54 @@
 17. قبول عدم بدء Phase 5.
 18. فحوصات backend ناجحة: 110/110.
 19. فحوصات frontend lint/typecheck/build ناجحة.
+
+---
+
+## Phase 5 — Floors + Room Types + Rooms
+- الحالة: 🔎 **بانتظار الاعتماد** (منفَّذة ومُختبَرة — لم تُعتمد ذاتيًا)
+- التاريخ: بدأت 2026-07-07 · اكتملت (تنفيذ) 2026-07-07
+- الهدف: أول مرحلة تشغيلية — **المخزون الفيزيائي للفندق** (طوابق + أنواع غرف + غرف بحالة يدوية أساسية)، **بلا** حجوزات/توفر/نزلاء/مال.
+
+### ما نُفّذ (Backend)
+- **تطبيق `apps/rooms`** منفصل عن `apps/hotels`، بأربعة نماذج مربوطة بالـ tenant (`hotel` FK):
+  - **`Floor`** (طابق/جناح): name/number/description/sort_order/is_active.
+  - **`RoomType`** (نوع غرفة): name/code/description/base_capacity/max_capacity/bed_type/amenities(JSON)/base_rate(قيمة مرجعية فقط، لا فوترة)/is_active/sort_order — **قيد فريد `(hotel, code)`**.
+  - **`Room`** (غرفة فعلية): floor(**PROTECT**)/room_type(**PROTECT**)/number/display_name/status/status_note/status_changed_at/status_changed_by/is_active — **قيد فريد `(hotel, number)`**.
+  - **`RoomStatusLog`**: سجلّ حالة الغرفة فقط (previous/new/note/changed_by) — ليس audit log عام.
+- **حالة الغرفة يدوية تشغيلية فقط**: `available/dirty/cleaning/maintenance/out_of_service/archived`. **لا `reserved`/`occupied`** (مشتقّة من النظام لاحقًا في Phase 6/7).
+- **قواعد العمل**: عزل tenant صارم؛ floor + room_type لغرفة **يجب** أن ينتميا لنفس الفندق (وإلا `400 cross_tenant_reference`)؛ رقم الغرفة/كود النوع فريد لكل فندق؛ تحقّق السعة (`max ≥ base` وكلاهما موجب)؛ **لا يُحذف** طابق/نوع فيه غرف (`409 resource_in_use` → عطِّله بدل الحذف)؛ تغييرات الحالة عبر مسار خدمة واحد داخل transaction مع تسجيل + **ملاحظة إلزامية** لـ maintenance/out_of_service (`400 status_note_required`)؛ `archived` مخفية افتراضيًا.
+- **صلاحيات في السجلّ**: `rooms.view/create/update/delete/status_update` — مفروضة على الباكند لكل endpoint عبر `HasHotelPermission`. الفندق المعلّق **للقراءة فقط** (`403 hotel_suspended` عند أي كتابة).
+- **APIs تحت `/api/v1/hotel/`**: `floors/`+`floors/{id}/` · `room-types/`+`room-types/{id}/` · `rooms/`+`rooms/{id}/` (فلاتر: floor/type/status/is_active/search/include_archived) · `rooms/{id}/status/`.
+- أخطاء موحّدة جديدة: `resource_in_use` (409) · `cross_tenant_reference` (400) · `status_note_required` (400).
+
+### ما نُفّذ (Frontend)
+- **عنصر «الغرف»** في sidebar الفندق، وصفحة **`/hotel/rooms`** بتبويبات: نظرة عامة / الطوابق / أنواع الغرف / الغرف.
+- **نظرة عامة**: بطاقات ملخّص الحالات. **الطوابق/الأنواع**: جداول + إنشاء/تعديل/حذف مع confirm dialogs. **الغرف**: شبكة بطاقات بألوان لكل حالة + شارات، فلاتر (طابق/نوع/حالة/بحث + إظهار المؤرشفة)، CRUD، ونافذة تغيير حالة (حقل ملاحظة يظهر للحالات التي تتطلبها).
+- نظام التصميم المركزي + أيقونات lucide، ترجمات **ar/en/tr** كاملة مع RTL/LTR، حالات loading/empty/error/success، responsive حقيقي.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/rooms/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration.
+- **جديدة (Frontend):** `app/hotel/rooms/page.tsx` · `components/hotel/rooms/{OverviewTab,FloorsTab,RoomTypesTab,RoomsTab,index}.tsx` · `components/ui/Tabs.tsx` · `lib/api/{hotelFetch,rooms}.ts` · والوثيقة `docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+delete/status_update) · `apps/common/exceptions.py` (3 أخطاء) · `config/settings/base.py` (+app) · `config/urls.py` (+urls) · `apps/hotels/tests.py` (تحديث اختبار regression للنماذج غير المسموحة).
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `components/ui/index.ts` · `lib/api/{hotel,types,errors}.ts` · `lib/format.ts` · قواميس ar/en/tr · `styles/globals.css` · التوثيق (README, DEVELOPMENT_RULES §8b, docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **140/140 OK** (110 سابقة + 30 لـ rooms) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/rooms` مبني) |
+| فحص حيّ End-to-End (Django+Next) | ✅ دخول مدير فندق → إنشاء طابق + نوع STD + غرف 101/102/103 · تغيير 102→dirty، 103→maintenance بملاحظة · maintenance بلا ملاحظة → **400** · قائمة الغرف بالفلاتر · لقطات `/hotel/rooms` overview/EN/AR/موبايل Premium وRTL سليم |
+
+### ملاحظات وقرارات
+- `base_rate` قيمة مرجعية فقط — Phase 5 لا يبني تسعيرًا/فوترة.
+- `PROTECT` على floor/room_type في `Room` خط دفاع ثانٍ خلف فحص «لا حذف أثناء الاستخدام».
+- قوائم الطوابق/الأنواع/الغرف مرقّمة (paginated) والواجهة تقرأ `.results`.
+- تحديث اختبار regression في Phase 4 ليمنع فقط نماذج (reservations/guests/invoices/folios/payments) — جداول rooms/floors أصبحت مشروعة في Phase 5.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا حجوزات/توفر/نزلاء/دخول-مغادرة/مدفوعات/مصروفات/فوليو/فواتير/مطعم/تنظيف-صيانة (workflows)/ورديات/إغلاق يومي/تقارير.** لا موقع عام/حجز عام. لا حالتَي `reserved`/`occupied`. **لم تبدأ Phase 6.**
+
+### الاعتماد
+- **بانتظار اعتماد المالك** عبر مراجعة PR. **لم تُعتمد ذاتيًا.** لا يُغيَّر وضع Phase 6.

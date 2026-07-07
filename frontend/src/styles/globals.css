@@ -963,6 +963,113 @@ a {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* --- Tabs ------------------------------------------------------------------ */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+.tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.tabs__tab:hover {
+  color: var(--color-fg);
+}
+.tabs__tab--active {
+  background: var(--color-surface);
+  color: var(--color-primary-active);
+  box-shadow: var(--shadow-xs);
+}
+
+/* --- Room cards ------------------------------------------------------------ */
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-4);
+}
+.room-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--room-accent, var(--color-border-strong));
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.room-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.room-card--available {
+  --room-accent: var(--color-success);
+}
+.room-card--dirty {
+  --room-accent: var(--color-warning);
+}
+.room-card--cleaning {
+  --room-accent: var(--color-info);
+}
+.room-card--maintenance {
+  --room-accent: var(--color-danger);
+}
+.room-card--out_of_service {
+  --room-accent: var(--color-fg-muted);
+}
+.room-card--archived {
+  --room-accent: var(--color-border-strong);
+  opacity: 0.85;
+}
+.room-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.room-card__number {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
+}
+.room-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.room-card__note {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-subtle);
+  font-style: italic;
+}
+.room-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-2);
+}
+
 /* --- Hotel media ---------------------------------------------------------- */
 .media-slots {
   display: grid;

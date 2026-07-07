@@ -4,14 +4,17 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 4 — Hotels + Hotel Settings (pending review).**
+> **Current status: Phase 5 — Floors + Room Types + Rooms (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
-> (platform-owner console) and Phase 3.1 (premium UI). Phase 4 adds the **hotel's
-> own settings & media** — identity, contact, location, policies, operational
-> defaults, and logo/cover/gallery — under `/api/v1/hotel/`, plus a hotel-side
-> console at `/hotel/settings`, all scoped by hotel membership and permissions.
-> **Still no floors, rooms, reservations, guests, money, public website, or real
-> maps/WhatsApp** — those are later phases. See
+> (platform-owner console), Phase 3.1 (premium UI) and Phase 4 (hotel settings &
+> media). Phase 5 adds the hotel's **physical inventory** — floors, room types,
+> and rooms with a basic **manual** operational status (available/dirty/cleaning/
+> maintenance/out_of_service/archived) — under `/api/v1/hotel/`, plus a tabbed
+> hotel-side console at `/hotel/rooms`, all scoped by hotel membership and
+> permissions (`rooms.*`).
+> **Still no reservations, availability, guests, check-in/out, money, public
+> website, or real maps/WhatsApp** — and no `reserved`/`occupied` statuses (those
+> are system-derived in later phases). See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
 > [PROGRESS_LOG.md](PROGRESS_LOG.md) for per-phase status, and
@@ -32,6 +35,7 @@ funduqii/
 │  ├─ apps/subscriptions/   # SubscriptionPlan + HotelSubscription (Phase 3)
 │  ├─ apps/platform/        # platform-owner API /api/v1/platform/ (Phase 3)
 │  ├─ apps/hotels/          # hotel settings + media /api/v1/hotel/ (Phase 4)
+│  ├─ apps/rooms/           # floors + room types + rooms /api/v1/hotel/ (Phase 5)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -280,6 +284,25 @@ hotel member unless explicitly added; a suspended hotel is read-only.
 Text and media are strictly separate — a settings `PATCH` never touches images.
 Images are stored files (never base64); responses return URLs + metadata. See
 [docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md](docs/HOTEL_SETTINGS_AND_MEDIA_STRATEGY.md).
+
+### Rooms endpoints (Phase 5)
+
+Also under `/api/v1/hotel/`, scoped to the caller's hotel context and guarded by
+the `rooms.*` permissions. A floor and room type referenced by a room must
+belong to the same hotel; a floor/room type with rooms cannot be deleted
+(deactivate instead); a suspended hotel is read-only.
+
+| Method & path | Purpose |
+|---|---|
+| `GET/POST /api/v1/hotel/floors/` · `GET/PATCH/DELETE .../floors/{id}/` | Floors CRUD |
+| `GET/POST /api/v1/hotel/room-types/` · `GET/PATCH/DELETE .../room-types/{id}/` | Room types CRUD |
+| `GET/POST /api/v1/hotel/rooms/` · `GET/PATCH/DELETE .../rooms/{id}/` | Rooms CRUD (filters: floor/type/status/search) |
+| `POST/PATCH /api/v1/hotel/rooms/{id}/status/` | Change a room's manual status (note required for maintenance/out-of-service) |
+
+Room status is manual ops state only (available/dirty/cleaning/maintenance/
+out_of_service/archived) — there is no `reserved`/`occupied` (system-derived
+later). See
+[docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md](docs/FLOORS_ROOM_TYPES_ROOMS_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

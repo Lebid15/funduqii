@@ -20,5 +20,6 @@ export { Skeleton } from "./Skeleton";
 export { StatCard } from "./StatCard";
 export { EmptyState, ErrorState, LoadingState } from "./states";
 export { Switch } from "./Switch";
+export { Tabs, type TabItem } from "./Tabs";
 export { Textarea } from "./Textarea";
 export { ToastProvider, useToast } from "./Toast";

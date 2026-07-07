@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BedDouble,
   Building2,
   CreditCard,
   Hotel,
@@ -50,6 +51,7 @@ export function Sidebar({
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
   const hotelItems: NavItem[] = [
+    { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];
 

@@ -16,7 +16,7 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "check_in",
         "check_out",
     ],
-    "rooms": ["view", "create", "update"],
+    "rooms": ["view", "create", "update", "delete", "status_update"],
     "guests": ["view", "create"],
     "payments": ["view", "create", "void"],
     "expenses": ["view", "create"],

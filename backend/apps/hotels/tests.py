@@ -307,9 +307,11 @@ class RegressionTests(APITestCase):
         for path in ("/api/v1/reservations/", "/api/v1/rooms/", "/api/v1/guests/"):
             self.assertEqual(self.client.get(path).status_code, 404, path)
 
-    def test_no_rooms_or_reservation_models(self):
+    def test_no_reservation_or_guest_models(self):
+        # Rooms/floors/room_types arrive in Phase 5; reservations/guests/finance
+        # remain out of scope through Phase 5.
         from django.apps import apps as django_apps
 
         models = {m._meta.db_table for m in django_apps.get_models()}
-        for forbidden in ("rooms", "reservations", "guests", "floors", "invoices"):
+        for forbidden in ("reservations", "guests", "invoices", "folios", "payments"):
             self.assertNotIn(forbidden, models)
