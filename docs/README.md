@@ -78,3 +78,7 @@ maps, etc.) will be added here as the project progresses through its phases.
 ## Phase 10 — Housekeeping + Maintenance + Lost & Found
 
 - [HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md) — the three operational workflows, HK/MT/LF numbering, status logs, the room-status integration rules (no `occupied`; housekeeping never overrides a maintenance block; closing maintenance never auto-releases a room), the check-out auto-task, permissions, and what is deferred (shifts/daily close/reports/inventory/purchasing/notifications).
+
+## Phase 11 — Staff + Permissions Management UI
+
+- [STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md) — why there are no fixed roles (grants are the single source of truth; job_title is descriptive only), the staff lifecycle (create/link/deactivate with last-manager protection), the permissions matrix with the anti-escalation guard, the permission-aware sidebar + route guard, and what is deferred (shifts/attendance/payroll/HR/email invitations/presets).

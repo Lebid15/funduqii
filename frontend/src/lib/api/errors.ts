@@ -91,6 +91,20 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.claimantRequired;
     case "disposal_reason_required":
       return t.operations.errors.disposalReasonRequired;
+    case "email_already_registered":
+      return t.staff.errors.emailExists;
+    case "membership_already_exists":
+      return t.staff.errors.membershipExists;
+    case "last_manager_protected":
+      return t.staff.errors.lastManager;
+    case "platform_owner_not_manageable":
+      return t.staff.errors.platformOwner;
+    case "permission_escalation_blocked":
+      return t.staff.errors.escalationBlocked;
+    case "manager_permissions_not_editable":
+      return t.staff.errors.managerNotEditable;
+    case "unknown_permission":
+      return t.staff.errors.unknownPermission;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

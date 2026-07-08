@@ -14,6 +14,7 @@ import {
   Package,
   Receipt,
   Settings,
+  UserCog,
   Users,
   UtensilsCrossed,
   type LucideIcon,
@@ -23,6 +24,8 @@ import { Icon } from "@/components/ui";
 import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { initials } from "@/lib/format";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+import { HOTEL_ROUTE_ACCESS } from "@/lib/session/hotelRouteAccess";
 
 type ShellVariant = "platform" | "hotel";
 
@@ -48,6 +51,7 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const pathname = usePathname();
+  const access = useHotelAccess();
 
   const platformItems: NavItem[] = [
     { href: "/platform", label: t.nav.dashboard, icon: LayoutDashboard, exact: true },
@@ -56,16 +60,30 @@ export function Sidebar({
     { href: "/platform/subscriptions", label: t.nav.subscriptions, icon: CreditCard },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
-  const hotelItems: NavItem[] = [
+  const allHotelItems: NavItem[] = [
     { href: "/hotel/front-desk", label: t.frontDesk.nav, icon: ConciergeBell },
     { href: "/hotel/reservations", label: t.reservations.nav, icon: CalendarCheck },
     { href: "/hotel/guests", label: t.guests.nav, icon: Users },
     { href: "/hotel/finance", label: t.finance.nav, icon: Receipt },
     { href: "/hotel/services", label: t.services.nav, icon: UtensilsCrossed },
     { href: "/hotel/operations", label: t.operations.nav, icon: ClipboardList },
+    { href: "/hotel/staff", label: t.staff.nav, icon: UserCog },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];
+  // Phase 11: the sidebar respects permissions — a link only shows when the
+  // user holds ANY of the route's view codes (manager: all). While the
+  // context loads, nothing is shown rather than flashing forbidden links.
+  // Hiding is cosmetic; every API enforces the same permissions itself.
+  const hotelItems =
+    access === null
+      ? allHotelItems
+      : access.loading
+        ? []
+        : allHotelItems.filter((item) => {
+            const required = HOTEL_ROUTE_ACCESS[item.href];
+            return !required || access.can(...required);
+          });
 
   const items = variant === "hotel" ? hotelItems : platformItems;
   const brandSubtitle =

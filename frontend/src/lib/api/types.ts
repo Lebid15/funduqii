@@ -989,3 +989,67 @@ export interface OperationsOverview {
   lost_found_open: number;
   urgent_tasks: number;
 }
+
+/* ==========================================================================
+ * Phase 11 — Staff & permissions DTOs (mirror /api/v1/hotel/staff/).
+ * ======================================================================== */
+
+export type HotelMembershipType = "manager" | "staff";
+
+export interface StaffMemberListItem {
+  id: number;
+  user_id: number;
+  full_name: string;
+  email: string;
+  phone: string;
+  membership_type: HotelMembershipType;
+  is_manager: boolean;
+  is_active: boolean;
+  job_title: string;
+  staff_code: string;
+  permission_count: number;
+  created_at: string;
+}
+
+export interface StaffMember extends Omit<StaffMemberListItem, "permission_count"> {
+  is_primary_manager: boolean;
+  notes: string;
+  deactivated_at: string | null;
+  deactivation_reason: string;
+  permissions: string[];
+  created_by_name: string;
+  updated_by_name: string;
+  updated_at: string;
+}
+
+export interface PermissionRegistrySection {
+  section: string;
+  operations: string[];
+  codes: string[];
+}
+
+export interface StaffPermissionsPayload {
+  membership: number;
+  full_name: string;
+  is_manager: boolean;
+  is_active: boolean;
+  editable: boolean;
+  is_self: boolean;
+  granted: string[];
+  effective: string[];
+  registry: PermissionRegistrySection[];
+}
+
+export interface MyHotelPermissions {
+  is_manager: boolean;
+  permissions: string[];
+}
+
+export interface StaffOverview {
+  total_staff: number;
+  active_staff: number;
+  inactive_staff: number;
+  managers: number;
+  staff_with_permissions: number;
+  staff_without_permissions: number;
+}

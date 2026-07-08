@@ -207,6 +207,45 @@ class DisposalReasonRequired(FunduqiiAPIException):
     default_code = "disposal_reason_required"
 
 
+# --- Staff & permissions management (Phase 11) ------------------------------
+
+
+class EmailAlreadyRegistered(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "A user with this email already exists."
+    default_code = "email_already_registered"
+
+
+class MembershipAlreadyExists(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This user is already a member of this hotel."
+    default_code = "membership_already_exists"
+
+
+class LastManagerProtected(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The hotel's last active manager cannot be deactivated."
+    default_code = "last_manager_protected"
+
+
+class PlatformOwnerNotManageable(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A platform owner account cannot be managed as hotel staff."
+    default_code = "platform_owner_not_manageable"
+
+
+class PermissionEscalationBlocked(FunduqiiAPIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "You cannot grant a permission you do not hold yourself."
+    default_code = "permission_escalation_blocked"
+
+
+class ManagerPermissionsNotEditable(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "A manager already holds every hotel permission; grants are not editable."
+    default_code = "manager_permissions_not_editable"
+
+
 # --- Reservations & availability (Phase 6) ---------------------------------
 
 

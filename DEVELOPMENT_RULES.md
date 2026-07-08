@@ -176,6 +176,29 @@ these rules is a defect, not a shortcut.
   status change is logged in a lightweight per-record status log.
 - Full rules: [docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md).
 
+### 8h. Staff & permissions management (from Phase 11)
+- **No fixed roles, ever.** Access = active hotel membership + explicit
+  permission grants (`section.operation`). `job_title` is a descriptive label
+  and must NEVER be read in any access decision. A manager membership holds
+  every hotel permission by type — grants on managers are refused.
+- **No privilege escalation.** A non-manager can never grant a permission
+  they do not hold themselves — to anyone, including themselves; removals are
+  always free. Permission replacement is transaction-safe bulk PUT validated
+  against the central registry (unknown codes rejected, nothing partial).
+- **The hotel is never left unmanageable.** The last active manager cannot be
+  deactivated (`last_manager_protected`). Staff are deactivated/reactivated,
+  never hard-deleted; a deactivated membership loses hotel access instantly
+  but keeps its history and grants.
+- **Platform owners are not hotel staff.** They can never be linked or
+  password-managed through the staff APIs (`platform_owner_not_manageable`).
+- **Frontend gating is cosmetic.** The sidebar and route guard read
+  `GET /staff/my-permissions/` and hide/block what the user cannot view, but
+  every API enforces the same permissions itself — hiding a link is never the
+  protection. Passwords are validated + hashed and never returned by any API;
+  there is no email invitation flow (temporary passwords are handed over
+  outside the system).
+- Full rules: [docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.
