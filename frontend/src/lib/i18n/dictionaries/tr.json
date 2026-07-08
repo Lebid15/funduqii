@@ -156,7 +156,18 @@
       "fileTypeError": "Desteklenmeyen dosya türü. PNG, JPG veya WebP kullanın.",
       "fileSizeError": "Dosya çok büyük.",
       "galleryFullError": "Galeri dolu (maksimuma ulaşıldı).",
-      "loadError": "Otel ayarları yüklenemedi."
+      "loadError": "Otel ayarları yüklenemedi.",
+      "sectionPublic": "Genel site",
+      "sectionPublicDesc": "Bu otelin genel Funduqii sitesinde nasıl göründüğü ve ziyaretçilerin nasıl rezervasyon yaptığı.",
+      "publicListed": "Oteli genel sitede listele",
+      "publicRequiresConfirmation": "Genel rezervasyonlar personel onayı gerektirir (önerilir)",
+      "publicFeatured": "Öne çıkanlar bölümünde göster",
+      "publicSlug": "Genel URL kısaltması",
+      "publicSlugHint": "Latin harfleri, rakamlar ve tire — örn. grand-hotel. Genel sayfa: /hotels/<slug>.",
+      "publicMinNights": "En az gece sayısı (genel)",
+      "publicMaxNights": "En fazla gece sayısı (genel)",
+      "publicTerms": "Genel rezervasyon koşulları",
+      "publicTermsHint": "Ziyaretçilere rezervasyondan önce gösterilir."
     }
   },
   "rooms": {
@@ -231,7 +242,13 @@
       "empty": "Henüz oda türü yok",
       "emptyHint": "Bu otelin sunduğu oda türlerini tanımlayın.",
       "deleteTitle": "Bu oda türü silinsin mi?",
-      "deleteBody": "Odalarca kullanılan türler silinemez — devre dışı bırakın."
+      "deleteBody": "Odalarca kullanılan türler silinemez — devre dışı bırakın.",
+      "publicVisible": "Genel sitede göster",
+      "publicName": "Genel ad",
+      "publicNameHint": "İç adı kullanmak için boş bırakın.",
+      "publicPrice": "Gecelik genel fiyat",
+      "publicPriceHint": "Taban fiyatı kullanmak için boş bırakın.",
+      "publicDescription": "Genel açıklama"
     },
     "list": {
       "add": "Oda ekle",
@@ -285,7 +302,8 @@
       "direct": "Doğrudan",
       "phone": "Telefon",
       "walk_in": "Kapıdan",
-      "other": "Diğer"
+      "other": "Diğer",
+      "public_website": "Genel site"
     },
     "overview": {
       "total": "Toplam rezervasyon",
@@ -415,7 +433,8 @@
       "cancel": "İptal",
       "edit": "Düzenle",
       "room": "Oda",
-      "noShowReason": "Gelmeme nedeni"
+      "noShowReason": "Gelmeme nedeni",
+      "publicCancelRequested": "Misafir, genel site üzerinden iptal talep etti"
     },
     "cancelDialog": {
       "title": "Rezervasyonu iptal et",
@@ -1765,6 +1784,118 @@
       "severity": "Önem",
       "date": "Tarih",
       "eventType": "Olay türü"
+    }
+  },
+  "public": {
+    "nav": {
+      "label": "Genel gezinme",
+      "hotels": "Oteller",
+      "manageBooking": "Rezervasyonumu yönet",
+      "login": "Giriş yap",
+      "freeTrial": "Ücretsiz deneme"
+    },
+    "footer": {
+      "tagline": "Otel yönetim platformu — hesap gerektirmeyen çevrimiçi rezervasyon."
+    },
+    "home": {
+      "heroTitle": "Konaklamanı bul, doğrudan rezerve et",
+      "heroSubtitle": "Yayınlanan otellere göz atın, canlı müsaitliği kontrol edin ve dakikalar içinde rezervasyon yapın — hesap gerekmez.",
+      "browseCta": "Otellere göz at",
+      "feature1": "Gerçek oteller, canlı müsaitlik",
+      "feature2": "Referans numarasıyla anında rezervasyon talebi",
+      "feature3": "Rezervasyonunuzu güvenli bir kodla yönetin — hesap gerekmez",
+      "featuredTitle": "Öne çıkan oteller",
+      "browseAll": "Tüm otelleri gör"
+    },
+    "hotels": {
+      "title": "Oteller",
+      "subtitle": "Funduqii'de yayınlanan tüm oteller",
+      "searchPlaceholder": "Otel adı veya şehirle arayın…",
+      "search": "Ara",
+      "empty": "Henüz yayınlanan otel yok",
+      "emptyHint": "Lütfen daha sonra tekrar deneyin.",
+      "featured": "Öne çıkan",
+      "bookingAvailable": "Çevrimiçi rezervasyon açık",
+      "bookingUnavailable": "Rezervasyon kapalı",
+      "viewHotel": "Oteli görüntüle"
+    },
+    "hotel": {
+      "about": "Otel hakkında",
+      "roomTypes": "Odalar",
+      "noRoomTypes": "Bu otel için henüz yayınlanan oda yok.",
+      "gallery": "Galeri",
+      "policies": "Politikalar",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "minNights": "En az gece sayısı",
+      "maxNights": "En fazla gece sayısı",
+      "cancellationPolicy": "İptal politikası",
+      "terms": "Rezervasyon koşulları",
+      "contact": "İletişim",
+      "backToHotels": "Tüm otellere dön",
+      "perNight": "/ gece",
+      "upTo": "En fazla {count} misafir",
+      "nights": "gece",
+      "notFound": "Otel bulunamadı",
+      "notFoundHint": "Bu otel genel sitede mevcut değil."
+    },
+    "booking": {
+      "title": "Konaklamanı rezerve et",
+      "checkIn": "Giriş tarihi",
+      "checkOut": "Çıkış tarihi",
+      "checkAvailability": "Müsaitliği kontrol et",
+      "unavailable": "Bu tarihler için müsait oda yok.",
+      "soldOut": "Tükendi",
+      "roomsLeft": "{count} müsait",
+      "selectType": "Oda tipi",
+      "roomsCount": "Oda sayısı",
+      "adults": "Yetişkin",
+      "children": "Çocuk",
+      "guestName": "Ad soyad",
+      "guestPhone": "Telefon numarası",
+      "guestEmail": "E-posta (isteğe bağlı)",
+      "specialRequests": "Özel istekler (isteğe bağlı)",
+      "acceptTerms": "Otelin rezervasyon koşullarını ve iptal politikasını kabul ediyorum.",
+      "confirmationNote": "Rezervasyonunuz otel onaylayana kadar tutulur; referans numaranızı hemen alırsınız.",
+      "instantNote": "Rezervasyonunuz referans numarasıyla hemen onaylanır.",
+      "submit": "Şimdi rezerve et",
+      "closed": "Bu otel için çevrimiçi rezervasyon şu anda kapalı.",
+      "successTitle": "Rezervasyon alındı",
+      "successHeld": "Rezervasyonunuz otelin onayını bekliyor.",
+      "successConfirmed": "Rezervasyonunuz onaylandı.",
+      "reference": "Rezervasyon referansı",
+      "manageToken": "Yönetim kodu",
+      "tokenWarning": "Bu kodu şimdi kaydedin — yalnızca bir kez gösterilir ve rezervasyonunuzu yönetmenin tek yoludur.",
+      "copyToken": "Kodu kopyala",
+      "copied": "Kopyalandı",
+      "goToManage": "Rezervasyonu yönet"
+    },
+    "manage": {
+      "title": "Rezervasyonumu yönet",
+      "subtitle": "Rezervasyon referansınızı ve rezervasyon sırasında aldığınız yönetim kodunu girin.",
+      "reference": "Rezervasyon referansı",
+      "token": "Yönetim kodu",
+      "tokenHint": "Rezervasyonu tamamladığınızda bir kez gösterilen kod.",
+      "view": "Rezervasyonu görüntüle",
+      "notFoundError": "Bu referans ve kodla eşleşen rezervasyon yok.",
+      "heldNote": "Otel onayı bekleniyor",
+      "hotel": "Otel",
+      "dates": "Tarihler",
+      "roomType": "Oda tipi",
+      "roomsCount": "Oda sayısı",
+      "guests": "Misafirler (yetişkin + çocuk)",
+      "requests": "Özel istekler",
+      "cancelTitle": "İptal talebi",
+      "cancelNote": "Otele bir iptal talebi gönderilir — otel bunu kendi politikasına göre işler.",
+      "cancelReason": "Neden (isteğe bağlı)",
+      "cancelSubmit": "İptal talebini gönder",
+      "cancelRequested": "İptal talebi otele gönderildi."
+    },
+    "status": {
+      "held": "Onay bekliyor",
+      "confirmed": "Onaylandı",
+      "cancelled": "İptal edildi",
+      "expired": "Süresi doldu"
     }
   },
   "language": {

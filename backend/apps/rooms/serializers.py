@@ -57,6 +57,12 @@ class RoomTypeSerializer(serializers.ModelSerializer):
             "base_rate",
             "is_active",
             "sort_order",
+            # Phase 15 — what the public website shows for this type.
+            "public_is_visible",
+            "public_name",
+            "public_description",
+            "public_base_price",
+            "public_sort_order",
             "room_count",
             "created_at",
             "updated_at",

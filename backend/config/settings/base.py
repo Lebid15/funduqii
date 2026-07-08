@@ -65,6 +65,7 @@ LOCAL_APPS = [
     "apps.shifts",
     "apps.reports",
     "apps.notifications",
+    "apps.public_site",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -160,6 +161,12 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "apps.common.pagination.DefaultPagination",
     # Unified, translatable error envelope: {"code", "message", "details"?}.
     "EXCEPTION_HANDLER": "apps.common.exceptions.funduqii_exception_handler",
+    # Basic throttling for the anonymous PUBLIC endpoints (Phase 15). The
+    # authenticated console APIs are not throttled here.
+    "DEFAULT_THROTTLE_RATES": {
+        "public": "300/minute",
+        "public_booking": "60/hour",
+    },
 }
 
 # --- JWT (SimpleJWT) --------------------------------------------------------

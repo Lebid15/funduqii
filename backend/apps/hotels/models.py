@@ -99,6 +99,22 @@ class HotelSettings(models.Model):
     require_guest_phone = models.BooleanField(default=True)
     require_guest_document = models.BooleanField(default=False)
 
+    # --- Public website publishing (Phase 15) ------------------------------
+    # The PUBLIC display reuses the identity/contact/location/policy fields
+    # above (deliberate — no duplicated public_* copies). Only what did not
+    # exist is added here. `allow_public_booking` (Phase 4) is the public
+    # booking switch.
+    public_is_listed = models.BooleanField(default=False)
+    public_slug = models.SlugField(
+        max_length=140, unique=True, null=True, blank=True
+    )
+    public_booking_requires_confirmation = models.BooleanField(default=True)
+    public_min_nights = models.PositiveSmallIntegerField(null=True, blank=True)
+    public_max_nights = models.PositiveSmallIntegerField(null=True, blank=True)
+    public_terms_text = models.TextField(blank=True, default="")
+    public_sort_order = models.IntegerField(default=0)
+    public_featured = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

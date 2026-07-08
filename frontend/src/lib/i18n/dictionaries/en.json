@@ -156,7 +156,18 @@
       "fileTypeError": "Unsupported file type. Use PNG, JPG or WebP.",
       "fileSizeError": "The file is too large.",
       "galleryFullError": "The gallery is full (maximum reached).",
-      "loadError": "Could not load hotel settings."
+      "loadError": "Could not load hotel settings.",
+      "sectionPublic": "Public website",
+      "sectionPublicDesc": "How this hotel appears on the public Funduqii site and how visitors book.",
+      "publicListed": "List the hotel on the public website",
+      "publicRequiresConfirmation": "Public bookings need staff confirmation (recommended)",
+      "publicFeatured": "Show in the featured section",
+      "publicSlug": "Public URL slug",
+      "publicSlugHint": "Latin letters, numbers and dashes — e.g. grand-hotel. The public page is /hotels/<slug>.",
+      "publicMinNights": "Minimum nights (public)",
+      "publicMaxNights": "Maximum nights (public)",
+      "publicTerms": "Public booking terms",
+      "publicTermsHint": "Shown to visitors before they book."
     }
   },
   "rooms": {
@@ -231,7 +242,13 @@
       "empty": "No room types yet",
       "emptyHint": "Define the types of rooms this hotel offers.",
       "deleteTitle": "Delete this room type?",
-      "deleteBody": "Types used by rooms cannot be deleted — deactivate instead."
+      "deleteBody": "Types used by rooms cannot be deleted — deactivate instead.",
+      "publicVisible": "Show on the public website",
+      "publicName": "Public name",
+      "publicNameHint": "Leave empty to use the internal name.",
+      "publicPrice": "Public price per night",
+      "publicPriceHint": "Leave empty to use the base rate.",
+      "publicDescription": "Public description"
     },
     "list": {
       "add": "Add room",
@@ -285,7 +302,8 @@
       "direct": "Direct",
       "phone": "Phone",
       "walk_in": "Walk-in",
-      "other": "Other"
+      "other": "Other",
+      "public_website": "Public website"
     },
     "overview": {
       "total": "Total reservations",
@@ -415,7 +433,8 @@
       "cancel": "Cancel",
       "edit": "Edit",
       "room": "Room",
-      "noShowReason": "No-show reason"
+      "noShowReason": "No-show reason",
+      "publicCancelRequested": "The guest requested cancellation via the public website"
     },
     "cancelDialog": {
       "title": "Cancel reservation",
@@ -1765,6 +1784,118 @@
       "severity": "Severity",
       "date": "Date",
       "eventType": "Event type"
+    }
+  },
+  "public": {
+    "nav": {
+      "label": "Public navigation",
+      "hotels": "Hotels",
+      "manageBooking": "Manage my booking",
+      "login": "Sign in",
+      "freeTrial": "Free trial"
+    },
+    "footer": {
+      "tagline": "Hotel management platform — online booking without accounts."
+    },
+    "home": {
+      "heroTitle": "Find your stay, book directly",
+      "heroSubtitle": "Browse published hotels, check live availability, and book in minutes — no account needed.",
+      "browseCta": "Browse hotels",
+      "feature1": "Real hotels, live availability",
+      "feature2": "Instant booking request with a reference number",
+      "feature3": "Manage your booking with a secure code — no account",
+      "featuredTitle": "Featured hotels",
+      "browseAll": "View all hotels"
+    },
+    "hotels": {
+      "title": "Hotels",
+      "subtitle": "All hotels published on Funduqii",
+      "searchPlaceholder": "Search by hotel name or city…",
+      "search": "Search",
+      "empty": "No hotels published yet",
+      "emptyHint": "Please check back soon.",
+      "featured": "Featured",
+      "bookingAvailable": "Online booking available",
+      "bookingUnavailable": "Booking unavailable",
+      "viewHotel": "View hotel"
+    },
+    "hotel": {
+      "about": "About the hotel",
+      "roomTypes": "Rooms",
+      "noRoomTypes": "No rooms are published for this hotel yet.",
+      "gallery": "Gallery",
+      "policies": "Policies",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "minNights": "Minimum nights",
+      "maxNights": "Maximum nights",
+      "cancellationPolicy": "Cancellation policy",
+      "terms": "Booking terms",
+      "contact": "Contact",
+      "backToHotels": "Back to all hotels",
+      "perNight": "/ night",
+      "upTo": "Up to {count} guests",
+      "nights": "nights",
+      "notFound": "Hotel not found",
+      "notFoundHint": "This hotel is not available on the public site."
+    },
+    "booking": {
+      "title": "Book your stay",
+      "checkIn": "Check-in date",
+      "checkOut": "Check-out date",
+      "checkAvailability": "Check availability",
+      "unavailable": "No rooms are available for these dates.",
+      "soldOut": "Sold out",
+      "roomsLeft": "{count} available",
+      "selectType": "Room type",
+      "roomsCount": "Rooms",
+      "adults": "Adults",
+      "children": "Children",
+      "guestName": "Full name",
+      "guestPhone": "Phone number",
+      "guestEmail": "Email (optional)",
+      "specialRequests": "Special requests (optional)",
+      "acceptTerms": "I agree to the hotel's booking terms and cancellation policy.",
+      "confirmationNote": "Your booking is held until the hotel confirms it. You get a reference number right away.",
+      "instantNote": "Your booking is confirmed immediately with a reference number.",
+      "submit": "Book now",
+      "closed": "Online booking is currently unavailable for this hotel.",
+      "successTitle": "Booking received",
+      "successHeld": "Your booking is awaiting the hotel's confirmation.",
+      "successConfirmed": "Your booking is confirmed.",
+      "reference": "Booking reference",
+      "manageToken": "Manage code",
+      "tokenWarning": "Save this code now — it is shown only once and is the only way to manage your booking.",
+      "copyToken": "Copy code",
+      "copied": "Copied",
+      "goToManage": "Manage booking"
+    },
+    "manage": {
+      "title": "Manage my booking",
+      "subtitle": "Enter your booking reference and the manage code you received when booking.",
+      "reference": "Booking reference",
+      "token": "Manage code",
+      "tokenHint": "The code shown once when you completed the booking.",
+      "view": "View booking",
+      "notFoundError": "No booking matches this reference and code.",
+      "heldNote": "Awaiting hotel confirmation",
+      "hotel": "Hotel",
+      "dates": "Dates",
+      "roomType": "Room type",
+      "roomsCount": "Rooms",
+      "guests": "Guests (adults + children)",
+      "requests": "Special requests",
+      "cancelTitle": "Request cancellation",
+      "cancelNote": "This sends a cancellation request to the hotel — the hotel processes it according to its policy.",
+      "cancelReason": "Reason (optional)",
+      "cancelSubmit": "Send cancellation request",
+      "cancelRequested": "A cancellation request has been sent to the hotel."
+    },
+    "status": {
+      "held": "Awaiting confirmation",
+      "confirmed": "Confirmed",
+      "cancelled": "Cancelled",
+      "expired": "Expired"
     }
   },
   "language": {

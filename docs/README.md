@@ -93,4 +93,8 @@ maps, etc.) will be added here as the project progresses through its phases.
 
 ## Phase 14 — Notifications + Activity Center
 
-- [NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md) — why this is in-app only (no WhatsApp/email/SMS/push/chat), ActivityEvent vs the per-record status logs, the single creation service, permission-matched recipients (never the actor/deactivated/another hotel), metadata scrubbing + internal-only URLs, the 13 wired event types and the deferred ones, activity visibility (view vs view_all), the suspended-hotel user-state rule, and what is deferred (preferences/realtime/scheduling/legal audit).
+- [NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md) — why this is in-app only (no WhatsApp/email/SMS/push/chat), ActivityEvent vs the per-record status logs, the single creation service, permission-matched recipients (never the actor/deactivated/another hotel), metadata scrubbing + internal-only URLs, the 14 wired event types and the deferred ones, activity visibility (view vs view_all), the suspended-hotel user-state rule, and what is deferred (preferences/realtime/scheduling/legal audit).
+
+## Phase 15 — Public Website + Public Booking
+
+- [PUBLIC_WEBSITE_BOOKING_STRATEGY.md](PUBLIC_WEBSITE_BOOKING_STRATEGY.md) — the reuse-first data model (Phase 4 settings/media reused; only 8+5+4 new fields), opt-in publishing (`public_is_listed`/`public_slug`/`public_is_visible`), the single booking engine (public bookings through `create_reservation`, overbooking impossible to bypass), held+72h hold and future-only (never auto check-in, never money), one-time manage token (SHA-256 stored, constant-time compare, indistinguishable 404s), cancellation as a REQUEST, the anonymous throttled `/api/v1/public/` surface, output limits (no staff/finance/notes/room numbers), and what is forbidden (payment gateways, customer accounts, OTA, reviews, external messaging).

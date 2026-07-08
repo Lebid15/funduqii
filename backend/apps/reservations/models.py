@@ -39,6 +39,8 @@ class ReservationSource(models.TextChoices):
     DIRECT = "direct", "Direct"
     PHONE = "phone", "Phone"
     WALK_IN = "walk_in", "Walk-in"
+    # Phase 15: bookings arriving from the public website.
+    PUBLIC_WEBSITE = "public_website", "Public website"
     OTHER = "other", "Other"
 
 
@@ -145,6 +147,17 @@ class Reservation(models.Model):
 
     # Only meaningful while status == held.
     hold_expires_at = models.DateTimeField(null=True, blank=True)
+
+    # --- Public booking (Phase 15) -----------------------------------------
+    # The visitor manages their booking with reference + token. Only the
+    # SHA-256 HASH of the token is stored — plaintext is shown exactly once
+    # in the create response and never again.
+    public_manage_token_hash = models.CharField(
+        max_length=64, blank=True, default=""
+    )
+    public_manage_token_created_at = models.DateTimeField(null=True, blank=True)
+    public_cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    public_cancel_reason = models.CharField(max_length=255, blank=True, default="")
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
