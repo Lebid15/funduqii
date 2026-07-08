@@ -1260,8 +1260,8 @@
 ---
 
 ## Phase 14 — Notifications + Activity Center
-- الحالة: **بانتظار الاعتماد 🔎** (نُفِّذت واختُبرت — لا تُعتمد ذاتيًا؛ الاعتماد قرار المالك حصرًا)
-- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09 · تاريخ الاعتماد: —
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09 · تاريخ الاعتماد: 2026-07-09
 - الهدف: مركز إشعارات **داخلي** وسجل نشاط تشغيلي مبسط — **ليست WhatsApp ولا Email ولا Push ولا SMS ولا Chat ولا Audit Log قانونيًا**.
 - الأساس: بُنيت من **`origin/main`** (3ab3646، بعد دمج Phase 13 عبر PR #12).
 
@@ -1303,4 +1303,6 @@
 - **لا WhatsApp · لا Email · لا SMS · لا Push · لا Chat/Mentions/Threads · لا realtime/WebSocket متقدم · لا جدولة/قوالب خارجية · لا حملات تسويق · لا رسائل نزلاء عامة · لا NotificationPreference · لا Audit Log قانوني/SIEM · لا Public website/booking · لا Payment gateway.** **لم تبدأ Phase 15.**
 
 ### الاعتماد
-- بانتظار قرار المالك بعد المراجعة. ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار.
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #13 (commit `214c9fa` على `origin/main@3ab3646`، mergeable_state: clean، backend 593/593، frontend lint/typecheck/build ناجحة، `/hotel/notifications` مبني، والبنود الـ30 المقبولة رسميًا في رسالة الاعتماد — مع ملاحظة المالك غير المانعة: تقرير التنفيذ ذكر 13 نوع حدث والمراجعة النهائية أثبتت 14 نوعًا مطابقًا للقائمة المطلوبة، فرق لصالح التنفيذ).
+- ملاحظة الاعتماد: «تم اعتماد Phase 14 بعد Final Acceptance Review. المرحلة أضافت مركز إشعارات داخلي وسجل نشاط تشغيلي مبسط عبر ActivityEvent وNotification وترقيم ACT/NTF، مع NotificationBell في Topbar، وصفحة /hotel/notifications، ومنطق recipients يحترم الصلاحيات والعضوية النشطة. تم تأمين metadata_json من الأسرار، وحصر related_url بالمسارات الداخلية، ومنع رؤية إشعارات الغير، وحماية activity visibility. تم ربط 14 نوع حدث داخليًا دون كسر التدفقات الأصلية. لا WhatsApp، لا Email، لا SMS، لا Push، لا Chat، لا public messaging، ولا Phase 15.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 15 لا تبدأ إلا برسالتها الرسمية.**
