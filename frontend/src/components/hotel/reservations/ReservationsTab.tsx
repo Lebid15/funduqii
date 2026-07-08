@@ -774,6 +774,13 @@ function DetailsModal({
           </Badge>
           <span className="muted">{t.reservations.source[r.source]}</span>
         </div>
+        {r.public_cancel_requested_at ? (
+          <Alert tone="warning">
+            {t.reservations.details.publicCancelRequested}{" "}
+            ({formatDate(r.public_cancel_requested_at, locale)})
+            {r.public_cancel_reason ? ` — ${r.public_cancel_reason}` : ""}
+          </Alert>
+        ) : null}
         <dl className="detail-grid">
           <div><dt>{t.reservations.details.guest}</dt><dd>{r.primary_guest_name}</dd></div>
           {r.primary_guest_phone ? <div><dt>{t.reservations.details.phone}</dt><dd>{r.primary_guest_phone}</dd></div> : null}

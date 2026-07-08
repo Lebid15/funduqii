@@ -260,6 +260,31 @@ these rules is a defect, not a shortcut.
   read and flip its own read/archive flags (user-state only).
 - Full rules: [docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md).
 
+### 8l. Public website & public booking (from Phase 15)
+- **Visibility is opt-in.** A hotel appears publicly only when `ACTIVE` +
+  `public_is_listed` + a `public_slug`; a room type only with
+  `public_is_visible`. Suspended/unlisted hotels are 404 everywhere public.
+- **One booking engine.** Public bookings go through the SAME
+  `create_reservation` + availability service as the console — overbooking
+  rules can never be bypassed from the public site.
+- **Never instant, never money.** A public booking is always
+  `booking_kind=future` (no auto check-in), defaults to `held` with a 72h
+  hold (`PUBLIC_HOLD_HOURS`), and creates no Payment/Invoice/Folio/Stay.
+  No payment gateway and no customer accounts exist.
+- **Token security.** The manage token is generated with `secrets`, shown
+  exactly once, stored only as SHA-256, compared in constant time; a wrong
+  reference and a wrong token return the same 404.
+- **Output is aggressively limited.** Public serializers expose only
+  visitor-safe fields: never staff, finance, folios, internal notes, room
+  numbers or other hotels. Availability returns COUNTS only.
+- **Cancellation is a request.** The public cancel endpoint stamps
+  `public_cancel_requested_at` (idempotent) and never cancels/voids/deletes;
+  staff act through the existing reservations workflow.
+- **Anonymous ⇒ throttled.** Everything under `/api/v1/public/` uses scoped
+  throttling (`public`, `public_booking`); the frontend reaches it only via
+  the auth-less `/api/public/*` passthrough (GET/POST only).
+- Full rules: [docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md](docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

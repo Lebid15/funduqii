@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   BedDouble,
   Building2,
+  Globe,
   MapPin,
   Phone,
   SlidersHorizontal,
@@ -524,13 +525,6 @@ export default function HotelSettingsPage() {
               </p>
               <div className="stack">
                 <Switch
-                  id="allow_public_booking"
-                  label={t.hotel.settings.allowPublicBooking}
-                  checked={s.allow_public_booking}
-                  disabled={suspended}
-                  onChange={(v) => patch("allow_public_booking", v)}
-                />
-                <Switch
                   id="require_guest_phone"
                   label={t.hotel.settings.requireGuestPhone}
                   checked={s.require_guest_phone}
@@ -544,6 +538,105 @@ export default function HotelSettingsPage() {
                   disabled={suspended}
                   onChange={(v) => patch("require_guest_document", v)}
                 />
+              </div>
+            </Card>
+
+            {/* Public website (Phase 15) */}
+            <Card className="settings-section">
+              <SectionHeader
+                title={t.hotel.settings.sectionPublic}
+                description={t.hotel.settings.sectionPublicDesc}
+                icon={Globe}
+              />
+              <div className="stack">
+                <Switch
+                  id="public_is_listed"
+                  label={t.hotel.settings.publicListed}
+                  checked={s.public_is_listed}
+                  disabled={suspended}
+                  onChange={(v) => patch("public_is_listed", v)}
+                />
+                <Switch
+                  id="allow_public_booking"
+                  label={t.hotel.settings.allowPublicBooking}
+                  checked={s.allow_public_booking}
+                  disabled={suspended}
+                  onChange={(v) => patch("allow_public_booking", v)}
+                />
+                <Switch
+                  id="public_requires_confirmation"
+                  label={t.hotel.settings.publicRequiresConfirmation}
+                  checked={s.public_booking_requires_confirmation}
+                  disabled={suspended}
+                  onChange={(v) => patch("public_booking_requires_confirmation", v)}
+                />
+                <Switch
+                  id="public_featured"
+                  label={t.hotel.settings.publicFeatured}
+                  checked={s.public_featured}
+                  disabled={suspended}
+                  onChange={(v) => patch("public_featured", v)}
+                />
+              </div>
+              <div className="form-grid" style={{ marginTop: "var(--space-4)" }}>
+                <FormField
+                  label={t.hotel.settings.publicSlug}
+                  htmlFor="public_slug"
+                  hint={t.hotel.settings.publicSlugHint}
+                >
+                  <Input
+                    id="public_slug"
+                    dir="ltr"
+                    value={s.public_slug ?? ""}
+                    disabled={suspended}
+                    onChange={(e) =>
+                      patch("public_slug", e.target.value === "" ? null : e.target.value)
+                    }
+                  />
+                </FormField>
+                <FormField label={t.hotel.settings.publicMinNights} htmlFor="public_min_nights">
+                  <Input
+                    id="public_min_nights"
+                    type="number"
+                    min="1"
+                    value={s.public_min_nights ?? ""}
+                    disabled={suspended}
+                    onChange={(e) =>
+                      patch(
+                        "public_min_nights",
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                  />
+                </FormField>
+                <FormField label={t.hotel.settings.publicMaxNights} htmlFor="public_max_nights">
+                  <Input
+                    id="public_max_nights"
+                    type="number"
+                    min="1"
+                    value={s.public_max_nights ?? ""}
+                    disabled={suspended}
+                    onChange={(e) =>
+                      patch(
+                        "public_max_nights",
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                  />
+                </FormField>
+                <FormField
+                  label={t.hotel.settings.publicTerms}
+                  htmlFor="public_terms_text"
+                  className="form-grid__full"
+                  hint={t.hotel.settings.publicTermsHint}
+                >
+                  <Textarea
+                    id="public_terms_text"
+                    value={s.public_terms_text}
+                    disabled={suspended}
+                    onChange={(e) => patch("public_terms_text", e.target.value)}
+                  />
+                </FormField>
               </div>
             </Card>
 

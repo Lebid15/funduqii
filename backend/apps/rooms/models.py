@@ -65,6 +65,19 @@ class RoomType(models.Model):
     )
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+
+    # --- Public website display (Phase 15) --------------------------------
+    # Capacity display reuses base/max_capacity (deliberate). `base_rate`
+    # stays the internal reference; `public_base_price` overrides it on the
+    # public site when set.
+    public_is_visible = models.BooleanField(default=False)
+    public_name = models.CharField(max_length=140, blank=True, default="")
+    public_description = models.TextField(blank=True, default="")
+    public_base_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    public_sort_order = models.IntegerField(default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

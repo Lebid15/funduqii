@@ -175,6 +175,10 @@ function RoomTypeModal({
   const [baseRate, setBaseRate] = useState("");
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [publicVisible, setPublicVisible] = useState(false);
+  const [publicName, setPublicName] = useState("");
+  const [publicDescription, setPublicDescription] = useState("");
+  const [publicBasePrice, setPublicBasePrice] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -189,6 +193,10 @@ function RoomTypeModal({
     setBaseRate(roomType?.base_rate ?? "");
     setDescription(roomType?.description ?? "");
     setIsActive(roomType?.is_active ?? true);
+    setPublicVisible(roomType?.public_is_visible ?? false);
+    setPublicName(roomType?.public_name ?? "");
+    setPublicDescription(roomType?.public_description ?? "");
+    setPublicBasePrice(roomType?.public_base_price ?? "");
     setError(null);
   }, [open, roomType]);
 
@@ -215,6 +223,10 @@ function RoomTypeModal({
       base_rate: baseRate === "" ? null : baseRate,
       description: description.trim(),
       is_active: isActive,
+      public_is_visible: publicVisible,
+      public_name: publicName.trim(),
+      public_description: publicDescription.trim(),
+      public_base_price: publicBasePrice === "" ? null : publicBasePrice,
     };
     setBusy(true);
     try {
@@ -270,6 +282,29 @@ function RoomTypeModal({
           <Textarea id="type-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
         </FormField>
         <Switch id="type-active" label={t.rooms.types.active} checked={isActive} onChange={setIsActive} />
+
+        {/* Phase 15 — what the public website shows for this type. */}
+        <Switch
+          id="type-public-visible"
+          label={t.rooms.types.publicVisible}
+          checked={publicVisible}
+          onChange={setPublicVisible}
+        />
+        {publicVisible ? (
+          <>
+            <div className="form-grid">
+              <FormField label={t.rooms.types.publicName} htmlFor="type-public-name" hint={t.rooms.types.publicNameHint}>
+                <Input id="type-public-name" value={publicName} onChange={(e) => setPublicName(e.target.value)} />
+              </FormField>
+              <FormField label={t.rooms.types.publicPrice} htmlFor="type-public-price" hint={t.rooms.types.publicPriceHint}>
+                <Input id="type-public-price" type="number" min="0" step="0.01" value={publicBasePrice} onChange={(e) => setPublicBasePrice(e.target.value)} />
+              </FormField>
+            </div>
+            <FormField label={t.rooms.types.publicDescription} htmlFor="type-public-desc">
+              <Textarea id="type-public-desc" value={publicDescription} onChange={(e) => setPublicDescription(e.target.value)} />
+            </FormField>
+          </>
+        ) : null}
       </form>
     </Modal>
   );

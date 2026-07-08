@@ -102,6 +102,10 @@ class ReservationSerializer(serializers.ModelSerializer):
             "cancellation_reason",
             "cancelled_at",
             "hold_expires_at",
+            # Phase 15: the hotel sees a public booking's cancel request; the
+            # manage-token HASH is deliberately never serialized.
+            "public_cancel_requested_at",
+            "public_cancel_reason",
             "created_by",
             "created_at",
             "updated_at",

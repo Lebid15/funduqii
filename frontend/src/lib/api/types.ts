@@ -221,6 +221,14 @@ export interface HotelSettings {
   allow_public_booking: boolean;
   require_guest_phone: boolean;
   require_guest_document: boolean;
+  public_is_listed: boolean;
+  public_slug: string | null;
+  public_booking_requires_confirmation: boolean;
+  public_min_nights: number | null;
+  public_max_nights: number | null;
+  public_terms_text: string;
+  public_sort_order: number;
+  public_featured: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -283,6 +291,11 @@ export interface RoomType {
   base_rate: string | null;
   is_active: boolean;
   sort_order: number;
+  public_is_visible: boolean;
+  public_name: string;
+  public_description: string;
+  public_base_price: string | null;
+  public_sort_order: number;
   room_count: number;
   created_at: string;
   updated_at: string;
@@ -313,7 +326,12 @@ export interface Room {
  * ======================================================================== */
 
 export type ReservationStatus = "held" | "confirmed" | "cancelled" | "expired";
-export type ReservationSource = "direct" | "phone" | "walk_in" | "other";
+export type ReservationSource =
+  | "direct"
+  | "phone"
+  | "walk_in"
+  | "public_website"
+  | "other";
 
 export interface ReservationLine {
   id: number;
@@ -360,6 +378,8 @@ export interface Reservation {
   cancellation_reason: string;
   cancelled_at: string | null;
   hold_expires_at: string | null;
+  public_cancel_requested_at: string | null;
+  public_cancel_reason: string;
   created_by: string | null;
   created_at: string;
   updated_at: string;

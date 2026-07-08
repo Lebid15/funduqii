@@ -1306,3 +1306,57 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #13 (commit `214c9fa` على `origin/main@3ab3646`، mergeable_state: clean، backend 593/593، frontend lint/typecheck/build ناجحة، `/hotel/notifications` مبني، والبنود الـ30 المقبولة رسميًا في رسالة الاعتماد — مع ملاحظة المالك غير المانعة: تقرير التنفيذ ذكر 13 نوع حدث والمراجعة النهائية أثبتت 14 نوعًا مطابقًا للقائمة المطلوبة، فرق لصالح التنفيذ).
 - ملاحظة الاعتماد: «تم اعتماد Phase 14 بعد Final Acceptance Review. المرحلة أضافت مركز إشعارات داخلي وسجل نشاط تشغيلي مبسط عبر ActivityEvent وNotification وترقيم ACT/NTF، مع NotificationBell في Topbar، وصفحة /hotel/notifications، ومنطق recipients يحترم الصلاحيات والعضوية النشطة. تم تأمين metadata_json من الأسرار، وحصر related_url بالمسارات الداخلية، ومنع رؤية إشعارات الغير، وحماية activity visibility. تم ربط 14 نوع حدث داخليًا دون كسر التدفقات الأصلية. لا WhatsApp، لا Email، لا SMS، لا Push، لا Chat، لا public messaging، ولا Phase 15.»
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 15 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 15 — Public Website + Public Booking
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09 · تاريخ الاعتماد: 2026-07-09
+- الهدف: موقع عام يرى فيه الزائر الفنادق **المنشورة** ويحجز **بلا دفع وبلا حساب عميل** — ويصل الحجز إلى كونسول الحجوزات القائم نفسه.
+- الأساس: بُنيت من **`origin/main`** (ac3472a، بعد دمج Phase 14 عبر PR #13).
+
+### ما نُفّذ (Backend)
+- **قرار إعادة الاستخدام أولًا (موثّق):** حقول العرض العام موجودة أصلًا في `HotelSettings` من Phase 4 (الاسم/الوصف/النجوم/العملة/التواصل/الموقع/أوقات الدخول والخروج/سياسة الإلغاء) و`HotelMedia` (شعار/غلاف/معرض) — **لم تُنسخ**؛ أُضيف فقط ما لم يكن موجودًا: **`HotelSettings` +8** (`public_is_listed` · `public_slug` فريد · `public_booking_requires_confirmation` افتراضي true · `public_min_nights`/`public_max_nights` · `public_terms_text` · `public_sort_order` · `public_featured`) — و`allow_public_booking` (Phase 4) هو مفتاح الحجز. **`RoomType` +5** (`public_is_visible` · `public_name` · `public_description` · `public_base_price` · `public_sort_order` — بfallback للاسم/الوصف/السعر الداخلي). **`Reservation` +4 + مصدر جديد** (`ReservationSource.PUBLIC_WEBSITE` · `public_manage_token_hash` · `public_manage_token_created_at` · `public_cancel_requested_at` · `public_cancel_reason`).
+- **تطبيق مستقل `apps/public_site`** تحت **`/api/v1/public/`** — مجهول الهوية بالكامل (`authentication_classes=[]` + `AllowAny`) خلف **Throttling بنطاقين**: `public` (300/دقيقة) للقراءة و`public_booking` (60/ساعة) للكتابة.
+- **العرض العام**: قائمة الفنادق المنشورة فقط (ACTIVE + مدرج + slug، ببحث q/city/country وسقف)، تفاصيل الفندق (هوية/سياسات/شروط/معرض/أنواع الغرف المرئية فقط) — **لا يتسرب شيء داخلي أبدًا**: لا موظفون ولا مالية ولا فوليو ولا ملاحظات داخلية ولا أرقام غرف ولا فنادق أخرى (اختبارات صريحة).
+- **التوفر عبر المحرك نفسه**: `AvailabilityService.availability_for_type` من Phase 6 — **أعداد فقط** لكل نوع مرئي، مع تحقق تواريخ عام (لا ماضٍ، ≤366 يومًا، حدود min/max nights).
+- **الحجز العام عبر `create_reservation` الداخلي نفسه** (Overbooking مستحيل تجاوزه — 409 `no_availability` كالكونسول تمامًا): **`booking_kind=future` دائمًا** (لا check-in تلقائي أبدًا)، الحالة الافتراضية **`held` بحجز 72 ساعة موثّق** (`PUBLIC_HOLD_HOURS`؛ `confirmed` فقط إذا عطّل الفندق التأكيد)، قناة `Funduqii Public`، سقوف 5 غرف/20 ضيفًا/طلبًا، **لا Payment ولا Invoice ولا Folio ولا Stay** (اختبار صريح). خطاف Phase 14 `reservation.created` يعمل تلقائيًا — إشعار الطاقم **بصفر كود جديد**.
+- **رمز الإدارة (Manage token)**: `secrets.token_urlsafe(32)` يُعرض للزائر **مرة واحدة فقط** في استجابة الإنشاء؛ يُخزَّن **SHA-256 فقط**؛ المقارنة بـ`hmac.compare_digest`؛ **مرجع خاطئ ورمز خاطئ = 404 واحد لا يُفرَّق** (لا Enumeration oracle).
+- **طلب الإلغاء طلبٌ فقط**: يختم `public_cancel_requested_at` + السبب (idempotent — الطلب الأول يثبت) و**لا يلغي ولا يفرّغ ولا يحذف شيئًا أبدًا** — الفندق يقرر عبر سير عمل Phase 6 القائم.
+- **العزل**: فندق غير مدرج/معلّق = 404 في كل شيء؛ حجز معطّل = 403؛ نوع غرفة مخفي/من فندق آخر = 404 (اختبارات لكلٍّ).
+- Migrations: `hotels.0002` · `rooms.0002` · `reservations.0004`.
+
+### ما نُفّذ (Frontend)
+- **BFF عام بلا جلسة**: `app/api/public/[...path]/route.ts` → Django `/api/v1/public/...` (GET/POST فقط، بلا كوكيز ولا توكنات) + `lib/api/public.ts`.
+- **الصفحات العامة**: **`/`** صفحة رئيسية عامة (بدل التحويل القديم — مع إبقاء رابطي تسجيل الدخول و«تجربة مجانية») · **`/hotels`** دليل ببحث · **`/hotels/[slug]`** ملف الفندق + فحص التوفر + **نموذج الحجز** (تواريخ → أعداد حية → بيانات الضيف → موافقة على الشروط → مرجع + رمز لمرة واحدة مع تحذير حفظ ونسخ) · **`/booking/manage`** (مرجع + رمز → عرض الحالة + طلب إلغاء).
+- **مكونات `components/public/`** (`PublicShell` · `PublicHotelCard` · `PublicBookingPanel`) من عناصر UI المركزية فقط + قسم CSS واحد في `globals.css` بالتوكنات حصرًا.
+- **جانب الفندق**: قسم **«الموقع العام»** في صفحة الإعدادات (إدراج/slug/مفتاح الحجز — نُقل إليه من قسم الافتراضيات/تأكيد إلزامي/مميز/حدود الليالي/الشروط) · حقول عامة في مودال نوع الغرفة (ظهور/اسم/وصف/سعر) · تسمية مصدر `public_website` في الحجوزات (**عرضًا فقط — ليست خيارًا في نموذج الإنشاء**) · **بانر تحذيري لطلب الإلغاء** في تفاصيل الحجز (الوقت + السبب) · **hash الرمز لا يُسلسَل للكونسول أبدًا**.
+- **i18n**: namespace جديد `public` كامل + مفاتيح الإعدادات/أنواع الغرف/الحجوزات — تكافؤ **1761=1761=1761** (ar/en/tr) + RTL/LTR على كل الصفحات العامة.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/public_site/{__init__,apps,services,views,urls,tests}.py` + migrations `hotels.0002`/`rooms.0002`/`reservations.0004` · **جديدة (Frontend):** `app/api/public/[...path]/route.ts` · `app/hotels/page.tsx` · `app/hotels/[slug]/page.tsx` · `app/booking/manage/page.tsx` · `components/public/{PublicShell,PublicHotelCard,PublicBookingPanel}.tsx` · `lib/api/public.ts` · والوثيقة `docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/hotels/models.py` · `apps/rooms/{models,serializers}.py` · `apps/reservations/{models,serializers}.py` · `config/settings/base.py` (throttle rates) · `config/urls.py`.
+- **معدّلة (Frontend):** `app/page.tsx` (صفحة عامة بدل redirect) · `app/hotel/settings/page.tsx` · `components/hotel/rooms/RoomTypesTab.tsx` · `components/hotel/reservations/ReservationsTab.tsx` · `lib/api/{types,rooms}.ts` · `styles/globals.css` · قواميس ar/en/tr · التوثيق (README، DEVELOPMENT_RULES §8l، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **633/633 OK** (593 سابقة + 40 لـ public_site) — انحدار صفر |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (المسارات `/`، `/hotels`، `/hotels/[slug]`، `/booking/manage`، `/api/public/[...path]` مبنية) |
+| فحص حيّ End-to-End (عبر BFF العام) | ✅ **22/22**: نشر Ops Hotel 10 من الإعدادات → ظهر في القائمة والتفاصيل (بلا أي تسرب داخلي) → توفر 2 → حجز عام 201 (**R00001**، `held` + رمز لمرة واحدة) → التوفر هبط إلى 1 → إدارة بالرمز الصحيح 200 · رمز خاطئ 404 · مرجع خاطئ 404 (متطابقان) → طلب إلغاء ✓ → الكونسول رأى `source=public_website` + السبب (**بلا hash**) → تأكيد عبر سير العمل القائم → الزائر رأى `confirmed` → Overbooking **409** · حجب الحجز **403** · إلغاء الإدراج أخفى الفندق (قائمة 0 + 404) → **لا فوليو/دفعة/فاتورة** أُنشئت — والصفحات الأربع تعرض 200 |
+
+### ملاحظات وقرارات
+- مدة الحجز المعلّق **72 ساعة** (`PUBLIC_HOLD_HOURS`) — قرار موثّق في الوثيقة الاستراتيجية؛ دلالات انتهاء `held` من Phase 6 تسري كما هي.
+- مفتاح `allow_public_booking` (من Phase 4) نُقل في واجهة الإعدادات إلى قسم «الموقع العام» الجديد لتجميع كل مفاتيح النشر في مكان واحد (بلا تغيير في الـ API).
+- تسمية `public_website` أُضيفت لقواميس المصادر **عرضًا فقط**؛ خيارات نموذج الإنشاء الداخلي بقيت بلا تغيير (direct/phone/walk_in/other).
+- إصلاح عرضي: سطرا README وdocs/README من Phase 14 كانا يقولان «13 نوع حدث» — صُحّحا إلى 14 وفق ملاحظة اعتماد المالك (فرق لصالح التنفيذ).
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا بوابة دفع/Stripe/PayPal · لا حسابات عملاء/تسجيل دخول للنزلاء · لا ولاء/كوبونات · لا Marketplace/SEO متقدم · لا مدونة · لا تقييمات/مراجعات · لا OTA/Channel manager · لا WhatsApp/Email/SMS/Push/Chat · لا طلبات خدمات عامة/QR menu.** **لم تبدأ Phase 16.**
+
+### الاعتماد
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #14 (commit `1940972` على `origin/main@ac3472a`، mergeable_state: clean، backend 633/633، frontend lint/typecheck/build ناجحة، والبنود الـ44 المقبولة رسميًا في رسالة الاعتماد — مع الملاحظتين غير المانعتين: تصحيح 13→14 نوع حدث توثيقي متوافق مع اعتماد Phase 14، وwarnings ترقيم صفحات ServiceOrder سابقة للمرحلة).
+- ملاحظة الاعتماد: «تم اعتماد Phase 15 بعد Final Acceptance Review. المرحلة أضافت الموقع العام والحجز العام الأساسي عبر public APIs تحت /api/v1/public/، مع قائمة فنادق منشورة، صفحة فندق عامة، فحص توفر باستخدام AvailabilityService، إنشاء حجز عام مدمج مع Reservation الحالي، وإدارة حجز عامة عبر reference + manage token آمن مخزن hash فقط. الحجز العام يمنع overbooking، ويستخدم booking_kind=future، والحالة الافتراضية held مع hold_expires_at = 72h، ولا ينشئ Payment أو Invoice أو Folio أو Stay. تم منع تسريب البيانات الداخلية وحماية public_manage_token_hash، وربط الحجز العام بكونسول الفندق بأمان. لا Payment Gateway، لا Customer Accounts، لا WhatsApp/Email/SMS/Push/Chat، لا OTA/Channel Manager، لا Marketplace advanced، ولا Phase 16.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 16 لا تبدأ إلا برسالتها الرسمية.**

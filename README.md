@@ -4,29 +4,31 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 14 — Notifications + Activity Center (pending review).**
+> **Current status: Phase 15 — Public Website + Public Booking (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
 > check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
-> orders), Phase 10 (housekeeping + maintenance + lost & found) and Phase 11
-> (staff + flexible permissions), Phase 12 (shifts + handover + daily close)
-> and Phase 13 (read-only reports & analytics). Phase 14 adds the **in-app
-> notifications + activity center**: domain services record
-> **ActivityEvent**s (`ACT00001`, a simplified operational feed — NOT a
-> legal audit log) through ONE central service which fans out
-> **Notification**s (`NTF00001`) to permission-matched recipients only
-> (managers + section viewers; never the actor, a deactivated member or
-> another hotel). 13 event types are wired across reservations, stays,
-> finance, services, operations, shifts and staff. Recipients get a private
-> inbox (read / mark-all / archive), managers a permission-scoped activity
-> center; metadata is scrubbed of secrets and related URLs are internal-only.
-> Console at `/hotel/notifications` (Overview / Notifications / Activity)
-> plus a one-shot unread badge in the topbar (no realtime, no polling),
-> guarded by `notifications.*` / `activity.*`.
-> **No WhatsApp, no email, no SMS, no push, no chat, no public messaging,
-> no legal audit log** — in-app only, deliberately.
+> orders), Phase 10 (housekeeping + maintenance + lost & found), Phase 11
+> (staff + flexible permissions), Phase 12 (shifts + handover + daily close),
+> Phase 13 (read-only reports & analytics) and Phase 14 (in-app notifications
+> + activity center, 14 wired event types). Phase 15 adds the **public
+> website**: visitors browse **published** hotels (`public_is_listed` +
+> `public_slug`), see publicly visible room types, check availability through
+> the SAME engine as the console, and book **without payment and without a
+> customer account**. A public booking is always `booking_kind=future`
+> (never auto check-in), defaults to `held` with a documented **72h hold**,
+> and returns a reference plus a **one-time manage token** (only its SHA-256
+> is stored; wrong reference and wrong token are indistinguishable 404s).
+> The manage page shows status and takes a cancellation **request** — it
+> never voids or deletes. Hotels receive public bookings in the existing
+> reservations console (`source=public_website`) and confirm through the
+> existing workflow. Anonymous APIs live under `/api/v1/public/` behind
+> scoped throttling; suspended/unlisted hotels are hidden and nothing
+> internal (staff, finance, folios, notes, room numbers) is ever serialized.
+> **No payment gateway, no customer accounts, no OTA/channel manager, no
+> reviews, no external messaging** — deliberately.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -59,10 +61,11 @@ funduqii/
 │  ├─ apps/shifts/          # shifts + handover + daily close /api/v1/hotel/shifts/ (Phase 12)
 │  ├─ apps/reports/         # read-only reports & analytics /api/v1/hotel/reports/ (Phase 13)
 │  ├─ apps/notifications/   # in-app notifications + activity center /api/v1/hotel/notifications/ (Phase 14)
+│  ├─ apps/public_site/     # anonymous public website + booking /api/v1/public/ (Phase 15)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
-│     ├─ app/               # routes: /login, /platform/*, BFF /api/session,/api/platform
+│     ├─ app/               # routes: public site (/,/hotels,/booking/manage), /login, /platform/*, /hotel/*, BFF /api/session,/api/platform,/api/hotel,/api/public
 │     ├─ components/        # central UI library + layout (AppShell/Sidebar/Topbar)
 │     ├─ lib/               # api client, session (BFF), i18n (ar/en/tr), format
 │     └─ styles/            # design tokens + global component styles
@@ -520,11 +523,33 @@ A suspended hotel may read AND mark read/archive (user-state only).
 | `GET .../unread-count/` | One-shot badge count for the topbar bell (no polling) |
 | `GET .../activity/` · `GET .../activity/{id}/` | The activity feed: everything for managers / `activity.view_all`; otherwise the caller's permission categories plus events they acted in or were targeted by |
 
-13 event types are wired (reservations created/cancelled, check-in/out,
+14 event types are wired (reservations created/cancelled, check-in/out,
 payment recorded/voided, service posting, housekeeping/maintenance
 created+done, shift closed, daily close, staff permissions). Metadata is
 scrubbed of secret-looking keys; related URLs are internal paths only. See
 [docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md).
+
+### Public website endpoints (Phase 15)
+
+Under `/api/v1/public/` — **anonymous** (no auth, no hotel header) and
+throttled per scope (`public` 300/min, `public_booking` 60/hour). Only
+published hotels (`ACTIVE` + `public_is_listed` + slug) are ever visible;
+suspended/unlisted hotels are 404. Nothing internal (staff, finance, folios,
+internal notes, room numbers) is serialized. No payment and no customer-auth
+endpoints exist.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/public/hotels/` | Published hotels (search `q`/`city`/`country`, capped) |
+| `GET .../hotels/{slug}/` | Public profile: media, policies, terms, visible room types |
+| `GET .../hotels/{slug}/availability/?check_in&check_out` | Per-type available COUNTS via the internal engine — never room numbers |
+| `POST .../hotels/{slug}/bookings/` | Create a public booking (no payment, no account): `held` + 72h hold by default, `booking_kind=future` always, overbooking → 409; returns reference + ONE-TIME manage token (SHA-256 stored) |
+| `GET .../bookings/{reference}/?token=…` | Manage view (token-gated; wrong ref and wrong token are the same 404) |
+| `POST .../bookings/{reference}/cancel-request/` | Cancellation REQUEST (idempotent) — never voids or deletes; staff decide in the console |
+
+Public pages: `/`, `/hotels`, `/hotels/[slug]`, `/booking/manage` through the
+auth-less BFF passthrough `/api/public/*`. See
+[docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md](docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

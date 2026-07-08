@@ -72,6 +72,11 @@ export type RoomTypeWriteBody = Partial<
     | "base_rate"
     | "is_active"
     | "sort_order"
+    | "public_is_visible"
+    | "public_name"
+    | "public_description"
+    | "public_base_price"
+    | "public_sort_order"
   >
 >;
 
