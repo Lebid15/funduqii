@@ -82,3 +82,7 @@ maps, etc.) will be added here as the project progresses through its phases.
 ## Phase 11 — Staff + Permissions Management UI
 
 - [STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md) — why there are no fixed roles (grants are the single source of truth; job_title is descriptive only), the staff lifecycle (create/link/deactivate with last-manager protection), the permissions matrix with the anti-escalation guard, the permission-aware sidebar + route guard, and what is deferred (shifts/attendance/payroll/HR/email invitations/presets).
+
+## Phase 12 — Shifts + Handover + Daily Close
+
+- [SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md) — why this is a daily-work organizer and not attendance/payroll, the shift cash drawer (FK attachment inside the finance services; expected-cash math; difference-needs-reason), handover workflow with the recipient guard, the business date, the daily-close snapshot + the safe lock boundaries (voids stay allowed), and what is deferred (attendance/payroll/HR/scheduling/night audit/reopen/reports).

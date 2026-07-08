@@ -246,6 +246,63 @@ class ManagerPermissionsNotEditable(FunduqiiAPIException):
     default_code = "manager_permissions_not_editable"
 
 
+# --- Shifts / handover / daily close (Phase 12) ------------------------------
+
+
+class ShiftAlreadyOpen(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This user already has an open shift in this hotel."
+    default_code = "shift_already_open"
+
+
+class ShiftNotOpen(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This operation requires an open shift."
+    default_code = "shift_not_open"
+
+
+class CashDifferenceReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required when the counted cash differs from the expected amount."
+    default_code = "cash_difference_reason_required"
+
+
+class HandoverNotRecipient(FunduqiiAPIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "Only the designated recipient (or a manager) can act on this handover."
+    default_code = "handover_not_recipient"
+
+
+class RejectionReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to reject this handover."
+    default_code = "rejection_reason_required"
+
+
+class BusinessDayClosed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This business date has been closed; new dated activity is not allowed."
+    default_code = "business_day_closed"
+
+
+class DayAlreadyClosed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This business date is already closed."
+    default_code = "day_already_closed"
+
+
+class OpenShiftsPreventClose(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The day cannot be closed while shifts for this date are still open."
+    default_code = "open_shifts_prevent_close"
+
+
+class PendingHandoversPreventClose(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The day cannot be closed while submitted handovers are unresolved."
+    default_code = "pending_handovers_prevent_close"
+
+
 # --- Reservations & availability (Phase 6) ---------------------------------
 
 

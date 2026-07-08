@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/v1/hotel/", include("apps.services.urls")),
     path("api/v1/hotel/", include("apps.operations.urls")),
     path("api/v1/hotel/", include("apps.staff.urls")),
+    path("api/v1/hotel/", include("apps.shifts.urls")),
 ]
 
 # Serve uploaded media in development only. In production the media files are

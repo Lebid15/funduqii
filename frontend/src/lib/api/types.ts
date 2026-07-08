@@ -1053,3 +1053,158 @@ export interface StaffOverview {
   staff_with_permissions: number;
   staff_without_permissions: number;
 }
+
+/* ==========================================================================
+ * Phase 12 — Shifts / handover / daily close DTOs (mirror /api/v1/hotel/shifts/).
+ * ======================================================================== */
+
+export type ShiftStatus = "open" | "closing" | "closed" | "cancelled";
+export type HandoverStatus =
+  | "draft"
+  | "submitted"
+  | "accepted"
+  | "rejected"
+  | "cancelled";
+export type DailyCloseStatus = "draft" | "closed" | "reopened";
+
+export interface ShiftListItem {
+  id: number;
+  shift_number: string;
+  business_date: string;
+  status: ShiftStatus;
+  responsible_user: number;
+  responsible_name: string;
+  opened_at: string;
+  closed_at: string | null;
+  opening_cash_amount: string;
+  expected_cash_amount: string;
+  actual_cash_amount: string | null;
+  cash_difference: string;
+}
+
+export interface Shift extends ShiftListItem {
+  opened_by: number | null;
+  opened_by_name: string;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  difference_reason: string;
+  opening_notes: string;
+  closing_notes: string;
+  internal_notes: string;
+  status_logs: OperationStatusLogEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShiftCashSummary {
+  opening_cash: string;
+  cash_payments_total: string;
+  cash_expenses_total: string;
+  expected_cash: string;
+  payments_count: number;
+  expenses_count: number;
+  payments_by_method: Record<string, { count: number; total: string }>;
+  expenses_by_method: Record<string, { count: number; total: string }>;
+}
+
+export interface UnassignedMovements {
+  payments_count: number;
+  payments_total: string;
+  expenses_count: number;
+  expenses_total: string;
+}
+
+export interface ShiftsOverview {
+  business_date: string;
+  open_shifts: number;
+  today_shifts: number;
+  pending_handovers: number;
+  last_daily_close_date: string | null;
+  today_cash_expected: string;
+  today_cash_actual: string;
+  unassigned_movements: UnassignedMovements;
+  today_close_status: DailyCloseStatus | null;
+}
+
+export interface ShiftHandoverListItem {
+  id: number;
+  handover_number: string;
+  from_shift: number;
+  from_shift_number: string;
+  to_user: number;
+  to_user_name: string;
+  status: HandoverStatus;
+  created_by_name: string;
+  submitted_at: string | null;
+  accepted_at: string | null;
+  created_at: string;
+}
+
+export interface ShiftHandover extends ShiftHandoverListItem {
+  rejected_at: string | null;
+  cancelled_at: string | null;
+  rejection_reason: string;
+  cancellation_reason: string;
+  summary_notes: string;
+  pending_tasks_notes: string;
+  cash_notes: string;
+  guest_notes: string;
+  maintenance_notes: string;
+  lost_found_notes: string;
+  status_logs: OperationStatusLogEntry[];
+  updated_at: string;
+}
+
+export interface DailyCloseTotals {
+  payments_total: string;
+  payments_cash_total: string;
+  expenses_total: string;
+  expenses_cash_total: string;
+  service_postings_total: string;
+  shifts_count: number;
+  open_shifts_count: number;
+}
+
+export interface DailyCloseSnapshot {
+  business_date: string;
+  payments: { count: number; total: string; cash_total: string; voided_count: number };
+  expenses: { count: number; total: string; cash_total: string; voided_count: number };
+  service_postings: { count: number; total: string };
+  stays: { arrivals: number; departures: number };
+  shifts: Array<{
+    shift_number: string;
+    status: ShiftStatus;
+    responsible: string;
+    opening_cash: string;
+    expected_cash: string;
+    actual_cash: string | null;
+    cash_difference: string;
+  }>;
+  pending_handovers: number;
+  unassigned_movements: UnassignedMovements;
+}
+
+export interface DailyClose {
+  id: number;
+  close_number: string;
+  business_date: string;
+  status: DailyCloseStatus;
+  closed_by: number | null;
+  closed_by_name: string;
+  closed_at: string | null;
+  notes: string;
+  snapshot_json: DailyCloseSnapshot;
+  totals_json: DailyCloseTotals;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyCloseListItem {
+  id: number;
+  close_number: string;
+  business_date: string;
+  status: DailyCloseStatus;
+  closed_by_name: string;
+  closed_at: string | null;
+  totals_json: DailyCloseTotals;
+}

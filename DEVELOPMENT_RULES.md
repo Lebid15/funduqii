@@ -199,6 +199,28 @@ these rules is a defect, not a shortcut.
   outside the system).
 - Full rules: [docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md).
 
+### 8i. Shifts, handover & daily close (from Phase 12)
+- **Shifts never write money.** Payments/expenses attach to the creator's
+  open shift INSIDE `apps/finance/services`; `apps/shifts` only reads them.
+  A missing shift never blocks a financial operation — the movement becomes a
+  reported "unassigned movement", never hidden.
+- **The drawer math is server-owned.** `expected_cash` = opening float +
+  POSTED cash payments − POSTED cash expenses of the shift; non-cash methods
+  are informational; voided records are excluded. Closing with a difference
+  REQUIRES a reason; one open shift per user per hotel is DB-enforced.
+- **A closed business day locks NEW dated activity** (payment/expense
+  creation, service-order posting, shift operations) through the central
+  services — it never deletes or rewrites history. Finance VOIDS stay
+  allowed after the close by design: void-with-reason is the official
+  correction path. Reopening a closed day is deliberately not built.
+- **The daily-close snapshot documents; it is never financial truth.**
+  Closing requires every shift of the date closed/cancelled and every
+  submitted handover resolved, and a date can be closed exactly once.
+- **Handovers**: accept/reject only by the designated recipient or a manager;
+  reject/cancel need a reason; accepted handovers are frozen. No attendance,
+  no payroll, no scheduling anywhere in this domain.
+- Full rules: [docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

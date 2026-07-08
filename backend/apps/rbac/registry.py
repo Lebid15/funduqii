@@ -88,7 +88,20 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     ],
     "reports": ["view"],
     "settings": ["view", "update"],
-    "daily_close": ["view", "run"],
+    # Shifts + handover (Phase 12).
+    "shifts": [
+        "view",
+        "create",
+        "update",
+        "close",
+        "cancel",
+        "handover",
+        "accept_handover",
+    ],
+    # Daily close (Phase 12). `run` is a vestigial blueprint code and NOT
+    # used; `reopen` is registered for the future — reopening a closed day is
+    # deliberately not built in Phase 12 (documented).
+    "daily_close": ["view", "prepare", "close", "reopen", "run"],
 }
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(

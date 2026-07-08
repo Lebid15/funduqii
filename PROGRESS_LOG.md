@@ -1151,3 +1151,57 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #10 (commit `9e9681d` على `origin/main@1f7d97a`، mergeable_state: clean، backend 464/464، frontend lint/typecheck/build ناجحة، `/hotel/staff` مبني، والبنود الـ24 المقبولة رسميًا في رسالة الاعتماد).
 - ملاحظة الاعتماد: «تم اعتماد Phase 11 بعد Final Acceptance Review. المرحلة أضافت واجهة إدارة الموظفين والصلاحيات المرنة اعتمادًا على HotelMembership و HotelPermissionGrant و permission registry، بدون أدوار ثابتة تتحكم بالوصول. job_title وصفي فقط، والصلاحيات هي مصدر الحقيقة. تم تفعيل staff APIs، permission registry، permissions matrix، my-permissions، HotelAccessProvider، HotelRouteGuard، واحترام السايدبار للصلاحيات. تم اختبار منع التصعيد، حماية آخر manager، منع وصول staff المعطّل، tenant isolation، وhotel suspended. لا Shifts، لا Payroll، لا Attendance، ولا Phase 12.»
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 12 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 12 — Shifts + Handover + Daily Close
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: 2026-07-08
+- الهدف: منظّم العمل اليومي — **ورديات بصندوق نقدي** (SH00001) و**تسليم وردية** (HO00001) و**إغلاق يوم تشغيلي** (DC00001) بقفل تأسيسي آمن — **ليس Attendance ولا Payroll ولا HR ولا نظام محاسبة كامل، ولا مصدر حقيقة مالية جديد** (سجلات Phase 8 تبقى المصدر الوحيد).
+- الأساس: بُنيت من **`origin/main`** (2a3de9a، بعد دمج Phase 11 عبر PR #10).
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/shifts`** (لا داخل finance/staff/operations) بوحدة خدمات واحدة هي مسار الكتابة الوحيد — **لا ينشئ ولا يعدّل أي سجل مالي**؛ الربط يحدث داخل `apps/finance/services` نفسها وهذا التطبيق يقرأ فقط.
+- **النماذج:** `Shift` (رقم فريد، business_date، مسؤول، افتتاحي/متوقع/فعلي/فرق، ملاحظات؛ **قيد DB: وردية مفتوحة واحدة لكل مستخدم لكل فندق**؛ أكثر من وردية مفتوحة للفندق مسموح — موثّق؛ حالة `closing` محجوزة غير مستخدمة لأن الإغلاق ذري — موثّق) · `ShiftHandover` (من وردية open/closed إلى عضو نشط؛ 6 خانات ملاحظات: ملخص/مهام معلقة/نقد/نزلاء/صيانة/مفقودات) · `DailyClose` (فريد لكل فندق+تاريخ؛ snapshot_json/totals_json توثيقية؛ حالة `reopened` وصلاحية `reopen` محجوزتان — **reopen غير مبني عمدًا وموثّق**) · **3 سجلات حالة خفيفة** · `ShiftsNumberSequence` (SH/HO/DC بقفل صف، منفصلة عن كل التسلسلات).
+- **ربط المال (FK لا snapshot — خيار المواصفة المفضل):** حقل `shift` nullable على Payment وExpense (هجرة finance.0003)؛ عند الإنشاء في خدمات المال، وردية المنشئ المفتوحة تُربط تلقائيًا؛ **غياب الوردية لا يكسر العملية** — تصبح **unassigned movement** معروضة بعدّها ومجموعها في overview/summary/اللقطة (لا تُخفى).
+- **حساب الصندوق (خادم فقط):** `expected_cash` = الافتتاحي + مدفوعات نقدية POSTED − مصروفات نقدية POSTED للوردية؛ غير النقدي معلوماتي بالطريقة؛ المبطل مستثنى؛ **فرق العد يتطلب سببًا** (`cash_difference_reason_required`)؛ إغلاق بقفل صف؛ **إلغاء وردية عليها حركات ممنوع** (تُغلق حسب الأصول)؛ المغلقة تاريخ لا يُعدَّل منه إلا `internal_notes`.
+- **business_date:** خدمة خلفية (`get_business_date`) بحسب timezone الفندق من HotelSettings عبر zoneinfo، وإلا timezone الخادم (موثّق)؛ تمرير التاريخ يدويًا **للمدير فقط** (وفتح وردية بالنيابة كذلك)؛ حدّ موثّق: مقارنات `paid_at__date` بتوقيت التخزين كتقريب في هذه المرحلة.
+- **التسليم:** `draft→submitted→accepted|rejected(بسبب)` + إلغاء (بسبب) من draft/submitted؛ **القبول/الرفض للمستلم أو المدير فقط** (`handover_not_recipient`) بعد بوابة `shifts.accept_handover`؛ المقبول مجمّد؛ `to_user` عضو نشط من نفس الفندق.
+- **إغلاق اليوم:** `prepare` ينشئ/يحدّث DRAFT بلقطة حديثة (idempotent، لا يقفل شيئًا)؛ `close` يتحقق — **لا ورديات مفتوحة للتاريخ** (`open_shifts_prevent_close`) و**لا تسليمات submitted غير محسومة** (`pending_handovers_prevent_close`) و**مرة واحدة فقط** (`day_already_closed`) — ثم يخزّن اللقطة النهائية (مدفوعات/مصروفات بعدد وإجمالي ونقدي ومبطل، ترحيلات الخدمات، وصول/مغادرة، الورديات بفروقها، التسليمات المعلقة، غير المرتبط).
+- **قفل اليوم المغلق (عبر الخدمات المركزية حصرًا):** `ensure_business_day_open` تُستدعى من `finance.record_payment` و`finance.create_expense` (تاريخ paid_at) و`services.post_order_to_folio` (الترحيل الآن) وكل عمليات shifts/daily-close → `409 business_day_closed`. **حدود موثّقة:** الإبطال المالي يبقى مسموحًا بعد الإغلاق (مسار التصحيح الرسمي لقاعدة Phase 8: void بسبب لا delete)، ورسوم الفوليو/الفواتير خارج قفل هذه المرحلة (فوترة نزيل لا حركة صندوق يومية) — موثّق في الاستراتيجية.
+- **الصلاحيات:** قسم `shifts` جديد (view/create/update/close/cancel/handover/accept_handover) و`daily_close` اكتمل (view/prepare/close + reopen محجوزة + run vestigial — موثّق)؛ المدير يملك الكل؛ overview بأي من صلاحيتي العرض (فئة any-of — نمط Phase 10)؛ عزل كامل؛ **المعلّق قراءة فقط** (`hotel_suspended` لكل كتابة).
+- **أخطاء جديدة (9):** `shift_already_open` · `shift_not_open` · `cash_difference_reason_required` · `handover_not_recipient` · `rejection_reason_required` · `business_day_closed` · `day_already_closed` · `open_shifts_prevent_close` · `pending_handovers_prevent_close`.
+- **APIs تحت `/api/v1/hotel/shifts/`**: `overview/` · `current/` · الورديات (list/create بفلاتر حالة/تاريخ/مسؤول/بحث، detail/PATCH، close/cancel/summary) · التسليمات (list/create/detail/PATCH + submit/accept/reject/cancel) · `daily-close/` (list + prepare + close + detail بالتاريخ) — كلها paginated وبلا أي DELETE.
+
+### ما نُفّذ (Frontend)
+- عنصر **«الورديات»** في السايدبار (محكوم بـ `shifts.view|daily_close.view` في خريطة المسارات المركزية) ومسار **`/hotel/shifts`** بخمسة تبويبات: **نظرة عامة** (7 بطاقات: مفتوحة/اليوم/تسليمات معلقة/النقد المتوقع/غير المرتبط/آخر إغلاق/حالة اليوم) · **ورديتي الحالية** (فتح بمودال، ملخص صندوق حي، إغلاق بمودال يعرض المتوقع والفرق لحظيًا ويطلب السبب، تسليم مباشر) · **الورديات** (بحث/فلاتر، إغلاق من القائمة بجلب المتوقع أولًا، إلغاء بسبب، مودال ملخص بالطرق) · **التسليمات** (إنشاء باختيار وردية مفتوحة وعضو من قائمة Staff الحقيقية + 6 خانات ملاحظات؛ submit/accept بتأكيد/reject وcancel بسبب) · **إغلاق اليوم** (تاريخ + ملاحظات، **prepare** يعرض اللقطة كاملة قبل الإغلاق، **close** بـ ConfirmDialog وتحذير صريح، قائمة الأيام المغلقة).
+- مكونات مركزية فقط + tokens (**صفر CSS جديد**) + ترجمات **ar/en/tr كاملة** (namespace `shifts`، تكافؤ **1442=1442=1442**) + RTL/LTR + حالات موحّدة + responsive + ConfirmDialogs لكل الإجراءات الحساسة. لا localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/shifts/{__init__,apps,models,services,serializers,views,urls,tests}.py` + هجرتا `shifts.0001` و`finance.0003` · **جديدة (Frontend):** `app/hotel/shifts/page.tsx` · `components/hotel/shifts/{ShiftsPanel,OverviewTab,CurrentShiftTab,ShiftsTab,HandoversTab,DailyCloseTab}.tsx` · `lib/api/shifts.ts` · والوثيقة `docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/finance/models.py` (+FK shift على Payment/Expense) · `apps/finance/services.py` (قفل اليوم + auto-attach في record_payment/create_expense) · `apps/services/services.py` (قفل الترحيل) · `apps/common/exceptions.py` (+9) · `apps/rbac/registry.py` (+shifts، إكمال daily_close) · `config/settings/base.py` · `config/urls.py` · **حراس نطاق في 6 اختبارات قديمة** حُدِّثوا (كانوا يؤكدون غياب shifts/daily_closes «لم تُبنَ بعد» — أصبحت مبنية بأمر رسمي؛ صاروا يمنعون payroll/attendance) — مسجّل في buglog.
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/session/hotelRouteAccess.ts` · `lib/api/{types,errors}.ts` · `lib/format.ts` (+2 tone helpers) · قواميس ar/en/tr · التوثيق (README، DEVELOPMENT_RULES §8i، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **519/519 OK** (464 سابقة + 55 لـ shifts) — انحدار صفر للمراحل 2→11 |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/shifts` مبني) |
+| فحص حيّ End-to-End (عبر BFF) | ✅ فتح SH00001 بافتتاحي 100 → فتح ثانٍ لنفس المستخدم **409** → دفعة نقدية 50 عبر واجهة المال **التصقت تلقائيًا بالوردية** → المتوقع 150.00 → إغلاق بـ 140 بلا سبب **400** → بسبب: فرق −10.00 مسجّل → HO00001 → submit → إغلاق اليوم **409 open_shifts** ثم **409 pending_handovers** → قبول المستلمة بعد منحها `shifts.accept_handover` من مصفوفة Phase 11 (بوابة الصلاحية قبل حارس المستلم — بالتصميم) → دفعة 5.00 بلا وردية = **unassigned معروضة بصدق** → DC00001 مغلق بلقطة (مدفوعات 55.00 نقدًا، ورديتان بفروقهما، غير المرتبط 5.00) → إغلاق ثانٍ **409** → **القفل**: دفعة/مصروف/فتح وردية على اليوم المغلق كلها **409 business_day_closed** → التفاصيل بالتاريخ + الصفحة 200 |
+
+### ملاحظات وقرارات
+- FK بدل snapshot لربط المال (خيار المواصفة المفضل) — لا تكرار للمال كحقيقة ثانية؛ اللقطة توثيق فقط.
+- الإبطال المالي بعد إغلاق اليوم **يبقى مسموحًا عمدًا** — هو مسار التصحيح الرسمي (void بسبب، Phase 8)؛ ورسوم الفوليو/الفواتير خارج قفل هذه المرحلة — كلاهما موثّق.
+- `closing` و`reopened`/`daily_close.reopen` محجوزة غير مستخدمة (موثّقة) — لا تغيير مخطط عند بناء night-audit/reopen مستقبلًا.
+- تحديث حراس النطاق الستة هو التعديل الوحيد على اختبارات سابقة — مسجّل في buglog.
+- التنفيذ الموزّع بالوكلاء غير متاح (حدّ أسبوعي حتى 2026-07-09 مساءً) — نُفِّذت المرحلة مباشرة بنفس التغطية.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا Attendance/بصمة · لا Payroll/رواتب وعقود · لا HR · لا Staff scheduling · لا Night Audit متقدم · لا إقفال محاسبي نهائي · لا reopen لليوم المغلق · لا تقارير متقدمة · لا ضريبة متقدمة/دفتر أستاذ · لا Inventory/Purchasing/Suppliers · لا إشعارات/WhatsApp · لا Public booking/بوابة دفع.** **لم تبدأ Phase 13.**
+
+### الاعتماد
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #11 (commit `ca2530b` على `origin/main@2a3de9a`، mergeable_state: clean، backend 519/519، frontend lint/typecheck/build ناجحة، `/hotel/shifts` مبني، والبنود الـ28 المقبولة رسميًا في رسالة الاعتماد).
+- ملاحظة الاعتماد: «تم اعتماد Phase 12 بعد Final Acceptance Review. المرحلة أضافت نظام الورديات وتسليم الوردية وإغلاق اليوم التشغيلي، مع Shift وShiftHandover وDailyClose وسجلات حالة وترقيم SH/HO/DC. تم ربط Payment/Expense بالوردية المفتوحة تلقائيًا عند الإمكان، وحساب expected cash من الباكند، وعرض unassigned movements، وتطبيق daily close lock على العمليات الآمنة: payments، expenses، post-to-folio للخدمات، وعمليات الورديات. بقيت void/corrections مسموحة كمسار تصحيح رسمي حسب التوثيق. لا Attendance، لا Payroll، لا HR، لا advanced reports، لا Inventory، ولا Phase 13.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 13 لا تبدأ إلا برسالتها الرسمية.**

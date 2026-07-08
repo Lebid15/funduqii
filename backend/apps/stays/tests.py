@@ -417,7 +417,8 @@ class RegressionTests(APITestCase):
 
         tables = {m._meta.db_table for m in django_apps.get_models()}
         # Finance (Phase 8) is legitimate; restaurant/stock/public-booking are not.
-        for forbidden in ("restaurant_orders", "stock_items", "public_bookings", "daily_closes", "shifts"):
+        # (shifts/daily_closes became legitimate in Phase 12.)
+        for forbidden in ("restaurant_orders", "stock_items", "public_bookings", "payroll", "attendance_records"):
             self.assertNotIn(forbidden, tables)
         # Stays/guests ARE present now.
         self.assertIn("stays", tables)

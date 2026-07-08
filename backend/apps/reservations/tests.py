@@ -751,7 +751,8 @@ class RegressionTests(APITestCase):
         from django.apps import apps as django_apps
 
         tables = {m._meta.db_table for m in django_apps.get_models()}
-        for forbidden in ("restaurant_orders", "stock_items", "daily_closes", "shifts"):
+        # (shifts/daily_closes became legitimate in Phase 12.)
+        for forbidden in ("restaurant_orders", "stock_items", "payroll", "attendance_records"):
             self.assertNotIn(forbidden, tables)
 
     def test_no_checkin_checkout_endpoints(self):

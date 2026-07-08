@@ -4,6 +4,7 @@ import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
 import type {
   FolioStatus,
+  HandoverStatus,
   HotelStatus,
   HousekeepingStatus,
   InvoiceStatus,
@@ -14,6 +15,7 @@ import type {
   ReservationStatus,
   RoomStatus,
   ServiceOrderStatus,
+  ShiftStatus,
   StayStatus,
   SubscriptionStatus,
 } from "@/lib/api/types";
@@ -264,6 +266,37 @@ export function lostFoundStatusTone(status: LostFoundStatus): BadgeTone {
     case "returned":
       return "success";
     case "disposed":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function shiftStatusTone(status: ShiftStatus): BadgeTone {
+  switch (status) {
+    case "open":
+      return "success";
+    case "closing":
+      return "warning";
+    case "closed":
+      return "neutral";
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function handoverStatusTone(status: HandoverStatus): BadgeTone {
+  switch (status) {
+    case "draft":
+      return "neutral";
+    case "submitted":
+      return "warning";
+    case "accepted":
+      return "success";
+    case "rejected":
+    case "cancelled":
       return "danger";
     default:
       return "neutral";
