@@ -143,6 +143,20 @@ class CheckInService:
                 hotel=hotel, stay=stay, guest=companion, role=StayGuestRole.COMPANION
             )
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
+        # Phase 14: activity + notifications (lazy import).
+        from apps.notifications.services import record_activity
+
+        record_activity(
+            hotel,
+            event_type="stay.checked_in",
+            category="stay",
+            severity="success",
+            title=f"Check-in: room {room.number}",
+            message=f"{primary_guest.full_name} · {reservation.reservation_number}",
+            actor=user,
+            related_object=stay,
+            related_url="/hotel/front-desk",
+        )
         return stay
 
 
@@ -182,4 +196,17 @@ class CheckOutService:
 
         create_checkout_cleaning_task(stay, user=user)
         _log(stay, previous, StayStatus.CHECKED_OUT, note="checked out", user=user)
+        from apps.notifications.services import record_activity
+
+        record_activity(
+            stay.hotel,
+            event_type="stay.checked_out",
+            category="stay",
+            severity="info",
+            title=f"Check-out: room {stay.room.number}",
+            message=stay.primary_guest.full_name,
+            actor=user,
+            related_object=stay,
+            related_url="/hotel/front-desk",
+        )
         return stay

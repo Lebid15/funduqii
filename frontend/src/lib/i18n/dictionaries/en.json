@@ -1677,6 +1677,96 @@
       "dcClosedAt": "Closed at"
     }
   },
+  "notifications": {
+    "nav": "Notifications",
+    "title": "Notifications & activity",
+    "subtitle": "What needs your attention inside this hotel — no external channels.",
+    "bell": "Notifications",
+    "tabs": {
+      "overview": "Overview",
+      "inbox": "Notifications",
+      "activity": "Activity center"
+    },
+    "categories": {
+      "reservation": "Reservations",
+      "stay": "Front desk",
+      "guest": "Guests",
+      "room": "Rooms",
+      "finance": "Finance",
+      "service": "Services",
+      "operation": "Operations",
+      "shift": "Shifts",
+      "staff": "Staff",
+      "report": "Reports",
+      "system": "System"
+    },
+    "severities": {
+      "info": "Info",
+      "success": "Success",
+      "warning": "Warning",
+      "danger": "Danger"
+    },
+    "eventTypes": {
+      "reservation.created": "Reservation created",
+      "reservation.cancelled": "Reservation cancelled",
+      "stay.checked_in": "Check-in",
+      "stay.checked_out": "Check-out",
+      "payment.recorded": "Payment recorded",
+      "payment.voided": "Payment voided",
+      "service_order.posted_to_folio": "Order posted to folio",
+      "housekeeping.task_created": "Cleaning task created",
+      "housekeeping.task_completed": "Cleaning task completed",
+      "maintenance.request_created": "Maintenance request created",
+      "maintenance.request_resolved": "Maintenance request resolved",
+      "shift.closed": "Shift closed",
+      "daily_close.closed": "Business day closed",
+      "staff.permissions_updated": "Permissions updated"
+    },
+    "overview": {
+      "unread": "Unread",
+      "unreadHint": "Notifications waiting for you.",
+      "warnings": "Warnings",
+      "warningsHint": "Unread warning notifications.",
+      "dangers": "Critical",
+      "dangersHint": "Unread critical notifications.",
+      "today": "Today",
+      "todayHint": "Notifications received today.",
+      "archived": "Archived",
+      "archivedHint": "Archived notifications.",
+      "activityToday": "Activity today",
+      "activityTodayHint": "Events visible to you today."
+    },
+    "inbox": {
+      "title": "Your notifications",
+      "markRead": "Mark read",
+      "markAllRead": "Mark all read",
+      "archiveBtn": "Archive",
+      "open": "Open",
+      "showArchived": "Archived",
+      "onlyUnread": "Unread only",
+      "readMsg": "Marked as read.",
+      "allReadMsg": "All notifications marked as read.",
+      "archivedMsg": "Notification archived.",
+      "empty": "No notifications",
+      "emptyHint": "You are all caught up."
+    },
+    "activity": {
+      "title": "Activity center",
+      "actor": "By",
+      "target": "For",
+      "time": "Time",
+      "type": "Event",
+      "system": "System",
+      "empty": "No activity for these filters",
+      "emptyHint": "Try different filters."
+    },
+    "filters": {
+      "category": "Category",
+      "severity": "Severity",
+      "date": "Date",
+      "eventType": "Event type"
+    }
+  },
   "language": {
     "label": "Language",
     "ar": "العربية",

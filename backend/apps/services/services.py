@@ -307,4 +307,18 @@ def post_order_to_folio(order: ServiceOrder, *, user=None) -> ServiceOrder:
             "updated_by", "updated_at",
         ]
     )
+    # Phase 14: activity + notifications (lazy import).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        order.hotel,
+        event_type="service_order.posted_to_folio",
+        category="service",
+        severity="success",
+        title=f"Order {order.order_number} posted to folio",
+        message=f"{totals['total']} → {folio.folio_number}",
+        actor=user,
+        related_object=order,
+        related_url="/hotel/services",
+    )
     return order

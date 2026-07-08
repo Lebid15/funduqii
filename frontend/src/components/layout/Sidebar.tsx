@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   BedDouble,
+  Bell,
   Building2,
   CalendarCheck,
   ClipboardList,
@@ -72,6 +73,7 @@ export function Sidebar({
     { href: "/hotel/staff", label: t.staff.nav, icon: UserCog },
     { href: "/hotel/shifts", label: t.shifts.nav, icon: Clock },
     { href: "/hotel/reports", label: t.reports.nav, icon: BarChart3 },
+    { href: "/hotel/notifications", label: t.notifications.nav, icon: Bell },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];

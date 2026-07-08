@@ -276,6 +276,22 @@ def close_shift(
     shift.updated_by = _actor(user)
     shift.save()
     _shift_log(shift, ShiftStatus.OPEN, ShiftStatus.CLOSED, user, shift.difference_reason)
+    # Phase 14: activity + notifications (lazy import).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        shift.hotel,
+        event_type="shift.closed",
+        category="shift",
+        severity="warning" if difference != ZERO else "success",
+        title=f"Shift {shift.shift_number} closed",
+        message=(
+            f"Expected {expected} · counted {actual} · difference {difference}"
+        ),
+        actor=user,
+        related_object=shift,
+        related_url="/hotel/shifts",
+    )
     return shift
 
 
@@ -608,4 +624,17 @@ def close_business_day(hotel, business_date, *, user=None, notes="") -> DailyClo
         close.notes = notes
     close.save(update_fields=["status", "closed_by", "closed_at", "notes", "updated_at"])
     _dc_log(close, DailyCloseStatus.DRAFT, DailyCloseStatus.CLOSED, user, notes)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="daily_close.closed",
+        category="shift",
+        severity="success",
+        title=f"Business day {business_date} closed ({close.close_number})",
+        message=notes or "",
+        actor=user,
+        related_object=close,
+        related_url="/hotel/shifts",
+    )
     return close

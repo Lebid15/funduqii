@@ -233,7 +233,7 @@ def record_payment(folio, *, amount, method, paid_at=None, payer_name="",
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
     paid_at = paid_at or timezone.now()
     shift = _shift_context(folio.hotel, user, paid_at)
-    return Payment.objects.create(
+    payment = Payment.objects.create(
         hotel=folio.hotel,
         folio=folio,
         receipt_number=next_number(folio.hotel, NumberKind.RECEIPT),
@@ -247,6 +247,21 @@ def record_payment(folio, *, amount, method, paid_at=None, payer_name="",
         notes=notes or "",
         created_by=_actor(user),
     )
+    # Phase 14: activity + notifications (lazy import).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        folio.hotel,
+        event_type="payment.recorded",
+        category="finance",
+        severity="success",
+        title=f"Payment {payment.receipt_number} recorded",
+        message=f"{payment.amount} {payment.currency} · {payment.method} · {folio.folio_number}",
+        actor=user,
+        related_object=payment,
+        related_url="/hotel/finance",
+    )
+    return payment
 
 
 @transaction.atomic
@@ -260,6 +275,19 @@ def void_payment(payment, *, reason, user=None) -> Payment:
     payment.voided_at = timezone.now()
     payment.voided_by = _actor(user)
     payment.save(update_fields=["status", "void_reason", "voided_at", "voided_by", "updated_at"])
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        payment.hotel,
+        event_type="payment.voided",
+        category="finance",
+        severity="danger",
+        title=f"Payment {payment.receipt_number} voided",
+        message=f"{payment.amount} {payment.currency} · {reason.strip()}",
+        actor=user,
+        related_object=payment,
+        related_url="/hotel/finance",
+    )
     return payment
 
 

@@ -4,27 +4,29 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 13 — Reports + Analytics (pending review).**
+> **Current status: Phase 14 — Notifications + Activity Center (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
 > check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
 > orders), Phase 10 (housekeeping + maintenance + lost & found) and Phase 11
-> (staff + flexible permissions) and Phase 12 (shifts + handover + daily
-> close). Phase 13 adds **READ-ONLY reports & analytics** over everything
-> built so far — overview, reservations, occupancy (derived from stays,
-> never a Room.status), guests, finance (net movement, deliberately NEVER
-> called profit; voided records excluded and reported), services, operations
-> and shifts/daily-close — all backend-computed with Decimal money, ranged
-> by hotel business dates (366-day cap), under `/api/v1/hotel/reports/`
-> with NO new models and NO write endpoints. Console at `/hotel/reports`
-> (8 tabs + global date filters + quick ranges), simple CSV export for three
-> tabular reports behind `reports.export`, and an overview print via the
-> central print layout. Guarded by `reports.view/finance/operations/shifts/
-> export`; a suspended hotel may still READ reports (read-only by nature).
-> **Not BI, no report designer, no scheduled/email reports, no chart
-> libraries, no server PDF, no advanced accounting.**
+> (staff + flexible permissions), Phase 12 (shifts + handover + daily close)
+> and Phase 13 (read-only reports & analytics). Phase 14 adds the **in-app
+> notifications + activity center**: domain services record
+> **ActivityEvent**s (`ACT00001`, a simplified operational feed — NOT a
+> legal audit log) through ONE central service which fans out
+> **Notification**s (`NTF00001`) to permission-matched recipients only
+> (managers + section viewers; never the actor, a deactivated member or
+> another hotel). 13 event types are wired across reservations, stays,
+> finance, services, operations, shifts and staff. Recipients get a private
+> inbox (read / mark-all / archive), managers a permission-scoped activity
+> center; metadata is scrubbed of secrets and related URLs are internal-only.
+> Console at `/hotel/notifications` (Overview / Notifications / Activity)
+> plus a one-shot unread badge in the topbar (no realtime, no polling),
+> guarded by `notifications.*` / `activity.*`.
+> **No WhatsApp, no email, no SMS, no push, no chat, no public messaging,
+> no legal audit log** — in-app only, deliberately.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -56,6 +58,7 @@ funduqii/
 │  ├─ apps/staff/           # staff + permission grants management /api/v1/hotel/staff/ (Phase 11)
 │  ├─ apps/shifts/          # shifts + handover + daily close /api/v1/hotel/shifts/ (Phase 12)
 │  ├─ apps/reports/         # read-only reports & analytics /api/v1/hotel/reports/ (Phase 13)
+│  ├─ apps/notifications/   # in-app notifications + activity center /api/v1/hotel/notifications/ (Phase 14)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -499,6 +502,29 @@ Ranges default to the current month (hotel business date) and are capped at
 CSV export additionally requires `reports.export` (AND with the section
 permission), respects the same filters/isolation, and is capped at 5000 rows.
 See [docs/REPORTS_ANALYTICS_STRATEGY.md](docs/REPORTS_ANALYTICS_STRATEGY.md).
+
+### Notification & activity endpoints (Phase 14)
+
+Under `/api/v1/hotel/notifications/`, scoped to the caller's hotel and
+guarded by `notifications.*` / `activity.*`. In-app ONLY — no external
+channels exist. Events are recorded exclusively through the central service;
+recipients are permission-matched (managers + section viewers, never the
+actor, never a deactivated member, never another hotel). No DELETE routes.
+A suspended hotel may read AND mark read/archive (user-state only).
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/notifications/overview/` | Unread/warning/danger/today/archived counters + today's visible activity |
+| `GET .../notifications/` · `GET .../{id}/` | The caller's OWN inbox (others' notifications are invisible), filterable by unread/archived/category/severity/date |
+| `POST .../{id}/mark-read|archive/` · `POST .../mark-all-read/` | Recipient-state operations (`notifications.update`) |
+| `GET .../unread-count/` | One-shot badge count for the topbar bell (no polling) |
+| `GET .../activity/` · `GET .../activity/{id}/` | The activity feed: everything for managers / `activity.view_all`; otherwise the caller's permission categories plus events they acted in or were targeted by |
+
+13 event types are wired (reservations created/cancelled, check-in/out,
+payment recorded/voided, service posting, housekeeping/maintenance
+created+done, shift closed, daily close, staff permissions). Metadata is
+scrubbed of secret-looking keys; related URLs are internal paths only. See
+[docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

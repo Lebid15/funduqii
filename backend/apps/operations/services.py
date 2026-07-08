@@ -229,6 +229,20 @@ def create_housekeeping_task(
         updated_by=actor,
     )
     _hk_log(task, "", task.status, user)
+    # Phase 14: activity + notifications (lazy import).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="housekeeping.task_created",
+        category="operation",
+        severity="info",
+        title=f"Housekeeping task {task.task_number} created",
+        message=f"Room {room.number} · {task.task_type}",
+        actor=user,
+        related_object=task,
+        related_url="/hotel/operations",
+    )
     return task
 
 
@@ -344,6 +358,19 @@ def complete_housekeeping_task(
                 user=user,
             )
     _hk_log(task, previous, HousekeepingStatus.COMPLETED, user, note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        task.hotel,
+        event_type="housekeeping.task_completed",
+        category="operation",
+        severity="success",
+        title=f"Housekeeping task {task.task_number} completed",
+        message=f"Room {room.number}" if room is not None else "",
+        actor=user,
+        related_object=task,
+        related_url="/hotel/operations",
+    )
     return task
 
 
@@ -452,6 +479,19 @@ def create_maintenance_request(
     )
     _apply_room_block(request, user)
     _mt_log(request, "", request.status, user)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="maintenance.request_created",
+        category="operation",
+        severity="warning",
+        title=f"Maintenance request {request.request_number} created",
+        message=f"{request.title}" + (f" · Room {room.number}" if room else ""),
+        actor=user,
+        related_object=request,
+        related_url="/hotel/operations",
+    )
     return request
 
 
@@ -542,6 +582,19 @@ def resolve_maintenance_request(
     request.updated_by = _actor(user)
     request.save()
     _mt_log(request, previous, MaintenanceStatus.RESOLVED, user, note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        request.hotel,
+        event_type="maintenance.request_resolved",
+        category="operation",
+        severity="success",
+        title=f"Maintenance request {request.request_number} resolved",
+        message=request.title,
+        actor=user,
+        related_object=request,
+        related_url="/hotel/operations",
+    )
     return request
 
 

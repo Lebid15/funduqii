@@ -89,6 +89,9 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     # Reports & analytics (Phase 13). Read-only; finance/operations/shifts
     # sections and CSV export are gated separately on top of `view`.
     "reports": ["view", "finance", "operations", "shifts", "export"],
+    # In-app notifications + activity center (Phase 14). No external channels.
+    "notifications": ["view", "update"],
+    "activity": ["view", "view_all"],
     "settings": ["view", "update"],
     # Shifts + handover (Phase 12).
     "shifts": [
