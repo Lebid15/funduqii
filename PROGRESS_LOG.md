@@ -59,7 +59,7 @@
 | 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | مكتملة ✅ | 2026-07-07 |
-| 9 | Restaurant / Café / Room Service Orders | بانتظار الاعتماد 🔎 | 2026-07-08 |
+| 9 | Restaurant / Café / Room Service Orders | مكتملة ✅ | 2026-07-08 |
 | 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
 | 11 | Shifts + Daily Close | لم تبدأ ⏳ | — |
 | 12 | Public Website + Public Booking | لم تبدأ ⏳ | — |
@@ -1005,8 +1005,8 @@
 ---
 
 ## Phase 9 — Restaurant / Café / Room Service Orders
-- الحالة: **بانتظار الاعتماد 🔎** (مُنفَّذة ومُختبَرة — لم تُعتمد بعد من المالك)
-- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · اعتُمدت —
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: 2026-07-08
 - الهدف: أساس طلبات الخدمات الداخلية — **كتالوج** (تصنيفات + أصناف بأسعار Decimal وضريبة لكل صنف) و**طلبات** مرتبطة بإقامة/غرفة تمرّ بدورة `submitted → preparing → ready → delivered` ثم **تُرحَّل مرة واحدة فقط إلى فوليو النزيل كرسم واحد** عبر خدمات المال في Phase 8. **بلا POS، بلا مخزون، بلا طاولات، بلا دفع مباشر، بلا بوابة دفع، بلا طلب عام.**
 - الأساس: بُنيت من **`origin/main`** (120e455، بعد دمج Phase 8 + 8.1 عبر PR #7).
 
@@ -1047,4 +1047,6 @@
 - **لا POS كامل · لا مخزون/مشتريات/موردون · لا إدارة/حجز طاولات · لا Kitchen Display متقدم/طابعات مطبخ · لا باركود · لا كاشير مستقل · لا دفع مباشر مستقل/بوابة دفع · لا طلب عام/QR · لا Delivery/WhatsApp orders · لا تقارير مبيعات متقدمة · لا Daily close/Shifts/Payroll.** **لم تبدأ Phase 10.**
 
 ### الاعتماد
-- **لم تُعتمد بعد.** مُنفَّذة ومُختبَرة وبانتظار مراجعة المالك عبر PR الخاص بالمرحلة. **لا اعتماد ذاتيًا.**
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #8 (commit `43ce68d` على `origin/main@120e455`، mergeable_state: clean، backend 346/346، frontend lint/typecheck/build ناجحة، `/hotel/services` مبني).
+- ملاحظة الاعتماد: «تم اعتماد Phase 9 بعد Final Acceptance Review. المرحلة أضافت أساس طلبات الخدمات الداخلية: ServiceCategory, ServiceItem, ServiceOrder, ServiceOrderItem, ServiceOrderStatusLog، مع ترحيل آمن إلى Folio عبر FolioCharge، ومنع الترحيل المكرر، وتطبيق tenant isolation والصلاحيات وhotel suspended. لا POS كامل، لا inventory/stock، لا payment gateway، لا public ordering، ولا Phase 10.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 10 لا تبدأ إلا برسالتها الرسمية.**
