@@ -112,6 +112,21 @@ def create_reservation(hotel, *, lines, status, user, **fields) -> Reservation:
             notes=line.get("notes", ""),
         )
     _log_status(reservation, "", status, note="created", user=user)
+    # Phase 14: activity + permission-matched notifications (lazy import to
+    # keep app loading order simple).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="reservation.created",
+        category="reservation",
+        severity="success",
+        title=f"Reservation {reservation.reservation_number} created",
+        message=f"{reservation.primary_guest_name} · {check_in} → {check_out}",
+        actor=user,
+        related_object=reservation,
+        related_url="/hotel/reservations",
+    )
     return reservation
 
 
@@ -264,6 +279,19 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
         reservation.updated_by = user
     reservation.save()
     _log_status(reservation, previous, reservation.status, note=reason.strip(), user=user)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        reservation.hotel,
+        event_type="reservation.cancelled",
+        category="reservation",
+        severity="warning",
+        title=f"Reservation {reservation.reservation_number} cancelled",
+        message=reason.strip(),
+        actor=user,
+        related_object=reservation,
+        related_url="/hotel/reservations",
+    )
     return reservation
 
 

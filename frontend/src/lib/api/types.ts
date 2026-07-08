@@ -1379,3 +1379,67 @@ export interface DailyCloseReportRow {
   closed_at: string | null;
   totals: DailyCloseTotals;
 }
+
+/* ==========================================================================
+ * Phase 14 — Notifications + activity DTOs (mirror /api/v1/hotel/notifications/).
+ * ======================================================================== */
+
+export type ActivityCategory =
+  | "reservation"
+  | "stay"
+  | "guest"
+  | "room"
+  | "finance"
+  | "service"
+  | "operation"
+  | "shift"
+  | "staff"
+  | "report"
+  | "system";
+
+export type ActivitySeverity = "info" | "success" | "warning" | "danger";
+
+export interface HotelNotification {
+  id: number;
+  notification_number: string;
+  category: ActivityCategory;
+  severity: ActivitySeverity;
+  title: string;
+  message: string;
+  related_url: string;
+  activity: number | null;
+  is_read: boolean;
+  read_at: string | null;
+  is_archived: boolean;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export interface ActivityEventRow {
+  id: number;
+  event_number: string;
+  event_type: string;
+  category: ActivityCategory;
+  severity: ActivitySeverity;
+  title: string;
+  message: string;
+  actor: number | null;
+  actor_name: string;
+  target_user: number | null;
+  target_user_name: string;
+  related_object_type: string;
+  related_object_id: number | null;
+  related_url: string;
+  metadata_json: Record<string, unknown>;
+  occurred_at: string;
+  created_at: string;
+}
+
+export interface NotificationsOverview {
+  unread_count: number;
+  today_notifications_count: number;
+  warning_count: number;
+  danger_count: number;
+  archived_count: number;
+  recent_activity_count: number;
+}

@@ -239,6 +239,27 @@ these rules is a defect, not a shortcut.
   documentation; live numbers are recomputed from source records.
 - Full rules: [docs/REPORTS_ANALYTICS_STRATEGY.md](docs/REPORTS_ANALYTICS_STRATEGY.md).
 
+### 8k. Notifications & activity (from Phase 14)
+- **In-app only.** No external channel exists or may be added ad hoc — no
+  WhatsApp, email, SMS, push, chat or public messaging.
+- **One creation path.** Events and notifications are created exclusively
+  through `apps/notifications/services.record_activity` — domain services
+  call it after their own successful write; views never create events.
+- **Recipients are permission-matched**: managers plus members holding a
+  view permission for the event's category. Never the actor, never a
+  deactivated member, never another hotel, never a platform owner without
+  membership. `system`/`report` events go to managers only.
+- **Inboxes are private.** A user reads/archives only their own
+  notifications; managers get breadth through the activity center
+  (`activity.view_all` or manager = all; `activity.view` = own permission
+  categories + events they acted in or were targeted by).
+- **Content safety**: metadata is scrubbed of secret-looking keys;
+  `related_url` accepts internal paths only. ActivityEvent is a simplified
+  operational feed — NOT a legal audit log and NOT a replacement for the
+  per-record status logs. No hard delete anywhere; a suspended hotel may
+  read and flip its own read/archive flags (user-state only).
+- Full rules: [docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

@@ -1677,6 +1677,96 @@
       "dcClosedAt": "Kapanış zamanı"
     }
   },
+  "notifications": {
+    "nav": "Bildirimler",
+    "title": "Bildirimler ve etkinlik",
+    "subtitle": "Bu otelde dikkatinizi bekleyenler — harici kanal yok.",
+    "bell": "Bildirimler",
+    "tabs": {
+      "overview": "Genel bakış",
+      "inbox": "Bildirimler",
+      "activity": "Etkinlik merkezi"
+    },
+    "categories": {
+      "reservation": "Rezervasyonlar",
+      "stay": "Resepsiyon",
+      "guest": "Misafirler",
+      "room": "Odalar",
+      "finance": "Finans",
+      "service": "Hizmetler",
+      "operation": "Operasyon",
+      "shift": "Vardiyalar",
+      "staff": "Personel",
+      "report": "Raporlar",
+      "system": "Sistem"
+    },
+    "severities": {
+      "info": "Bilgi",
+      "success": "Başarılı",
+      "warning": "Uyarı",
+      "danger": "Kritik"
+    },
+    "eventTypes": {
+      "reservation.created": "Rezervasyon oluşturuldu",
+      "reservation.cancelled": "Rezervasyon iptal edildi",
+      "stay.checked_in": "Giriş yapıldı",
+      "stay.checked_out": "Çıkış yapıldı",
+      "payment.recorded": "Tahsilat kaydedildi",
+      "payment.voided": "Tahsilat geçersiz kılındı",
+      "service_order.posted_to_folio": "Sipariş folyoya aktarıldı",
+      "housekeeping.task_created": "Temizlik görevi oluşturuldu",
+      "housekeeping.task_completed": "Temizlik görevi tamamlandı",
+      "maintenance.request_created": "Bakım talebi oluşturuldu",
+      "maintenance.request_resolved": "Bakım talebi çözüldü",
+      "shift.closed": "Vardiya kapatıldı",
+      "daily_close.closed": "İş günü kapatıldı",
+      "staff.permissions_updated": "Yetkiler güncellendi"
+    },
+    "overview": {
+      "unread": "Okunmamış",
+      "unreadHint": "Sizi bekleyen bildirimler.",
+      "warnings": "Uyarılar",
+      "warningsHint": "Okunmamış uyarı bildirimleri.",
+      "dangers": "Kritik",
+      "dangersHint": "Okunmamış kritik bildirimler.",
+      "today": "Bugün",
+      "todayHint": "Bugün gelen bildirimler.",
+      "archived": "Arşivlenen",
+      "archivedHint": "Arşivlenmiş bildirimler.",
+      "activityToday": "Bugünkü etkinlik",
+      "activityTodayHint": "Bugün görebildiğiniz olaylar."
+    },
+    "inbox": {
+      "title": "Bildirimleriniz",
+      "markRead": "Okundu işaretle",
+      "markAllRead": "Tümünü okundu işaretle",
+      "archiveBtn": "Arşivle",
+      "open": "Aç",
+      "showArchived": "Arşiv",
+      "onlyUnread": "Yalnızca okunmamış",
+      "readMsg": "Okundu olarak işaretlendi.",
+      "allReadMsg": "Tüm bildirimler okundu işaretlendi.",
+      "archivedMsg": "Bildirim arşivlendi.",
+      "empty": "Bildirim yok",
+      "emptyHint": "Her şey güncel."
+    },
+    "activity": {
+      "title": "Etkinlik merkezi",
+      "actor": "Yapan",
+      "target": "Hedef",
+      "time": "Zaman",
+      "type": "Olay",
+      "system": "Sistem",
+      "empty": "Bu filtreler için etkinlik yok",
+      "emptyHint": "Farklı filtreler deneyin."
+    },
+    "filters": {
+      "category": "Kategori",
+      "severity": "Önem",
+      "date": "Tarih",
+      "eventType": "Olay türü"
+    }
+  },
   "language": {
     "label": "Dil",
     "ar": "العربية",

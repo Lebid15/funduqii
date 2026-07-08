@@ -1677,6 +1677,96 @@
       "dcClosedAt": "وقت الإغلاق"
     }
   },
+  "notifications": {
+    "nav": "الإشعارات",
+    "title": "الإشعارات والنشاط",
+    "subtitle": "ما يحتاج انتباهك داخل هذا الفندق — بلا قنوات خارجية.",
+    "bell": "الإشعارات",
+    "tabs": {
+      "overview": "نظرة عامة",
+      "inbox": "الإشعارات",
+      "activity": "مركز النشاط"
+    },
+    "categories": {
+      "reservation": "الحجوزات",
+      "stay": "الاستقبال",
+      "guest": "النزلاء",
+      "room": "الغرف",
+      "finance": "المالية",
+      "service": "الخدمات",
+      "operation": "التشغيل",
+      "shift": "الورديات",
+      "staff": "الموظفون",
+      "report": "التقارير",
+      "system": "النظام"
+    },
+    "severities": {
+      "info": "معلومة",
+      "success": "نجاح",
+      "warning": "تحذير",
+      "danger": "خطير"
+    },
+    "eventTypes": {
+      "reservation.created": "حجز جديد",
+      "reservation.cancelled": "حجز أُلغي",
+      "stay.checked_in": "تسجيل دخول",
+      "stay.checked_out": "تسجيل مغادرة",
+      "payment.recorded": "دفعة مسجلة",
+      "payment.voided": "دفعة مبطلة",
+      "service_order.posted_to_folio": "طلب رُحِّل للفوليو",
+      "housekeeping.task_created": "مهمة تنظيف جديدة",
+      "housekeeping.task_completed": "مهمة تنظيف اكتملت",
+      "maintenance.request_created": "طلب صيانة جديد",
+      "maintenance.request_resolved": "طلب صيانة حُل",
+      "shift.closed": "وردية أُغلقت",
+      "daily_close.closed": "يوم تشغيلي أُغلق",
+      "staff.permissions_updated": "صلاحيات حُدّثت"
+    },
+    "overview": {
+      "unread": "غير مقروء",
+      "unreadHint": "إشعارات بانتظارك.",
+      "warnings": "تحذيرات",
+      "warningsHint": "إشعارات تحذير غير مقروءة.",
+      "dangers": "حرجة",
+      "dangersHint": "إشعارات حرجة غير مقروءة.",
+      "today": "اليوم",
+      "todayHint": "إشعارات وصلت اليوم.",
+      "archived": "مؤرشفة",
+      "archivedHint": "إشعارات مؤرشفة.",
+      "activityToday": "نشاط اليوم",
+      "activityTodayHint": "أحداث مرئية لك اليوم."
+    },
+    "inbox": {
+      "title": "إشعاراتك",
+      "markRead": "تعليم كمقروء",
+      "markAllRead": "تعليم الكل كمقروء",
+      "archiveBtn": "أرشفة",
+      "open": "فتح",
+      "showArchived": "المؤرشفة",
+      "onlyUnread": "غير المقروء فقط",
+      "readMsg": "عُلّم كمقروء.",
+      "allReadMsg": "عُلّمت كل الإشعارات كمقروءة.",
+      "archivedMsg": "أُرشف الإشعار.",
+      "empty": "لا إشعارات",
+      "emptyHint": "أنت على اطلاع بكل شيء."
+    },
+    "activity": {
+      "title": "مركز النشاط",
+      "actor": "بواسطة",
+      "target": "لأجل",
+      "time": "الوقت",
+      "type": "الحدث",
+      "system": "النظام",
+      "empty": "لا نشاط لهذه الفلاتر",
+      "emptyHint": "جرّب فلاتر مختلفة."
+    },
+    "filters": {
+      "category": "التصنيف",
+      "severity": "الخطورة",
+      "date": "التاريخ",
+      "eventType": "نوع الحدث"
+    }
+  },
   "language": {
     "label": "اللغة",
     "ar": "العربية",

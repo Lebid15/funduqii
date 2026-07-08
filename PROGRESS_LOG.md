@@ -4,7 +4,7 @@
 > **قاعدة التحديث:** بعد إغلاق أي مرحلة، أضِف قسمها هنا (أو حدّثه) قبل بدء المرحلة التالية.
 > **المرجعان الأساسيان:** [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) (خطة المشروع) و [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) (قواعد التطوير).
 > **حالة الاعتماد:** لا تُعلَّم مرحلة «مكتملة ✅» إلا بعد اعتماد المالك. المراحل المنفَّذة والمُختبَرة بانتظار المراجعة تُعلَّم «بانتظار الاعتماد 🔎».
-> **آخر تحديث:** 2026-07-08
+> **آخر تحديث:** 2026-07-09
 
 ---
 
@@ -1256,3 +1256,51 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #12 (commit `9762cec` على `origin/main@05e4d67`، mergeable_state: clean، backend 553/553، frontend lint/typecheck/build ناجحة، `/hotel/reports` مبني، والبنود الـ34 المقبولة رسميًا في رسالة الاعتماد).
 - ملاحظة الاعتماد: «تم اعتماد Phase 13 بعد Final Acceptance Review. المرحلة أضافت تقارير تشغيلية وإدارية read-only تشمل overview، reservations، occupancy، guests، finance، services، operations، shifts/daily close، مع date filters، CSV exports محدودة وآمنة، وصلاحيات reports.*. الإشغال مشتق من Stay وليس Room.status، وnet_cashflow_simple ليس profit بل صافي حركة تشغيلية. لا BI advanced، لا public booking، لا payment gateway، لا notifications، لا scheduled reports، ولا Phase 14.»
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 14 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 14 — Notifications + Activity Center
+- الحالة: **بانتظار الاعتماد 🔎** (نُفِّذت واختُبرت — لا تُعتمد ذاتيًا؛ الاعتماد قرار المالك حصرًا)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09 · تاريخ الاعتماد: —
+- الهدف: مركز إشعارات **داخلي** وسجل نشاط تشغيلي مبسط — **ليست WhatsApp ولا Email ولا Push ولا SMS ولا Chat ولا Audit Log قانونيًا**.
+- الأساس: بُنيت من **`origin/main`** (3ab3646، بعد دمج Phase 13 عبر PR #12).
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/notifications`** بنموذجين + عدّاد: `ActivityEvent` (ACT00001 — نوع/تصنيف من 11 فئة/خطورة من 4/عنوان/رسالة/فاعل/مستهدَف/مرجع كائن/رابط/metadata/occurred_at؛ **سجل تشغيلي مبسط للواجهة، ليس Audit قانونيًا ولا بديلًا عن سجلات الحالة القائمة**؛ append-only بلا DELETE) · `Notification` (NTF00001 — لمستلم واحد؛ read/archived بطوابعهما؛ **صندوق خاص**: المستخدم يرى إشعاراته فقط والمدير يرى الاتساع عبر مركز النشاط لا صناديق الآخرين) · `NotificationsNumberSequence` بقفل صف. **NotificationPreference أُجّل عمدًا** (خيار المواصفة المفضل — موثّق).
+- **المسار الوحيد للإنشاء**: `record_activity` المركزي — خدمات النطاق تستدعيه بعد نجاح كتابتها (استيراد كسول)؛ لا view ينشئ حدثًا. **أمان المحتوى**: `safe_metadata` تُسقط مفاتيح password/token/secret/authorization/api_key وتُبقي البدائيات فقط؛ `safe_related_url` مسارات داخلية `/…` حصرًا (https/‏//‏/javascript تُفرَّغ) — اختبارات صريحة لكليهما.
+- **منطق المستلمين** (`eligible_recipients`): عضويات الفندق النشطة بمستخدمين نشطين؛ **المدير دائمًا + حامل صلاحية عرض مطابقة للفئة** (خريطة CATEGORY_VIEW_CODES: finance→finance/expenses.view، operation→housekeeping/maintenance/lost_found.view، shift→shifts/daily_close.view، reservation/stay→reservations/stays.view، staff→staff.view…)؛ `system/report` للمديرين فقط؛ **الفاعل لا يُشعَر بفعله**؛ المعطّل/فندق آخر/مالك المنصة بلا عضوية: لا شيء أبدًا؛ منع التكرار — كلٌّ باختباره.
+- **الأحداث المربوطة (13 نوعًا — المجموعة الإلزامية كاملة):** `reservation.created/cancelled` · `stay.checked_in/checked_out` · `payment.recorded/voided` · `service_order.posted_to_folio` · `housekeeping.task_created/task_completed` · `maintenance.request_created/request_resolved` · `shift.closed` (warning عند فرق صندوق) · `daily_close.closed` · `staff.permissions_updated` (بمستهدَف). **المؤجل موثّق** (confirmed/no_show، room.marked_dirty، lost_found.*، expense/invoice/folio، service created/delivered/cancelled، shift.opened، handover.*، staff created/deactivated/reactivated) — كل إضافة لاحقة سطر استدعاء واحد.
+- **الصلاحيات**: `notifications.view/update` + `activity.view/view_all` في السجل. **رؤية النشاط**: المدير أو view_all = كل الفندق؛ view فقط = فئات صلاحياته **+ أحداثه كفاعل أو مستهدَف** (قاعدة موثقة — مُثبتة حيًا: موظفة رأت حدث تحديث صلاحياتها هي).
+- **الفندق المعلّق**: القراءة **وقراءة/أرشفة الإشعارات** مسموحة (قرار موثّق: أعلام user-state على صندوق المستخدم، لا كتابة تشغيلية) — مُختبر.
+- **APIs تحت `/api/v1/hotel/notifications/`**: `overview/` · `unread-count/` (لشارة الجرس) · القائمة/التفاصيل (صندوق المستخدم فقط بفلاتر unread/archived/category/severity/date) · `mark-read/`,`mark-all-read/`,`archive/` · `activity/`(+detail بفلاتر category/severity/event_type/actor/date) — paginated بلا أي DELETE ولا قناة خارجية.
+
+### ما نُفّذ (Frontend)
+- **جرس Topbar** (نُفِّذ — قرار موثّق): شارة عدد غير المقروء لواجهة الفندق تُحمَّل **مرة واحدة** عند فتح القشرة (لا realtime ولا polling — عمدًا)، تختفي كليًا بلا `notifications.view`، والنقر ينقل للصفحة.
+- عنصر **«الإشعارات»** في السايدبار (خلف `notifications.view|activity.view`) ومسار **`/hotel/notifications`** بثلاثة تبويبات: **نظرة عامة** (6 بطاقات: غير مقروء/تحذيرات/حرجة/اليوم/مؤرشفة/نشاط اليوم) · **الإشعارات** (فلاتر + أزرار غير المقروء/المؤرشفة + قراءة/الكل/أرشفة/فتح الرابط الداخلي) · **مركز النشاط** (نوع الحدث بتسمية مترجمة وfallback آمن، الفاعل/الوقت/الرابط؛ لا تعديل ولا حذف). **لا تبويب تفضيلات** (مؤجلة).
+- مكونات مركزية فقط + **صفر CSS جديد** + ترجمات **ar/en/tr كاملة** (namespace `notifications` شاملًا تسميات 13 نوع حدث و11 فئة و4 خطورات، تكافؤ **1648=1648=1648**) + RTL/LTR + حالات موحّدة + responsive. لا localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/notifications/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration `notifications.0001` · **جديدة (Frontend):** `app/hotel/notifications/page.tsx` · `components/hotel/notifications/{NotificationsPanel,OverviewTab,InboxTab,ActivityTab}.tsx` · `components/layout/NotificationBell.tsx` · `lib/api/notifications.ts` · والوثيقة `docs/NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/rbac/registry.py` (+قسمي notifications/activity) · **خطافات الأحداث** في `apps/{reservations,stays,finance,services,operations,shifts,staff}/services.py` (استدعاء record_activity الكسول بعد الكتابة الناجحة — 13 موضعًا) · `config/settings/base.py` · `config/urls.py`.
+- **معدّلة (Frontend):** `components/layout/{Topbar,Sidebar}.tsx` · `lib/session/hotelRouteAccess.ts` · `lib/api/types.ts` · قواميس ar/en/tr · التوثيق (README، DEVELOPMENT_RULES §8k، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **593/593 OK** (553 سابقة + 40 لـ notifications) — انحدار صفر رغم 13 خطافًا في 7 خدمات قائمة |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/notifications` مبني) |
+| فحص حيّ End-to-End (عبر BFF) | ✅ إنشاء مهمة تنظيف ولّد **ACT00001** (info، برابط `/hotel/operations`) → المدير الفاعل **غير مُشعَر** (unread 0) → بعد منح موظفة `housekeeping.view+notifications.*` استلمت **NTF00001** لمهمة جديدة → قراءة ✓ أرشفة ✓ → مركز نشاطها المقيد أظهر فئة operation **+ حدث staff المستهدِف لها** (القاعدة الموثقة) → دفعة على تاريخ أمس المغلق رُفضت **409 business_day_closed** (قفل Phase 12 سليم عبر حدود اليوم) → الصفحة 200 للمدير والموظفة |
+
+### ملاحظات وقرارات
+- جرس Topbar **بُني** (كان اختياريًا): الـ Topbar بسيط والتكلفة سطرين — تحميل واحد بلا polling.
+- NotificationPreference **مؤجل** (خيار المواصفة المفضل)؛ الافتراضيات المبنية على الصلاحيات كافية.
+- عناوين/رسائل الأحداث بيانات سجل (كسجلات الحالة السابقة)؛ الواجهة تترجم التسميات (النوع/الفئة/الخطورة) — متسق مع سوابق المشروع.
+- خادم dev قديم منهار احتجز :3000 مجددًا أثناء الـ E2E — قُتل وأعيد نظيفًا (نمط مسجّل في buglog سابقًا).
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا WhatsApp · لا Email · لا SMS · لا Push · لا Chat/Mentions/Threads · لا realtime/WebSocket متقدم · لا جدولة/قوالب خارجية · لا حملات تسويق · لا رسائل نزلاء عامة · لا NotificationPreference · لا Audit Log قانوني/SIEM · لا Public website/booking · لا Payment gateway.** **لم تبدأ Phase 15.**
+
+### الاعتماد
+- بانتظار قرار المالك بعد المراجعة. ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار.

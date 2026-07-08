@@ -90,3 +90,7 @@ maps, etc.) will be added here as the project progresses through its phases.
 ## Phase 13 — Reports + Analytics
 
 - [REPORTS_ANALYTICS_STRATEGY.md](REPORTS_ANALYTICS_STRATEGY.md) — why this is not BI (read-only, no new models, backend-computed Decimal numbers), the data sources, ranged filters with the 366-day cap and hotel business dates, stay-derived occupancy (never Room.status), the finance limits (net movement is never "profit"; voided excluded and reported), CSV export rules (permission AND, 5000-row cap), print via the central layout, no chart libraries, and what is deferred (BI/designer/scheduled/email/PDF/advanced accounting).
+
+## Phase 14 — Notifications + Activity Center
+
+- [NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md](NOTIFICATIONS_ACTIVITY_CENTER_STRATEGY.md) — why this is in-app only (no WhatsApp/email/SMS/push/chat), ActivityEvent vs the per-record status logs, the single creation service, permission-matched recipients (never the actor/deactivated/another hotel), metadata scrubbing + internal-only URLs, the 13 wired event types and the deferred ones, activity visibility (view vs view_all), the suspended-hotel user-state rule, and what is deferred (preferences/realtime/scheduling/legal audit).

@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { LogoutButton } from "./LogoutButton";
+import { NotificationBell } from "./NotificationBell";
 
 interface TopbarProps {
   variant?: "platform" | "hotel";
@@ -34,6 +35,7 @@ export function Topbar({ variant = "platform", onMenuToggle }: TopbarProps) {
         <span className="app-topbar__title">{scopeLabel}</span>
       </div>
       <div className="app-topbar__end">
+        {variant === "hotel" ? <NotificationBell /> : null}
         <LanguageSwitcher />
         <span className="app-topbar__divider" aria-hidden="true" />
         <LogoutButton />

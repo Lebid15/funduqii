@@ -241,6 +241,21 @@ def set_staff_permissions(
         HotelPermissionGrant.objects.get_or_create(membership=membership, code=code)
     membership.updated_by = _actor(actor)
     membership.save(update_fields=["updated_by", "updated_at"])
+    # Phase 14: activity + notifications (lazy import).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        membership.hotel,
+        event_type="staff.permissions_updated",
+        category="staff",
+        severity="info",
+        title=f"Permissions updated for {membership.user.full_name}",
+        message=f"{len(cleaned)} granted",
+        actor=actor,
+        target_user=membership.user,
+        related_object=membership,
+        related_url="/hotel/staff",
+    )
     return cleaned
 
 
