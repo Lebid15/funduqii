@@ -373,7 +373,27 @@
       "availabilityHint": "Availability is re-checked on the server before saving.",
       "room": "Assign room (optional)",
       "roomAny": "Any available room",
-      "roomHint": "Pin a specific room, or leave as any."
+      "roomHint": "Pin a specific room, or leave as any.",
+      "sectionKindDates": "Booking kind & dates",
+      "bookingKind": "Booking kind",
+      "instantHint": "Starts today — the check-in date is set to today.",
+      "futureHint": "Starts on a future date.",
+      "nights": "Nights",
+      "arrivalTime": "Expected arrival time",
+      "nationality": "Nationality",
+      "documentType": "Document type",
+      "documentNumber": "Document number",
+      "sectionRooms": "Rooms & availability",
+      "availabilityConflict": "Not enough rooms for these dates — only {count} available.",
+      "availabilityOk": "{count} room(s) available for these dates.",
+      "sectionSourceNotes": "Source & notes",
+      "channelName": "Booking channel",
+      "expectedPayment": "Expected payment method",
+      "expectedPaymentHint": "Informational only — no payment is taken.",
+      "internalNotes": "Internal notes",
+      "sectionReview": "Review & save",
+      "reviewHint": "Check the details above, then save.",
+      "save": "Save reservation"
     },
     "details": {
       "title": "Reservation",
@@ -394,7 +414,8 @@
       "confirm": "Confirm",
       "cancel": "Cancel",
       "edit": "Edit",
-      "room": "Room"
+      "room": "Room",
+      "noShowReason": "No-show reason"
     },
     "cancelDialog": {
       "title": "Cancel reservation",
@@ -412,6 +433,16 @@
       "reasonRequired": "A cancellation reason is required.",
       "invalidTransition": "This reservation status change is not allowed.",
       "roomConflict": "This room is already assigned for the selected dates."
+    },
+    "kind": {
+      "instant": "Instant booking",
+      "future": "Future booking"
+    },
+    "expectedPayment": {
+      "cash": "Cash",
+      "card": "Card",
+      "bank_transfer": "Bank transfer",
+      "other": "Other"
     }
   },
   "guests": {
@@ -526,7 +557,11 @@
       "notes": "Notes",
       "reason": "Reason",
       "financeNote": "Any billing or payment is handled in a later phase.",
-      "submit": "Check out"
+      "submit": "Check out",
+      "guest": "Guest",
+      "room": "Room",
+      "checkInDate": "Checked in",
+      "expectedCheckOut": "Expected departure"
     },
     "details": {
       "title": "Stay",
@@ -551,6 +586,21 @@
       "roomOccupied": "This room is already occupied.",
       "roomNotReady": "This room is not ready for check-in.",
       "alreadyCheckedIn": "This reservation room is already checked in."
+    },
+    "workflow": {
+      "arrivalsTitle": "Arrivals today",
+      "arrivalsDesc": "Confirmed reservations arriving today.",
+      "currentTitle": "Current residents",
+      "currentDesc": "Guests currently in house.",
+      "departuresTitle": "Departures today",
+      "departuresDesc": "In-house stays leaving today.",
+      "checkInTitle": "Check-in",
+      "checkInDesc": "Check an arriving guest into a room.",
+      "checkInAction": "Start check-in",
+      "checkOutTitle": "Check-out",
+      "checkOutDesc": "Check out a departing guest and free the room.",
+      "checkOutAction": "Start check-out",
+      "view": "View"
     }
   },
   "finance": {
@@ -662,7 +712,9 @@
       "payerName": "Payer name",
       "reference": "Reference",
       "notes": "Notes",
-      "submit": "Record payment"
+      "submit": "Record payment",
+      "mixedHint": "To pay with more than one method, record multiple payments.",
+      "addAnother": "Save & add another payment"
     },
     "invoiceForm": {
       "createTitle": "Create invoice",
@@ -732,7 +784,18 @@
       "invoiceTitle": "Invoice",
       "voucherTitle": "Payment voucher",
       "customer": "Customer",
-      "vendor": "Vendor"
+      "vendor": "Vendor",
+      "folio": "Folio",
+      "reservation": "Reservation",
+      "reference": "Reference",
+      "receivedBy": "Received by",
+      "createdBy": "Created by",
+      "notes": "Notes",
+      "signature": "Signature",
+      "customerPhone": "Phone",
+      "customerEmail": "Email",
+      "customerDocument": "Document no.",
+      "balanceAtIssue": "Balance at issue"
     },
     "financeNote": "All amounts are recorded internally only — no real payment is processed.",
     "errors": {

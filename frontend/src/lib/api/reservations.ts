@@ -66,15 +66,22 @@ export interface ReservationLineBody {
 export interface ReservationCreateBody {
   status: "held" | "confirmed";
   source?: string;
+  booking_kind?: "instant" | "future";
   check_in_date: string;
   check_out_date: string;
+  expected_arrival_time?: string | null;
   primary_guest_name: string;
   primary_guest_phone?: string;
   primary_guest_email?: string;
+  primary_guest_nationality?: string;
+  primary_guest_document_type?: string;
+  primary_guest_document_number?: string;
   adults: number;
   children: number;
   notes?: string;
   special_requests?: string;
+  booking_channel_name?: string;
+  expected_payment_method?: string;
   hold_expires_at?: string | null;
   lines: ReservationLineBody[];
 }

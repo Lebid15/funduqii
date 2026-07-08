@@ -5,7 +5,7 @@ import { Printer, Receipt } from "lucide-react";
 
 import {
   Badge, Button, Card, DataTable, EmptyState, ErrorState, FilterBar, FormField,
-  LoadingState, Pagination, Select, useToast, type Column,
+  LoadingState, Pagination, PrintDocumentLayout, Select, useToast, type Column,
 } from "@/components/ui";
 import { getReceipt, listPayments, voidPayment } from "@/lib/api/finance";
 import { messageForError } from "@/lib/api/errors";
@@ -99,17 +99,33 @@ export function PaymentsTab() {
         onConfirm={async (reason) => { if (voidTarget) { await voidPayment(voidTarget.id, reason); setVoidTarget(null); notify(t.finance.saved); load(); } }} />
       <PrintModal open={receipt !== null} title={t.finance.print.receiptTitle} onClose={() => setReceipt(null)}>
         {receipt ? (
-          <div className="receipt">
-            <h3>{receipt.hotel.hotel_name}</h3>
-            <p className="muted">{t.finance.print.receiptTitle} · {receipt.payment.receipt_number}</p>
-            <dl className="print-grid">
-              <div><dt>{t.finance.print.customer}</dt><dd>{receipt.payment.payer_name || "—"}</dd></div>
-              <div><dt>{t.finance.print.date}</dt><dd>{formatDate(receipt.payment.paid_at, locale)}</dd></div>
-              <div><dt>{t.finance.print.method}</dt><dd>{t.finance.methods[receipt.payment.method]}</dd></div>
-              <div><dt>{t.finance.print.amount}</dt><dd><strong>{formatMoney(receipt.payment.amount, receipt.payment.currency, locale)}</strong></dd></div>
-            </dl>
-            <p className="print-thanks">{t.finance.print.thanks}</p>
-          </div>
+          <PrintDocumentLayout
+            hotelName={receipt.hotel.hotel_name}
+            hotelAddress={receipt.hotel.address}
+            hotelPhone={receipt.hotel.phone}
+            docTitle={t.finance.print.receiptTitle}
+            docNumber={receipt.payment.receipt_number}
+            meta={[
+              { label: t.finance.print.customer, value: receipt.payment.payer_name || "—" },
+              { label: t.finance.print.date, value: formatDate(receipt.payment.paid_at, locale) },
+              { label: t.finance.print.method, value: t.finance.methods[receipt.payment.method] },
+              { label: t.finance.print.amount, value: <strong>{formatMoney(receipt.payment.amount, receipt.payment.currency, locale)}</strong> },
+              { label: t.finance.print.folio, value: receipt.payment.folio_number },
+              ...(receipt.payment.reservation_number
+                ? [{ label: t.finance.print.reservation, value: receipt.payment.reservation_number }]
+                : []),
+              ...(receipt.payment.reference
+                ? [{ label: t.finance.print.reference, value: receipt.payment.reference }]
+                : []),
+              ...(receipt.payment.created_by
+                ? [{ label: t.finance.print.receivedBy, value: receipt.payment.created_by }]
+                : []),
+            ]}
+            notes={receipt.payment.notes || undefined}
+            notesLabel={t.finance.print.notes}
+            signatureLabel={t.finance.print.signature}
+            footer={t.finance.print.thanks}
+          />
         ) : null}
       </PrintModal>
     </>

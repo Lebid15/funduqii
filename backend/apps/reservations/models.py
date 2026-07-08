@@ -42,6 +42,29 @@ class ReservationSource(models.TextChoices):
     OTHER = "other", "Other"
 
 
+class BookingKind(models.TextChoices):
+    """The only two booking kinds the system supports (Phase 8.1).
+
+    - ``instant``: the guest is present now / wants to move in right away.
+    - ``future``: the booking is for a later date.
+
+    There is deliberately no quick/full/basic/advanced split — one form, one
+    model, two kinds.
+    """
+
+    INSTANT = "instant", "Instant"
+    FUTURE = "future", "Future"
+
+
+class ExpectedPaymentMethod(models.TextChoices):
+    """Informational only — NOT an actual payment (finance lives in Phase 8)."""
+
+    CASH = "cash", "Cash"
+    CARD = "card", "Card"
+    BANK_TRANSFER = "bank_transfer", "Bank transfer"
+    OTHER = "other", "Other"
+
+
 class Reservation(models.Model):
     """The head of a booking.
 
@@ -63,19 +86,51 @@ class Reservation(models.Model):
         choices=ReservationSource.choices,
         default=ReservationSource.DIRECT,
     )
+    booking_kind = models.CharField(
+        max_length=16,
+        choices=BookingKind.choices,
+        default=BookingKind.INSTANT,
+    )
     check_in_date = models.DateField()
     check_out_date = models.DateField()
+    expected_arrival_time = models.TimeField(null=True, blank=True)
 
     # Primary guest SNAPSHOT (not a guest profile).
     primary_guest_name = models.CharField(max_length=180)
     primary_guest_phone = models.CharField(max_length=32, blank=True, default="")
     primary_guest_email = models.EmailField(blank=True, default="")
+    primary_guest_nationality = models.CharField(
+        max_length=100, blank=True, default=""
+    )
+    primary_guest_document_type = models.CharField(
+        max_length=32, blank=True, default=""
+    )
+    primary_guest_document_number = models.CharField(
+        max_length=64, blank=True, default=""
+    )
 
     adults = models.PositiveSmallIntegerField(default=1)
     children = models.PositiveSmallIntegerField(default=0)
 
+    # ``notes`` are the INTERNAL notes (staff-facing); ``special_requests``
+    # are guest-facing wishes. Both are optional free text.
     notes = models.TextField(blank=True, default="")
     special_requests = models.TextField(blank=True, default="")
+
+    # Where the booking came from, as free text (e.g. an OTA/office/company
+    # name). Complements the ``source`` choice field.
+    booking_channel_name = models.CharField(max_length=180, blank=True, default="")
+
+    # Informational only — the actual money lives in finance (Phase 8).
+    expected_payment_method = models.CharField(
+        max_length=16,
+        choices=ExpectedPaymentMethod.choices,
+        blank=True,
+        default="",
+    )
+
+    # No-show bookkeeping (free text, optional).
+    no_show_reason = models.CharField(max_length=255, blank=True, default="")
 
     # Cancellation bookkeeping.
     cancellation_reason = models.CharField(max_length=255, blank=True, default="")

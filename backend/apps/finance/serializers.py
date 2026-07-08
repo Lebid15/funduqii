@@ -33,16 +33,25 @@ class FolioChargeSerializer(serializers.ModelSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     folio_number = serializers.CharField(source="folio.folio_number", read_only=True)
+    # Safe read via the folio relation — for the printed receipt only.
+    reservation_number = serializers.CharField(
+        source="folio.reservation.reservation_number", read_only=True, default=None
+    )
+    created_by = serializers.SerializerMethodField()
     voided_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Payment
         fields = [
-            "id", "folio", "folio_number", "receipt_number", "amount", "currency",
-            "method", "status", "paid_at", "payer_name", "reference", "notes",
-            "void_reason", "voided_at", "voided_by", "created_at",
+            "id", "folio", "folio_number", "reservation_number", "receipt_number",
+            "amount", "currency", "method", "status", "paid_at", "payer_name",
+            "reference", "notes", "void_reason", "voided_at", "voided_by",
+            "created_by", "created_at",
         ]
         read_only_fields = fields
+
+    def get_created_by(self, obj):
+        return obj.created_by.email if obj.created_by_id else None
 
     def get_voided_by(self, obj):
         return obj.voided_by.email if obj.voided_by_id else None
@@ -109,20 +118,26 @@ class InvoiceLineSerializer(serializers.ModelSerializer):
 
 class InvoiceSerializer(serializers.ModelSerializer):
     folio_number = serializers.CharField(source="folio.folio_number", read_only=True)
+    # Safe read via the folio relation — for the printed invoice only.
+    reservation_number = serializers.CharField(
+        source="folio.reservation.reservation_number", read_only=True, default=None
+    )
     lines = InvoiceLineSerializer(many=True, read_only=True)
 
     class Meta:
         model = Invoice
         fields = [
-            "id", "folio", "folio_number", "invoice_number", "status", "currency",
-            "issued_at", "due_date", "subtotal", "tax_total", "total",
-            "balance_at_issue", "customer_name", "customer_phone", "notes",
+            "id", "folio", "folio_number", "reservation_number", "invoice_number",
+            "status", "currency", "issued_at", "due_date", "subtotal", "tax_total",
+            "total", "balance_at_issue", "customer_name", "customer_phone",
+            "customer_email", "customer_document_number", "notes",
             "void_reason", "voided_at", "lines", "created_at",
         ]
         read_only_fields = fields
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
+    created_by = serializers.SerializerMethodField()
     voided_by = serializers.SerializerMethodField()
     paid_at = serializers.DateTimeField(required=False)
 
@@ -131,12 +146,16 @@ class ExpenseSerializer(serializers.ModelSerializer):
         fields = [
             "id", "expense_number", "category", "description", "amount", "currency",
             "method", "paid_at", "vendor_name", "reference", "notes", "status",
-            "void_reason", "voided_at", "voided_by", "created_at", "updated_at",
+            "void_reason", "voided_at", "voided_by", "created_by",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "expense_number", "status", "void_reason", "voided_at",
-            "voided_by", "created_at", "updated_at",
+            "voided_by", "created_by", "created_at", "updated_at",
         ]
+
+    def get_created_by(self, obj):
+        return obj.created_by.email if obj.created_by_id else None
 
     def get_voided_by(self, obj):
         return obj.voided_by.email if obj.voided_by_id else None

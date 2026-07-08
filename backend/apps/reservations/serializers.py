@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from django.utils import timezone
+
 from rest_framework import serializers
 
 from apps.common.exceptions import CrossTenantReference
@@ -16,6 +18,8 @@ from apps.rooms.models import Room, RoomStatus, RoomType
 
 from .availability import TypeAvailability
 from .models import (
+    BookingKind,
+    ExpectedPaymentMethod,
     Reservation,
     ReservationRoomLine,
     ReservationSource,
@@ -76,17 +80,25 @@ class ReservationSerializer(serializers.ModelSerializer):
             "reservation_number",
             "status",
             "source",
+            "booking_kind",
             "check_in_date",
             "check_out_date",
+            "expected_arrival_time",
             "nights",
             "primary_guest_name",
             "primary_guest_phone",
             "primary_guest_email",
+            "primary_guest_nationality",
+            "primary_guest_document_type",
+            "primary_guest_document_number",
             "adults",
             "children",
             "total_guests",
             "notes",
             "special_requests",
+            "booking_channel_name",
+            "expected_payment_method",
+            "no_show_reason",
             "cancellation_reason",
             "cancelled_at",
             "hold_expires_at",
@@ -127,21 +139,39 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
         required=False,
         default=ReservationSource.DIRECT,
     )
+    # Optional on write: when omitted it is derived from the check-in date
+    # (today => instant, later => future).
+    booking_kind = serializers.ChoiceField(
+        choices=BookingKind.choices, required=False
+    )
+    expected_payment_method = serializers.ChoiceField(
+        choices=ExpectedPaymentMethod.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
     class Meta:
         model = Reservation
         fields = [
             "status",
             "source",
+            "booking_kind",
             "check_in_date",
             "check_out_date",
+            "expected_arrival_time",
             "primary_guest_name",
             "primary_guest_phone",
             "primary_guest_email",
+            "primary_guest_nationality",
+            "primary_guest_document_type",
+            "primary_guest_document_number",
             "adults",
             "children",
             "notes",
             "special_requests",
+            "booking_channel_name",
+            "expected_payment_method",
             "hold_expires_at",
             "lines",
         ]
@@ -233,6 +263,27 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
         if check_in and check_out and check_in >= check_out:
             raise serializers.ValidationError(
                 {"check_out_date": "Check-out must be after check-in."}
+            )
+
+        # Phase 8.1 — the only two booking kinds are instant/future. When the
+        # caller does not send one, derive it from the check-in date.
+        booking_kind = attrs.get(
+            "booking_kind", getattr(self.instance, "booking_kind", "")
+        )
+        if not booking_kind and check_in:
+            booking_kind = (
+                BookingKind.INSTANT
+                if check_in <= timezone.localdate()
+                else BookingKind.FUTURE
+            )
+            attrs["booking_kind"] = booking_kind
+        if (
+            booking_kind == BookingKind.INSTANT
+            and check_in
+            and check_in > timezone.localdate()
+        ):
+            raise serializers.ValidationError(
+                {"booking_kind": "An instant booking must start today."}
             )
 
         status = attrs.get("status", getattr(self.instance, "status", None))

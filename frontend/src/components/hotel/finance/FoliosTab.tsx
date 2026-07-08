@@ -17,7 +17,9 @@ import {
   LoadingState,
   Modal,
   Pagination,
+  PrintDocumentLayout,
   Select,
+  StatusSummaryCard,
   Textarea,
   useToast,
   type Column,
@@ -270,11 +272,13 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
             <span className="muted">{folio.customer_name || folio.guest_name || "—"}</span>
           </div>
 
-          <div className="balance-row">
-            <div><span className="muted">{t.finance.folio.totalCharges}</span><strong>{m(folio.balance.total_charges)}</strong></div>
-            <div><span className="muted">{t.finance.folio.totalPayments}</span><strong>{m(folio.balance.total_payments)}</strong></div>
-            <div className="balance-row__total"><span className="muted">{t.finance.folio.balance}</span><strong>{m(folio.balance.balance)}</strong></div>
-          </div>
+          <StatusSummaryCard
+            items={[
+              { label: t.finance.folio.totalCharges, value: m(folio.balance.total_charges) },
+              { label: t.finance.folio.totalPayments, value: m(folio.balance.total_payments) },
+              { label: t.finance.folio.balance, value: m(folio.balance.balance), emphasis: true },
+            ]}
+          />
 
           {editable ? (
             <div className="cluster">
@@ -287,7 +291,13 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
           ) : null}
 
           {panel === "charge" ? <ChargeForm folioId={folio.id} onDone={() => { setPanel(null); afterMutation(); }} /> : null}
-          {panel === "payment" ? <PaymentForm folioId={folio.id} onDone={() => { setPanel(null); afterMutation(); }} /> : null}
+          {panel === "payment" ? (
+            <PaymentForm
+              folioId={folio.id}
+              onDone={() => { setPanel(null); afterMutation(); }}
+              onSavedContinue={() => afterMutation()}
+            />
+          ) : null}
 
           <div>
             <h4>{t.finance.folio.charges}</h4>
@@ -348,17 +358,33 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
       />
       <PrintModal open={receipt !== null} title={t.finance.print.receiptTitle} onClose={() => setReceipt(null)}>
         {receipt ? (
-          <div className="receipt">
-            <h3>{receipt.hotel.hotel_name}</h3>
-            <p className="muted">{t.finance.print.receiptTitle} · {receipt.payment.receipt_number}</p>
-            <dl className="print-grid">
-              <div><dt>{t.finance.print.customer}</dt><dd>{receipt.payment.payer_name || "—"}</dd></div>
-              <div><dt>{t.finance.print.date}</dt><dd>{formatDate(receipt.payment.paid_at, locale)}</dd></div>
-              <div><dt>{t.finance.print.method}</dt><dd>{t.finance.methods[receipt.payment.method]}</dd></div>
-              <div><dt>{t.finance.print.amount}</dt><dd><strong>{formatMoney(receipt.payment.amount, receipt.payment.currency, locale)}</strong></dd></div>
-            </dl>
-            <p className="print-thanks">{t.finance.print.thanks}</p>
-          </div>
+          <PrintDocumentLayout
+            hotelName={receipt.hotel.hotel_name}
+            hotelAddress={receipt.hotel.address}
+            hotelPhone={receipt.hotel.phone}
+            docTitle={t.finance.print.receiptTitle}
+            docNumber={receipt.payment.receipt_number}
+            meta={[
+              { label: t.finance.print.customer, value: receipt.payment.payer_name || "—" },
+              { label: t.finance.print.date, value: formatDate(receipt.payment.paid_at, locale) },
+              { label: t.finance.print.method, value: t.finance.methods[receipt.payment.method] },
+              { label: t.finance.print.amount, value: <strong>{formatMoney(receipt.payment.amount, receipt.payment.currency, locale)}</strong> },
+              { label: t.finance.print.folio, value: receipt.payment.folio_number },
+              ...(receipt.payment.reservation_number
+                ? [{ label: t.finance.print.reservation, value: receipt.payment.reservation_number }]
+                : []),
+              ...(receipt.payment.reference
+                ? [{ label: t.finance.print.reference, value: receipt.payment.reference }]
+                : []),
+              ...(receipt.payment.created_by
+                ? [{ label: t.finance.print.receivedBy, value: receipt.payment.created_by }]
+                : []),
+            ]}
+            notes={receipt.payment.notes || undefined}
+            notesLabel={t.finance.print.notes}
+            signatureLabel={t.finance.print.signature}
+            footer={t.finance.print.thanks}
+          />
         ) : null}
       </PrintModal>
     </Modal>
@@ -409,7 +435,7 @@ function ChargeForm({ folioId, onDone }: { folioId: number; onDone: () => void }
   );
 }
 
-function PaymentForm({ folioId, onDone }: { folioId: number; onDone: () => void }) {
+function PaymentForm({ folioId, onDone, onSavedContinue }: { folioId: number; onDone: () => void; onSavedContinue: () => void }) {
   const { t } = useI18n();
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("cash");
@@ -420,19 +446,29 @@ function PaymentForm({ folioId, onDone }: { folioId: number; onDone: () => void 
 
   const methodOptions = (["cash", "card", "bank_transfer", "electronic", "other"] as const).map((v) => ({ value: v, label: t.finance.methods[v] }));
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  async function save(addAnother: boolean) {
     setError(null);
     if (!amount) return setError(t.errors.validation);
     setBusy(true);
     try {
       await recordPayment(folioId, { amount, method, payer_name: payer.trim(), reference: reference.trim() });
-      onDone();
+      if (addAnother) {
+        setAmount("");
+        setReference("");
+        onSavedContinue();
+      } else {
+        onDone();
+      }
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await save(false);
   }
 
   return (
@@ -445,8 +481,14 @@ function PaymentForm({ folioId, onDone }: { folioId: number; onDone: () => void 
           <FormField label={t.finance.paymentForm.payerName} htmlFor="pf-payer"><Input id="pf-payer" value={payer} onChange={(e) => setPayer(e.target.value)} /></FormField>
           <FormField label={t.finance.paymentForm.reference} htmlFor="pf-ref"><Input id="pf-ref" value={reference} onChange={(e) => setReference(e.target.value)} /></FormField>
         </div>
+        <p className="muted small">{t.finance.paymentForm.mixedHint}</p>
         <p className="muted small">{t.finance.financeNote}</p>
-        <div className="cluster"><Button type="submit" size="sm" loading={busy}>{t.finance.paymentForm.submit}</Button></div>
+        <div className="cluster">
+          <Button type="submit" size="sm" loading={busy}>{t.finance.paymentForm.submit}</Button>
+          <Button type="button" size="sm" variant="ghost" icon={Plus} disabled={busy} onClick={() => save(true)}>
+            {t.finance.paymentForm.addAnother}
+          </Button>
+        </div>
       </form>
     </Card>
   );

@@ -308,6 +308,12 @@ class Invoice(models.Model):
     balance_at_issue = models.DecimalField(**MONEY_KW, default=ZERO)
     customer_name = models.CharField(max_length=180, blank=True, default="")
     customer_phone = models.CharField(max_length=32, blank=True, default="")
+    # Extra customer snapshot fields (Phase 8.1) — filled from the folio guest
+    # when available so the printed invoice stays immutable.
+    customer_email = models.EmailField(blank=True, default="")
+    customer_document_number = models.CharField(
+        max_length=64, blank=True, default=""
+    )
     notes = models.TextField(blank=True, default="")
     void_reason = models.CharField(max_length=255, blank=True, default="")
     voided_at = models.DateTimeField(null=True, blank=True)

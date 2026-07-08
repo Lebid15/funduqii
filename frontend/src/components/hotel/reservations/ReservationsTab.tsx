@@ -1,7 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { CalendarCheck, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  BedDouble,
+  CalendarCheck,
+  CalendarClock,
+  ClipboardCheck,
+  MessageSquareText,
+  Plus,
+  Trash2,
+  UserRound,
+  Zap,
+} from "lucide-react";
 
 import {
   Alert,
@@ -17,14 +27,17 @@ import {
   LoadingState,
   Modal,
   Pagination,
+  SectionCard,
   SectionHeader,
   Select,
+  StepSummaryCard,
   Textarea,
   useToast,
   type Column,
 } from "@/components/ui";
 import {
   cancelReservation,
+  checkAvailability,
   confirmReservation,
   createReservation,
   getReservationLogs,
@@ -40,6 +53,7 @@ import type {
   ReservationStatusLogEntry,
   Room,
   RoomType,
+  TypeAvailability,
 } from "@/lib/api/types";
 import { formatDate, reservationStatusLabel, reservationStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -280,6 +294,12 @@ interface LineDraft {
   quantity: string;
 }
 
+function todayISO(): string {
+  const now = new Date();
+  const off = now.getTimezoneOffset();
+  return new Date(now.getTime() - off * 60_000).toISOString().slice(0, 10);
+}
+
 function ReservationModal({
   open,
   reservation,
@@ -293,37 +313,52 @@ function ReservationModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const editing = Boolean(reservation);
+  const [bookingKind, setBookingKind] = useState<"instant" | "future">("instant");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
+  const [arrivalTime, setArrivalTime] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [nationality, setNationality] = useState("");
+  const [docType, setDocType] = useState("");
+  const [docNumber, setDocNumber] = useState("");
   const [adults, setAdults] = useState("2");
   const [children, setChildren] = useState("0");
   const [notes, setNotes] = useState("");
   const [special, setSpecial] = useState("");
   const [source, setSource] = useState("direct");
+  const [channelName, setChannelName] = useState("");
+  const [expectedPay, setExpectedPay] = useState("");
   const [initialStatus, setInitialStatus] = useState<"held" | "confirmed">("confirmed");
   const [holdExpires, setHoldExpires] = useState("");
   const [lines, setLines] = useState<LineDraft[]>([{ room_type: "", room: "", quantity: "1" }]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [availability, setAvailability] = useState<TypeAvailability[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setCheckIn(reservation?.check_in_date ?? "");
+    setBookingKind(reservation?.booking_kind ?? "instant");
+    setCheckIn(reservation?.check_in_date ?? todayISO());
     setCheckOut(reservation?.check_out_date ?? "");
+    setArrivalTime(reservation?.expected_arrival_time ?? "");
     setName(reservation?.primary_guest_name ?? "");
     setPhone(reservation?.primary_guest_phone ?? "");
     setEmail(reservation?.primary_guest_email ?? "");
+    setNationality(reservation?.primary_guest_nationality ?? "");
+    setDocType(reservation?.primary_guest_document_type ?? "");
+    setDocNumber(reservation?.primary_guest_document_number ?? "");
     setAdults(String(reservation?.adults ?? 2));
     setChildren(String(reservation?.children ?? 0));
     setNotes(reservation?.notes ?? "");
     setSpecial(reservation?.special_requests ?? "");
     setSource(reservation?.source ?? "direct");
+    setChannelName(reservation?.booking_channel_name ?? "");
+    setExpectedPay(reservation?.expected_payment_method ?? "");
     setInitialStatus("confirmed");
     setHoldExpires("");
     setLines(
@@ -342,6 +377,32 @@ function ReservationModal({
       .then((r) => setRooms(r.results))
       .catch(() => setRooms([]));
   }, [open, reservation]);
+
+  // Instant bookings start today; switching kinds keeps the dates honest.
+  function changeKind(kind: "instant" | "future") {
+    setBookingKind(kind);
+    if (kind === "instant") setCheckIn(todayISO());
+  }
+
+  // Live availability for the chosen dates — conflicts are shown per line and
+  // re-validated by the backend before saving.
+  useEffect(() => {
+    if (!open || !checkIn || !checkOut || checkIn >= checkOut) {
+      setAvailability([]);
+      return;
+    }
+    let stale = false;
+    checkAvailability({ check_in_date: checkIn, check_out_date: checkOut })
+      .then((r) => { if (!stale) setAvailability(r.results); })
+      .catch(() => { if (!stale) setAvailability([]); });
+    return () => { stale = true; };
+  }, [open, checkIn, checkOut]);
+
+  const nights = useMemo(() => {
+    if (!checkIn || !checkOut) return 0;
+    const diff = (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86_400_000;
+    return diff > 0 ? Math.round(diff) : 0;
+  }, [checkIn, checkOut]);
 
   function updateLine(i: number, patch: Partial<LineDraft>) {
     setLines((prev) =>
@@ -373,6 +434,10 @@ function ReservationModal({
       .map((r) => ({ value: String(r.id), label: r.number }));
   }
 
+  function availabilityFor(typeId: string): TypeAvailability | undefined {
+    return availability.find((a) => String(a.room_type) === typeId);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
@@ -389,35 +454,30 @@ function ReservationModal({
 
     setBusy(true);
     try {
+      const common = {
+        booking_kind: bookingKind,
+        check_in_date: checkIn,
+        check_out_date: checkOut,
+        expected_arrival_time: arrivalTime || null,
+        primary_guest_name: name.trim(),
+        primary_guest_phone: phone.trim(),
+        primary_guest_email: email.trim(),
+        primary_guest_nationality: nationality.trim(),
+        primary_guest_document_type: docType,
+        primary_guest_document_number: docNumber.trim(),
+        adults: Number(adults) || 1,
+        children: Number(children) || 0,
+        notes: notes.trim(),
+        special_requests: special.trim(),
+        source,
+        booking_channel_name: channelName.trim(),
+        expected_payment_method: expectedPay,
+        lines: cleanLines,
+      };
       if (editing && reservation) {
-        await updateReservation(reservation.id, {
-          check_in_date: checkIn,
-          check_out_date: checkOut,
-          primary_guest_name: name.trim(),
-          primary_guest_phone: phone.trim(),
-          primary_guest_email: email.trim(),
-          adults: Number(adults) || 1,
-          children: Number(children) || 0,
-          notes: notes.trim(),
-          special_requests: special.trim(),
-          source,
-          lines: cleanLines,
-        });
+        await updateReservation(reservation.id, common);
       } else {
-        const body: ReservationCreateBody = {
-          status: initialStatus,
-          source,
-          check_in_date: checkIn,
-          check_out_date: checkOut,
-          primary_guest_name: name.trim(),
-          primary_guest_phone: phone.trim(),
-          primary_guest_email: email.trim(),
-          adults: Number(adults) || 1,
-          children: Number(children) || 0,
-          notes: notes.trim(),
-          special_requests: special.trim(),
-          lines: cleanLines,
-        };
+        const body: ReservationCreateBody = { status: initialStatus, ...common };
         if (initialStatus === "held") {
           body.hold_expires_at = holdExpires ? new Date(holdExpires).toISOString() : null;
         }
@@ -438,6 +498,21 @@ function ReservationModal({
     value: s,
     label: t.reservations.source[s],
   }));
+  const kindOptions = (["instant", "future"] as const).map((k) => ({
+    value: k,
+    label: t.reservations.kind[k],
+  }));
+  const payOptions = (["cash", "card", "bank_transfer", "other"] as const).map((v) => ({
+    value: v,
+    label: t.reservations.expectedPayment[v],
+  }));
+  const docTypeOptions = (["national_id", "passport", "driving_license", "other"] as const).map((v) => ({
+    value: v,
+    label: t.guests.documentTypes[v],
+  }));
+
+  const summaryType = types.find((ty) => String(ty.id) === lines[0]?.room_type);
+  const summaryRoom = rooms.find((r) => String(r.id) === lines[0]?.room);
 
   return (
     <Modal
@@ -448,27 +523,36 @@ function ReservationModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="res-form" type="submit" loading={busy}>{t.common.save}</Button>
+          <Button form="res-form" type="submit" loading={busy}>{t.reservations.form.save}</Button>
         </>
       }
     >
       <form id="res-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
 
-        <fieldset className="field-group">
-          <legend>{t.reservations.form.stayDates}</legend>
+        {/* Section 1 — booking kind & dates */}
+        <SectionCard title={t.reservations.form.sectionKindDates} icon={CalendarClock}>
           <div className="form-grid">
+            <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind" hint={bookingKind === "instant" ? t.reservations.form.instantHint : t.reservations.form.futureHint}>
+              <Select id="res-kind" value={bookingKind} options={kindOptions} onChange={(e) => changeKind(e.target.value as "instant" | "future")} />
+            </FormField>
             <FormField label={t.reservations.form.checkIn} htmlFor="res-in">
-              <Input id="res-in" type="date" value={checkIn} required onChange={(e) => setCheckIn(e.target.value)} />
+              <Input id="res-in" type="date" value={checkIn} required disabled={bookingKind === "instant"} onChange={(e) => setCheckIn(e.target.value)} />
             </FormField>
             <FormField label={t.reservations.form.checkOut} htmlFor="res-out">
               <Input id="res-out" type="date" value={checkOut} required onChange={(e) => setCheckOut(e.target.value)} />
             </FormField>
+            <FormField label={t.reservations.form.nights} htmlFor="res-nights">
+              <Input id="res-nights" value={String(nights)} disabled readOnly />
+            </FormField>
+            <FormField label={t.reservations.form.arrivalTime} htmlFor="res-arrival">
+              <Input id="res-arrival" type="time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} />
+            </FormField>
           </div>
-        </fieldset>
+        </SectionCard>
 
-        <fieldset className="field-group">
-          <legend>{t.reservations.form.guestInfo}</legend>
+        {/* Section 2 — primary guest basics */}
+        <SectionCard title={t.reservations.form.guestInfo} icon={UserRound}>
           <div className="form-grid">
             <FormField label={t.reservations.form.name} htmlFor="res-name">
               <Input id="res-name" value={name} required onChange={(e) => setName(e.target.value)} />
@@ -479,6 +563,21 @@ function ReservationModal({
             <FormField label={t.reservations.form.email} htmlFor="res-email">
               <Input id="res-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </FormField>
+            <FormField label={t.reservations.form.nationality} htmlFor="res-nat">
+              <Input id="res-nat" value={nationality} onChange={(e) => setNationality(e.target.value)} />
+            </FormField>
+            <FormField label={t.reservations.form.documentType} htmlFor="res-doc-type">
+              <Select id="res-doc-type" value={docType} placeholder={t.guests.documentTypes.none} options={docTypeOptions} onChange={(e) => setDocType(e.target.value)} />
+            </FormField>
+            <FormField label={t.reservations.form.documentNumber} htmlFor="res-doc-num">
+              <Input id="res-doc-num" value={docNumber} onChange={(e) => setDocNumber(e.target.value)} />
+            </FormField>
+          </div>
+        </SectionCard>
+
+        {/* Section 3 — rooms & availability */}
+        <SectionCard title={t.reservations.form.sectionRooms} icon={BedDouble}>
+          <div className="form-grid">
             <FormField label={t.reservations.form.adults} htmlFor="res-adults">
               <Input id="res-adults" type="number" min="1" value={adults} onChange={(e) => setAdults(e.target.value)} />
             </FormField>
@@ -486,77 +585,134 @@ function ReservationModal({
               <Input id="res-children" type="number" min="0" value={children} onChange={(e) => setChildren(e.target.value)} />
             </FormField>
           </div>
-        </fieldset>
-
-        <fieldset className="field-group">
-          <legend>{t.reservations.form.roomLines}</legend>
           <div className="stack-tight">
-            {lines.map((line, i) => (
-              <div className="line-row line-row--assign" key={i}>
-                <FormField label={t.reservations.form.roomType} htmlFor={`line-type-${i}`}>
-                  <Select
-                    id={`line-type-${i}`}
-                    value={line.room_type}
-                    placeholder={t.reservations.form.selectType}
-                    options={typeOptions}
-                    onChange={(e) => updateLine(i, { room_type: e.target.value })}
-                  />
-                </FormField>
-                <FormField label={t.reservations.form.room} htmlFor={`line-room-${i}`} hint={t.reservations.form.roomHint}>
-                  <Select
-                    id={`line-room-${i}`}
-                    value={line.room}
-                    placeholder={t.reservations.form.roomAny}
-                    options={roomOptionsFor(line.room_type)}
-                    disabled={!line.room_type}
-                    onChange={(e) => updateLine(i, { room: e.target.value })}
-                  />
-                </FormField>
-                <FormField label={t.reservations.form.quantity} htmlFor={`line-qty-${i}`}>
-                  <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} disabled={Boolean(line.room)} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
-                </FormField>
-                <Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => removeLine(i)} disabled={lines.length === 1}>
-                  {t.reservations.form.removeLine}
-                </Button>
-              </div>
-            ))}
+            {lines.map((line, i) => {
+              const avail = availabilityFor(line.room_type);
+              const wanted = line.room ? 1 : Number(line.quantity) || 1;
+              const conflict = avail && (!avail.can_book || avail.available_quantity < wanted);
+              return (
+                <div key={i} className="stack-tight">
+                  <div className="line-row line-row--assign">
+                    <FormField label={t.reservations.form.roomType} htmlFor={`line-type-${i}`}>
+                      <Select
+                        id={`line-type-${i}`}
+                        value={line.room_type}
+                        placeholder={t.reservations.form.selectType}
+                        options={typeOptions}
+                        onChange={(e) => updateLine(i, { room_type: e.target.value })}
+                      />
+                    </FormField>
+                    <FormField label={t.reservations.form.room} htmlFor={`line-room-${i}`} hint={t.reservations.form.roomHint}>
+                      <Select
+                        id={`line-room-${i}`}
+                        value={line.room}
+                        placeholder={t.reservations.form.roomAny}
+                        options={roomOptionsFor(line.room_type)}
+                        disabled={!line.room_type}
+                        onChange={(e) => updateLine(i, { room: e.target.value })}
+                      />
+                    </FormField>
+                    <FormField label={t.reservations.form.quantity} htmlFor={`line-qty-${i}`}>
+                      <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} disabled={Boolean(line.room)} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
+                    </FormField>
+                    <Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => removeLine(i)} disabled={lines.length === 1}>
+                      {t.reservations.form.removeLine}
+                    </Button>
+                  </div>
+                  {line.room_type && avail ? (
+                    conflict ? (
+                      <Alert tone="warning">
+                        {t.reservations.form.availabilityConflict.replace("{count}", String(avail.available_quantity))}
+                      </Alert>
+                    ) : (
+                      <p className="muted small">
+                        {t.reservations.form.availabilityOk.replace("{count}", String(avail.available_quantity))}
+                      </p>
+                    )
+                  ) : null}
+                </div>
+              );
+            })}
             <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={addLine}>
               {t.reservations.form.addLine}
             </Button>
           </div>
-        </fieldset>
+          <p className="muted small">{t.reservations.form.availabilityHint}</p>
+        </SectionCard>
 
-        <div className="form-grid">
-          <FormField label={t.reservations.form.source} htmlFor="res-source">
-            <Select id="res-source" value={source} options={sourceOptions} onChange={(e) => setSource(e.target.value)} />
+        {/* Section 4 — source & notes */}
+        <SectionCard title={t.reservations.form.sectionSourceNotes} icon={MessageSquareText}>
+          <div className="form-grid">
+            <FormField label={t.reservations.form.source} htmlFor="res-source">
+              <Select id="res-source" value={source} options={sourceOptions} onChange={(e) => setSource(e.target.value)} />
+            </FormField>
+            <FormField label={t.reservations.form.channelName} htmlFor="res-channel">
+              <Input id="res-channel" value={channelName} onChange={(e) => setChannelName(e.target.value)} />
+            </FormField>
+            <FormField label={t.reservations.form.expectedPayment} htmlFor="res-pay" hint={t.reservations.form.expectedPaymentHint}>
+              <Select id="res-pay" value={expectedPay} placeholder={t.common.all} options={payOptions} onChange={(e) => setExpectedPay(e.target.value)} />
+            </FormField>
+            {!editing ? (
+              <FormField label={t.reservations.form.initialStatus} htmlFor="res-init">
+                <Select
+                  id="res-init"
+                  value={initialStatus}
+                  options={[
+                    { value: "confirmed", label: t.reservations.form.createConfirmed },
+                    { value: "held", label: t.reservations.form.createHeld },
+                  ]}
+                  onChange={(e) => setInitialStatus(e.target.value as "held" | "confirmed")}
+                />
+              </FormField>
+            ) : null}
+            {!editing && initialStatus === "held" ? (
+              <FormField label={t.reservations.form.holdExpiry} htmlFor="res-hold" hint={t.reservations.form.holdExpiryHint}>
+                <Input id="res-hold" type="datetime-local" value={holdExpires} onChange={(e) => setHoldExpires(e.target.value)} />
+              </FormField>
+            ) : null}
+          </div>
+          <FormField label={t.reservations.form.specialRequests} htmlFor="res-special">
+            <Textarea id="res-special" value={special} onChange={(e) => setSpecial(e.target.value)} />
           </FormField>
-          {!editing ? (
-            <FormField label={t.reservations.form.initialStatus} htmlFor="res-init">
-              <Select
-                id="res-init"
-                value={initialStatus}
-                options={[
-                  { value: "confirmed", label: t.reservations.form.createConfirmed },
-                  { value: "held", label: t.reservations.form.createHeld },
-                ]}
-                onChange={(e) => setInitialStatus(e.target.value as "held" | "confirmed")}
-              />
-            </FormField>
-          ) : null}
-          {!editing && initialStatus === "held" ? (
-            <FormField label={t.reservations.form.holdExpiry} htmlFor="res-hold" hint={t.reservations.form.holdExpiryHint}>
-              <Input id="res-hold" type="datetime-local" value={holdExpires} onChange={(e) => setHoldExpires(e.target.value)} />
-            </FormField>
-          ) : null}
-        </div>
+          <FormField label={t.reservations.form.internalNotes} htmlFor="res-notes">
+            <Textarea id="res-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </FormField>
+        </SectionCard>
 
-        <FormField label={t.reservations.form.notes} htmlFor="res-notes">
-          <Textarea id="res-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </FormField>
-        <FormField label={t.reservations.form.specialRequests} htmlFor="res-special">
-          <Textarea id="res-special" value={special} onChange={(e) => setSpecial(e.target.value)} />
-        </FormField>
-        <p className="muted small">{t.reservations.form.availabilityHint}</p>
+        {/* Section 5 — review & save */}
+        <StepSummaryCard
+          title={t.reservations.form.sectionReview}
+          icon={ClipboardCheck}
+          hint={t.reservations.form.reviewHint}
+          rows={[
+            { label: t.reservations.form.name, value: name.trim() || "—" },
+            { label: t.reservations.form.phone, value: phone.trim() || "—" },
+            {
+              label: t.reservations.form.bookingKind,
+              value: (
+                <span className="cluster">
+                  {bookingKind === "instant" ? <Zap size={14} aria-hidden /> : <CalendarClock size={14} aria-hidden />}
+                  {t.reservations.kind[bookingKind]}
+                </span>
+              ),
+            },
+            {
+              label: t.reservations.form.stayDates,
+              value: checkIn && checkOut ? `${formatDate(checkIn, locale)} → ${formatDate(checkOut, locale)}` : "—",
+            },
+            { label: t.reservations.form.nights, value: nights || "—" },
+            { label: t.reservations.form.roomType, value: summaryType?.name ?? "—" },
+            { label: t.reservations.form.room, value: summaryRoom?.number ?? t.reservations.form.roomAny },
+            {
+              label: t.common.status,
+              value: editing && reservation
+                ? reservationStatusLabel(reservation.status, t)
+                : initialStatus === "held"
+                  ? t.reservations.form.createHeld
+                  : t.reservations.form.createConfirmed,
+            },
+          ]}
+        />
       </form>
     </Modal>
   );
@@ -613,16 +769,35 @@ function DetailsModal({
       <div className="stack">
         <div className="cluster">
           <Badge tone={reservationStatusTone(r.status)}>{reservationStatusLabel(r.status, t)}</Badge>
+          <Badge tone={r.booking_kind === "instant" ? "success" : "info"}>
+            {t.reservations.kind[r.booking_kind]}
+          </Badge>
           <span className="muted">{t.reservations.source[r.source]}</span>
         </div>
         <dl className="detail-grid">
           <div><dt>{t.reservations.details.guest}</dt><dd>{r.primary_guest_name}</dd></div>
           {r.primary_guest_phone ? <div><dt>{t.reservations.details.phone}</dt><dd>{r.primary_guest_phone}</dd></div> : null}
           {r.primary_guest_email ? <div><dt>{t.reservations.details.email}</dt><dd>{r.primary_guest_email}</dd></div> : null}
+          {r.primary_guest_nationality ? <div><dt>{t.reservations.form.nationality}</dt><dd>{r.primary_guest_nationality}</dd></div> : null}
+          {r.primary_guest_document_number ? (
+            <div>
+              <dt>{t.reservations.form.documentNumber}</dt>
+              <dd>{r.primary_guest_document_number}</dd>
+            </div>
+          ) : null}
           <div><dt>{t.reservations.details.dates}</dt><dd>{formatDate(r.check_in_date, locale)} → {formatDate(r.check_out_date, locale)}</dd></div>
           <div><dt>{t.reservations.details.nights}</dt><dd>{r.nights}</dd></div>
           <div><dt>{t.reservations.details.guests}</dt><dd>{r.total_guests}</dd></div>
+          {r.expected_arrival_time ? <div><dt>{t.reservations.form.arrivalTime}</dt><dd>{r.expected_arrival_time}</dd></div> : null}
+          {r.booking_channel_name ? <div><dt>{t.reservations.form.channelName}</dt><dd>{r.booking_channel_name}</dd></div> : null}
+          {r.expected_payment_method ? (
+            <div>
+              <dt>{t.reservations.form.expectedPayment}</dt>
+              <dd>{t.reservations.expectedPayment[r.expected_payment_method]}</dd>
+            </div>
+          ) : null}
           {r.hold_expires_at ? <div><dt>{t.reservations.details.holdExpires}</dt><dd>{formatDate(r.hold_expires_at, locale)}</dd></div> : null}
+          {r.no_show_reason ? <div><dt>{t.reservations.details.noShowReason}</dt><dd>{r.no_show_reason}</dd></div> : null}
           {r.cancellation_reason ? <div><dt>{t.reservations.details.cancellationReason}</dt><dd>{r.cancellation_reason}</dd></div> : null}
           {r.created_by ? <div><dt>{t.reservations.details.createdBy}</dt><dd>{r.created_by}</dd></div> : null}
         </dl>

@@ -373,7 +373,27 @@
       "availabilityHint": "Kaydetmeden önce müsaitlik sunucuda yeniden kontrol edilir.",
       "room": "Oda ata (isteğe bağlı)",
       "roomAny": "Herhangi bir müsait oda",
-      "roomHint": "Belirli bir oda sabitleyin veya herhangi bırakın."
+      "roomHint": "Belirli bir oda sabitleyin veya herhangi bırakın.",
+      "sectionKindDates": "Rezervasyon türü ve tarihler",
+      "bookingKind": "Rezervasyon türü",
+      "instantHint": "Bugün başlar — giriş tarihi otomatik olarak bugüne ayarlanır.",
+      "futureHint": "İleri bir tarihte başlar.",
+      "nights": "Gece sayısı",
+      "arrivalTime": "Tahmini varış saati",
+      "nationality": "Uyruk",
+      "documentType": "Belge türü",
+      "documentNumber": "Belge numarası",
+      "sectionRooms": "Odalar ve müsaitlik",
+      "availabilityConflict": "Bu tarihler için yeterli oda yok — yalnızca {count} müsait.",
+      "availabilityOk": "Bu tarihler için {count} oda müsait.",
+      "sectionSourceNotes": "Kaynak ve notlar",
+      "channelName": "Rezervasyon kanalı",
+      "expectedPayment": "Beklenen ödeme yöntemi",
+      "expectedPaymentHint": "Yalnızca bilgi amaçlı — ödeme alınmaz.",
+      "internalNotes": "Dahili notlar",
+      "sectionReview": "Gözden geçir ve kaydet",
+      "reviewHint": "Yukarıdaki bilgileri kontrol edip kaydedin.",
+      "save": "Rezervasyonu kaydet"
     },
     "details": {
       "title": "Rezervasyon",
@@ -394,7 +414,8 @@
       "confirm": "Onayla",
       "cancel": "İptal",
       "edit": "Düzenle",
-      "room": "Oda"
+      "room": "Oda",
+      "noShowReason": "Gelmeme nedeni"
     },
     "cancelDialog": {
       "title": "Rezervasyonu iptal et",
@@ -412,6 +433,16 @@
       "reasonRequired": "İptal nedeni gereklidir.",
       "invalidTransition": "Bu rezervasyon durum değişikliğine izin verilmiyor.",
       "roomConflict": "Bu oda seçilen tarihler için zaten atanmış."
+    },
+    "kind": {
+      "instant": "Anında rezervasyon",
+      "future": "İleri tarihli rezervasyon"
+    },
+    "expectedPayment": {
+      "cash": "Nakit",
+      "card": "Kart",
+      "bank_transfer": "Havale",
+      "other": "Diğer"
     }
   },
   "guests": {
@@ -526,7 +557,11 @@
       "notes": "Notlar",
       "reason": "Neden",
       "financeNote": "Faturalama veya ödeme sonraki bir aşamada ele alınır.",
-      "submit": "Çıkış yap"
+      "submit": "Çıkış yap",
+      "guest": "Konuk",
+      "room": "Oda",
+      "checkInDate": "Giriş tarihi",
+      "expectedCheckOut": "Beklenen çıkış"
     },
     "details": {
       "title": "Konaklama",
@@ -551,6 +586,21 @@
       "roomOccupied": "Bu oda zaten dolu.",
       "roomNotReady": "Bu oda girişe hazır değil.",
       "alreadyCheckedIn": "Bu rezervasyon odasına zaten giriş yapıldı."
+    },
+    "workflow": {
+      "arrivalsTitle": "Bugünkü girişler",
+      "arrivalsDesc": "Bugün gelecek onaylı rezervasyonlar.",
+      "currentTitle": "Mevcut konuklar",
+      "currentDesc": "Şu anda otelde kalan konuklar.",
+      "departuresTitle": "Bugünkü çıkışlar",
+      "departuresDesc": "Bugün ayrılacak konaklamalar.",
+      "checkInTitle": "Giriş işlemi",
+      "checkInDesc": "Gelen konuğu odasına yerleştirin.",
+      "checkInAction": "Girişi başlat",
+      "checkOutTitle": "Çıkış işlemi",
+      "checkOutDesc": "Ayrılan konuğun çıkışını yapın ve odayı boşaltın.",
+      "checkOutAction": "Çıkışı başlat",
+      "view": "Görüntüle"
     }
   },
   "finance": {
@@ -662,7 +712,9 @@
       "payerName": "Ödeyen",
       "reference": "Referans",
       "notes": "Notlar",
-      "submit": "Ödeme kaydet"
+      "submit": "Ödeme kaydet",
+      "mixedHint": "Birden fazla yöntemle ödeme için birden fazla ödeme kaydedin.",
+      "addAnother": "Kaydet ve başka ödeme ekle"
     },
     "invoiceForm": {
       "createTitle": "Fatura oluştur",
@@ -732,7 +784,18 @@
       "invoiceTitle": "Fatura",
       "voucherTitle": "Ödeme fişi",
       "customer": "Müşteri",
-      "vendor": "Tedarikçi"
+      "vendor": "Tedarikçi",
+      "folio": "Folyo",
+      "reservation": "Rezervasyon",
+      "reference": "Referans",
+      "receivedBy": "Teslim alan",
+      "createdBy": "Oluşturan",
+      "notes": "Notlar",
+      "signature": "İmza",
+      "customerPhone": "Telefon",
+      "customerEmail": "E-posta",
+      "customerDocument": "Belge no",
+      "balanceAtIssue": "Düzenleme anındaki bakiye"
     },
     "financeNote": "Tüm tutarlar yalnızca dahili olarak kaydedilir — gerçek ödeme işlenmez.",
     "errors": {

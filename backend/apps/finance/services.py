@@ -241,6 +241,7 @@ def void_payment(payment, *, reason, user=None) -> Payment:
 def create_invoice(folio, *, due_date=None, customer_name="", customer_phone="",
                    notes="", user=None) -> Invoice:
     """Create a DRAFT invoice for a folio (no number/snapshot until issued)."""
+    guest = folio.guest
     return Invoice.objects.create(
         hotel=folio.hotel,
         folio=folio,
@@ -248,7 +249,9 @@ def create_invoice(folio, *, due_date=None, customer_name="", customer_phone="",
         currency=folio.currency,
         due_date=due_date,
         customer_name=customer_name or folio.customer_name,
-        customer_phone=customer_phone or "",
+        customer_phone=customer_phone or (guest.phone if guest else ""),
+        customer_email=guest.email if guest else "",
+        customer_document_number=guest.document_number if guest else "",
         notes=notes or "",
         created_by=_actor(user),
     )

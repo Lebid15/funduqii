@@ -969,3 +969,33 @@
 
 #### ملاحظة Git
 - `origin/main` هو مصدر الحقيقة الوحيد. ممنوع استخدام الفرع المحلي `main` المختلف أو دفعه إلى origin، وممنوع reset مدمّر دون موافقة صريحة.
+
+---
+
+## Phase 8.1 — Current Scope Real Hotel Data & UX Patch
+- الحالة: **بانتظار الاعتماد 🔎** (رقعة تصحيح/تلميع داخل PR المرحلة 8 — قبل اعتماد Phase 8)
+- التاريخ: 2026-07-08
+- الطبيعة: **مقارنة محدودة بنطاق ما بُني حتى Phase 8 فقط** (حجوزات، نزلاء، front desk، مالية، طباعة) مع احتياجات الفندق الحقيقي والمشروع القديم كمصدر متطلبات فقط — **ليست Phase 9 وليست إعادة بناء ولا نسخًا من المشروع القديم**.
+
+### ما نُفّذ (Backend)
+- **نوعان فقط للحجز** على `Reservation.booking_kind`: `instant` (النزيل موجود الآن — الدخول يُفرض اليوم؛ يُرفض instant بتاريخ دخول مستقبلي) و`future` (لتاريخ لاحق). عند غياب الحقل يشتقّه الباكند من تاريخ الدخول — **لا quick/full booking ولا basic/advanced mode**.
+- **حقول تشغيلية جديدة** على الحجز (migration `reservations.0003`): `expected_arrival_time` · `booking_channel_name` · `expected_payment_method` (معلومة فقط — ليست دفعة) · `no_show_reason` · ولقطة النزيل: `primary_guest_nationality` · `primary_guest_document_type` · `primary_guest_document_number`. حقل `notes` يُستخدم كملاحظات داخلية؛ `cancellation_reason` يبقى إلزاميًا عند الإلغاء.
+- **الفاتورة**: حقلا لقطة آمنان `customer_email` و`customer_document_number` (migration `finance.0002`) يُملآن من نزيل الفوليو عند الإصدار؛ **مرجع الحجز قراءة علاقة آمنة** (`folio.reservation.reservation_number`) عبر الـ serializers — لا لقطة له لأن رقم الحجز لا يتغيّر؛ **تواريخ الإقامة وأرقام الغرف لم تُخزَّن عمدًا** (ليست لقطة بسيطة/آمنة — مرحلة لاحقة إن لزم).
+
+### ما نُفّذ (Frontend)
+- **نموذج حجز واحد** منظَّم في **خمسة أقسام** (`SectionCard`/`StepSummaryCard`): نوع وتواريخ (+عدد ليالٍ محسوب +وقت وصول متوقع) → بيانات النزيل (اسم/هاتف/بريد/جنسية/نوع ورقم وثيقة) → الغرف والتوفر (رسائل تعارض لكل سطر — القرار للباكند) → المصدر والملاحظات (مصدر/قناة/طلبات خاصة/ملاحظات داخلية/طريقة دفع متوقعة) → مراجعة وحفظ (ملخص + زر واضح). نافذة التفاصيل تعرض النوع والحقول الجديدة.
+- **`/hotel/front-desk`**: صف **5 بطاقات workflow** مركزية (`WorkflowCard`): وصول اليوم · النزلاء الحاليون · مغادرة اليوم · تسجيل دخول · تسجيل خروج — كلٌّ بأيقونة وعنوان وعدد حيّ ووصف وإجراء. صفوف الوصول/المغادرة عبر `ActionCard`. **نافذة الخروج** تعرض اسم النزيل ورقم الغرفة وتاريخ الدخول الفعلي وتاريخ الخروج المتوقع + تنبيه واضح أن التسوية المالية في قسم المالية + زر تأكيد — **بلا أي دفع داخل الخروج**.
+- **الطباعة** عبر مكوّن مركزي `PrintDocumentLayout`: فاتورة (ترويسة الفندق، بيانات العميل + بريد/وثيقة، فوليو + مرجع حجز، بنود، subtotal/tax/total/balance_at_issue، ملاحظات) · إيصال قبض (دافع، مبلغ+عملة، طريقة، مرجع، مستلم، توقيع) · سند صرف (مورّد، تصنيف، وصف، منشئ، توقيع).
+- **الدفع المختلط**: **لا نموذج تقسيم دفعة** — تعدد الدفعات على نفس الفوليو هو الآلية؛ نموذج الدفع يعرض تلميحًا («للدفع بأكثر من طريقة سجّل أكثر من دفعة.») وزر **«حفظ وإضافة دفعة أخرى»**.
+- **بطاقات مركزية جديدة** في `components/ui`: `WorkflowCard` · `ActionCard` · `SectionCard` · `StatusSummaryCard` · `DocumentPreviewCard` · `PrintDocumentLayout` · `StepSummaryCard` — design tokens فقط، أيقونات lucide، ترجمات **ar/en/tr** كاملة، RTL/LTR، responsive. رصيد الفوليو عبر `StatusSummaryCard`.
+
+### الملفات المضافة/المعدّلة
+- **جديدة:** مكوّنات الـ UI السبعة أعلاه · migrations `reservations.0003` و`finance.0002` · `docs/REAL_HOTEL_CURRENT_SCOPE_ALIGNMENT.md`.
+- **معدّلة (Backend):** `apps/reservations/{models,serializers}.py` · `apps/finance/{models,services,serializers}.py`.
+- **معدّلة (Frontend):** `components/ui/index.ts` · `components/hotel/reservations/ReservationsTab.tsx` · `components/hotel/frontdesk/FrontDeskPanel.tsx` · `components/hotel/finance/{FoliosTab,PaymentsTab,InvoicesTab,ExpensesTab}.tsx` · `lib/api/{types,reservations}.ts` · قواميس ar/en/tr · `styles/globals.css` · وثائق الاستراتيجية الثلاث (حجوزات/نزلاء/مالية).
+
+### ما لم يُنفَّذ (خارج النطاق، عمدًا)
+- **لا** موقع عام · **لا** حجز عام · **لا** مطعم/POS · **لا** housekeeping · **لا** maintenance · **لا** lost & found · **لا** shifts · **لا** daily close · **لا** تقارير متقدمة · **لا** إشعارات · **لا** WhatsApp · **لا** خرائط · **لا** عمولة منصة · **لا** توسيع اشتراكات · **لا** بوابة دفع/استرداد. **لم تبدأ Phase 9.** لم يُنسخ أي كود/تنسيق من المشروع القديم — استُخدم كمصدر متطلبات فقط.
+
+### الاعتماد
+- **لم تُعتمد بعد.** جزء من PR #7 (Phase 8) وبانتظار مراجعة المالك. **لا اعتماد ذاتيًا ولا دمج قبل الاعتماد النهائي.**

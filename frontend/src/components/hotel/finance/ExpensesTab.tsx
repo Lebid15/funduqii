@@ -5,7 +5,7 @@ import { PiggyBank, Plus, Printer } from "lucide-react";
 
 import {
   Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, FilterBar, FormField,
-  Input, LoadingState, Modal, Pagination, Select, Textarea, useToast, type Column,
+  Input, LoadingState, Modal, Pagination, PrintDocumentLayout, Select, Textarea, useToast, type Column,
 } from "@/components/ui";
 import { createExpense, getExpenseVoucher, listExpenses, voidExpense, type ExpenseBody } from "@/lib/api/finance";
 import { messageForError } from "@/lib/api/errors";
@@ -103,17 +103,30 @@ export function ExpensesTab() {
         onConfirm={async (reason) => { if (voidTarget) { await voidExpense(voidTarget.id, reason); setVoidTarget(null); notify(t.finance.saved); load(); } }} />
       <PrintModal open={voucher !== null} title={t.finance.print.voucherTitle} onClose={() => setVoucher(null)}>
         {voucher ? (
-          <div className="receipt">
-            <h3>{voucher.hotel.hotel_name}</h3>
-            <p className="muted">{t.finance.print.voucherTitle} · {voucher.expense.expense_number}</p>
-            <dl className="print-grid">
-              <div><dt>{t.finance.print.vendor}</dt><dd>{voucher.expense.vendor_name || "—"}</dd></div>
-              <div><dt>{t.finance.expenses.category}</dt><dd>{t.finance.categories[voucher.expense.category]}</dd></div>
-              <div><dt>{t.finance.print.date}</dt><dd>{formatDate(voucher.expense.paid_at, locale)}</dd></div>
-              <div><dt>{t.finance.print.method}</dt><dd>{t.finance.methods[voucher.expense.method]}</dd></div>
-              <div><dt>{t.finance.print.amount}</dt><dd><strong>{formatMoney(voucher.expense.amount, voucher.expense.currency, locale)}</strong></dd></div>
-            </dl>
-          </div>
+          <PrintDocumentLayout
+            hotelName={voucher.hotel.hotel_name}
+            hotelAddress={voucher.hotel.address}
+            hotelPhone={voucher.hotel.phone}
+            docTitle={t.finance.print.voucherTitle}
+            docNumber={voucher.expense.expense_number}
+            meta={[
+              { label: t.finance.print.vendor, value: voucher.expense.vendor_name || "—" },
+              { label: t.finance.expenses.category, value: t.finance.categories[voucher.expense.category] },
+              { label: t.finance.print.date, value: formatDate(voucher.expense.paid_at, locale) },
+              { label: t.finance.print.method, value: t.finance.methods[voucher.expense.method] },
+              { label: t.finance.print.amount, value: <strong>{formatMoney(voucher.expense.amount, voucher.expense.currency, locale)}</strong> },
+              { label: t.finance.expenses.description, value: voucher.expense.description },
+              ...(voucher.expense.reference
+                ? [{ label: t.finance.print.reference, value: voucher.expense.reference }]
+                : []),
+              ...(voucher.expense.created_by
+                ? [{ label: t.finance.print.createdBy, value: voucher.expense.created_by }]
+                : []),
+            ]}
+            notes={voucher.expense.notes || undefined}
+            notesLabel={t.finance.print.notes}
+            signatureLabel={t.finance.print.signature}
+          />
         ) : null}
       </PrintModal>
     </>

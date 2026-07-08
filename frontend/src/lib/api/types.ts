@@ -329,22 +329,34 @@ export interface ReservationLine {
   notes: string;
 }
 
+export type BookingKind = "instant" | "future";
+
+export type ExpectedPaymentMethod = "" | "cash" | "card" | "bank_transfer" | "other";
+
 export interface Reservation {
   id: number;
   reservation_number: string;
   status: ReservationStatus;
   source: ReservationSource;
+  booking_kind: BookingKind;
   check_in_date: string;
   check_out_date: string;
+  expected_arrival_time: string | null;
   nights: number;
   primary_guest_name: string;
   primary_guest_phone: string;
   primary_guest_email: string;
+  primary_guest_nationality: string;
+  primary_guest_document_type: string;
+  primary_guest_document_number: string;
   adults: number;
   children: number;
   total_guests: number;
   notes: string;
   special_requests: string;
+  booking_channel_name: string;
+  expected_payment_method: ExpectedPaymentMethod;
+  no_show_reason: string;
   cancellation_reason: string;
   cancelled_at: string | null;
   hold_expires_at: string | null;
@@ -518,6 +530,7 @@ export interface Payment {
   id: number;
   folio: number;
   folio_number: string;
+  reservation_number: string | null;
   receipt_number: string;
   amount: string;
   currency: string;
@@ -530,6 +543,7 @@ export interface Payment {
   void_reason: string;
   voided_at: string | null;
   voided_by: string | null;
+  created_by: string | null;
   created_at: string;
 }
 
@@ -587,6 +601,7 @@ export interface Invoice {
   id: number;
   folio: number;
   folio_number: string;
+  reservation_number: string | null;
   invoice_number: string;
   status: InvoiceStatus;
   currency: string;
@@ -598,6 +613,8 @@ export interface Invoice {
   balance_at_issue: string;
   customer_name: string;
   customer_phone: string;
+  customer_email: string;
+  customer_document_number: string;
   notes: string;
   void_reason: string;
   voided_at: string | null;
@@ -621,6 +638,7 @@ export interface Expense {
   void_reason: string;
   voided_at: string | null;
   voided_by: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 }

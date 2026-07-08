@@ -5,7 +5,7 @@ import { FileCheck, Printer, ReceiptText } from "lucide-react";
 
 import {
   Badge, Button, Card, DataTable, EmptyState, ErrorState, FilterBar, FormField,
-  Input, LoadingState, Pagination, Select, useToast, type Column,
+  Input, LoadingState, Pagination, PrintDocumentLayout, Select, useToast, type Column,
 } from "@/components/ui";
 import { getInvoicePrint, issueInvoice, listInvoices, voidInvoice } from "@/lib/api/finance";
 import { messageForError } from "@/lib/api/errors";
@@ -104,13 +104,38 @@ export function InvoicesTab() {
         onConfirm={async (reason) => { if (voidTarget) { await voidInvoice(voidTarget.id, reason); setVoidTarget(null); notify(t.finance.saved); load(); } }} />
       <PrintModal open={printDoc !== null} title={t.finance.print.invoiceTitle} onClose={() => setPrintDoc(null)}>
         {printDoc ? (
-          <div className="receipt">
-            <h3>{printDoc.hotel.hotel_name}</h3>
-            <p className="muted">{t.finance.print.invoiceTitle} · {printDoc.invoice.invoice_number}</p>
-            <dl className="print-grid">
-              <div><dt>{t.finance.print.customer}</dt><dd>{printDoc.invoice.customer_name || "—"}</dd></div>
-              <div><dt>{t.finance.print.date}</dt><dd>{printDoc.invoice.issued_at ? formatDate(printDoc.invoice.issued_at, locale) : "—"}</dd></div>
-            </dl>
+          <PrintDocumentLayout
+            hotelName={printDoc.hotel.hotel_name}
+            hotelAddress={printDoc.hotel.address}
+            hotelPhone={printDoc.hotel.phone}
+            docTitle={t.finance.print.invoiceTitle}
+            docNumber={printDoc.invoice.invoice_number}
+            meta={[
+              { label: t.finance.print.customer, value: printDoc.invoice.customer_name || "—" },
+              { label: t.finance.print.date, value: printDoc.invoice.issued_at ? formatDate(printDoc.invoice.issued_at, locale) : "—" },
+              ...(printDoc.invoice.customer_phone
+                ? [{ label: t.finance.print.customerPhone, value: printDoc.invoice.customer_phone }]
+                : []),
+              ...(printDoc.invoice.customer_email
+                ? [{ label: t.finance.print.customerEmail, value: printDoc.invoice.customer_email }]
+                : []),
+              ...(printDoc.invoice.customer_document_number
+                ? [{ label: t.finance.print.customerDocument, value: printDoc.invoice.customer_document_number }]
+                : []),
+              { label: t.finance.print.folio, value: printDoc.invoice.folio_number },
+              ...(printDoc.invoice.reservation_number
+                ? [{ label: t.finance.print.reservation, value: printDoc.invoice.reservation_number }]
+                : []),
+            ]}
+            totals={[
+              { label: t.finance.print.subtotal, value: formatMoney(printDoc.invoice.subtotal, printDoc.invoice.currency, locale) },
+              { label: t.finance.print.tax, value: formatMoney(printDoc.invoice.tax_total, printDoc.invoice.currency, locale) },
+              { label: t.finance.print.total, value: <strong>{formatMoney(printDoc.invoice.total, printDoc.invoice.currency, locale)}</strong> },
+              { label: t.finance.print.balanceAtIssue, value: formatMoney(printDoc.invoice.balance_at_issue, printDoc.invoice.currency, locale) },
+            ]}
+            notes={printDoc.invoice.notes || undefined}
+            notesLabel={t.finance.print.notes}
+          >
             <table className="print-table">
               <thead><tr><th>{t.finance.chargeForm.description}</th><th>{t.finance.chargeForm.quantity}</th><th>{t.finance.print.total}</th></tr></thead>
               <tbody>
@@ -119,12 +144,7 @@ export function InvoicesTab() {
                 ))}
               </tbody>
             </table>
-            <dl className="print-grid print-grid--totals">
-              <div><dt>{t.finance.print.subtotal}</dt><dd>{formatMoney(printDoc.invoice.subtotal, printDoc.invoice.currency, locale)}</dd></div>
-              <div><dt>{t.finance.print.tax}</dt><dd>{formatMoney(printDoc.invoice.tax_total, printDoc.invoice.currency, locale)}</dd></div>
-              <div><dt>{t.finance.print.total}</dt><dd><strong>{formatMoney(printDoc.invoice.total, printDoc.invoice.currency, locale)}</strong></dd></div>
-            </dl>
-          </div>
+          </PrintDocumentLayout>
         ) : null}
       </PrintModal>
     </>

@@ -260,3 +260,24 @@ no token/JWT in `localStorage` (auth stays in HttpOnly cookies via the BFF).
   **automatic early-checkout proration** (kept manual — see §9).
 - A broader PostgreSQL + large-dataset performance/concurrency pass is planned
   before production.
+
+## 14. Phase 8.1 patch (current-scope real-hotel alignment)
+
+- **Invoice snapshot additions** (migration `finance.0002`): `customer_email`
+  and `customer_document_number`, filled from the folio's guest at issue time
+  like the existing `customer_name`/`customer_phone` — simple, safe snapshots.
+- **Reservation reference on prints** is a **safe relation read**
+  (`folio.reservation.reservation_number`, exposed by the serializers) —
+  reservation numbers never change, so no snapshot is stored. Stay dates and
+  room numbers are deliberately **not** stored on the invoice (not
+  simple/safe to freeze; may come in a later phase).
+- **Richer print layouts** via the central `PrintDocumentLayout`: invoice
+  (hotel header, customer contact/document, folio & reservation reference,
+  lines, subtotal/tax/total/balance-at-issue, notes), receipt (payer, amount,
+  method, reference, received-by, signature) and expense voucher (vendor,
+  category, description, created-by, signature).
+- **Mixed payments**: still **no payment-split model** — multiple `Payment`s
+  on one folio remain the mechanism; the payment form now shows a hint and a
+  "Save & add another payment" action.
+
+See `docs/REAL_HOTEL_CURRENT_SCOPE_ALIGNMENT.md`.
