@@ -1208,3 +1208,174 @@ export interface DailyCloseListItem {
   closed_at: string | null;
   totals_json: DailyCloseTotals;
 }
+
+/* ==========================================================================
+ * Phase 13 — Reports DTOs (mirror /api/v1/hotel/reports/). Read-only.
+ * ======================================================================== */
+
+export interface ReportBucket {
+  key: string;
+  count: number;
+  total?: string;
+}
+
+export interface ReportDayRow {
+  date: string;
+  count: number;
+  total: string;
+}
+
+export interface ReportPage<T> {
+  count: number;
+  page: number;
+  page_size: number;
+  results: T[];
+}
+
+export interface OverviewReport {
+  date_from: string;
+  date_to: string;
+  reservations_count: number;
+  confirmed_reservations_count: number;
+  cancelled_reservations_count: number;
+  expired_reservations_count: number;
+  arrivals_count: number;
+  departures_count: number;
+  in_house_count: number;
+  occupancy_rate: string;
+  rooms_total: number;
+  rooms_available: number;
+  rooms_dirty: number;
+  rooms_maintenance: number;
+  total_payments: string;
+  total_expenses: string;
+  net_cashflow_simple: string;
+  service_orders_total: number;
+  service_orders_posted_total: string;
+  open_housekeeping_tasks: number;
+  open_maintenance_requests: number;
+  open_lost_found_items: number;
+  open_shifts_count: number;
+  closed_days_count: number;
+}
+
+export interface ReservationsReport {
+  by_status: ReportBucket[];
+  by_source: ReportBucket[];
+  by_booking_kind: ReportBucket[];
+  average_nights: string;
+  by_room_type: ReportBucket[];
+  arrivals_by_day: Record<string, number>;
+  departures_by_day: Record<string, number>;
+  list: ReportPage<{
+    id: number;
+    reservation_number: string;
+    guest_name: string;
+    status: ReservationStatus;
+    source: string;
+    booking_kind: string;
+    check_in_date: string;
+    check_out_date: string;
+    nights: number;
+  }>;
+}
+
+export interface OccupancyReport {
+  date_from: string;
+  date_to: string;
+  occupancy_rate: string;
+  rooms_capacity: number;
+  occupied_by_day: Record<string, number>;
+  in_house_now: number;
+  room_status_now: Record<string, number>;
+  stays_by_room_type: ReportBucket[];
+}
+
+export interface GuestsReport {
+  new_guests_count: number;
+  by_nationality: ReportBucket[];
+  repeat_guests_count: number;
+  current_residents_count: number;
+  checked_out_count: number;
+  list: ReportPage<{
+    id: number;
+    full_name: string;
+    nationality: string;
+    phone: string;
+    created_at: string;
+  }>;
+}
+
+export interface FinanceReport {
+  date_from: string;
+  date_to: string;
+  payments_by_method: ReportBucket[];
+  payments_by_day: ReportDayRow[];
+  expenses_by_category: ReportBucket[];
+  expenses_by_day: ReportDayRow[];
+  total_payments: string;
+  total_expenses: string;
+  net_cashflow_simple: string;
+  invoices_issued_count: number;
+  invoices_issued_total: string;
+  open_folios_count: number;
+  folios_closed_in_range: number;
+  voided: { payments: number; expenses: number; charges: number };
+}
+
+export interface ServicesReport {
+  orders_count: number;
+  by_status: ReportBucket[];
+  by_source: ReportBucket[];
+  delivered_posted: number;
+  delivered_unposted: number;
+  posted_to_folio_total: string;
+  top_items: Array<ReportBucket & { quantity: string }>;
+  cancelled_count: number;
+}
+
+export interface OperationsReport {
+  housekeeping_by_status: ReportBucket[];
+  cleaning_completed_count: number;
+  maintenance_by_status: ReportBucket[];
+  maintenance_by_category: ReportBucket[];
+  maintenance_by_priority: ReportBucket[];
+  rooms_under_maintenance_now: number;
+  lost_found_by_status: ReportBucket[];
+  lost_found_by_category: ReportBucket[];
+  urgent_open_count: number;
+}
+
+export interface ShiftsReport {
+  shifts_by_status: ReportBucket[];
+  closed_shifts_count: number;
+  shifts_with_difference: number;
+  total_expected_cash: string;
+  total_actual_cash: string;
+  total_cash_difference: string;
+  handovers_by_status: ReportBucket[];
+  unassigned_movements: UnassignedMovements;
+  closed_days_count: number;
+  shifts: Array<{
+    shift_number: string;
+    business_date: string;
+    status: ShiftStatus;
+    responsible: string;
+    opening_cash: string;
+    expected_cash: string;
+    actual_cash: string | null;
+    cash_difference: string;
+    difference_reason: string;
+  }>;
+  today_unassigned: UnassignedMovements;
+}
+
+export interface DailyCloseReportRow {
+  id: number;
+  close_number: string;
+  business_date: string;
+  status: DailyCloseStatus;
+  closed_by: string;
+  closed_at: string | null;
+  totals: DailyCloseTotals;
+}

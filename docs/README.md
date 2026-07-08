@@ -86,3 +86,7 @@ maps, etc.) will be added here as the project progresses through its phases.
 ## Phase 12 — Shifts + Handover + Daily Close
 
 - [SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md) — why this is a daily-work organizer and not attendance/payroll, the shift cash drawer (FK attachment inside the finance services; expected-cash math; difference-needs-reason), handover workflow with the recipient guard, the business date, the daily-close snapshot + the safe lock boundaries (voids stay allowed), and what is deferred (attendance/payroll/HR/scheduling/night audit/reopen/reports).
+
+## Phase 13 — Reports + Analytics
+
+- [REPORTS_ANALYTICS_STRATEGY.md](REPORTS_ANALYTICS_STRATEGY.md) — why this is not BI (read-only, no new models, backend-computed Decimal numbers), the data sources, ranged filters with the 366-day cap and hotel business dates, stay-derived occupancy (never Room.status), the finance limits (net movement is never "profit"; voided excluded and reported), CSV export rules (permission AND, 5000-row cap), print via the central layout, no chart libraries, and what is deferred (BI/designer/scheduled/email/PDF/advanced accounting).

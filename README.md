@@ -4,26 +4,27 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 12 — Shifts + Handover + Daily Close (pending review).**
+> **Current status: Phase 13 — Reports + Analytics (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
 > check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
 > orders), Phase 10 (housekeeping + maintenance + lost & found) and Phase 11
-> (staff + flexible permissions). Phase 12 adds the **daily work organizer**:
-> working **shifts** (`SH00001`) with a cash drawer — payments/expenses
-> auto-attach to the creator's open shift inside the finance services,
-> expected cash is server-computed and a counted difference requires a
-> reason — **shift handovers** (`HO00001`) with a recipient/manager-only
-> accept-or-reject flow, and an operational **daily close** (`DC00001`) that
-> snapshots the business date and **locks new dated activity** (payments,
-> expenses, service postings, shifts) for closed days; finance voids stay
-> possible by design. Console at `/hotel/shifts` (Overview / Current shift /
-> Shifts / Handovers / Daily close), guarded by `shifts.*` / `daily_close.*`.
-> **Not attendance, not payroll, not HR, not scheduling, not a full
-> accounting close — and never a new source of financial truth** (Phase 8
-> records stay that).
+> (staff + flexible permissions) and Phase 12 (shifts + handover + daily
+> close). Phase 13 adds **READ-ONLY reports & analytics** over everything
+> built so far — overview, reservations, occupancy (derived from stays,
+> never a Room.status), guests, finance (net movement, deliberately NEVER
+> called profit; voided records excluded and reported), services, operations
+> and shifts/daily-close — all backend-computed with Decimal money, ranged
+> by hotel business dates (366-day cap), under `/api/v1/hotel/reports/`
+> with NO new models and NO write endpoints. Console at `/hotel/reports`
+> (8 tabs + global date filters + quick ranges), simple CSV export for three
+> tabular reports behind `reports.export`, and an overview print via the
+> central print layout. Guarded by `reports.view/finance/operations/shifts/
+> export`; a suspended hotel may still READ reports (read-only by nature).
+> **Not BI, no report designer, no scheduled/email reports, no chart
+> libraries, no server PDF, no advanced accounting.**
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -54,6 +55,7 @@ funduqii/
 │  ├─ apps/operations/      # housekeeping + maintenance + lost & found /api/v1/hotel/operations/ (Phase 10)
 │  ├─ apps/staff/           # staff + permission grants management /api/v1/hotel/staff/ (Phase 11)
 │  ├─ apps/shifts/          # shifts + handover + daily close /api/v1/hotel/shifts/ (Phase 12)
+│  ├─ apps/reports/         # read-only reports & analytics /api/v1/hotel/reports/ (Phase 13)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -473,6 +475,30 @@ records remain the single source of financial truth. No DELETE routes.
 | `POST .../daily-close/close/` | Validates no open shifts / no pending handovers / never twice, then locks the date for NEW payments, expenses, service postings and shifts (voids stay allowed by design) |
 
 See [docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md).
+
+### Report endpoints (Phase 13)
+
+Under `/api/v1/hotel/reports/`, scoped to the caller's hotel and guarded by
+`reports.*`. **GET-only** (POST → 405): reports never write anything, so a
+suspended hotel may still read them. NO new models — every number is computed
+on demand from the source records (Decimal money, serialized as strings).
+Ranges default to the current month (hotel business date) and are capped at
+366 days; occupancy is derived from stay intervals, never from Room.status.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/reports/overview/` | Ranged counters + `net_cashflow_simple` (deliberately never "profit") |
+| `GET .../reports/reservations/` (+`export.csv`) | Status/source/booking-kind/room-type buckets, avg nights, per-day arrivals/departures, paginated list |
+| `GET .../reports/occupancy/` | Stay-derived per-day occupancy + rate, live room-status counts, room-type breakdown |
+| `GET .../reports/guests/` | New/repeat guests, top nationalities, residents, paginated list |
+| `GET .../reports/finance/` (+`payments/export.csv`) | Payments by method/day, expenses by category/day, invoices, folios, voided counts (excluded from totals) — needs `reports.finance` |
+| `GET .../reports/services/` | Orders by status/source, posted vs unposted delivered, posted totals, top items |
+| `GET .../reports/operations/` | HK/MT/LF buckets + urgent + rooms under maintenance — needs `reports.operations` |
+| `GET .../reports/shifts/` (+`export.csv`) · `GET .../reports/daily-close/`(+`/{date}/`) | Shifts with drawer differences, handovers, unassigned movements, closed days + stored snapshots — needs `reports.shifts` |
+
+CSV export additionally requires `reports.export` (AND with the section
+permission), respects the same filters/isolation, and is capped at 5000 rows.
+See [docs/REPORTS_ANALYTICS_STRATEGY.md](docs/REPORTS_ANALYTICS_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

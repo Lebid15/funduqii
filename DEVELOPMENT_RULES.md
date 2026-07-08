@@ -221,6 +221,24 @@ these rules is a defect, not a shortcut.
   no payroll, no scheduling anywhere in this domain.
 - Full rules: [docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md).
 
+### 8j. Reports & analytics (from Phase 13)
+- **Reports are READ-ONLY.** No report endpoint ever writes anything —
+  operational or financial. GET-only; a suspended hotel may still read them.
+- **The backend computes every number.** Hotel-scoped querysets at the root,
+  Decimal-only money via `money()` serialized as strings, never float, never
+  a frontend-computed sensitive figure.
+- **Occupancy is derived from stay intervals, never Room.status** — there is
+  no `occupied` room status anywhere.
+- **`net_cashflow_simple` is never called profit** (payments − expenses is
+  operational movement, not an accounting P&L); voided records are excluded
+  from every total and reported separately.
+- Ranged filters validate from ≤ to with a 366-day cap; empty ranges return
+  zeros, never 500. CSV export requires `reports.export` AND the section
+  permission, respects the same filters/isolation, caps at 5000 rows, and
+  carries no sensitive columns. The DailyClose snapshot is displayed as
+  documentation; live numbers are recomputed from source records.
+- Full rules: [docs/REPORTS_ANALYTICS_STRATEGY.md](docs/REPORTS_ANALYTICS_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.
