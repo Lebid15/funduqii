@@ -175,5 +175,11 @@ class CheckOutService:
         # Documented decision: a vacated room becomes `dirty` for housekeeping.
         if stay.room.status == RoomStatus.AVAILABLE:
             change_room_status(stay.room, RoomStatus.DIRTY, note="", user=user)
+        # Phase 10: auto-raise ONE check-out cleaning task (idempotent; same
+        # transaction — it has no external dependencies that could fail).
+        # Imported lazily to keep app loading order simple.
+        from apps.operations.services import create_checkout_cleaning_task
+
+        create_checkout_cleaning_task(stay, user=user)
         _log(stay, previous, StayStatus.CHECKED_OUT, note="checked out", user=user)
         return stay

@@ -823,3 +823,169 @@ export interface ServiceTicket {
   }>;
   totals: ServiceOrderTotals;
 }
+
+/* ==========================================================================
+ * Phase 10 — Operations DTOs (mirror /api/v1/hotel/operations/).
+ * ======================================================================== */
+
+export type OperationPriority = "low" | "normal" | "high" | "urgent";
+
+export type HousekeepingTaskType =
+  | "checkout_cleaning"
+  | "daily_cleaning"
+  | "deep_cleaning"
+  | "inspection"
+  | "other";
+
+export type HousekeepingStatus =
+  | "pending"
+  | "assigned"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+export interface OperationStatusLogEntry {
+  id: number;
+  previous_status: string;
+  new_status: string;
+  note: string;
+  changed_by_name: string;
+  created_at: string;
+}
+
+export interface HousekeepingTaskListItem {
+  id: number;
+  task_number: string;
+  room: number | null;
+  room_number: string;
+  stay: number | null;
+  task_type: HousekeepingTaskType;
+  status: HousekeepingStatus;
+  priority: OperationPriority;
+  assigned_to: number | null;
+  assigned_to_name: string;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface HousekeepingTask extends HousekeepingTaskListItem {
+  room_status: string;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  notes: string;
+  internal_notes: string;
+  status_logs: OperationStatusLogEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type MaintenanceCategory =
+  | "electrical"
+  | "plumbing"
+  | "hvac"
+  | "furniture"
+  | "cleaning_issue"
+  | "safety"
+  | "other";
+
+export type MaintenanceStatus =
+  | "open"
+  | "assigned"
+  | "in_progress"
+  | "resolved"
+  | "closed"
+  | "cancelled";
+
+export type RoomBlockStatus = "none" | "maintenance" | "out_of_service";
+
+export interface MaintenanceRequestListItem {
+  id: number;
+  request_number: string;
+  room: number | null;
+  room_number: string;
+  stay: number | null;
+  title: string;
+  category: MaintenanceCategory;
+  priority: OperationPriority;
+  status: MaintenanceStatus;
+  affects_room_availability: boolean;
+  room_block_status: RoomBlockStatus;
+  assigned_to: number | null;
+  assigned_to_name: string;
+  reported_at: string;
+  resolved_at: string | null;
+  closed_at: string | null;
+}
+
+export interface MaintenanceRequest extends MaintenanceRequestListItem {
+  room_status: string;
+  description: string;
+  started_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  resolution_notes: string;
+  internal_notes: string;
+  status_logs: OperationStatusLogEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type LostFoundCategory =
+  | "electronics"
+  | "documents"
+  | "clothing"
+  | "jewelry"
+  | "money"
+  | "luggage"
+  | "other";
+
+export type LostFoundStatus =
+  | "found"
+  | "stored"
+  | "claimed"
+  | "returned"
+  | "disposed"
+  | "closed";
+
+export interface LostFoundItemListItem {
+  id: number;
+  item_number: string;
+  title: string;
+  category: LostFoundCategory;
+  status: LostFoundStatus;
+  found_at: string;
+  found_location: string;
+  room: number | null;
+  room_number: string;
+  stay: number | null;
+  guest: number | null;
+  guest_name: string;
+  stored_location: string;
+  returned_at: string | null;
+}
+
+export interface LostFoundItem extends LostFoundItemListItem {
+  description: string;
+  found_by_name: string;
+  claimed_by_name: string;
+  claimed_by_phone: string;
+  claimed_at: string | null;
+  disposed_at: string | null;
+  closed_at: string | null;
+  notes: string;
+  internal_notes: string;
+  status_logs: OperationStatusLogEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OperationsOverview {
+  dirty_rooms: number;
+  hk_pending: number;
+  hk_in_progress: number;
+  open_maintenance: number;
+  rooms_under_maintenance: number;
+  lost_found_open: number;
+  urgent_tasks: number;
+}

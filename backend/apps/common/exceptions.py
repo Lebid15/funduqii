@@ -174,6 +174,39 @@ class ServiceItemUnavailable(FunduqiiAPIException):
     default_code = "service_item_unavailable"
 
 
+# --- Operations: housekeeping / maintenance / lost & found (Phase 10) -------
+
+
+class InvalidOperationStatusTransition(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This operational status change is not allowed."
+    default_code = "invalid_operation_status_transition"
+
+
+class OperationNotEditable(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This record can no longer be modified."
+    default_code = "operation_not_editable"
+
+
+class RoomBlockedByMaintenance(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room is blocked by maintenance and cannot be made available."
+    default_code = "room_blocked_by_maintenance"
+
+
+class ClaimantRequired(FunduqiiAPIException):
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = "A claimant name (or linked guest) is required."
+    default_code = "claimant_required"
+
+
+class DisposalReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to dispose of this item."
+    default_code = "disposal_reason_required"
+
+
 # --- Reservations & availability (Phase 6) ---------------------------------
 
 

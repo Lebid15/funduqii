@@ -155,6 +155,27 @@ these rules is a defect, not a shortcut.
   rows in use are deactivated, not deleted. All status changes are logged.
 - Full rules: [docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md).
 
+### 8g. Operations — housekeeping / maintenance / lost & found (from Phase 10)
+- **Room status is only ever changed through `apps/rooms/services.change_room_status`**
+  (validated + logged). `apps/operations` never writes `Room.status` directly,
+  and there is **no `occupied` room status** — occupancy stays derived from
+  in-house stays.
+- **Housekeeping never overrides a maintenance block.** A room that is
+  `maintenance`/`out_of_service`/`archived`, or that has an open
+  availability-affecting maintenance request, cannot be made `available` from
+  housekeeping (`room_blocked_by_maintenance`). Releasing a room is always an
+  explicit action, never a side effect.
+- **Closing a maintenance request never auto-releases the room.** Close is
+  resolve-gated and requires an explicit `room_next_status`
+  (keep / dirty / available); `available` is refused while another open
+  blocking request exists.
+- **Check-out auto-creates ONE `checkout_cleaning` task per stay** (idempotent,
+  same transaction); cancelling any task/request requires a reason; disposing a
+  lost & found item requires a reason; returning one requires a claimant name
+  or linked guest. Nothing is ever hard-deleted (no DELETE routes) and every
+  status change is logged in a lightweight per-record status log.
+- Full rules: [docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

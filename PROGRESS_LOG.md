@@ -4,7 +4,7 @@
 > **قاعدة التحديث:** بعد إغلاق أي مرحلة، أضِف قسمها هنا (أو حدّثه) قبل بدء المرحلة التالية.
 > **المرجعان الأساسيان:** [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) (خطة المشروع) و [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) (قواعد التطوير).
 > **حالة الاعتماد:** لا تُعلَّم مرحلة «مكتملة ✅» إلا بعد اعتماد المالك. المراحل المنفَّذة والمُختبَرة بانتظار المراجعة تُعلَّم «بانتظار الاعتماد 🔎».
-> **آخر تحديث:** 2026-07-07
+> **آخر تحديث:** 2026-07-08
 
 ---
 
@@ -1050,3 +1050,51 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #8 (commit `43ce68d` على `origin/main@120e455`، mergeable_state: clean، backend 346/346، frontend lint/typecheck/build ناجحة، `/hotel/services` مبني).
 - ملاحظة الاعتماد: «تم اعتماد Phase 9 بعد Final Acceptance Review. المرحلة أضافت أساس طلبات الخدمات الداخلية: ServiceCategory, ServiceItem, ServiceOrder, ServiceOrderItem, ServiceOrderStatusLog، مع ترحيل آمن إلى Folio عبر FolioCharge، ومنع الترحيل المكرر، وتطبيق tenant isolation والصلاحيات وhotel suspended. لا POS كامل، لا inventory/stock، لا payment gateway، لا public ordering، ولا Phase 10.»
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 10 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 10 — Housekeeping + Maintenance + Lost & Found
+- الحالة: **بانتظار الاعتماد 🔎** (نُفِّذت واختُبرت — لا تُعتمد ذاتيًا؛ الاعتماد قرار المالك حصرًا)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: —
+- الهدف: أساس العمليات التشغيلية اليومية المرتبطة بالغرف — **مهام التنظيف** (HK00001) و**طلبات الصيانة** (MT00001، قد تحجب الغرفة maintenance/out_of_service) و**سجل المفقودات** (LF00001) — بتكامل آمن مع حالة الغرفة (Phase 5) وتدفق المغادرة (Phase 7). **بلا Shifts، بلا Daily Close، بلا تقارير متقدمة، بلا Inventory، بلا Purchasing.**
+- الأساس: بُنيت من **`origin/main`** (98a3d53، بعد دمج Phase 9 عبر PR #8).
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/operations`** (لا داخل rooms/stays/finance) مع **وحدة خدمات واحدة** (`services.py`) هي مسار الكتابة الوحيد — الـ views لا تغيّر أي حالة مباشرة، و**كل تغيير لحالة الغرفة يمر حصرًا عبر `rooms.services.change_room_status`** (مسار Phase 5 المضبوط: تحقق + تسجيل في RoomStatusLog).
+- **النماذج:** `HousekeepingTask` (غرفة مطلوبة عند الإنشاء — FK بـ SET_NULL لبقاء التاريخ؛ إقامة اختيارية؛ نوع checkout/daily/deep/inspection/other؛ أولوية low/normal/high/urgent؛ طوابع started/completed/cancelled؛ سبب إلزامي للإلغاء) · `MaintenanceRequest` (غرفة/إقامة اختياريتان؛ عنوان/وصف/تصنيف electrical…other؛ `affects_room_availability` + `room_block_status` maintenance/out_of_service؛ resolution_notes؛ طوابع كاملة) · `LostFoundItem` (عنوان/وصف/تصنيف electronics…other؛ مكان العثور/التخزين؛ روابط اختيارية غرفة/إقامة/نزيل؛ بيانات المستلم؛ **بلا صور/ملفات/باركود**) · **3 سجلات حالة خفيفة** (HK/MT/LF StatusLog — تشغيلية، ليست Audit عامًا) · `OperationsNumberSequence` (عدّاد لكل فندق ولكل نوع بقفل صف — HK/MT/LF منفصلة عن الترقيم المالي والخدمي).
+- **سير الحالات:** HK: `pending→assigned→in_progress→completed` (+إلغاء بسبب)؛ MT: `open→assigned→in_progress→resolved→closed` (+إلغاء بسبب من الحالات المفتوحة فقط)؛ LF: `found→stored→claimed→returned→closed` أو `found/stored→disposed→closed`. نقاط `status/` العامة للتقدم الأمامي غير النهائي فقط؛ الإجراءات النهائية (`complete/`,`resolve/`,`close/`,`cancel/`,`claim/`,`return/`,`dispose/`) نقاط مخصصة بمدخلاتها الإلزامية؛ السجلات المكتملة/المغلقة/الملغاة مجمّدة (`409 operation_not_editable`)؛ **لا DELETE إطلاقًا**؛ كل تغيير حالة يُسجَّل.
+- **تكامل حالة الغرفة:** بدء مهمة تنظيف → الغرفة `cleaning` (فقط إن كانت dirty/available)؛ إكمالها **مع إتاحة صريحة** → `available` فقط إذا لم تكن الغرفة maintenance/out_of_service/archived **ولا يوجد طلب صيانة حاجب مفتوح** (وإلا `409 room_blocked_by_maintenance`)؛ إكمال بلا إتاحة أو إلغاء مهمة جارية → `cleaning` تعود `dirty`؛ طلب صيانة حاجب → الغرفة `maintenance`/`out_of_service` عند الإنشاء/التعديل؛ **الإغلاق لا يحرر الغرفة تلقائيًا أبدًا** — `close/` (بعد resolved فقط) يطلب `room_next_status` صريحًا keep/dirty/available، و`available` تُرفض مع وجود طلب حاجب آخر؛ إلغاء طلب حاجب يعيد الغرفة `dirty` (لا available) إن لم يبقَ حاجب آخر؛ **لا `occupied` في Room.status** — الإشغال يبقى مشتقًا من Stay.
+- **تكامل المغادرة (Phase 7):** check-out ما يزال يجعل الغرفة dirty كما هو؛ **أُضيف auto-create موثّق ومُختبَر**: مهمة `checkout_cleaning` واحدة لكل إقامة (idempotent بفحص exists على الإقامة+النوع) داخل نفس المعاملة (لا اعتماديات خارجية يمكن أن تفشل).
+- **الصلاحيات:** اكتمل قسما `housekeeping` (view/create/update/cancel/status_update/assign) و`maintenance` (+close) وأُضيف `lost_found` (view/create/update/status_update/close) في السجل المركزي؛ المدير يملك الكل؛ Staff بمنح صريح ولا يفتح قسمٌ قسمًا آخر؛ مالك المنصة بلا عضوية ممنوع؛ عزل كامل (استعلامات مقيدة بالفندق + 404 للمراجع الأجنبية + `400 cross_tenant_reference` للمُسند غير العضو)؛ **الفندق المعلّق قراءة فقط** (`403 hotel_suspended` لكل كتابة)؛ `overview/` تكفيها أي صلاحية عرض من الثلاث (فئة any-of مخصصة).
+- **أخطاء جديدة:** `invalid_operation_status_transition`(400) · `operation_not_editable`(409) · `room_blocked_by_maintenance`(409) · `claimant_required`(422) · `disposal_reason_required`(400).
+- **APIs تحت `/api/v1/hotel/operations/`**: `overview/` (غرف متسخة/تنظيف منتظر وجارٍ/صيانة مفتوحة/غرف محجوبة/مفقودات مفتوحة/مهام عاجلة) · `housekeeping/`(+`{id}/`,`status/`,`assign/`,`complete/`,`cancel/`) · `maintenance/`(+`{id}/`,`status/`,`assign/`,`resolve/`,`close/`,`cancel/`) · `lost-found/`(+`{id}/`,`status/`,`claim/`,`return/`,`dispose/`,`close/`) — كلها paginated بفلاتر بحث/حالة/نوع/تصنيف/أولوية/غرفة/مُسند/تاريخ/ترتيب حسب القسم.
+
+### ما نُفّذ (Frontend)
+- عنصر **«التشغيل»** في sidebar الفندق ومسار **`/hotel/operations`** بخمسة تبويبات: **نظرة عامة** (7 بطاقات WorkflowCard) · **التنظيف** (فلاتر حالة/أولوية/غرفة + إنشاء + إجراءات: أسند إليّ/بدء/إكمال بخيار «إتاحة الغرفة أو إبقاؤها متسخة»/إلغاء بسبب) · **الصيانة** (إنشاء بعنوان/وصف/تصنيف/أولوية/غرفة اختيارية/يؤثر على التوفر + اختيار maintenance أو out_of_service؛ إجراءات: أسند إليّ/بدء/حل/إغلاق بخيار حالة الغرفة التالية keep/dirty/available/إلغاء بسبب) · **المفقودات** (تسجيل/حفظ/مطالبة/تسليم/إتلاف بسبب/إغلاق — بلا صور/ملفات) · **لوحة حالة الغرف** (6 مجموعات حسب الحالة: available/dirty/cleaning/maintenance/out_of_service/archived؛ رقم الغرفة/الطابق/النوع/آخر مهمة/آخر طلب مفتوح؛ **الإشغال شارة «إقامة حالية» مشتقة من Stay — ليس حالة غرفة**؛ أزرار سريعة: مهمة تنظيف/صيانة/جعلها متسخة/جعلها متاحة حيث يكون آمنًا).
+- الإسناد في الواجهة «أسند إليّ» عمليًا (لا endpoint لسرد أعضاء الفندق بعد — إدارة الموظفين مرحلة لاحقة؛ الباكند يدعم الإسناد لأي عضو). مكونات مركزية فقط + tokens (أُضيف modifier مركزي واحد `board-grid--wide`) + ترجمات **ar/en/tr كاملة** (namespace `operations`، تكافؤ **1154=1154=1154**) + RTL/LTR + حالات موحّدة + responsive. لا localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/operations/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration `operations.0001` · **جديدة (Frontend):** `app/hotel/operations/page.tsx` · `components/hotel/operations/{OperationsPanel,OverviewTab,HousekeepingTab,MaintenanceTab,LostFoundTab,RoomBoardTab}.tsx` · `lib/api/operations.ts` · والوثيقة `docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/common/exceptions.py` (+5) · `apps/rbac/registry.py` (إكمال housekeeping/maintenance + إضافة lost_found) · `apps/stays/services.py` (auto-create مهمة تنظيف المغادرة) · `config/settings/base.py` · `config/urls.py`.
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` (+4 tone helpers) · قواميس ar/en/tr · `styles/globals.css` (modifier واحد) · التوثيق (README، DEVELOPMENT_RULES §8g، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **417/417 OK** (346 سابقة + 71 لـ operations) — انحدار صفر للمراحل 2→9 |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/operations` مبني) |
+| فحص حيّ End-to-End (عبر BFF) | ✅ check-out → الغرفة dirty + **HK00001 checkout_cleaning تلقائيًا (مرة واحدة)** → أسند إليّ → بدء (الغرفة cleaning) → إكمال مع إتاحة (الغرفة available، سجل كامل) → إكمال ثانٍ **400** → **MT00001 حاجب** (الغرفة maintenance) → محاولة إتاحة من التنظيف **409 room_blocked_by_maintenance** → حل (الغرفة تبقى maintenance — لا تحرير تلقائي) → إغلاق باختيار dirty (الغرفة dirty) → **LF00001** → حفظ → تسليم بلا مستلم **422** → تسليم باسم → إغلاق → عدّادات overview دقيقة قبل/بعد |
+
+### ملاحظات وقرارات
+- الإتاحة قرار صريح دائمًا: التنظيف لا يتجاوز حجب الصيانة حتى لو أعاد أحدهم حالة الغرفة يدويًا (يُفحص أيضًا وجود طلب حاجب مفتوح)، وإغلاق الصيانة يطلب اختيارًا صريحًا لحالة الغرفة التالية — لا رجوع تلقائي غامض.
+- auto-create بعد المغادرة نُفِّذ لأنه آمن وبسيط (idempotent، بلا اعتماديات خارجية، داخل معاملة المغادرة عمدًا) — موثّق ومغطّى باختبارين.
+- تركيب `overview/` بصلاحيات any-of احتاج فئة مخصصة: تركيب `|` القياسي في DRF كان سينفجر لأن صلاحياتنا ترفع استثناء بدل إرجاع False.
+- التنفيذ الموزّع بالوكلاء غير متاح (حدّ أسبوعي حتى 2026-07-09 مساءً) — نُفِّذت المرحلة مباشرة بنفس التغطية.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا Shifts/Staff scheduling/Payroll · لا Daily Close · لا تقارير متقدمة · لا Inventory/Stock · لا Purchasing/Suppliers · لا Laundry inventory · لا إشعارات (WhatsApp/Email) · لا تطبيق جوال · لا QR tasks · لا IoT · لا طلبات نزلاء عامة · لا صور/ملفات/باركود للمفقودات · لا بوابة دفع · لا POS.** **لم تبدأ Phase 11.**
+
+### الاعتماد
+- بانتظار قرار المالك بعد المراجعة. ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار.

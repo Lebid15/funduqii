@@ -1,0 +1,135 @@
+"""Operations URLs (mounted under /api/v1/hotel/)."""
+from django.urls import path
+
+from .views import (
+    HousekeepingAssignView,
+    HousekeepingCancelView,
+    HousekeepingCompleteView,
+    HousekeepingDetailView,
+    HousekeepingListCreateView,
+    HousekeepingStatusView,
+    LostFoundClaimView,
+    LostFoundCloseView,
+    LostFoundDetailView,
+    LostFoundDisposeView,
+    LostFoundListCreateView,
+    LostFoundReturnView,
+    LostFoundStatusView,
+    MaintenanceAssignView,
+    MaintenanceCancelView,
+    MaintenanceCloseView,
+    MaintenanceDetailView,
+    MaintenanceListCreateView,
+    MaintenanceResolveView,
+    MaintenanceStatusView,
+    OperationsOverviewView,
+)
+
+app_name = "operations"
+
+urlpatterns = [
+    path("operations/overview/", OperationsOverviewView.as_view(), name="overview"),
+    # Housekeeping
+    path(
+        "operations/housekeeping/",
+        HousekeepingListCreateView.as_view(),
+        name="housekeeping-list",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/",
+        HousekeepingDetailView.as_view(),
+        name="housekeeping-detail",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/status/",
+        HousekeepingStatusView.as_view(),
+        name="housekeeping-status",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/assign/",
+        HousekeepingAssignView.as_view(),
+        name="housekeeping-assign",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/cancel/",
+        HousekeepingCancelView.as_view(),
+        name="housekeeping-cancel",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/complete/",
+        HousekeepingCompleteView.as_view(),
+        name="housekeeping-complete",
+    ),
+    # Maintenance
+    path(
+        "operations/maintenance/",
+        MaintenanceListCreateView.as_view(),
+        name="maintenance-list",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/",
+        MaintenanceDetailView.as_view(),
+        name="maintenance-detail",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/status/",
+        MaintenanceStatusView.as_view(),
+        name="maintenance-status",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/assign/",
+        MaintenanceAssignView.as_view(),
+        name="maintenance-assign",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/cancel/",
+        MaintenanceCancelView.as_view(),
+        name="maintenance-cancel",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/resolve/",
+        MaintenanceResolveView.as_view(),
+        name="maintenance-resolve",
+    ),
+    path(
+        "operations/maintenance/<int:pk>/close/",
+        MaintenanceCloseView.as_view(),
+        name="maintenance-close",
+    ),
+    # Lost & Found
+    path(
+        "operations/lost-found/",
+        LostFoundListCreateView.as_view(),
+        name="lost-found-list",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/",
+        LostFoundDetailView.as_view(),
+        name="lost-found-detail",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/status/",
+        LostFoundStatusView.as_view(),
+        name="lost-found-status",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/claim/",
+        LostFoundClaimView.as_view(),
+        name="lost-found-claim",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/return/",
+        LostFoundReturnView.as_view(),
+        name="lost-found-return",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/dispose/",
+        LostFoundDisposeView.as_view(),
+        name="lost-found-dispose",
+    ),
+    path(
+        "operations/lost-found/<int:pk>/close/",
+        LostFoundCloseView.as_view(),
+        name="lost-found-close",
+    ),
+]

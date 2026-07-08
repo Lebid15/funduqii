@@ -5,7 +5,11 @@ import type { Locale } from "@/lib/i18n/config";
 import type {
   FolioStatus,
   HotelStatus,
+  HousekeepingStatus,
   InvoiceStatus,
+  LostFoundStatus,
+  MaintenanceStatus,
+  OperationPriority,
   PostingStatus,
   ReservationStatus,
   RoomStatus,
@@ -210,6 +214,72 @@ export function serviceOrderStatusTone(status: ServiceOrderStatus): BadgeTone {
       return "danger";
     default:
       return "neutral";
+  }
+}
+
+export function housekeepingStatusTone(status: HousekeepingStatus): BadgeTone {
+  switch (status) {
+    case "pending":
+      return "warning";
+    case "assigned":
+      return "info";
+    case "in_progress":
+      return "primary";
+    case "completed":
+      return "success";
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function maintenanceStatusTone(status: MaintenanceStatus): BadgeTone {
+  switch (status) {
+    case "open":
+      return "warning";
+    case "assigned":
+      return "info";
+    case "in_progress":
+      return "primary";
+    case "resolved":
+      return "success";
+    case "closed":
+      return "neutral";
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function lostFoundStatusTone(status: LostFoundStatus): BadgeTone {
+  switch (status) {
+    case "found":
+      return "warning";
+    case "stored":
+      return "info";
+    case "claimed":
+      return "primary";
+    case "returned":
+      return "success";
+    case "disposed":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function operationPriorityTone(priority: OperationPriority): BadgeTone {
+  switch (priority) {
+    case "urgent":
+      return "danger";
+    case "high":
+      return "warning";
+    case "low":
+      return "neutral";
+    default:
+      return "info";
   }
 }
 

@@ -81,6 +81,16 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.services.errors.invalidTransition;
     case "service_item_unavailable":
       return t.services.errors.itemUnavailable;
+    case "invalid_operation_status_transition":
+      return t.operations.errors.invalidTransition;
+    case "operation_not_editable":
+      return t.operations.errors.notEditable;
+    case "room_blocked_by_maintenance":
+      return t.operations.errors.roomBlocked;
+    case "claimant_required":
+      return t.operations.errors.claimantRequired;
+    case "disposal_reason_required":
+      return t.operations.errors.disposalReasonRequired;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":
