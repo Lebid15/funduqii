@@ -59,6 +59,16 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.roomNotReady;
     case "already_checked_in":
       return t.frontDesk.errors.alreadyCheckedIn;
+    case "folio_closed":
+      return t.finance.errors.folioClosed;
+    case "folio_not_balanced":
+      return t.finance.errors.folioNotBalanced;
+    case "void_reason_required":
+      return t.finance.errors.voidReasonRequired;
+    case "invalid_finance_operation":
+      return t.finance.errors.invalidOperation;
+    case "invalid_amount":
+      return t.finance.errors.invalidAmount;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

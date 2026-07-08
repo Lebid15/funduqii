@@ -225,3 +225,22 @@ shifts, daily close, reports, notifications, public website & booking, and any
 advanced timeline/Gantt drag-and-drop. (Minimal room **assignment** landed in
 Phase 6.1 — see §4.7/§7.6.) A broader PostgreSQL + large-dataset performance/
 concurrency pass is planned before production.
+
+## 11. Phase 8.1 patch (current-scope real-hotel alignment)
+
+- **Exactly two booking kinds** on `Reservation.booking_kind`: `instant`
+  (check-in forced to today; a future check-in is rejected) and `future`.
+  When omitted, the backend derives it from the check-in date. **No**
+  quick/full booking and **no** basic/advanced mode exist.
+- **New operational fields** (migration `reservations.0003`):
+  `expected_arrival_time`, `booking_channel_name`, `expected_payment_method`
+  (informational only — not a payment), `no_show_reason`, and guest snapshot
+  extras `primary_guest_nationality`, `primary_guest_document_type`,
+  `primary_guest_document_number`. `notes` is used as the internal notes
+  field; `cancellation_reason` remains required on cancel.
+- **The single reservation form** is organized into five sections (kind &
+  dates → guest basics → rooms & availability → source & notes → review &
+  save) using the central `SectionCard` / `StepSummaryCard` components.
+  Availability and conflicts are still decided only by the backend.
+
+See `docs/REAL_HOTEL_CURRENT_SCOPE_ALIGNMENT.md`.

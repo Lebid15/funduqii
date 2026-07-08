@@ -1,16 +1,17 @@
 import type { ReactNode } from "react";
-import { CircleAlert, CircleCheck, Info } from "lucide-react";
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 
 import { cx } from "@/lib/utils";
 
 import { Icon } from "./Icon";
 
-type AlertTone = "error" | "success" | "info";
+type AlertTone = "error" | "success" | "info" | "warning";
 
 const TONE_ICON = {
   error: CircleAlert,
   success: CircleCheck,
   info: Info,
+  warning: TriangleAlert,
 } as const;
 
 interface AlertProps {

@@ -163,3 +163,20 @@ responsiveness. No hardcoded text; no token/JWT in `localStorage`.
   shifts, daily close, public website & booking, real WhatsApp/maps, advanced
   reports and accounting. A broader PostgreSQL + large-dataset performance /
   concurrency pass is planned before production.
+
+## 11. Phase 8.1 patch (current-scope real-hotel alignment)
+
+- **Guest model confirmed** as text-only (`full_name`, `phone`, `email`,
+  `nationality`, `document_type`, `document_number`, `date_of_birth`,
+  `address`, `notes`) — still no document uploads and no base64.
+- **Front-desk workflow cards**: `/hotel/front-desk` now opens with a row of
+  five central `WorkflowCard`s — arrivals today, current residents, departures
+  today, check-in, check-out — each with an icon, live count, short
+  description and one clear action. Arrival/departure rows use the central
+  `ActionCard`.
+- **Check-out dialog** now shows the guest name, room number, actual check-in
+  date and expected check-out date, plus a clear notice that financial
+  settlement happens in the Finance section (Phase 8). Check-in/check-out
+  logic is unchanged — still no money at the front desk.
+
+See `docs/REAL_HOTEL_CURRENT_SCOPE_ALIGNMENT.md`.

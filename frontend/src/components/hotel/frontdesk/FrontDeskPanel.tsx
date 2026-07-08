@@ -1,13 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { CalendarClock, DoorOpen, LogOut, PlaneLanding, Plus, Users } from "lucide-react";
+import {
+  DoorOpen,
+  LogOut,
+  PlaneLanding,
+  PlaneTakeoff,
+  Plus,
+  Users,
+} from "lucide-react";
 
 import {
+  ActionCard,
   Alert,
   Badge,
   Button,
-  Card,
   EmptyState,
   ErrorState,
   FormField,
@@ -19,6 +26,7 @@ import {
   Tabs,
   Textarea,
   useToast,
+  WorkflowCard,
   type TabItem,
 } from "@/components/ui";
 import {
@@ -47,6 +55,25 @@ export function FrontDeskPanel() {
   const [tab, setTab] = useState("arrivals");
   const [reloadKey, setReloadKey] = useState(0);
   const refresh = () => setReloadKey((k) => k + 1);
+  const [counts, setCounts] = useState<{
+    arrivals: number;
+    current: number;
+    departures: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let stale = false;
+    Promise.all([listArrivalsToday(), listCurrentResidents(), listDeparturesToday()])
+      .then(([a, c, d]) => {
+        if (!stale) setCounts({ arrivals: a.length, current: c.count, departures: d.count });
+      })
+      .catch(() => {
+        if (!stale) setCounts(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [reloadKey]);
 
   const tabs: TabItem[] = [
     { key: "arrivals", label: t.frontDesk.tabs.arrivals, icon: PlaneLanding },
@@ -56,6 +83,66 @@ export function FrontDeskPanel() {
 
   return (
     <>
+      <div className="workflow-grid">
+        <WorkflowCard
+          icon={PlaneLanding}
+          tone="info"
+          title={t.frontDesk.workflow.arrivalsTitle}
+          value={counts ? counts.arrivals : "—"}
+          description={t.frontDesk.workflow.arrivalsDesc}
+          action={
+            <Button variant="secondary" size="sm" onClick={() => setTab("arrivals")}>
+              {t.frontDesk.workflow.view}
+            </Button>
+          }
+        />
+        <WorkflowCard
+          icon={Users}
+          tone="success"
+          title={t.frontDesk.workflow.currentTitle}
+          value={counts ? counts.current : "—"}
+          description={t.frontDesk.workflow.currentDesc}
+          action={
+            <Button variant="secondary" size="sm" onClick={() => setTab("current")}>
+              {t.frontDesk.workflow.view}
+            </Button>
+          }
+        />
+        <WorkflowCard
+          icon={PlaneTakeoff}
+          tone="warning"
+          title={t.frontDesk.workflow.departuresTitle}
+          value={counts ? counts.departures : "—"}
+          description={t.frontDesk.workflow.departuresDesc}
+          action={
+            <Button variant="secondary" size="sm" onClick={() => setTab("departures")}>
+              {t.frontDesk.workflow.view}
+            </Button>
+          }
+        />
+        <WorkflowCard
+          icon={DoorOpen}
+          tone="primary"
+          title={t.frontDesk.workflow.checkInTitle}
+          description={t.frontDesk.workflow.checkInDesc}
+          action={
+            <Button size="sm" onClick={() => setTab("arrivals")}>
+              {t.frontDesk.workflow.checkInAction}
+            </Button>
+          }
+        />
+        <WorkflowCard
+          icon={LogOut}
+          tone="danger"
+          title={t.frontDesk.workflow.checkOutTitle}
+          description={t.frontDesk.workflow.checkOutDesc}
+          action={
+            <Button size="sm" onClick={() => setTab("departures")}>
+              {t.frontDesk.workflow.checkOutAction}
+            </Button>
+          }
+        />
+      </div>
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} /> : null}
       {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} /> : null}
@@ -103,18 +190,13 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
       <SectionHeader title={t.frontDesk.tabs.arrivals} icon={PlaneLanding} />
       <div className="stack">
         {rows.map((res) => (
-          <Card key={res.id}>
-            <div className="mini-list__row">
-              <span className="mini-list__main">
-                <strong>{res.reservation_number} · {res.primary_guest_name}</strong>
-                <span className="muted">
-                  {formatDate(res.check_in_date, locale)} → {formatDate(res.check_out_date, locale)} ·{" "}
-                  {res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}
-                </span>
-              </span>
-              <Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>
-            </div>
-          </Card>
+          <ActionCard
+            key={res.id}
+            icon={PlaneLanding}
+            title={`${res.reservation_number} · ${res.primary_guest_name}`}
+            description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
+            action={<Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>}
+          />
         ))}
       </div>
       <CheckInModal
@@ -232,17 +314,13 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
       <SectionHeader title={t.frontDesk.tabs.departures} icon={LogOut} />
       <div className="stack">
         {rows.map((stay) => (
-          <Card key={stay.id}>
-            <div className="mini-list__row">
-              <span className="mini-list__main">
-                <strong>{stay.room_number} · {stay.primary_guest_name}</strong>
-                <span className="muted">
-                  <CalendarClock size={14} aria-hidden /> {formatDate(stay.actual_check_in_at, locale)} → {formatDate(stay.planned_check_out_date, locale)}
-                </span>
-              </span>
-              <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
-            </div>
-          </Card>
+          <ActionCard
+            key={stay.id}
+            icon={PlaneTakeoff}
+            title={`${stay.room_number} · ${stay.primary_guest_name}`}
+            description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
+            action={<Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>}
+          />
         ))}
       </div>
       <CheckOutModal
@@ -459,7 +537,7 @@ function CheckOutModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -504,13 +582,21 @@ function CheckOutModal({
       <form id="checkout-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
         <Alert tone="info">{t.frontDesk.checkOutModal.body}</Alert>
+        {stay ? (
+          <dl className="detail-grid">
+            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+            <div><dt>{t.frontDesk.checkOutModal.room}</dt><dd>{stay.room_number}</dd></div>
+            <div><dt>{t.frontDesk.checkOutModal.checkInDate}</dt><dd>{formatDate(stay.actual_check_in_at, locale)}</dd></div>
+            <div><dt>{t.frontDesk.checkOutModal.expectedCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+          </dl>
+        ) : null}
         <FormField label={t.frontDesk.checkOutModal.notes} htmlFor="co-notes">
           <Input id="co-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </FormField>
         <FormField label={t.frontDesk.checkOutModal.reason} htmlFor="co-reason">
           <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
         </FormField>
-        <p className="muted small">{t.frontDesk.checkOutModal.financeNote}</p>
+        <Alert tone="warning">{t.frontDesk.checkOutModal.financeNote}</Alert>
       </form>
     </Modal>
   );

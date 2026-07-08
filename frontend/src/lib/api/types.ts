@@ -329,22 +329,34 @@ export interface ReservationLine {
   notes: string;
 }
 
+export type BookingKind = "instant" | "future";
+
+export type ExpectedPaymentMethod = "" | "cash" | "card" | "bank_transfer" | "other";
+
 export interface Reservation {
   id: number;
   reservation_number: string;
   status: ReservationStatus;
   source: ReservationSource;
+  booking_kind: BookingKind;
   check_in_date: string;
   check_out_date: string;
+  expected_arrival_time: string | null;
   nights: number;
   primary_guest_name: string;
   primary_guest_phone: string;
   primary_guest_email: string;
+  primary_guest_nationality: string;
+  primary_guest_document_type: string;
+  primary_guest_document_number: string;
   adults: number;
   children: number;
   total_guests: number;
   notes: string;
   special_requests: string;
+  booking_channel_name: string;
+  expected_payment_method: ExpectedPaymentMethod;
+  no_show_reason: string;
   cancellation_reason: string;
   cancelled_at: string | null;
   hold_expires_at: string | null;
@@ -457,4 +469,202 @@ export interface StayStatusLogEntry {
   note: string;
   changed_by: string | null;
   created_at: string;
+}
+
+/* ==========================================================================
+ * Phase 8 — Internal finance DTOs (mirror /api/v1/hotel/finance/).
+ * ======================================================================== */
+
+export type FolioStatus = "open" | "closed" | "voided";
+export type PostingStatus = "posted" | "voided";
+export type InvoiceStatus = "draft" | "issued" | "voided";
+export type ChargeType =
+  | "room"
+  | "service"
+  | "tax"
+  | "adjustment"
+  | "discount"
+  | "other";
+export type PaymentMethod =
+  | "cash"
+  | "card"
+  | "bank_transfer"
+  | "electronic"
+  | "other";
+export type ExpenseCategory =
+  | "operations"
+  | "maintenance"
+  | "supplies"
+  | "marketing"
+  | "salary"
+  | "utilities"
+  | "other";
+
+export interface FolioBalance {
+  total_charges: string;
+  total_payments: string;
+  balance: string;
+}
+
+export interface FolioCharge {
+  id: number;
+  charge_number: string;
+  type: ChargeType;
+  description: string;
+  quantity: string;
+  unit_amount: string;
+  amount: string;
+  tax_rate: string;
+  tax_amount: string;
+  total_amount: string;
+  charge_date: string;
+  source: string;
+  status: PostingStatus;
+  void_reason: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  created_at: string;
+}
+
+export interface Payment {
+  id: number;
+  folio: number;
+  folio_number: string;
+  reservation_number: string | null;
+  receipt_number: string;
+  amount: string;
+  currency: string;
+  method: PaymentMethod;
+  status: PostingStatus;
+  paid_at: string;
+  payer_name: string;
+  reference: string;
+  notes: string;
+  void_reason: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface Folio {
+  id: number;
+  folio_number: string;
+  status: FolioStatus;
+  currency: string;
+  reservation: number | null;
+  reservation_number: string | null;
+  stay: number | null;
+  guest: number | null;
+  guest_name: string | null;
+  customer_name: string;
+  notes: string;
+  opened_at: string;
+  closed_at: string | null;
+  void_reason: string;
+  voided_at: string | null;
+  balance: FolioBalance;
+  charges: FolioCharge[];
+  payments: Payment[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FolioListItem {
+  id: number;
+  folio_number: string;
+  status: FolioStatus;
+  currency: string;
+  reservation: number | null;
+  reservation_number: string | null;
+  stay: number | null;
+  guest: number | null;
+  guest_name: string | null;
+  customer_name: string;
+  balance: FolioBalance;
+  opened_at: string;
+  created_at: string;
+}
+
+export interface InvoiceLine {
+  id: number;
+  description: string;
+  quantity: string;
+  unit_amount: string;
+  tax_rate: string;
+  tax_amount: string;
+  total_amount: string;
+  source_charge: number | null;
+}
+
+export interface Invoice {
+  id: number;
+  folio: number;
+  folio_number: string;
+  reservation_number: string | null;
+  invoice_number: string;
+  status: InvoiceStatus;
+  currency: string;
+  issued_at: string | null;
+  due_date: string | null;
+  subtotal: string;
+  tax_total: string;
+  total: string;
+  balance_at_issue: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email: string;
+  customer_document_number: string;
+  notes: string;
+  void_reason: string;
+  voided_at: string | null;
+  lines: InvoiceLine[];
+  created_at: string;
+}
+
+export interface Expense {
+  id: number;
+  expense_number: string;
+  category: ExpenseCategory;
+  description: string;
+  amount: string;
+  currency: string;
+  method: PaymentMethod;
+  paid_at: string;
+  vendor_name: string;
+  reference: string;
+  notes: string;
+  status: PostingStatus;
+  void_reason: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FinanceOverview {
+  open_folios: number;
+  outstanding_balance: string;
+  unpaid_folios: number;
+  payments_today: string;
+  expenses_today: string;
+  net_today: string;
+  issued_invoices: number;
+  currency: string;
+}
+
+export interface HotelHeader {
+  hotel_name: string;
+  currency: string;
+  phone: string;
+  address: string;
+}
+
+export interface PrintDocument {
+  document: string;
+  hotel: HotelHeader;
+  payment?: Payment;
+  invoice?: Invoice;
+  expense?: Expense;
 }

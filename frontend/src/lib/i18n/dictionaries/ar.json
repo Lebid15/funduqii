@@ -373,7 +373,27 @@
       "availabilityHint": "يُعاد التحقق من التوفر على الخادم قبل الحفظ.",
       "room": "تعيين غرفة (اختياري)",
       "roomAny": "أي غرفة متاحة",
-      "roomHint": "ثبّت غرفة محددة أو اتركها لأي غرفة."
+      "roomHint": "ثبّت غرفة محددة أو اتركها لأي غرفة.",
+      "sectionKindDates": "نوع الحجز والتواريخ",
+      "bookingKind": "نوع الحجز",
+      "instantHint": "يبدأ اليوم — تاريخ الوصول يُضبط تلقائيًا على اليوم.",
+      "futureHint": "يبدأ في تاريخ مستقبلي.",
+      "nights": "عدد الليالي",
+      "arrivalTime": "وقت الوصول المتوقع",
+      "nationality": "الجنسية",
+      "documentType": "نوع الوثيقة",
+      "documentNumber": "رقم الوثيقة",
+      "sectionRooms": "الغرف والتوفر",
+      "availabilityConflict": "لا توجد غرف كافية لهذه التواريخ — المتاح {count} فقط.",
+      "availabilityOk": "{count} غرفة متاحة لهذه التواريخ.",
+      "sectionSourceNotes": "المصدر والملاحظات",
+      "channelName": "قناة الحجز",
+      "expectedPayment": "طريقة الدفع المتوقعة",
+      "expectedPaymentHint": "للمعلومية فقط — لا يتم تحصيل أي دفعة.",
+      "internalNotes": "ملاحظات داخلية",
+      "sectionReview": "المراجعة والحفظ",
+      "reviewHint": "راجع التفاصيل أعلاه ثم احفظ.",
+      "save": "حفظ الحجز"
     },
     "details": {
       "title": "الحجز",
@@ -394,7 +414,8 @@
       "confirm": "تأكيد",
       "cancel": "إلغاء",
       "edit": "تعديل",
-      "room": "الغرفة"
+      "room": "الغرفة",
+      "noShowReason": "سبب عدم الحضور"
     },
     "cancelDialog": {
       "title": "إلغاء الحجز",
@@ -412,6 +433,16 @@
       "reasonRequired": "سبب الإلغاء مطلوب.",
       "invalidTransition": "تغيير حالة الحجز هذا غير مسموح.",
       "roomConflict": "هذه الغرفة مُعيَّنة بالفعل للتواريخ المختارة."
+    },
+    "kind": {
+      "instant": "حجز فوري",
+      "future": "حجز مستقبلي"
+    },
+    "expectedPayment": {
+      "cash": "نقدًا",
+      "card": "بطاقة",
+      "bank_transfer": "تحويل بنكي",
+      "other": "أخرى"
     }
   },
   "guests": {
@@ -526,7 +557,11 @@
       "notes": "ملاحظات",
       "reason": "السبب",
       "financeNote": "أي فوترة أو دفع يُعالَج في مرحلة لاحقة.",
-      "submit": "تسجيل الخروج"
+      "submit": "تسجيل الخروج",
+      "guest": "الضيف",
+      "room": "الغرفة",
+      "checkInDate": "تاريخ الوصول",
+      "expectedCheckOut": "تاريخ المغادرة المتوقع"
     },
     "details": {
       "title": "الإقامة",
@@ -551,6 +586,224 @@
       "roomOccupied": "هذه الغرفة مشغولة بالفعل.",
       "roomNotReady": "هذه الغرفة غير جاهزة لتسجيل الدخول.",
       "alreadyCheckedIn": "غرفة هذا الحجز مسجَّل دخولها بالفعل."
+    },
+    "workflow": {
+      "arrivalsTitle": "وصول اليوم",
+      "arrivalsDesc": "الحجوزات المؤكدة التي تصل اليوم.",
+      "currentTitle": "النزلاء الحاليون",
+      "currentDesc": "الضيوف المقيمون حاليًا في الفندق.",
+      "departuresTitle": "مغادرات اليوم",
+      "departuresDesc": "الإقامات التي تغادر اليوم.",
+      "checkInTitle": "تسجيل الوصول",
+      "checkInDesc": "سجّل وصول ضيف إلى غرفته.",
+      "checkInAction": "بدء تسجيل الوصول",
+      "checkOutTitle": "تسجيل المغادرة",
+      "checkOutDesc": "سجّل مغادرة ضيف وحرّر الغرفة.",
+      "checkOutAction": "بدء تسجيل المغادرة",
+      "view": "عرض"
+    }
+  },
+  "finance": {
+    "nav": "المالية",
+    "title": "المالية",
+    "subtitle": "الحسابات والدفعات والفواتير والمصروفات",
+    "saved": "تم الحفظ",
+    "tabs": {
+      "overview": "نظرة عامة",
+      "folios": "الحسابات",
+      "payments": "الدفعات",
+      "invoices": "الفواتير",
+      "expenses": "المصروفات"
+    },
+    "overview": {
+      "openFolios": "حسابات مفتوحة",
+      "outstanding": "الرصيد المستحق",
+      "unpaidFolios": "حسابات غير مسددة",
+      "paymentsToday": "دفعات اليوم",
+      "expensesToday": "مصروفات اليوم",
+      "netToday": "الصافي اليوم",
+      "issuedInvoices": "فواتير صادرة"
+    },
+    "folioStatus": {
+      "open": "مفتوح",
+      "closed": "مغلق",
+      "voided": "ملغى"
+    },
+    "invoiceStatus": {
+      "draft": "مسودة",
+      "issued": "صادرة",
+      "voided": "ملغاة"
+    },
+    "postingStatus": {
+      "posted": "مُرحَّل",
+      "voided": "ملغى"
+    },
+    "chargeTypes": {
+      "room": "غرفة",
+      "service": "خدمة",
+      "tax": "ضريبة",
+      "adjustment": "تسوية",
+      "discount": "خصم",
+      "other": "أخرى"
+    },
+    "methods": {
+      "cash": "نقدًا",
+      "card": "بطاقة",
+      "bank_transfer": "تحويل بنكي",
+      "electronic": "إلكتروني",
+      "other": "أخرى"
+    },
+    "categories": {
+      "operations": "تشغيل",
+      "maintenance": "صيانة",
+      "supplies": "مستلزمات",
+      "marketing": "تسويق",
+      "salary": "رواتب",
+      "utilities": "مرافق",
+      "other": "أخرى"
+    },
+    "folios": {
+      "add": "حساب جديد",
+      "empty": "لا حسابات بعد",
+      "emptyHint": "افتح حسابًا لتسجيل البنود والدفعات.",
+      "searchPlaceholder": "ابحث بالرقم أو العميل",
+      "number": "الرقم",
+      "customer": "العميل",
+      "balance": "الرصيد",
+      "view": "فتح",
+      "createTitle": "حساب جديد",
+      "customerName": "اسم العميل",
+      "currency": "العملة",
+      "notes": "ملاحظات"
+    },
+    "folio": {
+      "title": "الحساب",
+      "charges": "البنود",
+      "payments": "الدفعات",
+      "totalCharges": "إجمالي البنود",
+      "totalPayments": "إجمالي الدفعات",
+      "balance": "الرصيد",
+      "addCharge": "إضافة بند",
+      "recordPayment": "تسجيل دفعة",
+      "createInvoice": "إنشاء فاتورة",
+      "close": "إغلاق الحساب",
+      "void": "إلغاء الحساب",
+      "noCharges": "لا بنود بعد",
+      "noPayments": "لا دفعات بعد",
+      "voidCharge": "إلغاء",
+      "voidPayment": "إلغاء",
+      "printReceipt": "سند",
+      "voided": "ملغى",
+      "invoices": "الفواتير"
+    },
+    "chargeForm": {
+      "title": "إضافة بند",
+      "type": "النوع",
+      "description": "الوصف",
+      "quantity": "الكمية",
+      "unitAmount": "سعر الوحدة",
+      "taxRate": "نسبة الضريبة (%)",
+      "submit": "إضافة بند"
+    },
+    "paymentForm": {
+      "title": "تسجيل دفعة",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "payerName": "اسم الدافع",
+      "reference": "المرجع",
+      "notes": "ملاحظات",
+      "submit": "تسجيل دفعة",
+      "mixedHint": "للدفع بأكثر من طريقة سجّل أكثر من دفعة.",
+      "addAnother": "حفظ وإضافة دفعة أخرى"
+    },
+    "invoiceForm": {
+      "createTitle": "إنشاء فاتورة",
+      "dueDate": "تاريخ الاستحقاق",
+      "customerName": "اسم العميل",
+      "customerPhone": "الهاتف",
+      "notes": "ملاحظات",
+      "create": "إنشاء مسودة"
+    },
+    "payments": {
+      "empty": "لا دفعات بعد",
+      "emptyHint": "الدفعات التي تسجّلها تظهر هنا.",
+      "receipt": "سند",
+      "void": "إلغاء",
+      "number": "السند",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "date": "التاريخ"
+    },
+    "invoices": {
+      "empty": "لا فواتير بعد",
+      "emptyHint": "الفواتير التي تنشئها تظهر هنا.",
+      "issue": "إصدار",
+      "void": "إلغاء",
+      "print": "طباعة",
+      "number": "الرقم",
+      "customer": "العميل",
+      "total": "الإجمالي",
+      "issuedAt": "صدرت",
+      "view": "عرض"
+    },
+    "expenses": {
+      "add": "مصروف جديد",
+      "empty": "لا مصروفات بعد",
+      "emptyHint": "المصروفات التي تسجّلها تظهر هنا.",
+      "searchPlaceholder": "ابحث في المورّد أو الوصف أو المرجع",
+      "number": "السند",
+      "category": "التصنيف",
+      "description": "الوصف",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "vendor": "المورّد",
+      "reference": "المرجع",
+      "date": "التاريخ",
+      "void": "إلغاء",
+      "voucher": "سند صرف",
+      "createTitle": "مصروف جديد",
+      "submit": "حفظ المصروف"
+    },
+    "void": {
+      "title": "إلغاء السجل",
+      "reason": "السبب",
+      "reasonPlaceholder": "لماذا يُلغى هذا؟",
+      "confirm": "إلغاء"
+    },
+    "print": {
+      "print": "طباعة",
+      "close": "إغلاق",
+      "date": "التاريخ",
+      "total": "الإجمالي",
+      "subtotal": "المجموع الفرعي",
+      "tax": "الضريبة",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "thanks": "شكرًا لكم",
+      "receiptTitle": "سند قبض",
+      "invoiceTitle": "فاتورة",
+      "voucherTitle": "سند صرف",
+      "customer": "العميل",
+      "vendor": "المورّد",
+      "folio": "الحساب",
+      "reservation": "الحجز",
+      "reference": "المرجع",
+      "receivedBy": "استلمها",
+      "createdBy": "حرّرها",
+      "notes": "ملاحظات",
+      "signature": "التوقيع",
+      "customerPhone": "الهاتف",
+      "customerEmail": "البريد الإلكتروني",
+      "customerDocument": "رقم الوثيقة",
+      "balanceAtIssue": "الرصيد عند الإصدار"
+    },
+    "financeNote": "كل المبالغ تُسجَّل داخليًا فقط — لا تتم معالجة دفع فعلي.",
+    "errors": {
+      "folioClosed": "هذا الحساب مغلق أو ملغى ولا يمكن تعديله.",
+      "folioNotBalanced": "لا يمكن إغلاق الحساب إلا عندما يكون الرصيد صفرًا.",
+      "voidReasonRequired": "يلزم سبب لإلغاء هذا السجل.",
+      "invalidOperation": "هذه العملية المالية غير مسموحة.",
+      "invalidAmount": "المبلغ غير صالح."
     }
   },
   "language": {

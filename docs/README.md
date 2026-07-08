@@ -64,5 +64,9 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 
 - [GUESTS_CHECKIN_CHECKOUT_STRATEGY.md](GUESTS_CHECKIN_CHECKOUT_STRATEGY.md) — the `apps/guests` (`Guest` directory) and `apps/stays` (`Stay`, `StayGuest`, `StayStatusLog`) apps, the central `CheckInService`/`CheckOutService`, derived occupancy (why there is no manual `room.status = occupied`), current residents / arrivals-today / departures-today, permissions (`guests.*`, `stays.*`), the `/api/v1/hotel/` API surface, the front-desk & guests console, why check-out creates no invoice, and what is deferred to Phase 8.
 
+## Phase 8 — Finance (folios, payments, invoices, expenses)
+
+- [FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md](FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md) — the `apps/finance` app (`Folio`, `FolioCharge`, `Payment`, `Invoice`/`InvoiceLine`, `Expense`, `FinancialNumberSequence`), the single money service (`services.py`), the money rules (Decimal-only, void-not-delete, computed balances), charge/tax math, receipts, folio lifecycle (why a folio can't close with a non-zero balance), the immutable **issued-invoice snapshot**, per-hotel document numbering, the documented **early-checkout financial policy** (manual, no auto-refund), permissions (`finance.*`, `expenses.*`), tenant isolation, the `/api/v1/hotel/finance/` API surface, the `/hotel/finance` console + client-side print, and why real gateways / e-invoicing / ledger / daily-close are out of scope or deferred.
+
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.
