@@ -668,3 +668,158 @@ export interface PrintDocument {
   invoice?: Invoice;
   expense?: Expense;
 }
+
+/* ==========================================================================
+ * Phase 9 — Service catalog & orders DTOs (mirror /api/v1/hotel/services/).
+ * ======================================================================== */
+
+export type ServiceItemType = "restaurant" | "cafe" | "room_service" | "other";
+export type ServiceOrderSource =
+  | "room_service"
+  | "restaurant"
+  | "cafe"
+  | "other";
+export type ServiceOrderStatus =
+  | "draft"
+  | "submitted"
+  | "preparing"
+  | "ready"
+  | "delivered"
+  | "cancelled";
+
+export interface ServiceCategory {
+  id: number;
+  name: string;
+  code: string;
+  description: string;
+  sort_order: number;
+  is_active: boolean;
+  item_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceItem {
+  id: number;
+  category: number;
+  category_name: string;
+  name: string;
+  code: string;
+  description: string;
+  item_type: ServiceItemType;
+  unit_price: string;
+  currency: string;
+  tax_rate: string;
+  is_available: boolean;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceOrderItem {
+  id: number;
+  service_item: number | null;
+  item_name: string;
+  quantity: string;
+  unit_price: string;
+  tax_rate: string;
+  amount: string;
+  tax_amount: string;
+  total_amount: string;
+  notes: string;
+}
+
+export interface ServiceOrderStatusLogEntry {
+  id: number;
+  previous_status: string;
+  new_status: string;
+  note: string;
+  changed_by_name: string;
+  created_at: string;
+}
+
+export interface ServiceOrderListItem {
+  id: number;
+  order_number: string;
+  source: ServiceOrderSource;
+  status: ServiceOrderStatus;
+  stay: number | null;
+  room: number | null;
+  room_number: string;
+  ordered_at: string;
+  requested_delivery_time: string | null;
+  delivered_at: string | null;
+  is_posted: boolean;
+  posted_at: string | null;
+  total: string | null;
+}
+
+export interface ServiceOrderTotals {
+  subtotal: string;
+  tax_total: string;
+  total: string;
+}
+
+export interface ServiceOrder {
+  id: number;
+  order_number: string;
+  source: ServiceOrderSource;
+  status: ServiceOrderStatus;
+  stay: number | null;
+  room: number | null;
+  room_number: string;
+  guest_name: string;
+  folio: number | null;
+  folio_number: string;
+  ordered_at: string;
+  requested_delivery_time: string | null;
+  delivered_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  notes: string;
+  internal_notes: string;
+  is_posted: boolean;
+  posted_at: string | null;
+  posted_charge: number | null;
+  posted_charge_number: string;
+  items: ServiceOrderItem[];
+  totals: ServiceOrderTotals;
+  status_logs: ServiceOrderStatusLogEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServicesOverview {
+  orders_today: number;
+  submitted: number;
+  preparing: number;
+  ready: number;
+  delivered: number;
+  delivered_not_posted: number;
+  posted_today_total: string;
+  active_items: number;
+}
+
+export interface ServiceTicket {
+  document: "service_ticket";
+  hotel: HotelHeader;
+  order: {
+    order_number: string;
+    source: ServiceOrderSource;
+    status: ServiceOrderStatus;
+    room_number: string;
+    guest_name: string;
+    ordered_at: string;
+    requested_delivery_time: string | null;
+    notes: string;
+  };
+  items: Array<{
+    item_name: string;
+    quantity: string;
+    unit_price: string;
+    total_amount: string;
+    notes: string;
+  }>;
+  totals: ServiceOrderTotals;
+}

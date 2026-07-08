@@ -42,6 +42,18 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "invoice_void",
     ],
     "expenses": ["view", "create", "update", "void"],
+    # Service catalog + internal service orders (Phase 9): restaurant / café /
+    # room service. The blueprint's `restaurant.*` codes below are vestigial and
+    # NOT used; Phase 9 uses these explicit sections instead.
+    "services": ["view", "create", "update", "delete"],
+    "service_orders": [
+        "view",
+        "create",
+        "update",
+        "cancel",
+        "status_update",
+        "post_to_folio",
+    ],
     "restaurant": ["view", "create_order"],
     "housekeeping": ["view", "update"],
     "maintenance": ["view", "update"],

@@ -141,6 +141,20 @@ these rules is a defect, not a shortcut.
   charge — no auto-refund).
 - Full rules: [docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md](docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md).
 
+### 8f. Service orders — restaurant / café / room service (from Phase 9)
+- **Service orders never write money themselves.** Their ONLY financial exit is
+  one FolioCharge created through `apps/finance/services.py`
+  (`type=service`, `source=service_order`) — no Payment, Invoice, or Expense is
+  ever created from an order, and no direct/standalone payment exists.
+- **Posting is deliver-gated and once-only.** Only a `delivered` order posts;
+  a posted order can never be posted again (row-locked check) nor cancelled —
+  corrections are a finance-side charge **void**, never an un-post.
+- **Order lines are snapshots** (`item_name`, price, tax frozen at order time)
+  with server-computed Decimal totals; items are editable only while draft.
+- **Cancellation requires a reason; orders are never hard-deleted**; catalog
+  rows in use are deactivated, not deleted. All status changes are logged.
+- Full rules: [docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

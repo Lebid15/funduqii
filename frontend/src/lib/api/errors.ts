@@ -69,6 +69,18 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.finance.errors.invalidOperation;
     case "invalid_amount":
       return t.finance.errors.invalidAmount;
+    case "order_already_posted":
+      return t.services.errors.alreadyPosted;
+    case "order_not_postable":
+      return t.services.errors.notPostable;
+    case "order_not_editable":
+      return t.services.errors.notEditable;
+    case "order_items_required":
+      return t.services.errors.itemsRequired;
+    case "invalid_order_status_transition":
+      return t.services.errors.invalidTransition;
+    case "service_item_unavailable":
+      return t.services.errors.itemUnavailable;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

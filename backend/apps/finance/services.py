@@ -159,11 +159,26 @@ def void_folio(folio, *, reason, user=None) -> Folio:
 
 @transaction.atomic
 def add_charge(folio, *, charge_type, description, quantity, unit_amount,
-               tax_rate=ZERO, charge_date=None, source="manual", user=None) -> FolioCharge:
+               tax_rate=ZERO, tax_amount=None, charge_date=None, source="manual",
+               user=None) -> FolioCharge:
     _guard_open(folio)
-    amount, tax_amount, total = compute_charge_totals(
-        quantity, unit_amount, tax_rate, charge_type
-    )
+    if tax_amount is None:
+        amount, tax_amount, total = compute_charge_totals(
+            quantity, unit_amount, tax_rate, charge_type
+        )
+    else:
+        # Explicit tax override: used when the caller already holds an exact,
+        # per-line-rounded tax sum (e.g. posting a Phase 9 service order whose
+        # items may mix tax rates). The stored ``tax_rate`` is informational.
+        amount = money(Decimal(quantity) * Decimal(unit_amount))
+        tax_amount = money(tax_amount)
+        if tax_amount < ZERO:
+            raise InvalidAmount({"field": "tax_amount", "reason": "must_not_be_negative"})
+        if charge_type not in CREDIT_CHARGE_TYPES and amount <= ZERO:
+            raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+        total = money(amount + tax_amount)
+        if total == ZERO:
+            raise InvalidAmount({"field": "total_amount", "reason": "must_not_be_zero"})
     return FolioCharge.objects.create(
         hotel=folio.hotel,
         folio=folio,
