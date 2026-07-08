@@ -243,6 +243,16 @@ class Payment(models.Model):
         max_length=16, choices=PostingStatus.choices, default=PostingStatus.POSTED
     )
     paid_at = models.DateTimeField()
+    # Phase 12: the shift whose cash drawer received this payment. Attached
+    # by the finance services when the creator has an open shift; NULL means
+    # an "unassigned movement" (reported, never hidden).
+    shift = models.ForeignKey(
+        "shifts.Shift",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payments",
+    )
     payer_name = models.CharField(max_length=180, blank=True, default="")
     reference = models.CharField(max_length=120, blank=True, default="")
     notes = models.CharField(max_length=255, blank=True, default="")
@@ -409,6 +419,14 @@ class Expense(models.Model):
         max_length=16, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
     paid_at = models.DateTimeField()
+    # Phase 12: the shift whose cash drawer paid this expense (see Payment).
+    shift = models.ForeignKey(
+        "shifts.Shift",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expenses",
+    )
     vendor_name = models.CharField(max_length=180, blank=True, default="")
     reference = models.CharField(max_length=120, blank=True, default="")
     notes = models.CharField(max_length=255, blank=True, default="")

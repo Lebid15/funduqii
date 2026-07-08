@@ -105,6 +105,24 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.staff.errors.managerNotEditable;
     case "unknown_permission":
       return t.staff.errors.unknownPermission;
+    case "shift_already_open":
+      return t.shifts.errors.alreadyOpen;
+    case "shift_not_open":
+      return t.shifts.errors.notOpen;
+    case "cash_difference_reason_required":
+      return t.shifts.errors.differenceReason;
+    case "handover_not_recipient":
+      return t.shifts.errors.notRecipient;
+    case "rejection_reason_required":
+      return t.shifts.errors.rejectionReason;
+    case "business_day_closed":
+      return t.shifts.errors.dayClosed;
+    case "day_already_closed":
+      return t.shifts.errors.dayAlreadyClosed;
+    case "open_shifts_prevent_close":
+      return t.shifts.errors.openShifts;
+    case "pending_handovers_prevent_close":
+      return t.shifts.errors.pendingHandovers;
     case "trial_already_used":
       return t.subscriptions.trialAlreadyUsed;
     case "conflicting_subscription":

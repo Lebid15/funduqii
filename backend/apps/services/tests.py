@@ -654,7 +654,8 @@ class RegressionTests(APITestCase):
             "/api/v1/hotel/services/inventory/",
             "/api/v1/hotel/services/tables/",
             "/api/v1/hotel/services/public-orders/",
-            "/api/v1/hotel/daily-close/",
-            "/api/v1/hotel/shifts/",
+            # (shifts/daily-close became legitimate in Phase 12.)
+            "/api/v1/hotel/payroll/",
+            "/api/v1/hotel/attendance/",
         ):
             self.assertEqual(self.client.get(path).status_code, 404, path)

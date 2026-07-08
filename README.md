@@ -4,25 +4,26 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 11 — Staff + Permissions Management UI (pending review).**
+> **Current status: Phase 12 — Shifts + Handover + Daily Close (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
 > check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
-> orders) and Phase 10 (housekeeping + maintenance + lost & found). Phase 11
-> adds **staff & flexible permissions management** on top of the Phase 2
-> foundation (no new RBAC, no new models — only descriptive fields on
-> `HotelMembership`): create or link staff users, deactivate/reactivate with
-> last-manager protection, a per-section **permissions matrix** with bulk
-> replace and an anti-escalation guard, a grouped permission-registry
-> endpoint, and `GET /staff/my-permissions/` powering a **permission-aware
-> sidebar + route guard** at `/hotel/staff` (Overview / Staff list / Matrix /
-> Reference). **There are NO fixed roles: `job_title` is descriptive only —
-> permission grants are the single source of truth** (a manager holds
-> everything by membership type).
-> **No shifts, no payroll, no attendance, no scheduling, no HR, no email
-> invitations, no general activity audit** — deferred or out of scope.
+> orders), Phase 10 (housekeeping + maintenance + lost & found) and Phase 11
+> (staff + flexible permissions). Phase 12 adds the **daily work organizer**:
+> working **shifts** (`SH00001`) with a cash drawer — payments/expenses
+> auto-attach to the creator's open shift inside the finance services,
+> expected cash is server-computed and a counted difference requires a
+> reason — **shift handovers** (`HO00001`) with a recipient/manager-only
+> accept-or-reject flow, and an operational **daily close** (`DC00001`) that
+> snapshots the business date and **locks new dated activity** (payments,
+> expenses, service postings, shifts) for closed days; finance voids stay
+> possible by design. Console at `/hotel/shifts` (Overview / Current shift /
+> Shifts / Handovers / Daily close), guarded by `shifts.*` / `daily_close.*`.
+> **Not attendance, not payroll, not HR, not scheduling, not a full
+> accounting close — and never a new source of financial truth** (Phase 8
+> records stay that).
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -52,6 +53,7 @@ funduqii/
 │  ├─ apps/services/        # service catalog + orders -> folio charge /api/v1/hotel/services/ (Phase 9)
 │  ├─ apps/operations/      # housekeeping + maintenance + lost & found /api/v1/hotel/operations/ (Phase 10)
 │  ├─ apps/staff/           # staff + permission grants management /api/v1/hotel/staff/ (Phase 11)
+│  ├─ apps/shifts/          # shifts + handover + daily close /api/v1/hotel/shifts/ (Phase 12)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -448,6 +450,29 @@ fixed roles anywhere. Passwords are validated, hashed, and never echoed back.
 | `GET .../staff/my-permissions/` | Current user's effective permissions — powers the permission-aware sidebar + route guard |
 
 See [docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md).
+
+### Shifts & daily-close endpoints (Phase 12)
+
+Under `/api/v1/hotel/shifts/`, scoped to the caller's hotel and guarded by
+`shifts.*` / `daily_close.*`. Shifts organize the daily work — they never
+create or mutate finance records (attachment happens inside the finance
+services), and the daily-close snapshot documents the day while Phase 8
+records remain the single source of financial truth. No DELETE routes.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/shifts/overview/` | Open/today shifts, pending handovers, last close, expected/counted cash, unassigned movements, today's close status |
+| `GET .../shifts/current/` | The caller's open shift + live drawer summary |
+| `GET/POST .../shifts/` · `GET/PATCH .../shifts/{id}/` | Shifts `SH00001` (one OPEN per user per hotel — DB-enforced; manager-only open-for-others/pinned date) |
+| `POST .../shifts/{id}/close/` | Server-computed expected cash; a counted difference REQUIRES a reason; row-locked |
+| `POST .../shifts/{id}/cancel/` · `GET .../shifts/{id}/summary/` | Cancel (reason; blocked once movements attached) / drawer summary by method |
+| `GET/POST .../shifts/handovers/` · `GET/PATCH .../handovers/{id}/` | Handovers `HO00001` (draft-editable; accepted = frozen) |
+| `POST .../handovers/{id}/submit|accept|reject|cancel/` | Recipient-or-manager guard on accept/reject; reject/cancel need a reason |
+| `GET .../shifts/daily-close/` · `GET .../daily-close/{date}/` | Closed/draft days with snapshot + totals |
+| `POST .../daily-close/prepare/` | Idempotent DRAFT snapshot preview (locks nothing) |
+| `POST .../daily-close/close/` | Validates no open shifts / no pending handovers / never twice, then locks the date for NEW payments, expenses, service postings and shifts (voids stay allowed by design) |
+
+See [docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md](docs/SHIFTS_HANDOVER_DAILY_CLOSE_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

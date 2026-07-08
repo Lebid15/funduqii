@@ -472,6 +472,7 @@ class RegressionTests(APITestCase):
         tables = {m._meta.db_table for m in django_apps.get_models()}
         for present in ("folios", "payments", "invoices", "expenses"):
             self.assertIn(present, tables)
-        # Still no restaurant/stock/daily-close/shift models.
-        for forbidden in ("restaurant_orders", "stock_items", "daily_closes", "shifts", "payroll"):
+        # Shifts/daily close arrived legitimately in Phase 12; still no
+        # restaurant/stock/payroll/attendance models.
+        for forbidden in ("restaurant_orders", "stock_items", "payroll", "attendance_records"):
             self.assertNotIn(forbidden, tables)

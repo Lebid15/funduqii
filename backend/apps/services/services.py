@@ -268,6 +268,12 @@ def post_order_to_folio(order: ServiceOrder, *, user=None) -> ServiceOrder:
     if totals["total"] <= ZERO:
         raise OrderNotPostable({"reason": "zero_total"})
 
+    # Phase 12: posting happens "now" — a closed business day refuses it
+    # (imported lazily to avoid app-load cycles).
+    from apps.shifts.services import ensure_business_day_open, get_business_date
+
+    ensure_business_day_open(order.hotel, get_business_date(order.hotel))
+
     folio = _resolve_folio(order, user=user)
     if folio.status != FolioStatus.OPEN:
         raise FolioClosed({"folio": folio.id, "status": folio.status})

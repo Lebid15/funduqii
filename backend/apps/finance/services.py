@@ -214,12 +214,25 @@ def void_charge(charge, *, reason, user=None) -> FolioCharge:
 # --- Payments ---------------------------------------------------------------
 
 
+def _shift_context(hotel, user, when):
+    """Phase 12 hooks (imported lazily to avoid app-load cycles): refuse new
+    dated activity on a CLOSED business day, and attach the movement to the
+    creator's open shift when one exists — a missing shift never blocks the
+    operation (it becomes a reported "unassigned movement")."""
+    from apps.shifts.services import ensure_business_day_open, get_open_shift_for
+
+    ensure_business_day_open(hotel, when.date())
+    return get_open_shift_for(user, hotel)
+
+
 @transaction.atomic
 def record_payment(folio, *, amount, method, paid_at=None, payer_name="",
                    reference="", notes="", currency=None, user=None) -> Payment:
     _guard_open(folio)
     if money(amount) <= ZERO:
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    paid_at = paid_at or timezone.now()
+    shift = _shift_context(folio.hotel, user, paid_at)
     return Payment.objects.create(
         hotel=folio.hotel,
         folio=folio,
@@ -227,7 +240,8 @@ def record_payment(folio, *, amount, method, paid_at=None, payer_name="",
         amount=money(amount),
         currency=currency or folio.currency,
         method=method,
-        paid_at=paid_at or timezone.now(),
+        paid_at=paid_at,
+        shift=shift,
         payer_name=payer_name or folio.customer_name,
         reference=reference or "",
         notes=notes or "",
@@ -337,6 +351,8 @@ def create_expense(hotel, *, category, description, amount, method, paid_at=None
     if money(amount) <= ZERO:
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
     actor = _actor(user)
+    paid_at = paid_at or timezone.now()
+    shift = _shift_context(hotel, user, paid_at)
     return Expense.objects.create(
         hotel=hotel,
         expense_number=next_number(hotel, NumberKind.EXPENSE),
@@ -345,7 +361,8 @@ def create_expense(hotel, *, category, description, amount, method, paid_at=None
         amount=money(amount),
         currency=currency or _hotel_currency(hotel),
         method=method,
-        paid_at=paid_at or timezone.now(),
+        paid_at=paid_at,
+        shift=shift,
         vendor_name=vendor_name or "",
         reference=reference or "",
         notes=notes or "",

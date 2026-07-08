@@ -7,6 +7,7 @@ import {
   Building2,
   CalendarCheck,
   ClipboardList,
+  Clock,
   ConciergeBell,
   CreditCard,
   Hotel,
@@ -68,6 +69,7 @@ export function Sidebar({
     { href: "/hotel/services", label: t.services.nav, icon: UtensilsCrossed },
     { href: "/hotel/operations", label: t.operations.nav, icon: ClipboardList },
     { href: "/hotel/staff", label: t.staff.nav, icon: UserCog },
+    { href: "/hotel/shifts", label: t.shifts.nav, icon: Clock },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];
