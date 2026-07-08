@@ -21,7 +21,10 @@ async function proxy(request: Request, ctx: Ctx): Promise<Response> {
 
   const { path } = await ctx.params;
   const search = new URL(request.url).search;
-  const target = `/v1/hotel/${path.join("/")}/${search}`;
+  // Django URLs end with a slash EXCEPT file-like endpoints (e.g. the Phase
+  // 13 `export.csv` routes) where a trailing slash would 404.
+  const isFileLike = path[path.length - 1]?.includes(".");
+  const target = `/v1/hotel/${path.join("/")}${isFileLike ? "" : "/"}${search}`;
 
   const method = request.method;
   const hasBody = method !== "GET" && method !== "HEAD";

@@ -86,7 +86,9 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "permissions_update",
         "manage",
     ],
-    "reports": ["view"],
+    # Reports & analytics (Phase 13). Read-only; finance/operations/shifts
+    # sections and CSV export are gated separately on top of `view`.
+    "reports": ["view", "finance", "operations", "shifts", "export"],
     "settings": ["view", "update"],
     # Shifts + handover (Phase 12).
     "shifts": [
