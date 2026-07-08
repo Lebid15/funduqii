@@ -1209,8 +1209,8 @@
 ---
 
 ## Phase 13 — Reports + Analytics
-- الحالة: **بانتظار الاعتماد 🔎** (نُفِّذت واختُبرت — لا تُعتمد ذاتيًا؛ الاعتماد قرار المالك حصرًا)
-- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: —
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: 2026-07-08
 - الهدف: تقارير تشغيلية وإدارية **للقراءة فقط** فوق كل ما بُني (المراحل 5→12) — **ليست BI ولا محاسبة متقدمة ولا مركز تصدير ولا Dashboards تسويقية**.
 - الأساس: بُنيت من **`origin/main`** (05e4d67، بعد دمج Phase 12 عبر PR #11).
 
@@ -1253,4 +1253,6 @@
 - **لا BI متقدم · لا Data warehouse · لا Pivot/Report designer · لا تقارير مجدولة/بريد/WhatsApp · لا Notifications · لا موقع عام/حجز عام · لا بوابة دفع · لا محاسبة متقدمة/دفتر أستاذ/ضريبة متقدمة · لا تقارير Payroll/Attendance/Inventory/Purchasing · لا تحليلات مالك المنصة المتقدمة.** **لم تبدأ Phase 14.**
 
 ### الاعتماد
-- بانتظار قرار المالك بعد المراجعة. ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار.
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #12 (commit `9762cec` على `origin/main@05e4d67`، mergeable_state: clean، backend 553/553، frontend lint/typecheck/build ناجحة، `/hotel/reports` مبني، والبنود الـ34 المقبولة رسميًا في رسالة الاعتماد).
+- ملاحظة الاعتماد: «تم اعتماد Phase 13 بعد Final Acceptance Review. المرحلة أضافت تقارير تشغيلية وإدارية read-only تشمل overview، reservations، occupancy، guests، finance، services، operations، shifts/daily close، مع date filters، CSV exports محدودة وآمنة، وصلاحيات reports.*. الإشغال مشتق من Stay وليس Room.status، وnet_cashflow_simple ليس profit بل صافي حركة تشغيلية. لا BI advanced، لا public booking، لا payment gateway، لا notifications، لا scheduled reports، ولا Phase 14.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 14 لا تبدأ إلا برسالتها الرسمية.**
