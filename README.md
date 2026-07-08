@@ -4,26 +4,25 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 10 — Housekeeping + Maintenance + Lost & Found (pending review).**
+> **Current status: Phase 11 — Staff + Permissions Management UI (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
-> check-in/out), Phase 8 + 8.1 (internal finance: folios, charges, payments,
-> invoices, expenses) and Phase 9 (internal service orders posted once to the
-> folio). Phase 10 adds **daily room operations** — housekeeping tasks
-> (`HK00001`), maintenance requests (`MT00001`) that can block a room as
-> `maintenance`/`out_of_service`, and a lost & found log (`LF00001`) — under
-> `/api/v1/hotel/operations/`, plus a hotel console at `/hotel/operations`
-> (Overview / Housekeeping / Maintenance / Lost & Found / Room status board),
-> guarded by `housekeeping.*` / `maintenance.*` / `lost_found.*` permissions.
-> Check-out now auto-creates ONE check-out cleaning task; every room status
-> change still goes through the Phase 5 controlled path (no `occupied` status —
-> occupancy stays derived from stays; closing maintenance never auto-releases
-> a room).
-> **No shifts, no daily close, no advanced reports, no inventory/stock, no
-> purchasing, no notifications, no mobile app, no QR tasks, no photos/files
-> for lost & found** — deferred or out of scope.
+> check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
+> orders) and Phase 10 (housekeeping + maintenance + lost & found). Phase 11
+> adds **staff & flexible permissions management** on top of the Phase 2
+> foundation (no new RBAC, no new models — only descriptive fields on
+> `HotelMembership`): create or link staff users, deactivate/reactivate with
+> last-manager protection, a per-section **permissions matrix** with bulk
+> replace and an anti-escalation guard, a grouped permission-registry
+> endpoint, and `GET /staff/my-permissions/` powering a **permission-aware
+> sidebar + route guard** at `/hotel/staff` (Overview / Staff list / Matrix /
+> Reference). **There are NO fixed roles: `job_title` is descriptive only —
+> permission grants are the single source of truth** (a manager holds
+> everything by membership type).
+> **No shifts, no payroll, no attendance, no scheduling, no HR, no email
+> invitations, no general activity audit** — deferred or out of scope.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -52,6 +51,7 @@ funduqii/
 │  ├─ apps/finance/         # folios + charges + payments + invoices + expenses /api/v1/hotel/finance/ (Phase 8)
 │  ├─ apps/services/        # service catalog + orders -> folio charge /api/v1/hotel/services/ (Phase 9)
 │  ├─ apps/operations/      # housekeeping + maintenance + lost & found /api/v1/hotel/operations/ (Phase 10)
+│  ├─ apps/staff/           # staff + permission grants management /api/v1/hotel/staff/ (Phase 11)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -428,6 +428,26 @@ writes money, and there is no DELETE route anywhere (history is never erased).
 Check-out (Phase 7) additionally auto-creates ONE `checkout_cleaning` task per
 stay (idempotent). See
 [docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md).
+
+### Staff & permissions endpoints (Phase 11)
+
+Under `/api/v1/hotel/staff/`, scoped to the caller's hotel and guarded by
+`staff.*`. Built entirely on the Phase 2 foundation — access is decided by
+permission GRANTS only; job titles are descriptive labels and there are no
+fixed roles anywhere. Passwords are validated, hashed, and never echoed back.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/staff/overview/` | Total/active/inactive staff, managers, staff with/without grants |
+| `GET/POST .../staff/` · `GET/PATCH .../staff/{id}/` | List/search/filter members; create a NEW staff user; PATCH = descriptive fields only |
+| `POST .../staff/link-existing-user/` | Attach an existing user by email (platform owners refused; duplicates 409) |
+| `POST .../staff/{id}/deactivate|reactivate/` | Lifecycle instead of delete; the last active manager is protected (409) |
+| `POST .../staff/{id}/reset-password/` | Local temporary password (no email is ever sent — delivered outside the system) |
+| `GET .../staff/permission-registry/` | The full registry grouped by section — the matrix builds from this |
+| `GET/PUT .../staff/{id}/permissions/` | Granted + effective permissions; PUT = transaction-safe bulk replace with anti-escalation guard |
+| `GET .../staff/my-permissions/` | Current user's effective permissions — powers the permission-aware sidebar + route guard |
+
+See [docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md](docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 

@@ -75,7 +75,17 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "close",
     ],
     "lost_found": ["view", "create", "update", "status_update", "close"],
-    "staff": ["view", "manage"],
+    # Staff & permissions management (Phase 11). `manage` is a vestigial
+    # blueprint code and NOT used; the explicit operations below are.
+    "staff": [
+        "view",
+        "create",
+        "update",
+        "deactivate",
+        "permissions_view",
+        "permissions_update",
+        "manage",
+    ],
     "reports": ["view"],
     "settings": ["view", "update"],
     "daily_close": ["view", "run"],

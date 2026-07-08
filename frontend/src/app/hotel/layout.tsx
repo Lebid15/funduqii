@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/layout/AppShell";
+import { HotelRouteGuard } from "@/components/layout/HotelRouteGuard";
+import { HotelAccessProvider } from "@/lib/session/HotelAccessContext";
 import { getHotelId, getMe } from "@/lib/session/server";
 
 /**
@@ -33,8 +35,10 @@ export default async function HotelLayout({
     activeMemberships[0];
 
   return (
-    <AppShell variant="hotel" user={me.user} hotelName={current.hotel_name}>
-      {children}
-    </AppShell>
+    <HotelAccessProvider>
+      <AppShell variant="hotel" user={me.user} hotelName={current.hotel_name}>
+        <HotelRouteGuard>{children}</HotelRouteGuard>
+      </AppShell>
+    </HotelAccessProvider>
   );
 }

@@ -64,6 +64,28 @@ class HotelMembership(models.Model):
     )
     is_active = models.BooleanField(default=True)
     is_primary_manager = models.BooleanField(default=False)
+    # Descriptive staff fields (Phase 11). `job_title` is a DESCRIPTIVE label
+    # only — it never grants or restricts access; permission grants are the
+    # single source of truth for what a member can do.
+    job_title = models.CharField(max_length=120, blank=True, default="")
+    staff_code = models.CharField(max_length=32, blank=True, default="")
+    notes = models.CharField(max_length=255, blank=True, default="")
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+    deactivation_reason = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memberships_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memberships_updated",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

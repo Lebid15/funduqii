@@ -1100,3 +1100,54 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** ومدمجة إلى main عبر **PR #9** بدمج squash — كومِت الدمج `07492c1` (اعتماد مبدئي ثم فحص ما قبل الدمج: **لا أحرف Unicode مخفية/ثنائية اتجاه ضارة** — تنبيه GitHub سببه النص العربي/RTL العادي في 7 ملفات (القواميس والوثائق) وتأكد ذلك بمسح برمجي لكل ملفات الـ PR؛ ومراجعة Copilot بلا أي ملاحظة blocking).
 - تحقق ما بعد الدمج: origin/main يحتوي Phase 10 كاملة؛ diff بين main وفرع phase-10 **فارغ**؛ backend `check`/`makemigrations --check`/**417/417 tests** ✅ على main المدموج؛ frontend lint/tsc/build ✅ (`/hotel/operations` مبني).
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 11 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 11 — Staff + Permissions Management UI
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · تاريخ الاعتماد: 2026-07-08
+- الهدف: واجهة إدارة موظفي الفندق وصلاحياتهم **المرنة** فوق أساس Phase 2 كما هو — **لا أدوار ثابتة تتحكم بالوصول أبدًا**: العضوية + منح الصلاحيات هي مصدر الحقيقة الوحيد، و`job_title` مسمى وصفي فقط. **بلا Shifts، بلا Payroll، بلا حضور وانصراف، بلا Scheduling، بلا HR، بلا دعوات بريد.**
+- الأساس: بُنيت من **`origin/main`** (1f7d97a، بعد دمج Phase 10 عبر PR #9 = 07492c1).
+
+### ما نُفّذ (Backend)
+- **لا نظام RBAC جديد ولا نماذج جديدة**: `apps/staff` تطبيق API رقيق فوق `tenancy.HotelMembership` + `rbac.HotelPermissionGrant` وخدمات rbac القائمة (`grant/revoke/get_hotel_permissions/has_hotel_permission`). أُضيفت **حقول وصفية فقط** إلى HotelMembership (هجرة tenancy.0002): `job_title` · `staff_code` · `notes` · `deactivated_at` · `deactivation_reason` · `created_by` · `updated_by` (البقية موجودة أصلًا: created_at كتاريخ انضمام، phone على User، is_active).
+- **السجل المركزي**: اكتمل قسم `staff` بـ view/create/update/deactivate/permissions_view/permissions_update (+`manage` القديمة موثّقة vestigial) — 81 كودًا في 18 قسمًا.
+- **دورة الحياة**: إنشاء مستخدم جديد (بريد فريد عالميًا → `409 email_already_registered`، كلمة مرور عبر `validate_password` مجزأة ولا تعود في أي استجابة، معاملة ترجع كاملة عند الفشل) · **ربط مستخدم موجود** بالبريد (تكرار عضوية → `409 membership_already_exists`؛ **مالك المنصة يُرفض دائمًا** → `platform_owner_not_manageable` — قرار موثّق) · تعديل حقول **وصفية فقط** (الاسم/الهاتف/المسمى/الرمز/الملاحظات؛ البريد هوية ثابتة؛ نوع العضوية والتفعيل والمنح خارج PATCH بنيويًا) · **تعطيل/إعادة تفعيل بدل الحذف** (لا DELETE؛ المعطّل يفقد الوصول فورًا عبر `membership_inactive` القائمة ويحتفظ بسجله ومنحه) · **حماية آخر مدير نشط** → `409 last_manager_protected` · إعادة تعيين كلمة مرور محلية (بلا أي بريد — التسليم خارج النظام، موثّق).
+- **إدارة المنح**: `PUT permissions/` استبدال كامل transaction-safe (حذف الزائد + get_or_create بلا تكرار)؛ كود غير معروف → `unknown_permission` بلا أي تغيير جزئي؛ **حارس التصعيد**: غير المدير لا يمنح — لنفسه أو لغيره — صلاحية لا يملكها (`403 permission_escalation_blocked`) والإزالة حرة؛ **منح المدير غير قابلة للتعديل** (`409 manager_permissions_not_editable`) لأنه يملك الكل بحكم النوع.
+- **سياق الواجهة**: `GET my-permissions/` (عضوية فقط — عن الذات): `{is_manager, permissions[]}` — يغذي السايدبار والحارس. `GET permission-registry/` يعيد السجل مجمّعًا حسب الأقسام (المصفوفة تُبنى منه — لا hardcode في الواجهة).
+- **أخطاء جديدة (6)**: `email_already_registered` · `membership_already_exists` · `last_manager_protected` · `platform_owner_not_manageable` · `permission_escalation_blocked` · `manager_permissions_not_editable`.
+- **APIs تحت `/api/v1/hotel/staff/`**: `overview/` · `` (list/create بفلاتر بحث/نشاط/نوع/has_permission/ترتيب) · `{id}/` (GET/PATCH) · `{id}/deactivate|reactivate|permissions|reset-password/` · `link-existing-user/` · `permission-registry/` · `my-permissions/` — عزل كامل والفندق المعلّق قراءة فقط (`hotel_suspended` لكل كتابة).
+
+### ما نُفّذ (Frontend)
+- **سايدبار يحترم الصلاحيات** (النقطة المحورية): `HotelAccessProvider` يحمّل `my-permissions` مرة واحدة، وخريطة مركزية واحدة `hotelRouteAccess.ts` تربط كل مسار بأكواده (any-of): stays/reservations/guests/finance|expenses/services|service_orders/housekeeping|maintenance|lost_found/staff/rooms/settings — الرابط لا يظهر إلا لحامل الصلاحية (المدير يرى الكل؛ أثناء التحميل لا شيء بدل وميض روابط ممنوعة)، و`HotelRouteGuard` يعرض «الوصول مرفوض» واضحة عند الدخول اليدوي. **الإخفاء تجميلي**: كل API يمنع بنفسه (مُختبر).
+- عنصر **«الموظفون»** ومسار **`/hotel/staff`** بأربعة تبويبات: **نظرة عامة** (6 بطاقات) · **قائمة الموظفين** (بحث/فلترة نشط-معطّل، إنشاء بمودال كامل بكلمة مرور مؤقتة لا تُعرض ثانية، ربط مستخدم موجود، تعديل وصفي، تعطيل بمودال تحذير وسبب اختياري، إعادة تفعيل بتأكيد، إعادة تعيين كلمة مرور — وبعد الإنشاء/الربط يُفتح تبويب الصلاحيات للعضو الجديد مباشرة) · **مصفوفة الصلاحيات** (اختيار موظف؛ بطاقة لكل قسم بمفاتيح لكل عملية + تحديد الكل/مسح للقسم + عداد الممنوح + حفظ/استرجاع لا يُفعَّلان إلا عند تغيير فعلي؛ تحذير أصفر عند تعديل الذات + تحديث سياق السايدبار فورًا بعده؛ رسالة «المدير يملك كل شيء» بدل مصفوفة عبثية؛ ملاحظة للمعطّل) · **مرجع الصلاحيات** (من registry API حصرًا مع تسميات مترجمة لكل قسم وعملية وfallback آمن لأي كود مستقبلي + بيانا «المسمى لا يمنح وصولًا» و«المنح مصدر الحقيقة»).
+- مكونات مركزية فقط + tokens (**صفر CSS جديد هذه المرحلة**) + ترجمات **ar/en/tr كاملة** (namespace `staff`، تكافؤ **1294=1294=1294**) + RTL/LTR + حالات موحّدة + responsive. لا localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/staff/{__init__,apps,services,serializers,views,urls,tests}.py` (بلا models.py — عمدًا) + هجرة `tenancy.0002` · **جديدة (Frontend):** `app/hotel/staff/page.tsx` · `components/hotel/staff/{StaffPanel,OverviewTab,StaffListTab,PermissionsMatrixTab,RegistryTab}.tsx` · `components/layout/HotelRouteGuard.tsx` · `lib/session/{HotelAccessContext.tsx,hotelRouteAccess.ts}` · `lib/api/staff.ts` · والوثيقة `docs/STAFF_PERMISSIONS_MANAGEMENT_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/tenancy/models.py` (حقول وصفية) · `apps/rbac/registry.py` (قسم staff) · `apps/common/exceptions.py` (+6) · `config/settings/base.py` · `config/urls.py`.
+- **معدّلة (Frontend):** `app/hotel/layout.tsx` (Provider + Guard) · `components/layout/Sidebar.tsx` (فلترة بالصلاحيات + رابط الموظفين) · `lib/api/{types,errors}.ts` · قواميس ar/en/tr · التوثيق (README، DEVELOPMENT_RULES §8h، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **464/464 OK** (417 سابقة + 47 لـ staff) — انحدار صفر للمراحل 2→10 |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/staff` مبني) |
+| فحص حيّ End-to-End (عبر BFF) | ✅ my-permissions للمدير (is_manager=true، 81 صلاحية) → إنشاء موظفة بصلاحية stays.view فقط (لا password في الرد) → دخولها: my-permissions تعيد صلاحيتها فقط؛ stays 200؛ finance 403؛ staff 403 → المدير يمنحها إدارة الصلاحيات → محاولتها منح نفسها finance.view **403 permission_escalation_blocked** → إزالتها صلاحية من نفسها تنجح → المدير يعطّل نفسه **409 last_manager_protected** → تعديل منح المدير **409 manager_permissions_not_editable** → كود مجهول **400 unknown_permission** → registry (18 قسمًا/81 كودًا) → تعطيل («إجازة») → وصولها **403 membership_inactive** → إعادة تفعيل → تعمل → صفحة `/hotel/staff` 200 |
+
+### ملاحظات وقرارات
+- **قوالب الصلاحيات (Presets) أُجّلت عمدًا** (المواصفة سمحت بذلك صراحة): كانت ستعقّد المصفوفة دون قيمة جوهرية؛ أي قالب مستقبلي = ملء أولي لمربعات ثم منح عادية.
+- **ترقية/تنزيل نوع العضوية** (staff↔manager) خارج نطاق المرحلة — موثّقة كمؤجلة؛ PATCH وصفي بنيويًا لا يستطيع لمسها.
+- ربط مالك المنصة كموظف فندق **مُنع كليًا** (الخيار الأكثر أمانًا الذي رجحته المواصفة) — الفصل التام بين النطاقين.
+- الإسناد في تبويبات Operations ما يزال «أسند إليّ»؛ قائمة أعضاء كاملة للإسناد يمكن أن تُبنى لاحقًا فوق `staff.view` (تحسين مؤجل).
+- التنفيذ الموزّع بالوكلاء غير متاح (حدّ أسبوعي حتى 2026-07-09 مساءً) — نُفِّذت المرحلة مباشرة بنفس التغطية.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا أدوار ثابتة تتحكم بالوصول · لا Shifts · لا حضور وانصراف/بصمة · لا Payroll/عقود ورواتب · لا Staff scheduling · لا HR كامل · لا دعوات بريد حقيقية · لا WhatsApp للموظفين · لا إشعارات متقدمة · لا Activity audit عام · لا تقارير متقدمة.** **لم تبدأ Phase 12.**
+
+### الاعتماد
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-08** بعد Final Acceptance Review لـ PR #10 (commit `9e9681d` على `origin/main@1f7d97a`، mergeable_state: clean، backend 464/464، frontend lint/typecheck/build ناجحة، `/hotel/staff` مبني، والبنود الـ24 المقبولة رسميًا في رسالة الاعتماد).
+- ملاحظة الاعتماد: «تم اعتماد Phase 11 بعد Final Acceptance Review. المرحلة أضافت واجهة إدارة الموظفين والصلاحيات المرنة اعتمادًا على HotelMembership و HotelPermissionGrant و permission registry، بدون أدوار ثابتة تتحكم بالوصول. job_title وصفي فقط، والصلاحيات هي مصدر الحقيقة. تم تفعيل staff APIs، permission registry، permissions matrix، my-permissions، HotelAccessProvider، HotelRouteGuard، واحترام السايدبار للصلاحيات. تم اختبار منع التصعيد، حماية آخر manager، منع وصول staff المعطّل، tenant isolation، وhotel suspended. لا Shifts، لا Payroll، لا Attendance، ولا Phase 12.»
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 12 لا تبدأ إلا برسالتها الرسمية.**
