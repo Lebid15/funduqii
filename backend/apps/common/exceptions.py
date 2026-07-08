@@ -135,6 +135,45 @@ class StatusNoteRequired(FunduqiiAPIException):
     default_code = "status_note_required"
 
 
+# --- Service orders (Phase 9) -----------------------------------------------
+
+
+class OrderAlreadyPosted(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This order has already been posted to a folio."
+    default_code = "order_already_posted"
+
+
+class OrderNotPostable(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This order cannot be posted to a folio."
+    default_code = "order_not_postable"
+
+
+class OrderNotEditable(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This order can no longer be modified."
+    default_code = "order_not_editable"
+
+
+class OrderItemsRequired(FunduqiiAPIException):
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = "The order must contain at least one item."
+    default_code = "order_items_required"
+
+
+class InvalidOrderStatusTransition(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This order status change is not allowed."
+    default_code = "invalid_order_status_transition"
+
+
+class ServiceItemUnavailable(FunduqiiAPIException):
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = "This service item is inactive or unavailable."
+    default_code = "service_item_unavailable"
+
+
 # --- Reservations & availability (Phase 6) ---------------------------------
 
 

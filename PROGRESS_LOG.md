@@ -59,7 +59,7 @@
 | 6 | Reservations + Availability Engine | مكتملة ✅ | 2026-07-07 |
 | 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | مكتملة ✅ | 2026-07-07 |
-| 9 | Restaurant + Cafeteria | لم تبدأ ⏳ | — |
+| 9 | Restaurant / Café / Room Service Orders | بانتظار الاعتماد 🔎 | 2026-07-08 |
 | 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
 | 11 | Shifts + Daily Close | لم تبدأ ⏳ | — |
 | 12 | Public Website + Public Booking | لم تبدأ ⏳ | — |
@@ -1001,3 +1001,50 @@
 
 ### الاعتماد
 - **معتمدة ضمن الاعتماد النهائي لـ Phase 8** (قرار المالك بتاريخ 2026-07-07 بعد Final Acceptance Review). جزء من PR #7 بالكومِت `bd3f075`.
+
+---
+
+## Phase 9 — Restaurant / Café / Room Service Orders
+- الحالة: **بانتظار الاعتماد 🔎** (مُنفَّذة ومُختبَرة — لم تُعتمد بعد من المالك)
+- التاريخ: بدأت 2026-07-08 · اكتملت (تنفيذ) 2026-07-08 · اعتُمدت —
+- الهدف: أساس طلبات الخدمات الداخلية — **كتالوج** (تصنيفات + أصناف بأسعار Decimal وضريبة لكل صنف) و**طلبات** مرتبطة بإقامة/غرفة تمرّ بدورة `submitted → preparing → ready → delivered` ثم **تُرحَّل مرة واحدة فقط إلى فوليو النزيل كرسم واحد** عبر خدمات المال في Phase 8. **بلا POS، بلا مخزون، بلا طاولات، بلا دفع مباشر، بلا بوابة دفع، بلا طلب عام.**
+- الأساس: بُنيت من **`origin/main`** (120e455، بعد دمج Phase 8 + 8.1 عبر PR #7).
+
+### ما نُفّذ (Backend)
+- **تطبيق مستقل `apps/services`** (لا داخل finance/stays/rooms) مع **وحدة خدمات واحدة** (`services.py`) هي مسار الكتابة الوحيد — الـ views لا تعدّل الطلبات مباشرة.
+- **النماذج:** `ServiceCategory` (فريدة الرمز داخل الفندق؛ لا حذف مع وجود أصناف → `409 resource_in_use`) · `ServiceItem` (تصنيف من نفس الفندق، نوع restaurant/cafe/room_service/other، سعر Decimal ≥ 0، ضريبة %، متاح/نشط؛ الصنف المستخدم في طلب لا يُحذف — يُعطَّل) · `ServiceOrder` (`order_number` فريد لكل فندق ORD00001، مصدر، stay/room/folio اختيارية بفحص المستأجر، حالة، ملاحظات، وختم الترحيل `posted_charge` OneToOne→FolioCharge + `posted_at/posted_by`) · `ServiceOrderItem` (**لقطة** اسم/سعر/ضريبة + مجاميع محسوبة بنفس تقريب `money()`) · `ServiceOrderStatusLog` (سجل حالة خفيف — ليس Audit عامًا) · `ServiceNumberSequence` (عدّاد مستقل بقفل صف — لا خلط مع الترقيم المالي).
+- **سير الحالات:** أمامي فقط مع سماح بالقفز (submitted→delivered لطلب الكاونتر)؛ العناصر تُعدَّل في **draft فقط**؛ delivered/cancelled/posted مجمّدة (`409 order_not_editable`)؛ الإلغاء بمساره الخاص **وبسبب إلزامي**؛ لا DELETE للطلبات إطلاقًا؛ كل تغيير يُسجَّل.
+- **الترحيل إلى الفوليو (المخرج المالي الوحيد):** يتطلب `service_orders.post_to_folio` + حالة **delivered** + عدم ترحيل سابق (**قفل صف** يمنع الترحيل المزدوج المتزامن → `409 order_already_posted`) + إجمالي > 0؛ حلّ الفوليو: فوليو الطلب المفتوح → الفوليو المفتوح للإقامة → **إنشاء فوليو عبر `finance.create_folio`** (بالحجز والنزيل الرئيسي)؛ بلا إقامة وبلا فوليو → `409 order_not_postable`؛ يُنشأ **رسم واحد** عبر `finance.add_charge` بـ `type=service` و`source=service_order` ووصف `Service order ORD00001` — مع تمرير **مجموع ضريبة الطلب الدقيق صراحةً** (توسعة موثّقة صغيرة لـ`add_charge` بمعامل `tax_amount` اختياري) بحيث تساوي مبالغ الرسم مبالغ الطلب للسنت حتى مع اختلاف نسب الضريبة بين الأسطر؛ الطلب المرحّل لا يُلغى — التصحيح **void مالي من قسم المالية فقط** (لا un-post).
+- **الصلاحيات:** `services.view/create/update/delete` + `service_orders.view/create/update/cancel/status_update/post_to_folio` (أُضيفت للسجل مع توثيق `restaurant.*` القديمة كـ vestigial)؛ المدير يملك الكل، وStaff بمنح صريح؛ **الفندق المعلّق قراءة فقط** (كل كتابة → `403 hotel_suspended`)؛ عزل مستأجرين كامل (بحث مقيّد بالفندق 404 + `400 cross_tenant_reference`).
+- **أخطاء جديدة:** `order_already_posted`(409) · `order_not_postable`(409) · `order_not_editable`(409) · `order_items_required`(422) · `invalid_order_status_transition`(400) · `service_item_unavailable`(422).
+- **APIs تحت `/api/v1/hotel/services/`**: `overview/` · `categories/`(+`{id}/`) · `items/`(+`{id}/`، بفلاتر بحث/تصنيف/نوع/توفر/ترتيب) · `orders/`(+`{id}/`,`status/`,`cancel/`,`post-to-folio/`,`ticket/`، بفلاتر حالة/مصدر/إقامة/غرفة/تاريخ/مرحّل) — كلها paginated.
+
+### ما نُفّذ (Frontend)
+- عنصر **«الخدمات»** في sidebar الفندق ومسار **`/hotel/services`** بأربعة تبويبات: **نظرة عامة** (بطاقات workflow: طلبات اليوم/في المطبخ/جاهزة/سُلّمت/مُسلّمة غير مرحّلة/مرحّل اليوم/أصناف نشطة) · **الكتالوج** (تصنيفات + أصناف: إنشاء/تعديل/تفعيل/تعطيل/حذف محكوم، فلترة وبحث) · **الطلبات** (إنشاء بطلب لإقامة حالية أو زبون مباشر + محرر أسطر؛ تفاصيل بمجاميع الباكند وسجل الحالات؛ أزرار حالة واضحة؛ إلغاء بسبب؛ ترحيل للفوليو بتأكيد ومقيّد بالصلاحية؛ **تذكرة طباعة** عبر `PrintDocumentLayout`) · **لوحة التحضير** (4 أعمدة حالة بأزرار صريحة — لا سحب/إفلات؛ الباكند يتحقق من كل انتقال).
+- **لا حساب مالي في الواجهة**: نموذج الإنشاء لا يعرض مجاميع محلية («تُحسب المجاميع من النظام بعد الحفظ») والمجاميع كلها من ردّ الباكند. مكوّنات 8.1 المركزية (WorkflowCard/StatusSummaryCard/ConfirmDialog/…) + tokens فقط (أُضيف قسم `board-grid` مركزي صغير في globals.css) + lucide + ترجمات **ar/en/tr كاملة** (namespace `services`، تكافؤ 960=960=960) + RTL/LTR + حالات موحّدة + responsive. لا localStorage.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/services/{__init__,apps,models,services,serializers,views,urls,tests}.py` + migration `services.0001` · **جديدة (Frontend):** `app/hotel/services/page.tsx` · `components/hotel/services/{ServicesPanel,OverviewTab,CatalogTab,OrdersTab,BoardTab}.tsx` · `lib/api/services.ts` · والوثيقة `docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/common/exceptions.py` (+6) · `apps/rbac/registry.py` (+قسمي services/service_orders) · `apps/finance/services.py` (توسعة `add_charge` بـ`tax_amount` اختياري — موثّقة) · `config/settings/base.py` · `config/urls.py`.
+- **معدّلة (Frontend):** `components/layout/Sidebar.tsx` · `lib/api/{types,errors}.ts` · `lib/format.ts` (+formatDateTime +serviceOrderStatusTone) · قواميس ar/en/tr · `styles/globals.css` (قسم board) · التوثيق (README، DEVELOPMENT_RULES §8f، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **346/346 OK** (302 سابقة + 44 لـ services) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/hotel/services` مبني) |
+| فحص حيّ End-to-End (Django، SQLite) | ✅ تصنيف RS + صنفان (25+10% و8+0%) → طلب ORD00001 بمجاميع 58/5/63 → submitted→preparing→ready→delivered → تذكرة (عنصران، 63.00) → **ترحيل**: فوليو FOL00003 أُنشئ تلقائيًا للإقامة + رسم CHG00003 → **رصيد الفوليو 63.00 بالضبط** → ترحيل ثانٍ **409 order_already_posted** → overview: طلبات اليوم 1/مُسلّمة 1/غير مرحّلة 0/مرحّل اليوم 63.00/أصناف نشطة 2 |
+
+### ملاحظات وقرارات
+- **رسم واحد لكل طلب** مع تمرير ضريبة الطلب الدقيقة صراحةً (بدل rate-only) — يضمن تطابق الرسم مع الطلب للسنت مع أسطر مختلطة الضرائب؛ `tax_rate` المخزّن على الرسم نسبة فعلية معلوماتية. التوسعة في finance متوافقة رجعيًا (بلا معامل، السلوك السابق حرفيًا).
+- إلغاء delivered **غير المرحّل** مسموح (بسبب)؛ المرحّل لا يُلغى نهائيًا — void مالي فقط.
+- طلب بإجمالي صفري (أصناف مجانية فقط) لا يُرحَّل (`order_not_postable: zero_total`) — لا رسم صفري في المال.
+- التنفيذ الموزّع بالوكلاء غير متاح (حدّ أسبوعي حتى 2026-07-09 مساءً) — نُفِّذت المرحلة مباشرة بنفس التغطية.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا POS كامل · لا مخزون/مشتريات/موردون · لا إدارة/حجز طاولات · لا Kitchen Display متقدم/طابعات مطبخ · لا باركود · لا كاشير مستقل · لا دفع مباشر مستقل/بوابة دفع · لا طلب عام/QR · لا Delivery/WhatsApp orders · لا تقارير مبيعات متقدمة · لا Daily close/Shifts/Payroll.** **لم تبدأ Phase 10.**
+
+### الاعتماد
+- **لم تُعتمد بعد.** مُنفَّذة ومُختبَرة وبانتظار مراجعة المالك عبر PR الخاص بالمرحلة. **لا اعتماد ذاتيًا.**

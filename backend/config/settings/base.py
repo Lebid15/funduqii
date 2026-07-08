@@ -55,6 +55,7 @@ LOCAL_APPS = [
     "apps.platform",
     "apps.hotels",
     "apps.rooms",
+    "apps.services",
     "apps.reservations",
     "apps.guests",
     "apps.stays",

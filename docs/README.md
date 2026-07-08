@@ -70,3 +70,7 @@ Production topology example: [../docker-compose.prod.example.yml](../docker-comp
 
 Phase-specific design notes (data model decisions, API contracts, permission
 maps, etc.) will be added here as the project progresses through its phases.
+
+## Phase 9 — Service orders (restaurant / café / room service)
+
+- [SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md) — catalog + orders, status workflow, once-only posting to the folio, permissions, tenancy, print ticket, and what is deferred (POS/inventory/tables/public ordering).

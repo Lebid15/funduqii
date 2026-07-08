@@ -9,6 +9,7 @@ import type {
   PostingStatus,
   ReservationStatus,
   RoomStatus,
+  ServiceOrderStatus,
   StayStatus,
   SubscriptionStatus,
 } from "@/lib/api/types";
@@ -185,6 +186,31 @@ export function invoiceStatusTone(status: InvoiceStatus): BadgeTone {
 
 export function postingStatusTone(status: PostingStatus): BadgeTone {
   return status === "posted" ? "success" : "danger";
+}
+
+export function formatDateTime(iso: string | null, locale: Locale): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(iso));
+}
+
+export function serviceOrderStatusTone(status: ServiceOrderStatus): BadgeTone {
+  switch (status) {
+    case "submitted":
+      return "info";
+    case "preparing":
+      return "warning";
+    case "ready":
+      return "primary";
+    case "delivered":
+      return "success";
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 export function billingCycleLabel(cycle: string, t: Dictionary): string {

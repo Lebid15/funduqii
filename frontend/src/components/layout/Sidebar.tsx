@@ -14,6 +14,7 @@ import {
   Receipt,
   Settings,
   Users,
+  UtensilsCrossed,
   type LucideIcon,
 } from "lucide-react";
 
@@ -59,6 +60,7 @@ export function Sidebar({
     { href: "/hotel/reservations", label: t.reservations.nav, icon: CalendarCheck },
     { href: "/hotel/guests", label: t.guests.nav, icon: Users },
     { href: "/hotel/finance", label: t.finance.nav, icon: Receipt },
+    { href: "/hotel/services", label: t.services.nav, icon: UtensilsCrossed },
     { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
     { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
   ];

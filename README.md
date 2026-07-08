@@ -4,26 +4,22 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 8 — Payments + Expenses + Folio + Invoices (pending review).**
+> **Current status: Phase 9 — Restaurant / Café / Room Service Orders (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
-> availability, incl. 6.1 room assignment) and Phase 7 (guests + operational
-> check-in/out). Phase 8 adds the **internal finance layer** — a **folio** per
-> reservation/stay that accumulates **charges** (with per-line tax), **payments**
-> recorded as receipts, an **invoice** issued from the folio as an immutable
-> snapshot, and standalone **expense** vouchers — under
-> `/api/v1/hotel/finance/`, plus a hotel-side console at `/hotel/finance`
-> (Overview / Folios / Payments / Invoices / Expenses), scoped by hotel
-> membership and permissions (`finance.*`, `expenses.*`). All money is
-> **Decimal**; posted records are **never hard-deleted** (void with a reason);
-> **balances are computed** from posted line items; a folio **cannot be closed
-> with a non-zero balance**.
-> **This is an internal accounting layer only — no real payment gateway
-> (Stripe/PayPal/online payment), no bank reconciliation, no e-invoicing
-> government integration, no accounting ledger, no payroll, no daily close/shifts,
-> no restaurant, no public booking payments, and no advanced reports** — those are
-> out of scope or later phases.
+> availability, incl. 6.1 room assignment), Phase 7 (guests + operational
+> check-in/out) and Phase 8 + 8.1 (internal finance: folios, charges, payments,
+> invoices, expenses). Phase 9 adds **internal service orders** — a catalog of
+> service categories/items (restaurant, café, room service) and orders tied to
+> a stay or room that move through `submitted → preparing → ready → delivered`
+> and are then **posted ONCE to the guest folio as a single finance charge** —
+> under `/api/v1/hotel/services/`, plus a hotel console at `/hotel/services`
+> (Overview / Catalog / Orders / Preparation board) with a printable service
+> ticket, guarded by `services.*` / `service_orders.*` permissions.
+> **No POS, no inventory, no tables, no kitchen printers, no direct/standalone
+> payment, no gateway, no public/QR ordering, no delivery integration, no
+> advanced reports, no shifts/daily close** — deferred or out of scope.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -50,6 +46,7 @@ funduqii/
 │  ├─ apps/guests/          # guest directory /api/v1/hotel/ (Phase 7)
 │  ├─ apps/stays/           # check-in/out + occupancy /api/v1/hotel/ (Phase 7)
 │  ├─ apps/finance/         # folios + charges + payments + invoices + expenses /api/v1/hotel/finance/ (Phase 8)
+│  ├─ apps/services/        # service catalog + orders -> folio charge /api/v1/hotel/services/ (Phase 9)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -385,6 +382,26 @@ changes it; corrections are made by voiding and re-issuing. A folio **cannot be
 closed with a non-zero balance**. Early-checkout settlement is **manual** (void
 or adjustment charge — no auto-refund). See
 [docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md](docs/FINANCE_FOLIO_PAYMENTS_INVOICES_STRATEGY.md).
+
+### Service-order endpoints (Phase 9)
+
+Under `/api/v1/hotel/services/`, scoped to the caller's hotel and guarded by
+`services.*` / `service_orders.*`. Orders are an internal order pad; their only
+financial exit is **one folio charge, posted once**, created through the
+finance services (`type=service`, `source=service_order`).
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/services/overview/` | Today's orders by status, delivered-not-posted, posted-today total, active items |
+| `GET/POST .../services/categories/` · `GET/PATCH/DELETE .../categories/{id}/` | Catalog sections (delete blocked while items exist) |
+| `GET/POST .../services/items/` · `GET/PATCH/DELETE .../items/{id}/` | Items with Decimal price + tax % (delete blocked once ordered — deactivate) |
+| `GET/POST .../services/orders/` · `GET/PATCH .../orders/{id}/` | Orders (line snapshots; items editable only while draft; no DELETE route) |
+| `POST .../orders/{id}/status/` | Forward-only workflow `submitted → preparing → ready → delivered` (logged) |
+| `POST .../orders/{id}/cancel/` | Cancel with a mandatory reason (blocked once posted) |
+| `POST .../orders/{id}/post-to-folio/` | Deliver-gated, once-only posting; auto-creates/reuses the stay's open folio |
+| `GET .../orders/{id}/ticket/` | Print-friendly service ticket payload |
+
+See [docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 
