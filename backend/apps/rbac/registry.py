@@ -55,8 +55,26 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "post_to_folio",
     ],
     "restaurant": ["view", "create_order"],
-    "housekeeping": ["view", "update"],
-    "maintenance": ["view", "update"],
+    # Daily room operations (Phase 10): housekeeping tasks, maintenance
+    # requests and lost & found — each with explicit operation codes.
+    "housekeeping": [
+        "view",
+        "create",
+        "update",
+        "cancel",
+        "status_update",
+        "assign",
+    ],
+    "maintenance": [
+        "view",
+        "create",
+        "update",
+        "cancel",
+        "status_update",
+        "assign",
+        "close",
+    ],
+    "lost_found": ["view", "create", "update", "status_update", "close"],
     "staff": ["view", "manage"],
     "reports": ["view"],
     "settings": ["view", "update"],

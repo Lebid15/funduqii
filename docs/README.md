@@ -74,3 +74,7 @@ maps, etc.) will be added here as the project progresses through its phases.
 ## Phase 9 — Service orders (restaurant / café / room service)
 
 - [SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md) — catalog + orders, status workflow, once-only posting to the folio, permissions, tenancy, print ticket, and what is deferred (POS/inventory/tables/public ordering).
+
+## Phase 10 — Housekeeping + Maintenance + Lost & Found
+
+- [HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md) — the three operational workflows, HK/MT/LF numbering, status logs, the room-status integration rules (no `occupied`; housekeeping never overrides a maintenance block; closing maintenance never auto-releases a room), the check-out auto-task, permissions, and what is deferred (shifts/daily close/reports/inventory/purchasing/notifications).

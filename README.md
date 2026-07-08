@@ -4,22 +4,26 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 9 — Restaurant / Café / Room Service Orders (pending review).**
+> **Current status: Phase 10 — Housekeeping + Maintenance + Lost & Found (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
 > availability, incl. 6.1 room assignment), Phase 7 (guests + operational
-> check-in/out) and Phase 8 + 8.1 (internal finance: folios, charges, payments,
-> invoices, expenses). Phase 9 adds **internal service orders** — a catalog of
-> service categories/items (restaurant, café, room service) and orders tied to
-> a stay or room that move through `submitted → preparing → ready → delivered`
-> and are then **posted ONCE to the guest folio as a single finance charge** —
-> under `/api/v1/hotel/services/`, plus a hotel console at `/hotel/services`
-> (Overview / Catalog / Orders / Preparation board) with a printable service
-> ticket, guarded by `services.*` / `service_orders.*` permissions.
-> **No POS, no inventory, no tables, no kitchen printers, no direct/standalone
-> payment, no gateway, no public/QR ordering, no delivery integration, no
-> advanced reports, no shifts/daily close** — deferred or out of scope.
+> check-in/out), Phase 8 + 8.1 (internal finance: folios, charges, payments,
+> invoices, expenses) and Phase 9 (internal service orders posted once to the
+> folio). Phase 10 adds **daily room operations** — housekeeping tasks
+> (`HK00001`), maintenance requests (`MT00001`) that can block a room as
+> `maintenance`/`out_of_service`, and a lost & found log (`LF00001`) — under
+> `/api/v1/hotel/operations/`, plus a hotel console at `/hotel/operations`
+> (Overview / Housekeeping / Maintenance / Lost & Found / Room status board),
+> guarded by `housekeeping.*` / `maintenance.*` / `lost_found.*` permissions.
+> Check-out now auto-creates ONE check-out cleaning task; every room status
+> change still goes through the Phase 5 controlled path (no `occupied` status —
+> occupancy stays derived from stays; closing maintenance never auto-releases
+> a room).
+> **No shifts, no daily close, no advanced reports, no inventory/stock, no
+> purchasing, no notifications, no mobile app, no QR tasks, no photos/files
+> for lost & found** — deferred or out of scope.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -47,6 +51,7 @@ funduqii/
 │  ├─ apps/stays/           # check-in/out + occupancy /api/v1/hotel/ (Phase 7)
 │  ├─ apps/finance/         # folios + charges + payments + invoices + expenses /api/v1/hotel/finance/ (Phase 8)
 │  ├─ apps/services/        # service catalog + orders -> folio charge /api/v1/hotel/services/ (Phase 9)
+│  ├─ apps/operations/      # housekeeping + maintenance + lost & found /api/v1/hotel/operations/ (Phase 10)
 │  └─ requirements/         # base / development / production dependencies
 ├─ frontend/                # Next.js + TypeScript app
 │  └─ src/
@@ -402,6 +407,27 @@ finance services (`type=service`, `source=service_order`).
 | `GET .../orders/{id}/ticket/` | Print-friendly service ticket payload |
 
 See [docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md](docs/SERVICE_ORDERS_RESTAURANT_CAFE_STRATEGY.md).
+
+### Operations endpoints (Phase 10)
+
+Under `/api/v1/hotel/operations/`, scoped to the caller's hotel and guarded by
+`housekeeping.*` / `maintenance.*` / `lost_found.*`. Every room status change
+goes through the Phase 5 controlled path (validated + logged); nothing here
+writes money, and there is no DELETE route anywhere (history is never erased).
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/hotel/operations/overview/` | Dirty rooms, waiting/in-progress cleaning, open maintenance, blocked rooms, open lost & found, urgent tasks |
+| `GET/POST .../operations/housekeeping/` · `GET/PATCH .../housekeeping/{id}/` | Cleaning tasks `HK00001` (room required; PATCH = metadata while active) |
+| `POST .../housekeeping/{id}/status|assign|complete|cancel/` | Forward-only workflow; start ⇒ room `cleaning`; complete ⇒ explicit release-or-keep-dirty; cancel needs a reason |
+| `GET/POST .../operations/maintenance/` · `GET/PATCH .../maintenance/{id}/` | Requests `MT00001`; an availability-affecting request blocks the room (`maintenance`/`out_of_service`) |
+| `POST .../maintenance/{id}/status|assign|resolve|close|cancel/` | Close is resolve-gated and asks an explicit `room_next_status` (keep/dirty/available) — never an automatic release |
+| `GET/POST .../operations/lost-found/` · `GET/PATCH .../lost-found/{id}/` | Lost & found log `LF00001` (text only — no photos/files/barcodes) |
+| `POST .../lost-found/{id}/status|claim|return|dispose|close/` | `found → stored → claimed → returned → closed` or dispose-with-reason; returning requires a claimant name or linked guest |
+
+Check-out (Phase 7) additionally auto-creates ONE `checkout_cleaning` task per
+stay (idempotent). See
+[docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md](docs/HOUSEKEEPING_MAINTENANCE_LOST_FOUND_STRATEGY.md).
 
 ### Platform-owner endpoints (Phase 3)
 
