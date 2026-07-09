@@ -28,9 +28,7 @@ import {
 
 import { Icon } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { initials } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
-import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 import { HOTEL_ROUTE_ACCESS } from "@/lib/session/hotelRouteAccess";
 
 type ShellVariant = "platform" | "hotel";
@@ -45,23 +43,20 @@ interface NavItem {
   access?: string[];
 }
 
-/** Central navigation: the hotel identity on top and the nav list only —
- * the user chip lives in the topbar (owner decision). Serves both the
- * platform-owner and hotel-side shells via the `variant` prop. */
+/** Central navigation: the PLATFORM identity on top and the nav list only —
+ * the hotel identity and the user chip live in the topbar (owner decision).
+ * Serves both shells via the `variant` prop. */
 export function Sidebar({
   variant,
-  hotelName,
   onNavigate,
 }: {
   variant: ShellVariant;
-  hotelName?: string;
   onNavigate?: () => void;
 }) {
   const { t } = useI18n();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const access = useHotelAccess();
-  const profile = useHotelProfile();
 
   const platformItems: NavItem[] = [
     { href: "/platform", label: t.nav.dashboard, icon: LayoutDashboard, exact: true },
@@ -140,11 +135,11 @@ export function Sidebar({
           });
 
   const items = variant === "hotel" ? hotelItems : platformItems;
+  // Scope label only — never the hotel's name (the hotel identity is in the
+  // topbar per the owner's correction).
   const brandSubtitle =
-    variant === "hotel"
-      ? hotelName || t.hotel.nav.subtitle
-      : t.nav.platformOwner;
-  const navLabel = variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
+    variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
+  const navLabel = brandSubtitle;
 
   function isActive(item: NavItem): boolean {
     const [basePath, query] = item.href.split("?");
@@ -164,38 +159,18 @@ export function Sidebar({
     return !currentTab || !siblingTabs.includes(currentTab);
   }
 
-  // The hotel shell's brand slot is the HOTEL's identity (owner decision):
-  // the uploaded logo when one exists, otherwise an elegant monogram from
-  // the hotel name — never a generic menu-like mark. The platform console
-  // keeps the product brand. The mobile menu stays a separate topbar button.
-  const hotelDisplayName =
-    profile?.display_name || profile?.hotel.name || hotelName || t.app.name;
-  const logoUrl = profile?.logo?.url ?? null;
-
+  // Owner correction: the sidebar carries the PLATFORM identity only —
+  // Funduqii mark + name + the nav list. The HOTEL identity (logo/name)
+  // lives in the topbar; user info lives in the topbar chip.
   return (
     <>
       <div className="app-sidebar__brand">
-        {variant === "hotel" ? (
-          logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- hotel-uploaded media
-            <img className="brand-logo" src={logoUrl} alt={hotelDisplayName} />
-          ) : (
-            <span className="brand-mark brand-mark--monogram" aria-hidden="true">
-              {initials(hotelDisplayName)}
-            </span>
-          )
-        ) : (
-          <span className="brand-mark">
-            <Icon icon={Hotel} size="lg" />
-          </span>
-        )}
+        <span className="brand-mark">
+          <Icon icon={Hotel} size="lg" />
+        </span>
         <span className="app-sidebar__brand-text">
-          <span className="app-sidebar__brand-name">
-            {variant === "hotel" ? hotelDisplayName : t.app.name}
-          </span>
-          <span className="app-sidebar__brand-sub">
-            {variant === "hotel" ? t.app.name : brandSubtitle}
-          </span>
+          <span className="app-sidebar__brand-name">{t.app.name}</span>
+          <span className="app-sidebar__brand-sub">{brandSubtitle}</span>
         </span>
       </div>
 

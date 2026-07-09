@@ -33,7 +33,7 @@ export function AppShell({
   const shell = (
     <div className="app-shell">
       <aside className="app-sidebar" data-open={sidebarOpen}>
-        <Sidebar variant={variant} hotelName={hotelName} onNavigate={close} />
+        <Sidebar variant={variant} onNavigate={close} />
       </aside>
       <button
         type="button"
@@ -47,6 +47,7 @@ export function AppShell({
         <Topbar
           variant={variant}
           user={user}
+          hotelName={hotelName}
           onMenuToggle={() => setSidebarOpen((v) => !v)}
         />
         <ContentContainer>

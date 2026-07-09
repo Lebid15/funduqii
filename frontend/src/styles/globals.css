@@ -200,21 +200,51 @@ a {
   height: 2.5rem;
 }
 
-/* Hotel identity in the brand slot (owner review): the uploaded logo, or an
- * elegant monogram fallback — never a generic menu-like mark. */
-.brand-logo {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: var(--radius-lg);
+/* Hotel identity in the TOPBAR (owner correction): the uploaded logo, or an
+ * elegant monogram fallback + the hotel name. The sidebar carries the
+ * platform brand only. */
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.topbar-brand__logo {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-md);
   object-fit: cover;
   border: 1px solid var(--color-border);
   background: var(--color-surface-muted);
   flex: none;
 }
-.brand-mark--monogram {
-  font-size: var(--font-size-base);
+.topbar-brand__mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-extrabold);
   letter-spacing: var(--tracking-tight);
+  flex: none;
+}
+.topbar-brand__name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 16rem;
+}
+@media (max-width: 420px) {
+  /* Very tight screens keep the hotel mark only. */
+  .topbar-brand__name {
+    display: none;
+  }
 }
 
 .app-sidebar__brand-text {
