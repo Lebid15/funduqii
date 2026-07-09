@@ -439,12 +439,12 @@ a {
   position: sticky;
   top: var(--shell-gap);
   z-index: var(--z-sidebar);
-  /* Two stacked rows inside ONE card (owner spec): the identity/tools row,
-     then the quick-actions row (hotel shell only). */
+  /* One clean row (owner correction): identity + tools only — the quick
+     operations live on the dashboard, not here. */
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
   /* Owner review: a taller, statelier bar — the hotel identity must read
      clearly without crowding. */
   min-height: 5rem;
@@ -455,12 +455,6 @@ a {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xs);
-}
-.app-topbar__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
 }
 .app-topbar__start,
 .app-topbar__end {
@@ -553,19 +547,11 @@ a {
   }
 }
 
-/* --- Quick actions bar ------------------------------------------------------
- * The topbar card's second row (owner spec): small icon+label buttons for the
- * daily operations, permission-filtered. Desktop: one tidy wrapping row.
- * Mobile (≤640px): a quiet disclosure that unfolds a two-column grid — no
- * horizontal overflow, no scrollbar. */
+/* --- Quick operations (dashboard only — owner correction) -------------------
+ * A titled section on /hotel: small direct-operation buttons (icon+label),
+ * permission-filtered. Desktop: one tidy wrapping row. Mobile (≤640px): a
+ * two-column grid — no horizontal overflow, no scrollbar, ever. */
 .quick-actions {
-  border-top: 1px solid var(--color-border-subtle);
-  padding-top: var(--space-2);
-}
-.quick-actions__toggle {
-  display: none;
-}
-.quick-actions__list {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -574,13 +560,14 @@ a {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0.4rem 0.75rem;
+  padding: 0.5rem 0.9rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface);
   color: var(--color-fg-muted);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
+  box-shadow: var(--shadow-xs);
   white-space: nowrap;
   transition: background var(--transition-fast), border-color var(--transition-fast),
     color var(--transition-fast);
@@ -608,41 +595,10 @@ a {
   color: var(--color-primary-contrast);
   filter: brightness(1.06);
 }
-.quick-actions__chevron {
-  transition: transform var(--transition-fast);
-}
 @media (max-width: 640px) {
-  .quick-actions__toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: 0.45rem var(--space-2);
-    border: 0;
-    background: transparent;
-    color: var(--color-fg-muted);
-    font-family: inherit;
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    cursor: pointer;
-  }
-  .quick-actions__toggle .icon {
-    color: var(--color-primary);
-  }
-  .quick-actions__chevron {
-    margin-inline-start: auto;
-  }
-  .quick-actions[data-open] .quick-actions__chevron {
-    transform: rotate(180deg);
-  }
-  .quick-actions__list {
-    display: none;
-  }
-  .quick-actions[data-open] .quick-actions__list {
+  .quick-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-2);
-    padding-top: var(--space-2);
   }
   .quick-actions__btn {
     border-radius: var(--radius-md);

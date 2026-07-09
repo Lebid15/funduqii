@@ -12,7 +12,6 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { LogoutButton } from "./LogoutButton";
 import { NotificationBell } from "./NotificationBell";
-import { QuickActionsBar } from "./QuickActionsBar";
 
 interface TopbarProps {
   variant?: "platform" | "hotel";
@@ -43,8 +42,7 @@ export function Topbar({
 
   return (
     <header className="app-topbar">
-      <div className="app-topbar__row">
-        <div className="app-topbar__start">
+      <div className="app-topbar__start">
         <IconButton
           label={t.nav.openMenu}
           icon={Menu}
@@ -89,13 +87,9 @@ export function Topbar({
           </span>
           <span className="topbar-user__name">{user.full_name}</span>
         </span>
-          <span className="app-topbar__divider" aria-hidden="true" />
-          <LogoutButton />
-        </div>
+        <span className="app-topbar__divider" aria-hidden="true" />
+        <LogoutButton />
       </div>
-      {/* Second row of the SAME card (owner spec): daily quick actions —
-          hotel shell only, permission-aware, never crowds the identity row. */}
-      {variant === "hotel" ? <QuickActionsBar /> : null}
     </header>
   );
 }

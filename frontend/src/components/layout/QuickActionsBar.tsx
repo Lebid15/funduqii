@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import {
   Brush,
   CalendarPlus,
-  ChevronDown,
   LogIn,
   LogOut,
   Receipt,
@@ -13,11 +11,10 @@ import {
   UtensilsCrossed,
   Wallet,
   Wrench,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 
-import { Icon } from "@/components/ui";
+import { Icon, SectionHeader } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { cx } from "@/lib/utils";
@@ -32,11 +29,11 @@ interface QuickAction {
   primary?: boolean;
 }
 
-/** DIRECT daily operations in priority order (owner correction): every
- * button lands in the EXISTING create form/modal — `action=new` is consumed
- * once by the owning component (useQuickAction) which opens its modal and
- * strips the param. Check-in/out and payment are entity-scoped by design,
- * so their buttons open the existing selection surface (today's arrivals /
+/** DIRECT daily operations in priority order (owner spec): every button
+ * lands in the EXISTING create form/modal — `action=new` is consumed once
+ * by the owning component (useQuickAction) which opens its modal and strips
+ * the param. Check-in/out and payment are entity-scoped by design, so their
+ * buttons open the existing selection surface (today's arrivals /
  * departures, the folio list) where the action lives on each row. No new
  * flows, no new modals, no new backend. */
 const ACTIONS: QuickAction[] = [
@@ -83,16 +80,15 @@ const ACTIONS: QuickAction[] = [
 ];
 
 /**
- * Quick Actions Bar (owner spec): the second row of the topbar card in the
- * HOTEL shell — small icon+label buttons for the daily operations, filtered
- * by the same Phase 11 access rule as the sidebar. Desktop: one tidy
- * wrapping row. Mobile (≤640px): a quiet disclosure button that unfolds a
- * two-column grid — no horizontal overflow ever.
+ * Quick Operations section — lives ONLY on the /hotel dashboard (owner
+ * correction: the topbar stays a clean identity/tools card). A titled
+ * section of small direct-operation buttons filtered by the same Phase 11
+ * access rule as the sidebar. Desktop: a tidy wrapping row; mobile: a
+ * two-column grid — no overflow either way.
  */
 export function QuickActionsBar() {
   const { t } = useI18n();
   const access = useHotelAccess();
-  const [open, setOpen] = useState(false);
 
   // Same visibility rule as the sidebar: nothing while permissions load
   // (no forbidden flash), any-of codes afterwards, manager sees all.
@@ -105,22 +101,9 @@ export function QuickActionsBar() {
   const labels = t.quickActions as Record<string, string>;
 
   return (
-    <nav
-      className="quick-actions"
-      aria-label={t.quickActions.title}
-      data-open={open || undefined}
-    >
-      <button
-        type="button"
-        className="quick-actions__toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Icon icon={Zap} size="sm" />
-        {t.quickActions.title}
-        <Icon icon={ChevronDown} size="sm" className="quick-actions__chevron" />
-      </button>
-      <div className="quick-actions__list">
+    <section className="stack" aria-label={t.quickActions.title}>
+      <SectionHeader title={t.quickActions.title} />
+      <div className="quick-actions">
         {visible.map((action) => (
           <Link
             key={action.key}
@@ -135,6 +118,6 @@ export function QuickActionsBar() {
           </Link>
         ))}
       </div>
-    </nav>
+    </section>
   );
 }

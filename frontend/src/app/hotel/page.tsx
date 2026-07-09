@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
+import { QuickActionsBar } from "@/components/layout/QuickActionsBar";
 import {
   Alert,
   Icon,
@@ -181,6 +182,11 @@ export default function HotelDashboardPage() {
           )}
         </section>
       ) : null}
+
+      {/* Owner correction: the quick OPERATIONS live here on the dashboard —
+          right after the stats, before the section shortcuts. The topbar
+          stays a clean identity/tools card. */}
+      <QuickActionsBar />
 
       <section className="stack" aria-label={d.quickAccess}>
         <SectionHeader title={d.quickAccess} />
