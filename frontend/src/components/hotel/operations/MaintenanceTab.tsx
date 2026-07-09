@@ -81,8 +81,13 @@ export function MaintenanceTab() {
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  // Topbar quick action: ?action=new opens the EXISTING request modal once.
-  useQuickAction("new", () => setCreateOpen(true));
+  const [quickRoom, setQuickRoom] = useState(0);
+  // Quick action: ?action=new opens the EXISTING request modal once — with
+  // an optional preselected room (operational board deep-link).
+  useQuickAction("new", (params) => {
+    setQuickRoom(Number(params.get("room")) || 0);
+    setCreateOpen(true);
+  });
   const [closeReq, setCloseReq] = useState<MaintenanceRequestListItem | null>(null);
   const [cancelReq, setCancelReq] = useState<MaintenanceRequestListItem | null>(null);
 
@@ -330,9 +335,11 @@ export function MaintenanceTab() {
       <CreateRequestModal
         open={createOpen}
         rooms={rooms}
-        onClose={() => setCreateOpen(false)}
+        presetRoom={quickRoom || undefined}
+        onClose={() => { setCreateOpen(false); setQuickRoom(0); }}
         onSaved={() => {
           setCreateOpen(false);
+          setQuickRoom(0);
           notify(mt.created);
           load();
         }}

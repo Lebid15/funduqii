@@ -81,8 +81,22 @@ export function ReservationsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
-  // Topbar quick action: ?action=new opens the EXISTING create modal once.
-  useQuickAction("new", () => setCreating(true));
+  const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
+  // Quick actions: ?action=new opens the EXISTING create modal once (with an
+  // optional preselected room from the operational board); ?action=find&q=
+  // focuses the list on a reservation number.
+  useQuickAction("new", (params) => {
+    const room = params.get("room");
+    const roomType = params.get("room_type");
+    setQuickLine(room && roomType ? { room, room_type: roomType } : null);
+    setCreating(true);
+  });
+  useQuickAction("find", (params) => {
+    const q = params.get("q") ?? "";
+    setSearch(q);
+    setQuery(q);
+    setPage(1);
+  });
   const [editing, setEditing] = useState<Reservation | null>(null);
   const [details, setDetails] = useState<Reservation | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null);
@@ -260,8 +274,9 @@ export function ReservationsTab() {
       <ReservationModal
         open={creating}
         types={types}
-        onClose={() => setCreating(false)}
-        onSaved={() => { setCreating(false); notify(t.reservations.saved); setPage(1); load(); }}
+        initialLine={quickLine}
+        onClose={() => { setCreating(false); setQuickLine(null); }}
+        onSaved={() => { setCreating(false); setQuickLine(null); notify(t.reservations.saved); setPage(1); load(); }}
       />
       <ReservationModal
         open={editing !== null}
@@ -308,12 +323,15 @@ function ReservationModal({
   open,
   reservation,
   types,
+  initialLine,
   onClose,
   onSaved,
 }: {
   open: boolean;
   reservation?: Reservation;
   types: RoomType[];
+  /** Optional preselected room line (operational board deep-link). */
+  initialLine?: { room_type: string; room: string } | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -372,7 +390,13 @@ function ReservationModal({
             room: l.room ? String(l.room) : "",
             quantity: String(l.quantity),
           }))
-        : [{ room_type: "", room: "", quantity: "1" }],
+        : [
+            {
+              room_type: initialLine?.room_type ?? "",
+              room: initialLine?.room ?? "",
+              quantity: "1",
+            },
+          ],
     );
     setError(null);
     // Bookable rooms for the optional per-line assignment (UX only — the
@@ -380,7 +404,7 @@ function ReservationModal({
     listRooms({ page_size: 200 })
       .then((r) => setRooms(r.results))
       .catch(() => setRooms([]));
-  }, [open, reservation]);
+  }, [open, reservation, initialLine]);
 
   // Instant bookings start today; switching kinds keeps the dates honest.
   function changeKind(kind: "instant" | "future") {
