@@ -166,15 +166,13 @@ a {
   position: sticky;
   top: var(--shell-gap);
   height: calc(100dvh - 2 * var(--shell-gap));
-  overflow-y: auto;
-  /* Owner fix: the card must never show a gray scroll gutter next to the
-     content. Scrolling still works on short screens — the bar is just
-     invisible (all nav items stay reachable). */
-  scrollbar-width: none;
+  /* Owner rule: the sidebar is a FIXED panel on desktop — never a scroll
+     container. `clip` (not auto/hidden+scroll) means the wheel always moves
+     the page, i.e. the content card, while the sticky sidebar stays put.
+     The compact height tier below guarantees all 15 items fit, so nothing
+     is ever clipped on real screens. */
+  overflow: clip;
   z-index: var(--z-sidebar);
-}
-.app-sidebar::-webkit-scrollbar {
-  display: none;
 }
 
 /* Platform brand area (owner review): a REAL brand block, not a small icon —
@@ -309,11 +307,12 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 0.7rem var(--space-3);
+  padding: 0.65rem var(--space-3);
   border-radius: var(--radius-md);
   color: var(--color-fg-muted);
   font-weight: var(--font-weight-medium);
   font-size: var(--font-size-sm);
+  line-height: 1.3;
   transition: background var(--transition-fast), color var(--transition-fast),
     box-shadow var(--transition-fast);
 }
@@ -336,6 +335,38 @@ a {
 }
 .app-nav__link[aria-current="page"] .icon {
   color: var(--color-primary-contrast);
+}
+
+/* Short viewports (typical laptops): densify the column so the FULL official
+ * list fits with no internal scroll — the owner's hard rule. The identity
+ * stays a clear brand area, just tighter; nothing is hidden or reordered. */
+@media (max-height: 900px) {
+  .app-shell {
+    --shell-gap: var(--space-2);
+  }
+  .app-sidebar {
+    padding-block: var(--space-3);
+  }
+  .app-sidebar__brand {
+    padding: var(--space-2) var(--space-2) var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+  .app-sidebar__brand .brand-mark {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .app-sidebar__brand-name {
+    font-size: var(--font-size-lg);
+  }
+  .app-nav {
+    gap: 2px;
+  }
+  .app-nav__section {
+    padding-block: var(--space-1);
+  }
+  .app-nav__link {
+    padding-block: 0.4rem;
+  }
 }
 
 .avatar {
@@ -466,6 +497,13 @@ a {
     transform: translateX(-105%);
     transition: transform var(--transition-base);
     box-shadow: var(--shadow-lg);
+    /* The DRAWER alone may scroll (very short phones) — invisible bar so
+       every nav item stays reachable. Desktop never scrolls internally. */
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .app-sidebar::-webkit-scrollbar {
+    display: none;
   }
   [dir="rtl"] .app-sidebar {
     transform: translateX(105%);
