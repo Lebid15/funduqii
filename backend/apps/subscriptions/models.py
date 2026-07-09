@@ -10,6 +10,7 @@ app talks to an external service.
 """
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import models
 
 
@@ -41,6 +42,15 @@ class SubscriptionPlan(models.Model):
     feature_codes = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    # --- Phase 16 additions. The Phase 3 fields are REUSED, not duplicated:
+    # slug = the plan code, price = the price for `billing_cycle`,
+    # room_limit/user_limit = max rooms/staff, feature_codes = features list.
+    price_yearly = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    is_public = models.BooleanField(default=True)
+    max_public_bookings_per_month = models.PositiveIntegerField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -117,3 +127,63 @@ class HotelSubscription(models.Model):
     @property
     def is_live(self) -> bool:
         return self.status in LIVE_STATUSES
+
+
+class PaymentMethod(models.TextChoices):
+    CASH = "cash", "Cash"
+    BANK_TRANSFER = "bank_transfer", "Bank transfer"
+    MANUAL = "manual", "Manual"
+    OTHER = "other", "Other"
+
+
+class PlatformSubscriptionPayment(models.Model):
+    """A MANUAL record of money the platform owner received for a hotel's
+    subscription (Phase 16).
+
+    This is NOT a payment gateway and NOT the hotel's finance: it never touches
+    Folio/Invoice/Payment in apps.finance, computes no taxes, and is voided
+    (with a reason) rather than deleted. Amounts are Decimal only.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="subscription_payments",
+    )
+    subscription = models.ForeignKey(
+        HotelSubscription,
+        on_delete=models.PROTECT,
+        related_name="payments",
+        null=True,
+        blank=True,
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default="USD")
+    method = models.CharField(
+        max_length=16, choices=PaymentMethod.choices, default=PaymentMethod.MANUAL
+    )
+    reference = models.CharField(max_length=140, blank=True, default="")
+    note = models.CharField(max_length=255, blank=True, default="")
+    received_at = models.DateTimeField()
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="platform_payments_recorded",
+    )
+    voided_at = models.DateTimeField(null=True, blank=True)
+    void_reason = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "platform_subscription_payments"
+        ordering = ["-received_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"hotel={self.hotel_id} {self.amount} {self.currency} ({self.method})"
+
+    @property
+    def is_voided(self) -> bool:
+        return self.voided_at is not None

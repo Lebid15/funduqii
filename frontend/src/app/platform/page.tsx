@@ -10,8 +10,11 @@ import {
   Clock,
   CreditCard,
   Gift,
+  Globe,
   Hotel as HotelIcon,
+  Package,
   TriangleAlert,
+  Wallet,
 } from "lucide-react";
 
 import {
@@ -28,9 +31,9 @@ import {
 } from "@/components/ui";
 import { useCurrentUser } from "@/lib/session/CurrentUserContext";
 import { PageContainer } from "@/components/layout/PageContainer";
-import { fetchOverview } from "@/lib/api/platform";
+import { fetchDashboard } from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
-import type { Hotel, HotelSubscription, PlatformOverview } from "@/lib/api/types";
+import type { Hotel, HotelSubscription, PlatformDashboard } from "@/lib/api/types";
 import {
   formatDate,
   hotelStatusLabel,
@@ -43,7 +46,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 export default function DashboardPage() {
   const { t, locale } = useI18n();
   const user = useCurrentUser();
-  const [overview, setOverview] = useState<PlatformOverview | null>(null);
+  const [overview, setOverview] = useState<PlatformDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,7 +55,7 @@ export default function DashboardPage() {
   // set the spinner from their own handlers).
   const load = useCallback(async () => {
     try {
-      const data = await fetchOverview();
+      const data = await fetchDashboard();
       setOverview(data);
       setError(null);
     } catch (err) {
@@ -142,61 +145,99 @@ export default function DashboardPage() {
           <section className="stat-grid">
             <StatCard
               label={t.dashboard.hotelsTotal}
-              value={overview.hotels.total}
+              value={overview.total_hotels}
               caption={t.dashboard.captions.hotelsTotal}
               icon={Building2}
               tone="primary"
             />
             <StatCard
               label={t.dashboard.hotelsActive}
-              value={overview.hotels.active}
+              value={overview.active_hotels}
               caption={t.dashboard.captions.hotelsActive}
               icon={CircleCheck}
               tone="success"
             />
             <StatCard
               label={t.dashboard.hotelsSetup}
-              value={overview.hotels.setup}
+              value={overview.setup_hotels}
               caption={t.dashboard.captions.hotelsSetup}
               icon={Clock}
               tone="neutral"
             />
             <StatCard
               label={t.dashboard.hotelsSuspended}
-              value={overview.hotels.suspended}
+              value={overview.suspended_hotels}
               caption={t.dashboard.captions.hotelsSuspended}
               icon={CirclePause}
               tone="danger"
             />
             <StatCard
-              label={t.dashboard.activeTrials}
-              value={overview.subscriptions.active_trials}
-              caption={t.dashboard.captions.activeTrials}
+              label={t.dashboard.trialHotels}
+              value={overview.trial_hotels}
+              caption={t.dashboard.captions.trialHotels}
               icon={Gift}
               tone="info"
             />
             <StatCard
-              label={t.dashboard.activeSubscriptions}
-              value={overview.subscriptions.active}
-              caption={t.dashboard.captions.activeSubscriptions}
+              label={t.dashboard.paidHotels}
+              value={overview.paid_hotels}
+              caption={t.dashboard.captions.paidHotels}
               icon={CreditCard}
               tone="success"
             />
             <StatCard
               label={t.dashboard.expiringSoon}
-              value={overview.subscriptions.expiring_soon}
+              value={overview.expiring_soon_subscriptions}
               caption={t.dashboard.captions.expiringSoon}
               icon={TriangleAlert}
               tone="warning"
             />
             <StatCard
               label={t.dashboard.expired}
-              value={overview.subscriptions.expired}
+              value={overview.expired_subscriptions}
               caption={t.dashboard.captions.expired}
               icon={CircleX}
               tone="neutral"
             />
+            <StatCard
+              label={t.dashboard.publicListed}
+              value={overview.public_listed_hotels}
+              caption={t.dashboard.captions.publicListed}
+              icon={Globe}
+              tone="info"
+            />
+            <StatCard
+              label={t.dashboard.totalPlans}
+              value={overview.total_plans}
+              caption={t.dashboard.captions.totalPlans}
+              icon={Package}
+              tone="neutral"
+            />
           </section>
+
+          {/* Estimated recurring revenue — an administrative indicator from
+              manually activated subscriptions; deliberately NEVER "profit". */}
+          <Card>
+            <SectionHeader
+              title={t.dashboard.revenueTitle}
+              description={t.dashboard.revenueHint}
+              icon={Wallet}
+            />
+            {Object.keys(overview.estimated_monthly_recurring_revenue).length ===
+            0 ? (
+              <p className="muted">{t.dashboard.revenueEmpty}</p>
+            ) : (
+              <div className="cluster">
+                {Object.entries(overview.estimated_monthly_recurring_revenue).map(
+                  ([currency, amount]) => (
+                    <span className="revenue-figure" key={currency}>
+                      {amount} <span className="muted">{currency}</span>
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
+          </Card>
 
           <Card>
             <SectionHeader
@@ -233,13 +274,13 @@ export default function DashboardPage() {
                 </Link>
               }
             />
-            {overview.recent_subscriptions.length === 0 ? (
+            {overview.recent_subscription_events.length === 0 ? (
               <EmptyState title={t.dashboard.noSubscriptions} />
             ) : (
               <DataTable
                 caption={t.dashboard.recentSubscriptions}
                 columns={subColumns}
-                rows={overview.recent_subscriptions}
+                rows={overview.recent_subscription_events}
                 rowKey={(row) => row.id}
               />
             )}

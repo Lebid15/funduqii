@@ -32,14 +32,18 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
             "slug",
             "description",
             "price",
+            "price_yearly",
             "currency",
             "billing_cycle",
             "trial_days",
             "room_limit",
             "user_limit",
+            "max_public_bookings_per_month",
             "feature_codes",
             "is_active",
+            "is_public",
             "sort_order",
+            "notes",
             "is_in_use",
             "created_at",
             "updated_at",
@@ -79,6 +83,18 @@ class HotelSerializer(serializers.ModelSerializer):
 
     primary_manager = serializers.SerializerMethodField()
     current_subscription = serializers.SerializerMethodField()
+    # Phase 16 — owner-panel context: publishing, usage counts, trial + audit.
+    trial_used = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
+    country = serializers.SerializerMethodField()
+    contact_phone = serializers.SerializerMethodField()
+    contact_email = serializers.SerializerMethodField()
+    public_is_listed = serializers.SerializerMethodField()
+    public_booking_enabled = serializers.SerializerMethodField()
+    rooms_count = serializers.SerializerMethodField()
+    staff_count = serializers.SerializerMethodField()
+    reservations_count = serializers.SerializerMethodField()
+    status_changed_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Hotel
@@ -87,8 +103,21 @@ class HotelSerializer(serializers.ModelSerializer):
             "name",
             "slug",
             "status",
+            "suspension_reason",
+            "status_changed_at",
+            "status_changed_by",
             "primary_manager",
             "current_subscription",
+            "trial_used",
+            "city",
+            "country",
+            "contact_phone",
+            "contact_email",
+            "public_is_listed",
+            "public_booking_enabled",
+            "rooms_count",
+            "staff_count",
+            "reservations_count",
             "created_at",
             "updated_at",
         ]
@@ -115,6 +144,51 @@ class HotelSerializer(serializers.ModelSerializer):
             return None
         return SubscriptionSummarySerializer(sub).data
 
+    def _settings(self, hotel):
+        # HotelSettings may not exist yet for a bare tenant.
+        return getattr(hotel, "settings", None)
+
+    def get_trial_used(self, hotel):
+        from apps.subscriptions.services import hotel_has_used_trial
+
+        return hotel_has_used_trial(hotel)
+
+    def get_city(self, hotel):
+        s = self._settings(hotel)
+        return s.city if s else ""
+
+    def get_country(self, hotel):
+        s = self._settings(hotel)
+        return s.country if s else ""
+
+    def get_contact_phone(self, hotel):
+        s = self._settings(hotel)
+        return s.phone if s else ""
+
+    def get_contact_email(self, hotel):
+        s = self._settings(hotel)
+        return s.email if s else ""
+
+    def get_public_is_listed(self, hotel):
+        s = self._settings(hotel)
+        return bool(s and s.public_is_listed)
+
+    def get_public_booking_enabled(self, hotel):
+        s = self._settings(hotel)
+        return bool(s and s.allow_public_booking)
+
+    def get_rooms_count(self, hotel):
+        return hotel.rooms.count()
+
+    def get_staff_count(self, hotel):
+        return hotel.memberships.filter(is_active=True).count()
+
+    def get_reservations_count(self, hotel):
+        return hotel.reservations.count()
+
+    def get_status_changed_by(self, hotel):
+        return hotel.status_changed_by.email if hotel.status_changed_by_id else None
+
 
 class ManagerInputSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -134,15 +208,19 @@ class HotelCreateSerializer(serializers.ModelSerializer):
 
 
 class HotelUpdateSerializer(serializers.ModelSerializer):
-    """Update only the basic tenant fields allowed in Phase 3."""
+    """Update only the basic tenant fields.
+
+    Phase 16: ``status`` is no longer patchable here — status changes go
+    exclusively through the audited actions (activate/suspend/unsuspend),
+    which record the reason and the acting user.
+    """
 
     class Meta:
         model = Hotel
-        fields = ["name", "slug", "status"]
+        fields = ["name", "slug"]
         extra_kwargs = {
             "name": {"required": False},
             "slug": {"required": False},
-            "status": {"required": False},
         }
 
 
@@ -226,3 +304,176 @@ class PlatformSettingsSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["updated_at"]
+
+
+# --- Phase 16: subscription lifecycle inputs ---------------------------------
+
+
+class StartTrialSerializer(serializers.Serializer):
+    plan = serializers.PrimaryKeyRelatedField(queryset=SubscriptionPlan.objects.all())
+    trial_days = serializers.IntegerField(required=False, min_value=1)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class ActivatePaidSerializer(serializers.Serializer):
+    plan = serializers.PrimaryKeyRelatedField(queryset=SubscriptionPlan.objects.all())
+    starts_at = serializers.DateTimeField(required=False)
+    ends_at = serializers.DateTimeField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    # Optional MANUAL payment record (cash/bank transfer) — never a gateway.
+    payment_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False
+    )
+    payment_method = serializers.ChoiceField(
+        choices=["cash", "bank_transfer", "manual", "other"], required=False
+    )
+    payment_reference = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+    def validate(self, attrs):
+        if not attrs["plan"].is_active:
+            raise serializers.ValidationError(
+                {"plan": "Cannot activate a paid subscription on an inactive plan."}
+            )
+        starts = attrs.get("starts_at")
+        ends = attrs.get("ends_at")
+        if starts and ends and ends <= starts:
+            raise serializers.ValidationError(
+                {"ends_at": "The end must be after the start."}
+            )
+        if "payment_amount" in attrs and "payment_method" not in attrs:
+            raise serializers.ValidationError(
+                {"payment_method": "A method is required to record a payment."}
+            )
+        return attrs
+
+
+class RenewSerializer(serializers.Serializer):
+    ends_at = serializers.DateTimeField(required=False)
+    days = serializers.IntegerField(required=False, min_value=1)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    payment_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False
+    )
+    payment_method = serializers.ChoiceField(
+        choices=["cash", "bank_transfer", "manual", "other"], required=False
+    )
+    payment_reference = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+
+class CancelSubscriptionSerializer(serializers.Serializer):
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class SuspendHotelSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255)
+
+
+# --- Phase 16: manual platform payments --------------------------------------
+
+
+class PlatformPaymentSerializer(serializers.ModelSerializer):
+    hotel_name = serializers.CharField(source="hotel.name", read_only=True)
+    recorded_by = serializers.SerializerMethodField()
+    is_voided = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        from apps.subscriptions.models import PlatformSubscriptionPayment
+
+        model = PlatformSubscriptionPayment
+        fields = [
+            "id",
+            "hotel",
+            "hotel_name",
+            "subscription",
+            "amount",
+            "currency",
+            "method",
+            "reference",
+            "note",
+            "received_at",
+            "recorded_by",
+            "is_voided",
+            "voided_at",
+            "void_reason",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_recorded_by(self, obj):
+        return obj.recorded_by.email if obj.recorded_by_id else None
+
+
+class PlatformPaymentCreateSerializer(serializers.Serializer):
+    hotel = serializers.PrimaryKeyRelatedField(queryset=Hotel.objects.all())
+    subscription = serializers.IntegerField(required=False, allow_null=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default="USD")
+    method = serializers.ChoiceField(
+        choices=["cash", "bank_transfer", "manual", "other"]
+    )
+    reference = serializers.CharField(required=False, allow_blank=True, default="")
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+    received_at = serializers.DateTimeField(required=False)
+
+
+class VoidPaymentSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255)
+
+
+# --- Phase 16: public site settings -------------------------------------------
+
+_I18N_LOCALES = ("ar", "en", "tr")
+
+
+def _validate_i18n_value(value):
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("Expected an object of ar/en/tr strings.")
+    clean = {}
+    for locale in _I18N_LOCALES:
+        text = value.get(locale, "")
+        if not isinstance(text, str):
+            raise serializers.ValidationError(f"'{locale}' must be a string.")
+        clean[locale] = text.strip()[:200]
+    return clean
+
+
+def _validate_safe_url(value: str) -> str:
+    """Internal path or explicit http(s) only.
+
+    A single leading slash is an internal path, but a PROTOCOL-RELATIVE URL
+    ("//evil.com") also starts with "/" and would resolve to an external host
+    — it is explicitly rejected (Copilot review finding on PR #15).
+    """
+    value = (value or "").strip()
+    if not value:
+        return value
+    if value.startswith("//"):
+        raise serializers.ValidationError(
+            "Protocol-relative URLs (//...) are not allowed."
+        )
+    if not value.startswith(("/", "http://", "https://")):
+        raise serializers.ValidationError(
+            "Only internal paths (/...) or http(s) links are allowed."
+        )
+    return value
+
+
+class PlatformPublicSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import PlatformPublicSettings
+
+        model = PlatformPublicSettings
+        exclude = ["id"]
+        read_only_fields = ["updated_at"]
+
+    def validate(self, attrs):
+        for field, value in list(attrs.items()):
+            if field.endswith(("_label", "_title", "_subtitle")) or field == "footer_text":
+                attrs[field] = _validate_i18n_value(value)
+            if field.endswith("_button_url"):
+                attrs[field] = _validate_safe_url(value)
+        return attrs

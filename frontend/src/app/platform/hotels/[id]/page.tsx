@@ -20,9 +20,29 @@ import {
   Select,
   useToast,
 } from "@/components/ui";
-import { getHotel, setHotelManager, updateHotel } from "@/lib/api/platform";
+import {
+  activateHotel,
+  activatePaid,
+  cancelHotelSubscription,
+  expireHotelSubscription,
+  fetchSubscriptionHistory,
+  getHotel,
+  listPlans,
+  listPlatformPayments,
+  renewSubscription,
+  setHotelManager,
+  startTrial,
+  suspendHotel,
+  unsuspendHotel,
+  updateHotel,
+} from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
-import type { Hotel } from "@/lib/api/types";
+import type {
+  Hotel,
+  HotelSubscription,
+  PlatformPayment,
+  SubscriptionPlan,
+} from "@/lib/api/types";
 import {
   formatDate,
   hotelStatusLabel,
@@ -112,8 +132,103 @@ export default function HotelDetailPage() {
                   {formatDate(hotel.created_at, locale)}
                 </span>
               </div>
+              <div className="detail-item">
+                <span className="detail-item__label">{t.hotels.city}</span>
+                <span className="detail-item__value">
+                  {[hotel.city, hotel.country].filter(Boolean).join(" · ") || "—"}
+                </span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">{t.hotels.roomsCount}</span>
+                <span className="detail-item__value">{hotel.rooms_count}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">{t.hotels.staffCount}</span>
+                <span className="detail-item__value">{hotel.staff_count}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">
+                  {t.hotels.reservationsCount}
+                </span>
+                <span className="detail-item__value">
+                  {hotel.reservations_count}
+                </span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">{t.hotels.publicListed}</span>
+                <span>
+                  <Badge tone={hotel.public_is_listed ? "success" : "neutral"}>
+                    {hotel.public_is_listed ? t.common.yes : t.common.no}
+                  </Badge>
+                </span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">
+                  {t.hotels.publicBookingEnabled}
+                </span>
+                <span>
+                  <Badge tone={hotel.public_booking_enabled ? "success" : "neutral"}>
+                    {hotel.public_booking_enabled ? t.common.yes : t.common.no}
+                  </Badge>
+                </span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-item__label">{t.hotels.trialUsed}</span>
+                <span>
+                  <Badge tone={hotel.trial_used ? "warning" : "neutral"}>
+                    {hotel.trial_used ? t.common.yes : t.common.no}
+                  </Badge>
+                </span>
+              </div>
             </div>
+            {hotel.status === "suspended" && hotel.suspension_reason ? (
+              <Alert tone="warning">
+                {t.hotels.suspendedReasonLabel}: {hotel.suspension_reason}
+                {hotel.status_changed_by ? ` — ${hotel.status_changed_by}` : ""}
+              </Alert>
+            ) : null}
+            <div className="cluster" style={{ marginTop: "var(--space-3)" }}>
+              {hotel.status === "setup" ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await activateHotel(hotel.id);
+                      notify(t.settings.saved);
+                      load();
+                    } catch (err) {
+                      notify(messageForError(err, t), "error");
+                    }
+                  }}
+                >
+                  {t.hotels.activate}
+                </Button>
+              ) : null}
+              {hotel.status === "suspended" ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await unsuspendHotel(hotel.id);
+                      notify(t.settings.saved);
+                      load();
+                    } catch (err) {
+                      notify(messageForError(err, t), "error");
+                    }
+                  }}
+                >
+                  {t.hotels.unsuspend}
+                </Button>
+              ) : null}
+            </div>
+            {hotel.status === "active" ? (
+              <InlineSuspendForm hotel={hotel} onDone={load} onNotify={notify} />
+            ) : null}
           </Card>
+
+          <SubscriptionCard hotel={hotel} onChanged={load} onNotify={notify} />
 
           <Card>
             <SectionHeader title={t.hotels.currentSubscription} />
@@ -182,7 +297,6 @@ function EditHotelCard({
   const { t } = useI18n();
   const [name, setName] = useState(hotel.name);
   const [slug, setSlug] = useState(hotel.slug);
-  const [status, setStatus] = useState(hotel.status);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -191,7 +305,9 @@ function EditHotelCard({
     setError(null);
     setBusy(true);
     try {
-      await updateHotel(hotel.id, { name, slug, status });
+      // Phase 16: the status is deliberately NOT editable here — it changes
+      // only through the audited activate/suspend/unsuspend actions.
+      await updateHotel(hotel.id, { name, slug });
       onNotify(t.settings.saved);
       onSaved();
     } catch (err) {
@@ -221,20 +337,6 @@ function EditHotelCard({
               onChange={(event) => setSlug(event.target.value)}
             />
           </FormField>
-          <FormField label={t.common.status} htmlFor="edit-status">
-            <Select
-              id="edit-status"
-              value={status}
-              options={[
-                { value: "setup", label: t.hotels.statusSetup },
-                { value: "active", label: t.hotels.statusActive },
-                { value: "suspended", label: t.hotels.statusSuspended },
-              ]}
-              onChange={(event) =>
-                setStatus(event.target.value as Hotel["status"])
-              }
-            />
-          </FormField>
         </div>
         <div className="cluster">
           <Button type="submit" disabled={busy}>
@@ -242,6 +344,256 @@ function EditHotelCard({
           </Button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+/** Suspension from the detail page — the reason is mandatory and audited. */
+function InlineSuspendForm({
+  hotel,
+  onDone,
+  onNotify,
+}: {
+  hotel: Hotel;
+  onDone: () => void;
+  onNotify: (message: string, tone?: "success" | "error") => void;
+}) {
+  const { t } = useI18n();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!reason.trim()) return;
+    setBusy(true);
+    try {
+      await suspendHotel(hotel.id, reason.trim());
+      onNotify(t.settings.saved);
+      onDone();
+    } catch (err) {
+      onNotify(messageForError(err, t), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="cluster" onSubmit={submit} noValidate style={{ marginTop: "var(--space-3)" }}>
+      <FormField label={t.hotels.suspendReason} htmlFor="detail-suspend-reason">
+        <Input
+          id="detail-suspend-reason"
+          value={reason}
+          required
+          onChange={(event) => setReason(event.target.value)}
+        />
+      </FormField>
+      <Button type="submit" variant="danger" size="sm" loading={busy} disabled={!reason.trim()}>
+        {t.hotels.suspend}
+      </Button>
+    </form>
+  );
+}
+
+/** Current subscription + lifecycle actions + preserved history + manual
+ * platform payments (never a gateway). */
+function SubscriptionCard({
+  hotel,
+  onChanged,
+  onNotify,
+}: {
+  hotel: Hotel;
+  onChanged: () => void;
+  onNotify: (message: string, tone?: "success" | "error") => void;
+}) {
+  const { t, locale } = useI18n();
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [history, setHistory] = useState<HotelSubscription[]>([]);
+  const [payments, setPayments] = useState<PlatformPayment[]>([]);
+  const [planId, setPlanId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadExtras = useCallback(async () => {
+    try {
+      const [planData, historyData, paymentData] = await Promise.all([
+        listPlans({ is_active: "true", page_size: 100 }),
+        fetchSubscriptionHistory(hotel.id),
+        listPlatformPayments(hotel.id),
+      ]);
+      setPlans(planData.results);
+      setHistory(historyData);
+      setPayments(paymentData);
+      if (planData.results.length > 0) {
+        setPlanId((prev) => prev || String(planData.results[0].id));
+      }
+    } catch {
+      // Non-blocking: the page still shows the hotel itself.
+    }
+  }, [hotel.id]);
+
+  useEffect(() => {
+    loadExtras();
+  }, [loadExtras]);
+
+  async function run(action: () => Promise<unknown>) {
+    setError(null);
+    setBusy(true);
+    try {
+      await action();
+      onNotify(t.settings.saved);
+      onChanged();
+      loadExtras();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const sub = hotel.current_subscription;
+  const planOptions = plans.map((plan) => ({
+    value: String(plan.id),
+    label: `${plan.name} — ${plan.price} ${plan.currency}`,
+  }));
+
+  return (
+    <Card>
+      <SectionHeader
+        title={t.hotels.subscriptionSection}
+        description={t.hotels.subscriptionSectionDesc}
+      />
+      {error ? <Alert tone="error">{error}</Alert> : null}
+
+      {sub ? (
+        <div className="detail-grid">
+          <div className="detail-item">
+            <span className="detail-item__label">{t.subscriptions.plan}</span>
+            <span className="detail-item__value">{sub.plan_name}</span>
+          </div>
+          <div className="detail-item">
+            <span className="detail-item__label">{t.common.status}</span>
+            <span>
+              <Badge tone={subscriptionStatusTone(sub.status)}>
+                {subscriptionStatusLabel(sub.status, t)}
+              </Badge>
+            </span>
+          </div>
+          <div className="detail-item">
+            <span className="detail-item__label">{t.subscriptions.endsAt}</span>
+            <span className="detail-item__value">
+              {formatDate(sub.ends_at ?? sub.trial_ends_at, locale)}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <p className="muted">{t.hotels.noSubscription}</p>
+      )}
+
+      <div className="cluster">
+        {!sub ? (
+          <>
+            <FormField label={t.subscriptions.plan} htmlFor="sub-plan">
+              <Select
+                id="sub-plan"
+                value={planId}
+                options={planOptions}
+                onChange={(event) => setPlanId(event.target.value)}
+              />
+            </FormField>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy || !planId || hotel.trial_used}
+              onClick={() => run(() => startTrial(hotel.id, { plan: Number(planId) }))}
+            >
+              {t.subscriptions.startTrial}
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy || !planId}
+              onClick={() => run(() => activatePaid(hotel.id, { plan: Number(planId) }))}
+            >
+              {t.subscriptions.activatePaid}
+            </Button>
+          </>
+        ) : (
+          <>
+            {/* Renew applies to active/past_due only — a trial is upgraded
+                via activate-paid, so the button is hidden for trials
+                (PR #15 review finding). */}
+            {sub.status === "active" || sub.status === "past_due" ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => run(() => renewSubscription(hotel.id, {}))}
+              >
+                {t.subscriptions.renew}
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => run(() => cancelHotelSubscription(hotel.id))}
+            >
+              {t.subscriptions.cancel}
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy}
+              onClick={() => run(() => expireHotelSubscription(hotel.id))}
+            >
+              {t.subscriptions.expire}
+            </Button>
+          </>
+        )}
+      </div>
+      {!sub && hotel.trial_used ? (
+        <p className="muted">{t.subscriptions.trialAlreadyUsedHint}</p>
+      ) : null}
+
+      {history.length > 0 ? (
+        <div>
+          <h4>{t.hotels.subscriptionHistory}</h4>
+          <ul className="mini-list">
+            {history.map((row) => (
+              <li key={row.id} className="mini-list__row">
+                <span>{row.plan_name}</span>
+                <Badge tone={subscriptionStatusTone(row.status)}>
+                  {subscriptionStatusLabel(row.status, t)}
+                </Badge>
+                <span className="muted">
+                  {formatDate(row.starts_at, locale)} →{" "}
+                  {formatDate(row.ends_at ?? row.trial_ends_at, locale)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {payments.length > 0 ? (
+        <div>
+          <h4>{t.hotels.paymentsHistory}</h4>
+          <ul className="mini-list">
+            {payments.map((payment) => (
+              <li key={payment.id} className="mini-list__row">
+                <span>
+                  {payment.amount} {payment.currency}
+                </span>
+                <span className="muted">
+                  {t.subscriptions.methods[payment.method]}
+                </span>
+                <span className="muted">{formatDate(payment.received_at, locale)}</span>
+                {payment.is_voided ? (
+                  <Badge tone="danger">{t.subscriptions.voided}</Badge>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </Card>
   );
 }

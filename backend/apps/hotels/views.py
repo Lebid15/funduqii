@@ -71,6 +71,10 @@ class HotelProfileView(APIView):
     permission_classes = [CanView]
 
     def get(self, request: Request) -> Response:
+        # Phase 16: the hotel console reads its own billing state here (safe,
+        # read-only) to show the subscription banners.
+        from apps.subscriptions.enforcement import subscription_state
+
         hotel = request.hotel
         settings_obj = _get_settings(hotel)
         media = HotelMedia.objects.filter(hotel=hotel, is_active=True)
@@ -93,6 +97,7 @@ class HotelProfileView(APIView):
                     HotelMediaSerializer(cover, context=ctx).data if cover else None
                 ),
                 "gallery_count": media.filter(kind=MediaKind.GALLERY).count(),
+                "subscription_state": subscription_state(hotel),
             }
         )
 

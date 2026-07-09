@@ -1360,3 +1360,60 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #14 (commit `1940972` على `origin/main@ac3472a`، mergeable_state: clean، backend 633/633، frontend lint/typecheck/build ناجحة، والبنود الـ44 المقبولة رسميًا في رسالة الاعتماد — مع الملاحظتين غير المانعتين: تصحيح 13→14 نوع حدث توثيقي متوافق مع اعتماد Phase 14، وwarnings ترقيم صفحات ServiceOrder سابقة للمرحلة).
 - ملاحظة الاعتماد: «تم اعتماد Phase 15 بعد Final Acceptance Review. المرحلة أضافت الموقع العام والحجز العام الأساسي عبر public APIs تحت /api/v1/public/، مع قائمة فنادق منشورة، صفحة فندق عامة، فحص توفر باستخدام AvailabilityService، إنشاء حجز عام مدمج مع Reservation الحالي، وإدارة حجز عامة عبر reference + manage token آمن مخزن hash فقط. الحجز العام يمنع overbooking، ويستخدم booking_kind=future، والحالة الافتراضية held مع hold_expires_at = 72h، ولا ينشئ Payment أو Invoice أو Folio أو Stay. تم منع تسريب البيانات الداخلية وحماية public_manage_token_hash، وربط الحجز العام بكونسول الفندق بأمان. لا Payment Gateway، لا Customer Accounts، لا WhatsApp/Email/SMS/Push/Chat، لا OTA/Channel Manager، لا Marketplace advanced، ولا Phase 16.»
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 16 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 16 — Platform Owner Panel Completion
+- الحالة: **بانتظار الاعتماد 🔎** (التنفيذ مكتمل — بانتظار المراجعة النهائية من المالك)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09
+- الهدف: إكمال لوحة صاحب المنصة — فنادق وباقات واشتراكات وتجربة مجانية وإعدادات الموقع العام وتقييد العمليات عند غياب اشتراك فعال — **بلا أي بوابة دفع**.
+- الأساس: بُنيت من **`origin/main`** (0350ae9، بعد دمج Phase 15 عبر PR #14).
+
+### ما نُفّذ (Backend)
+- **إعادة استخدام أولًا:** لم يُعَد بناء شيء من Phase 3 — وُسِّع الموجود: `SubscriptionPlan` **+4 فقط** (`price_yearly` · `is_public` · `max_public_bookings_per_month` · `notes`؛ mapping موثّق: slug=الكود، price=سعر الدورة، room/user_limit=الحدود، feature_codes=الميزات) · `Hotel` **+3 تدقيق** (`suspension_reason` · `status_changed_at` · `status_changed_by`) · نموذجان جديدان: **`PlatformSubscriptionPayment`** (مدفوعات يدوية: Decimal، cash/bank_transfer/manual/other، مرجع، void بسبب لا حذف، **منفصلة كليًا عن مالية الفندق** — اختبار يثبت صفر Payment فندقي) و**`PlatformPublicSettings`** (Singleton — ليست CMS).
+- **دورة حياة الفندق مدقّقة:** `activate/suspend/unsuspend` أفعال صريحة — التعليق **يتطلب سببًا** ويسجّل الفاعل والوقت؛ `status` **أزيل من PATCH** (لا التفاف على التدقيق)؛ لا حذف قاسٍ (DELETE → 405)؛ التعليق لا يحذف شيئًا ويخفي الفندق عامًا (فلاتر Phase 15 القائمة).
+- **دورة الاشتراك كاملة تحت `hotels/{id}/subscriptions/`:** ‏`start-trial` (**تشديد Phase 16: التجربة مرة واحدة وكأول اشتراك فقط** — تُرفض بعد أي اشتراك سابق مدفوع/منتهٍ/ملغى، `trial_already_used`) · `activate-paid` (يدوي، مع تسجيل دفعة يدوية اختيارية) · `renew` (يمدد من max(الآن، النهاية) — لا تلقائي ولا يعيد كتابة التاريخ) · `cancel` · `expire` · `history` (محفوظ بالكامل). فلتر `expiring=soon` (نافذة 14 يومًا) للقوائم.
+- **Enforcement مركزي — `apps/subscriptions/enforcement.py`:** ‏`ensure_hotel_operational` نقطة الحسم الوحيدة، تستدعيها حراس الكتابة في **9 تطبيقات** (حجوزات، إقامات/check-in-out، نزلاء، مالية/دفعات/مصاريف/فواتير، طلبات خدمات وترحيلها، تنظيف/صيانة، موظفون/صلاحيات، ورديات/إقفال يومي، غرف) **+ الحجز العام** عبر `booking_open` — معلّق → `hotel_suspended` (يتقدم)؛ بلا اشتراك فعال → **`subscription_inactive`**. **Time-aware** (اشتراك حي تجاوز نهايته يحجب — لا cron). **قرار موثّق:** فندق بلا أي سجل اشتراك لا يُحجب (الفوترة تبدأ مع الإلحاق). القراءات/التقارير/الإشعارات تعمل دائمًا ولا يُحذف شيء.
+- **Dashboard جديد `dashboard/`:** عدادات الفنادق (إجمالي/نشط/إعداد/معلّق) + فنادق التجربة/المدفوعة + الاشتراكات المنتهية والقريبة من الانتهاء + عدد الباقات + المنشور عامًا/المفعّل حجزه + آخر الفنادق وأحداث الاشتراك + **تقدير الإيراد الشهري المتكرر** لكل عملة (Decimal؛ السنوي ÷12؛ custom مستثنى ومَعدود) — **لا يسمى ربحًا أبدًا** (اختبار مضاد للتسمية).
+- **إعدادات الموقع العام:** إظهار/إخفاء روابط وأزرار الهيدر (رئيسية/فنادق/تواصل/احجز الآن/تجربة مجانية) + **تجاوزات تسميات لكل لغة** `{ar,en,tr}` (الفارغ يعود للقواميس) + نصوص hero وأزراره + معلومات تواصل المنصة + الفوتر؛ الروابط مقيّدة بمسار داخلي أو http(s) فقط (javascript: مرفوض — مُختبر)؛ كتابة للمالك فقط وقراءة عامة آمنة عبر `GET /api/v1/public/site-settings/`.
+- **حالة الاشتراك للفندق:** ‏`/api/v1/hotel/profile/` يعيد `subscription_state` (الحالة/النهاية الفعلية/الأيام المتبقية/expiring_soon/expired/suspended/write_blocked+السبب).
+- **أحداث النشاط (Phase 14 معاد استخدامه):** ‏`hotel.suspended/unsuspended` + `subscription.trial_started/activated/renewed/expired/cancelled` عبر `record_activity` (فئة system → مديرو الفندق) — **بلا نظام إشعارات جديد** (مركز إشعارات لصاحب المنصة مؤجل موثّقًا — الداشبورد يعرض الأحداث الأخيرة).
+- Migrations: ‏`subscriptions.0002` · `tenancy.0003` · `platform_owner.0002`.
+
+### ما نُفّذ (Frontend)
+- **Dashboard** أُرقي للنقطة الجديدة: 10 بطاقات إحصاء + بطاقة **تقدير الإيراد** (بالتلميح الموثّق) + آخر الفنادق/أحداث الاشتراك.
+- **الفنادق:** أعمدة جديدة (مدينة/اشتراك/نشر عام) + فلاتر (حالة/اشتراك/نشر) + أزرار **تفعيل / تعليق (مودال سبب إلزامي) / رفع تعليق** حسب الحالة؛ **التفاصيل:** بيانات موسّعة (عدادات غرف/موظفين/حجوزات، أعلام النشر، التجربة، بانر سبب التعليق مع الفاعل) + **بطاقة الاشتراك** (بدء تجربة — معطّل إن استُخدمت — /تفعيل مدفوع/تجديد/إلغاء/إنهاء + سجل الاشتراكات + المدفوعات اليدوية) + حذف Select الحالة من نموذج التعديل.
+- **الباقات:** حقول جديدة (سعر سنوي/حجوزات عامة شهريًا/عرض عام/ملاحظات داخلية) + تفعيل/تعطيل عبر النقاط الصريحة.
+- **الاشتراكات:** فلتر «القريبة من الانتهاء فقط» + أزرار تجديد/إنهاء/إلغاء.
+- **صفحة جديدة `/platform/public-site`:** أقسام الهيدر (مفاتيح + تسميات ×3 لغات لكل حقل) والـ hero والتواصل والفوتر — بعنصر `I18nField` مركزي؛ وعنصر جديد في سايدبار المنصة.
+- **كونسول الفندق:** ‏`SubscriptionBanner` في القشرة (معلّق/منتهٍ/قريب الانتهاء بعدد الأيام) + ربط `subscription_inactive` وبقية أكواد Phase 16 برسائل مترجمة في `errors.ts` — **الواجهة UX فقط والمنع في الخلفية**.
+- **الموقع العام يستهلك الإعدادات:** ‏`SiteSettingsContext` + ‏`resolvePublicText` (fallback للقواميس) — الهيدر (ظهور/تسميات + زر «احجز الآن» الجديد) والـ hero (نصوص وأزرار وروابطها) والفوتر (نص + هاتف/بريد/عنوان المنصة) — الموقع لا ينكسر أبدًا عند غياب الإعدادات.
+- **i18n:** namespaces جديدان `subscriptionState` و`publicSiteAdmin` + توسعة dashboard/hotels/plans/subscriptions/nav/public — تكافؤ **1856=1856=1856** + RTL/LTR + responsive + قسم CSS صغير واحد بالتوكنات.
+
+### الملفات المضافة/المعدّلة
+- **جديدة (Backend):** `apps/subscriptions/{enforcement,tests_enforcement}.py` · `apps/platform/tests_phase16.py` · migrations ×3 · **جديدة (Frontend):** `app/platform/public-site/page.tsx` · `components/hotel/SubscriptionBanner.tsx` · `components/public/SiteSettingsContext.tsx` · والوثيقة `docs/PLATFORM_OWNER_PANEL_STRATEGY.md`.
+- **معدّلة (Backend):** `apps/subscriptions/{models,services}.py` · `apps/tenancy/models.py` · `apps/platform/{models,serializers,views,urls,services,tests}.py` · `apps/common/exceptions.py` (+3) · حراس الكتابة في views لتسعة تطبيقات · `apps/public_site/{services,views,urls}.py` · `apps/hotels/views.py`.
+- **معدّلة (Frontend):** `lib/api/{types,platform,public,errors}.ts` · صفحات platform الخمس القائمة · `components/layout/{AppShell,Sidebar}.tsx` · `components/public/PublicShell.tsx` · `app/page.tsx` · قواميس ar/en/tr · `styles/globals.css` · التوثيق (README، DEVELOPMENT_RULES §8m، docs/README).
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ **678/678 OK** (633 سابقة + 45 جديدة: وصول/داشبورد/فنادق/باقات/اشتراكات/مدفوعات/إعدادات عامة/**enforcement عبر 13 كتابة ممنوعة + قراءات تعمل + حجز عام**) — انحدار صفر رغم لمس حراس 9 تطبيقات |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح (مسار `/platform/public-site` مبني) |
+| فحص حيّ End-to-End | ✅ **31/31**: فصل وصول (مدير مرفوض من المنصة 403 · مجهول 401 · مالك بلا عضوية مرفوض من الفندق) → داشبورد بلا «ربح» → إعدادات الموقع العام (تحديث المالك ✓ رابط javascript مرفوض 400 ✓ مدير مرفوض 403 ✓ الموقع العام يقرأها) → باقة بحقول 16 → **تفعيل مدفوع يدوي + دفعة TRX-E2E** → تجديد → حالة الفندق نشطة → **إنهاء الاشتراك** → إنشاء حجز **403 `subscription_inactive`** · القراءات والتقارير تعمل · بانر «منتهٍ» · **الحجز العام توقف** → التجربة مرفوضة بعد اشتراك سابق (**409**) → إعادة تفعيل أعادت الكتابة → **تعليق بلا سبب 400** · تعليق بسبب ✓ · مخفي عامًا 404 · `hotel_suspended` ✓ → رفع التعليق أعاد كل شيء → أحداث `hotel.suspended/unsuspended/subscription.expired` ظهرت في سجل نشاط الفندق |
+
+### ملاحظات وقرارات
+- **قرار موثّق:** فندق بلا أي سجل اشتراك لا يُحجب — التقييد يبدأ مع دورة الفوترة («بعد انتهاء التجربة»)، حفاظًا على المستأجرين القدامى وسلوك ما قبل 16.
+- **تشديد بأمر المرحلة:** التجربة تُرفض بعد أي اشتراك سابق (كانت تُرفض فقط بعد تجربة سابقة).
+- **تشديد:** ‏`status` أزيل من PATCH الفندق — التغيير حصريًا عبر الأفعال المدقّقة (اختبار Phase 3 حُدّث لذلك).
+- تطبيق limits الباقات تشغيليًا (غرف/موظفون/حجوزات) **مؤجل موثّقًا** مع feature flags — كما في Phase 3.
+- مركز إشعارات خاص بصاحب المنصة **مؤجل موثّقًا** — الأحداث تصل مديري الفندق عبر Phase 14 والداشبورد يعرض الأخيرة.
+- `PlatformSubscriptionPayment` **بُني** (كان اختياريًا): بسيط جدًا ويغلق حلقة «تسجيل مرجع يدوي».
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا Payment Gateway/Stripe/PayPal/بوابة محلية · لا دفع اشتراكات إلكتروني · لا Bank reconciliation · لا Tax engine متقدم · لا Accounting ledger · لا فواتير منصة متقدمة · لا Commission engine · لا OTA/Channel manager · لا Marketplace متقدم · لا حسابات عملاء · لا WhatsApp/Email/SMS/Push · لا CRM · لا Affiliate · لا كوبونات متقدمة · لا تقييمات عامة.** **لم تبدأ Phase 17.**
+
+### الاعتماد
+- **بانتظار الاعتماد 🔎** — لا يُدمج ولا يُعتمد إلا بقرار صريح من المالك بعد المراجعة.

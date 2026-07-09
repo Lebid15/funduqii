@@ -111,11 +111,19 @@ class HotelManagementTests(APITestCase):
         self.assertEqual(membership.membership_type, MembershipType.MANAGER)
 
     def test_update_hotel_status(self):
+        # Phase 16: status is NOT patchable — it changes only through the
+        # audited actions (activate/suspend/unsuspend).
         hotel = Hotel.objects.create(name="Hotel", slug="hotel")
         res = self.client.patch(
             reverse("platform:hotel-detail", args=[hotel.id]),
             {"status": "active"},
             format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        hotel.refresh_from_db()
+        self.assertEqual(hotel.status, "setup")  # unchanged via PATCH
+        res = self.client.post(
+            reverse("platform:hotel-activate", args=[hotel.id])
         )
         self.assertEqual(res.status_code, 200)
         hotel.refresh_from_db()

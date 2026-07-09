@@ -6,16 +6,33 @@ import { Building2, CalendarCheck, ShieldCheck } from "lucide-react";
 
 import { PublicHotelCard } from "@/components/public/PublicHotelCard";
 import { PublicShell } from "@/components/public/PublicShell";
+import { useSiteSettings } from "@/components/public/SiteSettingsContext";
 import { Icon, LoadingState } from "@/components/ui";
-import { listPublicHotels, type PublicHotelCard as HotelCardDto } from "@/lib/api/public";
+import {
+  listPublicHotels,
+  resolvePublicText,
+  type PublicHotelCard as HotelCardDto,
+} from "@/lib/api/public";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 /**
  * The PUBLIC home page (Phase 15). Visitors land here; hotel staff and
- * platform owners continue to /login as before.
+ * platform owners continue to /login as before. Since Phase 16 the hero
+ * texts/buttons can be overridden from the platform owner's public-site
+ * settings (dictionary texts remain the fallback).
  */
 export default function PublicHomePage() {
-  const { t } = useI18n();
+  return (
+    <PublicShell>
+      <HomeContent />
+    </PublicShell>
+  );
+}
+
+function HomeContent() {
+  const { t, locale } = useI18n();
+  const settings = useSiteSettings();
+  const hero = settings?.hero;
   const [hotels, setHotels] = useState<HotelCardDto[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,17 +52,32 @@ export default function PublicHomePage() {
     { icon: ShieldCheck, label: t.public.home.feature3 },
   ];
 
+  const primaryUrl = hero?.primary_button_url || "/hotels";
+  const secondaryUrl = hero?.secondary_button_url || "/booking/manage";
+
   return (
-    <PublicShell>
+    <>
       <section className="public-hero">
-        <h1 className="public-hero__title">{t.public.home.heroTitle}</h1>
-        <p className="public-hero__subtitle">{t.public.home.heroSubtitle}</p>
+        <h1 className="public-hero__title">
+          {resolvePublicText(hero?.title, locale, t.public.home.heroTitle)}
+        </h1>
+        <p className="public-hero__subtitle">
+          {resolvePublicText(hero?.subtitle, locale, t.public.home.heroSubtitle)}
+        </p>
         <div className="cluster public-hero__actions">
-          <Link href="/hotels" className="btn btn--primary">
-            {t.public.home.browseCta}
+          <Link href={primaryUrl} className="btn btn--primary">
+            {resolvePublicText(
+              hero?.primary_button_label,
+              locale,
+              t.public.home.browseCta,
+            )}
           </Link>
-          <Link href="/booking/manage" className="btn btn--secondary">
-            {t.public.nav.manageBooking}
+          <Link href={secondaryUrl} className="btn btn--secondary">
+            {resolvePublicText(
+              hero?.secondary_button_label,
+              locale,
+              t.public.nav.manageBooking,
+            )}
           </Link>
         </div>
         <ul className="public-hero__features">
@@ -77,6 +109,6 @@ export default function PublicHomePage() {
           </div>
         )}
       </section>
-    </PublicShell>
+    </>
   );
 }

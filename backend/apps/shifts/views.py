@@ -19,12 +19,11 @@ from rest_framework.views import APIView
 
 from apps.common.exceptions import (
     CrossTenantReference,
-    HotelSuspended,
     PermissionDenied,
 )
 from apps.rbac.permissions import HasHotelMembership, HasHotelPermission
 from apps.rbac.services import has_hotel_permission
-from apps.tenancy.models import HotelStatus
+from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
 from .models import (
@@ -68,8 +67,10 @@ DailyCloseClose = HasHotelPermission("daily_close.close")
 
 
 def _guard_write(request: Request) -> None:
-    if request.hotel.status == HotelStatus.SUSPENDED:
-        raise HotelSuspended()
+    # Phase 16: ONE central rule decides operational writes — suspended
+    # hotels AND hotels without an active subscription are refused here
+    # (hotel_suspended / subscription_inactive). Reads are never blocked.
+    ensure_hotel_operational(request.hotel)
 
 
 def _get(model, request, pk):

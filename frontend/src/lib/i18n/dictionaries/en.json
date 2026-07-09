@@ -44,7 +44,8 @@
     "platformOwner": "Platform owner",
     "openMenu": "Open menu",
     "closeMenu": "Close menu",
-    "mainSection": "Main"
+    "mainSection": "Main",
+    "publicSite": "Public site"
   },
   "auth": {
     "loginTitle": "Sign in",
@@ -1792,7 +1793,10 @@
       "hotels": "Hotels",
       "manageBooking": "Manage my booking",
       "login": "Sign in",
-      "freeTrial": "Free trial"
+      "freeTrial": "Free trial",
+      "home": "Home",
+      "contact": "Contact us",
+      "bookNow": "Book now"
     },
     "footer": {
       "tagline": "Hotel management platform — online booking without accounts."
@@ -1898,6 +1902,51 @@
       "expired": "Expired"
     }
   },
+  "subscriptionState": {
+    "suspended": "This hotel is suspended by the platform. Data is read-only; contact the platform owner.",
+    "expired": "The hotel's subscription has ended. Important operations are restricted until the platform owner activates a subscription — no data is lost.",
+    "expiringSoon": "The hotel's subscription ends in {days} days. Contact the platform owner to renew.",
+    "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner."
+  },
+  "publicSiteAdmin": {
+    "title": "Public website",
+    "subtitle": "Control the public site's header, hero, contact info and footer. Empty label overrides fall back to the built-in translations.",
+    "saved": "Public site settings saved",
+    "sectionHeader": "Header links & buttons",
+    "sectionHeaderDesc": "Choose which links and buttons visitors see, and optionally override their labels per language.",
+    "showHome": "Show the Home link",
+    "showHotels": "Show the Hotels link",
+    "showContact": "Show the Contact link",
+    "showBookNow": "Show the Book now button",
+    "showTrial": "Show the Free trial button",
+    "homeLabel": "Home label",
+    "hotelsLabel": "Hotels label",
+    "contactLabel": "Contact label",
+    "bookNowLabel": "Book now label",
+    "trialLabel": "Free trial label",
+    "sectionHero": "Home hero",
+    "sectionHeroDesc": "The main title, subtitle and buttons on the public home page.",
+    "heroTitle": "Hero title",
+    "heroSubtitle": "Hero subtitle",
+    "heroPrimaryLabel": "Primary button label",
+    "heroPrimaryUrl": "Primary button URL",
+    "heroSecondaryLabel": "Secondary button label",
+    "heroSecondaryUrl": "Secondary button URL",
+    "urlHint": "Internal path (/...) or a full http(s) link.",
+    "sectionContact": "Platform contact info",
+    "sectionContactDesc": "Shown publicly in the site footer.",
+    "phone": "Phone",
+    "whatsapp": "WhatsApp (display only)",
+    "email": "Email",
+    "address": "Address",
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "website": "Website",
+    "sectionFooter": "Footer",
+    "sectionFooterDesc": "The short text under the platform name.",
+    "footerText": "Footer text",
+    "overrideHint": "Leave empty to use the built-in translation."
+  },
   "language": {
     "label": "Language",
     "ar": "العربية",
@@ -1930,7 +1979,11 @@
       "activeTrials": "Free trials running",
       "activeSubscriptions": "Paid & active",
       "expiringSoon": "Within the next 14 days",
-      "expired": "No longer active"
+      "expired": "No longer active",
+      "trialHotels": "Hotels with a running free trial",
+      "paidHotels": "Hotels with an active paid subscription",
+      "publicListed": "Active hotels listed on the public site",
+      "totalPlans": "All subscription plans"
     },
     "hotelsTotal": "Total hotels",
     "hotelsActive": "Active hotels",
@@ -1943,7 +1996,14 @@
     "recentHotels": "Latest hotels",
     "recentSubscriptions": "Latest subscription activity",
     "noHotels": "No hotels registered yet.",
-    "noSubscriptions": "No subscription activity yet."
+    "noSubscriptions": "No subscription activity yet.",
+    "trialHotels": "Hotels on trial",
+    "paidHotels": "Paying hotels",
+    "publicListed": "Publicly listed",
+    "totalPlans": "Plans",
+    "revenueTitle": "Estimated monthly recurring revenue",
+    "revenueHint": "An administrative estimate from manually activated subscriptions (yearly plans normalized to monthly). Not profit and not a legal financial report.",
+    "revenueEmpty": "No active paid subscriptions yet."
   },
   "hotels": {
     "title": "Hotels",
@@ -1976,7 +2036,27 @@
     "empty": "No hotels yet",
     "emptyHint": "Add your first hotel to get started.",
     "nameRequired": "Name is required.",
-    "slugRequired": "Slug is required."
+    "slugRequired": "Slug is required.",
+    "city": "City",
+    "subscription": "Subscription",
+    "publicListed": "Public listing",
+    "publicBookingEnabled": "Public booking",
+    "trialUsed": "Trial used",
+    "roomsCount": "Rooms",
+    "staffCount": "Staff",
+    "reservationsCount": "Reservations",
+    "unsuspend": "Lift suspension",
+    "suspendTitle": "Suspend hotel",
+    "suspendBody": "Suspension blocks the hotel's important operations and hides it from the public site. No data is deleted.",
+    "suspendReason": "Suspension reason",
+    "suspendReasonRequired": "A suspension reason is required.",
+    "suspendedReasonLabel": "Suspension reason",
+    "invalidStatusTransition": "This hotel status change is not allowed.",
+    "filterSubscription": "Subscription",
+    "subscriptionSection": "Subscription",
+    "subscriptionSectionDesc": "The hotel's current subscription, lifecycle actions and preserved history. Paid activation is manual — there is no payment gateway.",
+    "subscriptionHistory": "Subscription history",
+    "paymentsHistory": "Manual payments"
   },
   "plans": {
     "title": "Subscription plans",
@@ -2010,7 +2090,13 @@
     "empty": "No plans yet",
     "emptyHint": "Create your first subscription plan.",
     "active": "Active",
-    "inactive": "Inactive"
+    "inactive": "Inactive",
+    "priceYearly": "Yearly price",
+    "priceYearlyHint": "Optional — shown alongside the base price.",
+    "maxPublicBookings": "Public bookings / month",
+    "isPublic": "Show this plan publicly",
+    "notes": "Internal notes",
+    "notesHint": "Visible to the platform owner only."
   },
   "subscriptions": {
     "title": "Hotel subscriptions",
@@ -2043,7 +2129,24 @@
     "trialAlreadyUsed": "This hotel has already used its one-time free trial.",
     "conflict": "This hotel already has an active subscription.",
     "empty": "No subscriptions yet",
-    "emptyHint": "Assign a plan to a hotel to create one."
+    "emptyHint": "Assign a plan to a hotel to create one.",
+    "startTrial": "Start free trial",
+    "activatePaid": "Activate paid subscription",
+    "renew": "Renew",
+    "expiringSoonFilter": "Expiring soon only",
+    "trialAlreadyUsedHint": "This hotel already used its one-time free trial.",
+    "voided": "Voided",
+    "methods": {
+      "cash": "Cash",
+      "bank_transfer": "Bank transfer",
+      "manual": "Manual",
+      "other": "Other"
+    },
+    "errors": {
+      "trialAlreadyUsed": "The free trial can only be granted once, as the hotel's first subscription.",
+      "conflicting": "This hotel already has an active subscription.",
+      "invalidTransition": "This subscription action is not allowed in the current state."
+    }
   },
   "settings": {
     "title": "Platform settings",

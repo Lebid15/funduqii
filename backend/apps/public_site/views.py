@@ -39,6 +39,52 @@ def _get_settings_or_404(slug: str):
     return settings_obj
 
 
+class PublicSiteSettingsView(PublicAPIView):
+    """The platform's public-website configuration (Phase 16): header link
+    visibility + label overrides, hero texts, platform contact info and the
+    footer. Everything in this model is public by design — no secrets, no
+    internal configuration, no hotel data."""
+
+    def get(self, request: Request) -> Response:
+        from apps.platform.models import PlatformPublicSettings
+
+        s = PlatformPublicSettings.load()
+        return Response(
+            {
+                "header": {
+                    "show_home_link": s.show_home_link,
+                    "show_hotels_link": s.show_hotels_link,
+                    "show_contact_link": s.show_contact_link,
+                    "show_book_now_button": s.show_book_now_button,
+                    "show_trial_button": s.show_trial_button,
+                    "home_label": s.header_home_label,
+                    "hotels_label": s.header_hotels_label,
+                    "contact_label": s.header_contact_label,
+                    "book_now_label": s.header_book_now_label,
+                    "trial_label": s.header_trial_label,
+                },
+                "hero": {
+                    "title": s.hero_title,
+                    "subtitle": s.hero_subtitle,
+                    "primary_button_label": s.hero_primary_button_label,
+                    "primary_button_url": s.hero_primary_button_url,
+                    "secondary_button_label": s.hero_secondary_button_label,
+                    "secondary_button_url": s.hero_secondary_button_url,
+                },
+                "contact": {
+                    "phone": s.public_phone,
+                    "whatsapp": s.public_whatsapp_display,
+                    "email": s.public_email,
+                    "address": s.public_address,
+                    "facebook_url": s.facebook_url,
+                    "instagram_url": s.instagram_url,
+                    "website_url": s.website_url,
+                },
+                "footer": {"text": s.footer_text},
+            }
+        )
+
+
 def _hotel_card(settings_obj) -> dict:
     media = services.hotel_media_payload(settings_obj.hotel)
     return {

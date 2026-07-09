@@ -27,9 +27,11 @@ import {
 } from "@/components/ui";
 import {
   createSubscription,
+  expireHotelSubscription,
   listHotels,
   listPlans,
   listSubscriptions,
+  renewSubscription,
   updateSubscription,
   type SubscriptionCreateBody,
 } from "@/lib/api/platform";
@@ -56,6 +58,7 @@ export default function SubscriptionsPage() {
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
+  const [expiringSoon, setExpiringSoon] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -70,6 +73,7 @@ export default function SubscriptionsPage() {
       const data = await listSubscriptions({
         page,
         status: status || undefined,
+        expiring: expiringSoon ? "soon" : undefined,
       });
       setRows(data.results);
       setCount(data.count);
@@ -79,7 +83,7 @@ export default function SubscriptionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, t]);
+  }, [page, status, expiringSoon, t]);
 
   useEffect(() => {
     load();
@@ -146,6 +150,22 @@ export default function SubscriptionsPage() {
       render: (row) =>
         isLive(row) ? (
           <div className="table__actions">
+            {row.status === "active" || row.status === "past_due" ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => runRowAction(() => renewSubscription(row.hotel, {}))}
+              >
+                {t.subscriptions.renew}
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => runRowAction(() => expireHotelSubscription(row.hotel))}
+            >
+              {t.subscriptions.expire}
+            </Button>
             <Button
               variant="danger"
               size="sm"
@@ -159,6 +179,16 @@ export default function SubscriptionsPage() {
         ),
     },
   ];
+
+  async function runRowAction(action: () => Promise<unknown>) {
+    try {
+      await action();
+      notify(t.settings.saved);
+      load();
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
 
   return (
     <PageContainer>
@@ -187,6 +217,18 @@ export default function SubscriptionsPage() {
               }}
             />
           </FormField>
+          <label className="cluster" style={{ alignSelf: "end" }}>
+            <input
+              type="checkbox"
+              checked={expiringSoon}
+              onChange={(event) => {
+                setLoading(true);
+                setPage(1);
+                setExpiringSoon(event.target.checked);
+              }}
+            />
+            <span>{t.subscriptions.expiringSoonFilter}</span>
+          </label>
         </FilterBar>
       </Card>
 

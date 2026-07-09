@@ -27,6 +27,17 @@ class Hotel(models.Model):
         choices=HotelStatus.choices,
         default=HotelStatus.SETUP,
     )
+    # Phase 16 — platform-owner status audit: WHY a hotel was suspended and
+    # WHO changed the status last. Suspension never deletes anything.
+    suspension_reason = models.CharField(max_length=255, blank=True, default="")
+    status_changed_at = models.DateTimeField(null=True, blank=True)
+    status_changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="hotels_status_changed",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

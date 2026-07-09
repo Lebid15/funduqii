@@ -399,6 +399,30 @@ class InvalidAmount(FunduqiiAPIException):
     default_code = "invalid_amount"
 
 
+# --- Platform owner panel / subscription enforcement (Phase 16) -------------
+
+
+class SubscriptionInactive(FunduqiiAPIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = (
+        "This hotel has no active subscription; important operations are "
+        "restricted until the platform owner activates one."
+    )
+    default_code = "subscription_inactive"
+
+
+class SuspensionReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to suspend a hotel."
+    default_code = "suspension_reason_required"
+
+
+class InvalidHotelStatusTransition(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This hotel status change is not allowed."
+    default_code = "invalid_hotel_status_transition"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

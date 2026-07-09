@@ -10,7 +10,11 @@ import type {
   Hotel,
   HotelSubscription,
   PaginatedResponse,
+  PlatformDashboard,
   PlatformOverview,
+  PlatformPayment,
+  PlatformPaymentMethod,
+  PlatformPublicSettings,
   PlatformSettings,
   SubscriptionPlan,
 } from "./types";
@@ -76,10 +80,19 @@ export function fetchOverview(): Promise<PlatformOverview> {
   return request<PlatformOverview>("/overview");
 }
 
+// --- Dashboard (Phase 16) -----------------------------------------------------
+
+export function fetchDashboard(): Promise<PlatformDashboard> {
+  return request<PlatformDashboard>("/dashboard");
+}
+
 // --- Hotels -----------------------------------------------------------------
 
 export interface HotelListParams {
   status?: string;
+  subscription?: string;
+  public?: string;
+  city?: string;
   search?: string;
   page?: number;
   page_size?: number;
@@ -111,7 +124,7 @@ export function createHotel(body: HotelCreateBody): Promise<Hotel> {
 
 export function updateHotel(
   id: number,
-  body: Partial<Pick<Hotel, "name" | "slug" | "status">>,
+  body: Partial<Pick<Hotel, "name" | "slug">>,
 ): Promise<Hotel> {
   return request<Hotel>(`/hotels/${id}`, {
     method: "PATCH",
@@ -125,6 +138,132 @@ export function setHotelManager(
 ): Promise<Hotel> {
   return request<Hotel>(`/hotels/${id}/manager`, {
     method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// --- Hotel status lifecycle (Phase 16) ----------------------------------------
+
+export function activateHotel(id: number): Promise<Hotel> {
+  return request<Hotel>(`/hotels/${id}/activate`, { method: "POST" });
+}
+
+export function suspendHotel(id: number, reason: string): Promise<Hotel> {
+  return request<Hotel>(`/hotels/${id}/suspend`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function unsuspendHotel(id: number): Promise<Hotel> {
+  return request<Hotel>(`/hotels/${id}/unsuspend`, { method: "POST" });
+}
+
+// --- Subscription lifecycle per hotel (Phase 16) -------------------------------
+
+export interface ManualPaymentInput {
+  payment_amount?: string;
+  payment_method?: PlatformPaymentMethod;
+  payment_reference?: string;
+}
+
+export function startTrial(
+  hotelId: number,
+  body: { plan: number; trial_days?: number; notes?: string },
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(`/hotels/${hotelId}/subscriptions/start-trial`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function activatePaid(
+  hotelId: number,
+  body: { plan: number; starts_at?: string; ends_at?: string; notes?: string } &
+    ManualPaymentInput,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(
+    `/hotels/${hotelId}/subscriptions/activate-paid`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export function renewSubscription(
+  hotelId: number,
+  body: { ends_at?: string; days?: number; notes?: string } & ManualPaymentInput,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(`/hotels/${hotelId}/subscriptions/renew`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function cancelHotelSubscription(
+  hotelId: number,
+  notes?: string,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(`/hotels/${hotelId}/subscriptions/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ notes: notes ?? "" }),
+  });
+}
+
+export function expireHotelSubscription(
+  hotelId: number,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(`/hotels/${hotelId}/subscriptions/expire`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function fetchSubscriptionHistory(
+  hotelId: number,
+): Promise<HotelSubscription[]> {
+  return request<HotelSubscription[]>(`/hotels/${hotelId}/subscriptions/history`);
+}
+
+// --- Manual platform payments (Phase 16 — never a gateway) ---------------------
+
+export function listPlatformPayments(
+  hotelId?: number,
+): Promise<PlatformPayment[]> {
+  return request<PlatformPayment[]>(
+    `/subscription-payments${hotelId ? `?hotel=${hotelId}` : ""}`,
+  );
+}
+
+export function voidPlatformPayment(
+  id: number,
+  reason: string,
+): Promise<PlatformPayment> {
+  return request<PlatformPayment>(`/subscription-payments/${id}/void`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+// --- Plan activation (Phase 16) -------------------------------------------------
+
+export function activatePlan(id: number): Promise<SubscriptionPlan> {
+  return request<SubscriptionPlan>(`/plans/${id}/activate`, { method: "POST" });
+}
+
+export function deactivatePlan(id: number): Promise<SubscriptionPlan> {
+  return request<SubscriptionPlan>(`/plans/${id}/deactivate`, { method: "POST" });
+}
+
+// --- Public site settings (Phase 16) --------------------------------------------
+
+export function getPublicSiteSettings(): Promise<PlatformPublicSettings> {
+  return request<PlatformPublicSettings>("/public-site-settings");
+}
+
+export function updatePublicSiteSettings(
+  body: Partial<PlatformPublicSettings>,
+): Promise<PlatformPublicSettings> {
+  return request<PlatformPublicSettings>("/public-site-settings", {
+    method: "PATCH",
     body: JSON.stringify(body),
   });
 }
@@ -153,14 +292,18 @@ export type PlanWriteBody = Partial<
     | "slug"
     | "description"
     | "price"
+    | "price_yearly"
     | "currency"
     | "billing_cycle"
     | "trial_days"
     | "room_limit"
     | "user_limit"
+    | "max_public_bookings_per_month"
     | "feature_codes"
     | "is_active"
+    | "is_public"
     | "sort_order"
+    | "notes"
   >
 >;
 
@@ -191,6 +334,7 @@ export interface SubscriptionListParams {
   status?: string;
   hotel?: number;
   page?: number;
+  expiring?: "soon";
 }
 
 export function listSubscriptions(
