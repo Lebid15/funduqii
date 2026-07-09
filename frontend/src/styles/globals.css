@@ -287,37 +287,6 @@ a {
   color: var(--color-primary-contrast);
 }
 
-.app-sidebar__user {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-  padding: var(--space-3);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border-subtle);
-}
-.app-sidebar__user-meta {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-  min-width: 0;
-}
-.app-sidebar__user-name {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.app-sidebar__user-email {
-  font-size: var(--font-size-xs);
-  color: var(--color-fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .avatar {
   display: grid;
   place-items: center;
@@ -331,6 +300,36 @@ a {
 .avatar--md {
   width: 2.25rem;
   height: 2.25rem;
+}
+.avatar--sm {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: var(--font-size-xs);
+}
+
+/* The topbar user chip (moved from the sidebar — owner decision): a small
+ * avatar + the name only, no email. The avatar span is the future
+ * profile-picture slot. */
+.topbar-user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.topbar-user__name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+@media (max-width: 640px) {
+  /* Tight screens keep the avatar only — the name would crowd the bar. */
+  .topbar-user__name {
+    display: none;
+  }
 }
 
 .app-main {

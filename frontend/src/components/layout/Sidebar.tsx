@@ -27,7 +27,6 @@ import {
 } from "lucide-react";
 
 import { Icon } from "@/components/ui";
-import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { initials } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
@@ -46,16 +45,15 @@ interface NavItem {
   access?: string[];
 }
 
-/** Central navigation with brand block, icon nav, and a user card. Serves both
- * the platform-owner and hotel-side shells via the `variant` prop. */
+/** Central navigation: the hotel identity on top and the nav list only —
+ * the user chip lives in the topbar (owner decision). Serves both the
+ * platform-owner and hotel-side shells via the `variant` prop. */
 export function Sidebar({
   variant,
-  user,
   hotelName,
   onNavigate,
 }: {
   variant: ShellVariant;
-  user: CurrentUser;
   hotelName?: string;
   onNavigate?: () => void;
 }) {
@@ -216,16 +214,6 @@ export function Sidebar({
           </Link>
         ))}
       </nav>
-
-      <div className="app-sidebar__user">
-        <span className="avatar avatar--md" aria-hidden="true">
-          {initials(user.full_name)}
-        </span>
-        <span className="app-sidebar__user-meta">
-          <span className="app-sidebar__user-name">{user.full_name}</span>
-          <span className="app-sidebar__user-email">{user.email}</span>
-        </span>
-      </div>
     </>
   );
 }
