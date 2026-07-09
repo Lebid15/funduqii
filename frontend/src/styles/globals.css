@@ -70,10 +70,19 @@ a {
   padding-inline: var(--space-4);
 }
 
+/* The console CONTENT CARD (owner-approved shell = three detached cards:
+ * sidebar / topbar / content). Used only inside the AppShell. */
 .content-container {
   width: 100%;
   max-width: var(--container-max);
   margin-inline: auto;
+  flex: 1;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  /* Inner padding comes from .page-container inside each page. */
+  overflow: clip;
 }
 
 .page-container {
@@ -128,10 +137,17 @@ a {
 }
 
 /* --- App shell ------------------------------------------------------------ */
+/* Three detached cards inside a padded screen: sidebar / topbar / content.
+ * `--shell-gap` drives the outer padding AND the gaps between the cards so
+ * the rhythm stays consistent (and shrinks together on small screens). */
 .app-shell {
+  --shell-gap: var(--space-3);
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
+  gap: var(--shell-gap);
   min-height: 100dvh;
+  padding: var(--shell-gap);
+  background: var(--color-bg);
 }
 
 .app-sidebar {
@@ -139,11 +155,13 @@ a {
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
-  border-inline-end: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   padding: var(--space-5) var(--space-4);
   position: sticky;
-  top: 0;
-  height: 100dvh;
+  top: var(--shell-gap);
+  height: calc(100dvh - 2 * var(--shell-gap));
   overflow-y: auto;
   z-index: var(--z-sidebar);
 }
@@ -291,12 +309,13 @@ a {
   grid-column: 2;
   display: flex;
   flex-direction: column;
+  gap: var(--shell-gap);
   min-width: 0;
 }
 
 .app-topbar {
   position: sticky;
-  top: 0;
+  top: var(--shell-gap);
   z-index: var(--z-sidebar);
   display: flex;
   align-items: center;
@@ -304,9 +323,11 @@ a {
   gap: var(--space-3);
   min-height: var(--topbar-height);
   padding-inline: var(--space-6);
-  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 .app-topbar__start,
 .app-topbar__end {
@@ -337,16 +358,23 @@ a {
 
 @media (max-width: 900px) {
   .app-shell {
+    --shell-gap: var(--space-2);
     grid-template-columns: 1fr;
   }
   .app-main {
     grid-column: 1;
   }
+  /* The sidebar becomes a full-height drawer again: square on the leading
+     edge, rounded on the trailing edge only (RTL-safe logical corners). */
   .app-sidebar {
     position: fixed;
     inset-block: 0;
     inset-inline-start: 0;
+    height: 100dvh;
     width: min(var(--sidebar-width), 86vw);
+    border-radius: 0;
+    border-start-end-radius: var(--radius-xl);
+    border-end-end-radius: var(--radius-xl);
     transform: translateX(-105%);
     transition: transform var(--transition-base);
     box-shadow: var(--shadow-lg);
@@ -362,6 +390,9 @@ a {
   }
   .app-topbar__title {
     display: none;
+  }
+  .app-topbar {
+    padding-inline: var(--space-4);
   }
   .sidebar-overlay[data-open="true"] {
     display: block;
