@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.common.exceptions import HotelSuspended, SubscriptionInactive
@@ -62,6 +63,46 @@ def subscription_blocks_writes(hotel) -> bool:
         return False
     # Never-onboarded hotels are not blocked (documented decision).
     return HotelSubscription.objects.filter(hotel=hotel).exists()
+
+
+def subscription_blocked_hotel_ids(hotel_ids) -> set[int]:
+    """Batch form of :func:`subscription_blocks_writes` (Phase 17).
+
+    Answers "which of these hotels are write-blocked?" in TWO queries instead
+    of two per hotel — used by list endpoints (e.g. the public hotel list)
+    to avoid an N+1 pattern. The rule is IDENTICAL to the per-hotel check:
+    blocked = has subscription history AND no effectively-live subscription
+    (time-aware, mirroring ``_effective_end``).
+    """
+    hotel_ids = list(hotel_ids)
+    if not hotel_ids:
+        return set()
+    now = timezone.now()
+    with_history = set(
+        HotelSubscription.objects.filter(hotel_id__in=hotel_ids)
+        .values_list("hotel_id", flat=True)
+        .distinct()
+    )
+    open_ended = Q(ends_at__isnull=True) | Q(ends_at__gt=now)
+    effectively_live = (
+        Q(status=SubscriptionStatus.TRIAL)
+        & (Q(trial_ends_at__gt=now) | (Q(trial_ends_at__isnull=True) & open_ended))
+    ) | (
+        Q(
+            status__in=(
+                SubscriptionStatus.ACTIVE,
+                SubscriptionStatus.PAST_DUE,
+            )
+        )
+        & open_ended
+    )
+    live = set(
+        HotelSubscription.objects.filter(hotel_id__in=hotel_ids)
+        .filter(effectively_live)
+        .values_list("hotel_id", flat=True)
+        .distinct()
+    )
+    return with_history - live
 
 
 def ensure_hotel_operational(hotel) -> None:

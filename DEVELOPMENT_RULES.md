@@ -315,6 +315,18 @@ these rules is a defect, not a shortcut.
   yearly normalized) — never named profit, never a legal financial report.
 - Full rules: [docs/PLATFORM_OWNER_PANEL_STRATEGY.md](docs/PLATFORM_OWNER_PANEL_STRATEGY.md).
 
+### 8n. PWA & offline (from Phase 17)
+- **The service worker caches PUBLIC STATIC assets only** (the offline page
+  and icons). API responses, console pages, authenticated content and
+  anything tenant-scoped must NEVER enter a service-worker or shared cache.
+- **No tokens near any cache** — sessions stay in HttpOnly cookies.
+- **No offline writes**: no offline booking/check-in/payments/invoices/
+  operations, no write queue, no background sync, no local operational
+  database. Offline is a static fallback page, nothing more.
+- Responsive behavior lives in the CENTRAL primitives (tokens + shared
+  CSS); pages never build their own mobile layout.
+- Full rules: [docs/MOBILE_PWA_PERFORMANCE_STRATEGY.md](docs/MOBILE_PWA_PERFORMANCE_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

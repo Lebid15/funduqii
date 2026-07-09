@@ -120,6 +120,11 @@ class HotelSubscription(models.Model):
                 name="unique_live_subscription_per_hotel",
             ),
         ]
+        indexes = [
+            # Phase 17: the subscription enforcement consults (hotel, status)
+            # on EVERY important write request — keep that lookup indexed.
+            models.Index(fields=["hotel", "status"]),
+        ]
 
     def __str__(self) -> str:
         return f"hotel={self.hotel_id} plan={self.plan_id} ({self.status})"

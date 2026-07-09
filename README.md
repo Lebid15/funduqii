@@ -4,7 +4,23 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 16 — Platform Owner Panel Completion (pending review).**
+> **Current status: Phase 17 — Mobile / PWA / Offline / Performance (pending review).**
+> Phase 17 adds a CENTRAL mobile/tablet polish layer (overflow guards,
+> coarse-pointer touch targets, sheet-like modals, single-column filters,
+> denser scrollable tables, public-site adjustments — all token-only and
+> RTL/LTR-safe), a safe PWA foundation (`app/manifest.ts` + generated brand
+> icons + viewport/apple metadata → installable), and a MINIMAL offline
+> fallback: a service worker that caches ONLY the static trilingual
+> `offline.html` + icons and answers failed navigations with it — **no API
+> or page caching, no tokens near any cache, no offline writes/queue/data**
+> (documented security decisions). Performance: the public hotel list's
+> subscription answer is now ONE batch (parity-tested against the per-hotel
+> rule) + media via one prefetch; the platform hotels list gained
+> `select_related`; and `HotelSubscription (hotel, status)` — consulted on
+> every write by the Phase 16 enforcement — is now indexed. No product-scope
+> change of any kind.
+>
+> **Previously approved: Phase 16 — Platform Owner Panel Completion ✅**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +

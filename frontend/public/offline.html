@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Funduqii — Offline</title>
+  <style>
+    /* Static offline fallback (Phase 17): served by the service worker when
+       navigation fails. Trilingual by design because no app dictionary is
+       available offline. Mirrors the design tokens. */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f4f5f3;
+      color: #1c2a27;
+    }
+    .card {
+      max-width: 26rem;
+      width: 100%;
+      background: #ffffff;
+      border: 1px solid #dde3e0;
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(6, 33, 29, 0.08);
+      padding: 32px;
+      text-align: center;
+    }
+    .mark {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 20px;
+      border-radius: 16px;
+      background: #0d6e64;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mark img { width: 40px; height: 40px; }
+    h1 { font-size: 1.15rem; margin-bottom: 6px; }
+    p { color: #5b6b66; font-size: 0.95rem; line-height: 1.6; }
+    .lang { margin-top: 18px; padding-top: 18px; border-top: 1px solid #eceeec; }
+    .lang:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+    [dir="ltr"] { direction: ltr; }
+    button {
+      margin-top: 24px;
+      width: 100%;
+      padding: 12px;
+      min-height: 44px;
+      border: none;
+      border-radius: 12px;
+      background: #0d6e64;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #0a5a52; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark"><img src="/icons/icon-192.png" alt="Funduqii" /></div>
+    <div class="lang">
+      <h1>لا يوجد اتصال بالإنترنت</h1>
+      <p>تعذّر الوصول إلى فندقي. تحقّق من اتصالك ثم أعد المحاولة — لا تُنفَّذ أي عمليات أثناء انقطاع الاتصال.</p>
+    </div>
+    <div class="lang" dir="ltr">
+      <h1>You are offline</h1>
+      <p>Funduqii could not be reached. Check your connection and try again — no operations run while offline.</p>
+    </div>
+    <div class="lang" dir="ltr">
+      <h1>Çevrimdışısınız</h1>
+      <p>Funduqii'ye ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin — çevrimdışıyken hiçbir işlem yapılmaz.</p>
+    </div>
+    <button onclick="location.reload()">إعادة المحاولة · Retry · Yeniden dene</button>
+  </main>
+</body>
+</html>
