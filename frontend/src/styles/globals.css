@@ -200,6 +200,23 @@ a {
   height: 2.5rem;
 }
 
+/* Hotel identity in the brand slot (owner review): the uploaded logo, or an
+ * elegant monogram fallback — never a generic menu-like mark. */
+.brand-logo {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-lg);
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  flex: none;
+}
+.brand-mark--monogram {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+}
+
 .app-sidebar__brand-text {
   display: flex;
   flex-direction: column;
@@ -421,35 +438,88 @@ a {
   }
 }
 
-/* --- Language switcher ---------------------------------------------------- */
-.lang-switcher {
+/* --- Language menu ---------------------------------------------------------
+ * A quiet pill + custom dropdown (owner review): no raw native select menu. */
+.lang-menu {
+  position: relative;
+}
+.lang-menu__button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   padding-inline: var(--space-3);
   height: 2.25rem;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
   background: var(--color-surface);
-  color: var(--color-fg-muted);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-}
-.lang-switcher:focus-within {
-  border-color: var(--color-primary);
-  box-shadow: var(--focus-ring);
-}
-.lang-switcher__select {
-  border: none;
-  background: transparent;
+  color: var(--color-fg);
   font-family: inherit;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  color: var(--color-fg);
   cursor: pointer;
-  padding-inline-end: var(--space-2);
+  transition: border-color var(--transition-fast), background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
-.lang-switcher__select:focus {
+.lang-menu__button .icon {
+  color: var(--color-fg-subtle);
+}
+.lang-menu__button:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border-strong);
+}
+.lang-menu__button:focus-visible {
   outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+.lang-menu__chevron {
+  transition: transform var(--transition-fast);
+}
+.lang-menu__button[aria-expanded="true"] .lang-menu__chevron {
+  transform: rotate(180deg);
+}
+.lang-menu__list {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + var(--space-2));
+  min-width: 10rem;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-modal);
+  animation: pop-in var(--transition-fast);
+}
+.lang-menu__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.lang-menu__option:hover {
+  background: var(--color-surface-sunken);
+}
+.lang-menu__option[aria-selected="true"] {
+  color: var(--color-primary-active);
+  background: var(--color-primary-soft);
+}
+.lang-menu__option .icon {
+  color: var(--color-primary);
 }
 
 /* --- Buttons -------------------------------------------------------------- */
@@ -506,6 +576,20 @@ a {
 }
 .btn--danger:not(:disabled):hover {
   background: var(--color-danger-hover);
+}
+/* Soft-danger (owner review): unmistakably an exit/destructive action but
+ * calm — danger text on a soft danger wash, deepening on hover. */
+.btn--dangerSoft {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
+}
+.btn--dangerSoft .icon {
+  color: var(--color-danger);
+}
+.btn--dangerSoft:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-danger) 14%, var(--color-danger-soft));
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 .btn--ghost {
   background: transparent;
@@ -2827,7 +2911,7 @@ a {
   }
   .input,
   .select,
-  .lang-switcher {
+  .lang-menu__button {
     min-height: 2.75rem;
   }
   .tabs__tab {

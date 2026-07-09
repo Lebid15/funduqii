@@ -31,6 +31,7 @@ import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { initials } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 import { HOTEL_ROUTE_ACCESS } from "@/lib/session/hotelRouteAccess";
 
 type ShellVariant = "platform" | "hotel";
@@ -62,6 +63,7 @@ export function Sidebar({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const access = useHotelAccess();
+  const profile = useHotelProfile();
 
   const platformItems: NavItem[] = [
     { href: "/platform", label: t.nav.dashboard, icon: LayoutDashboard, exact: true },
@@ -164,15 +166,38 @@ export function Sidebar({
     return !currentTab || !siblingTabs.includes(currentTab);
   }
 
+  // The hotel shell's brand slot is the HOTEL's identity (owner decision):
+  // the uploaded logo when one exists, otherwise an elegant monogram from
+  // the hotel name — never a generic menu-like mark. The platform console
+  // keeps the product brand. The mobile menu stays a separate topbar button.
+  const hotelDisplayName =
+    profile?.display_name || profile?.hotel.name || hotelName || t.app.name;
+  const logoUrl = profile?.logo?.url ?? null;
+
   return (
     <>
       <div className="app-sidebar__brand">
-        <span className="brand-mark">
-          <Icon icon={Hotel} size="lg" />
-        </span>
+        {variant === "hotel" ? (
+          logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- hotel-uploaded media
+            <img className="brand-logo" src={logoUrl} alt={hotelDisplayName} />
+          ) : (
+            <span className="brand-mark brand-mark--monogram" aria-hidden="true">
+              {initials(hotelDisplayName)}
+            </span>
+          )
+        ) : (
+          <span className="brand-mark">
+            <Icon icon={Hotel} size="lg" />
+          </span>
+        )}
         <span className="app-sidebar__brand-text">
-          <span className="app-sidebar__brand-name">{t.app.name}</span>
-          <span className="app-sidebar__brand-sub">{brandSubtitle}</span>
+          <span className="app-sidebar__brand-name">
+            {variant === "hotel" ? hotelDisplayName : t.app.name}
+          </span>
+          <span className="app-sidebar__brand-sub">
+            {variant === "hotel" ? t.app.name : brandSubtitle}
+          </span>
         </span>
       </div>
 

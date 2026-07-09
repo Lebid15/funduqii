@@ -5,7 +5,7 @@ import { cx } from "@/lib/utils";
 
 import { Icon } from "./Icon";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost";
+type Variant = "primary" | "secondary" | "danger" | "dangerSoft" | "ghost";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;

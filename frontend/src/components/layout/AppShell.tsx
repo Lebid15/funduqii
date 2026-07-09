@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import type { CurrentUser } from "@/lib/api/types";
 import { CurrentUserProvider } from "@/lib/session/CurrentUserContext";
+import { HotelProfileProvider } from "@/lib/session/HotelProfileContext";
 import { SubscriptionBanner } from "@/components/hotel/SubscriptionBanner";
 
 import { ContentContainer } from "./ContentContainer";
@@ -29,7 +30,7 @@ export function AppShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const close = () => setSidebarOpen(false);
 
-  return (
+  const shell = (
     <div className="app-shell">
       <aside className="app-sidebar" data-open={sidebarOpen}>
         <Sidebar
@@ -57,5 +58,13 @@ export function AppShell({
         </ContentContainer>
       </div>
     </div>
+  );
+
+  // The hotel shell shares ONE profile load (sidebar brand slot + the
+  // subscription banner); the platform shell has no hotel profile.
+  return variant === "hotel" ? (
+    <HotelProfileProvider>{shell}</HotelProfileProvider>
+  ) : (
+    shell
   );
 }
