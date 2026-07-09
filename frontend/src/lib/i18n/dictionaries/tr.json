@@ -2236,5 +2236,21 @@
       "openHousekeeping": "Açık kat hizmeti görevleri",
       "openMaintenance": "Açık bakım talepleri"
     }
+  },
+  "quickActions": {
+    "title": "Hızlı İşlemler",
+    "newReservation": "Yeni Rezervasyon",
+    "checkIn": "Giriş Yap",
+    "checkOut": "Çıkış Yap",
+    "addGuest": "Misafir Ekle",
+    "guestFolio": "Misafir Folyosu",
+    "recordPayment": "Ödeme Kaydet",
+    "addExpense": "Gider Ekle",
+    "serviceOrder": "Servis Siparişi",
+    "housekeepingTask": "Kat Hizmeti Görevi",
+    "maintenance": "Bakım",
+    "quickReport": "Hızlı Rapor",
+    "settings": "Ayarlar",
+    "more": "Daha Fazla"
   }
 }

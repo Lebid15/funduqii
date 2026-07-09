@@ -2236,5 +2236,21 @@
       "openHousekeeping": "مهام تدبير مفتوحة",
       "openMaintenance": "طلبات صيانة مفتوحة"
     }
+  },
+  "quickActions": {
+    "title": "إجراءات سريعة",
+    "newReservation": "حجز جديد",
+    "checkIn": "دخول نزيل",
+    "checkOut": "مغادرة نزيل",
+    "addGuest": "إضافة نزيل",
+    "guestFolio": "فوليو النزيل",
+    "recordPayment": "تسجيل دفعة",
+    "addExpense": "إضافة مصروف",
+    "serviceOrder": "طلب خدمة",
+    "housekeepingTask": "مهمة تنظيف",
+    "maintenance": "صيانة",
+    "quickReport": "تقرير سريع",
+    "settings": "الإعدادات",
+    "more": "المزيد"
   }
 }

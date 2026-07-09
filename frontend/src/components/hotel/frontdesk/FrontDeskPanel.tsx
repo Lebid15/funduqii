@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   DoorOpen,
   LogOut,
@@ -50,9 +51,16 @@ import type {
 import { formatDate, stayStatusLabel, stayStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
+const TAB_KEYS = ["arrivals", "current", "departures"];
+
 export function FrontDeskPanel() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("arrivals");
+  // Deep-linkable initial tab (?tab=departures — the topbar quick actions):
+  // read once on mount, tabs themselves stay local state as before.
+  const requested = useSearchParams().get("tab");
+  const [tab, setTab] = useState(
+    requested && TAB_KEYS.includes(requested) ? requested : "arrivals",
+  );
   const [reloadKey, setReloadKey] = useState(0);
   const refresh = () => setReloadKey((k) => k + 1);
   const [counts, setCounts] = useState<{

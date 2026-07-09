@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { BedDouble, Brush, LayoutDashboard, PackageSearch, Wrench } from "lucide-react";
 
 import { Tabs, type TabItem } from "@/components/ui";
@@ -11,9 +12,16 @@ import { MaintenanceTab } from "./MaintenanceTab";
 import { OverviewTab } from "./OverviewTab";
 import { RoomBoardTab } from "./RoomBoardTab";
 
+const TAB_KEYS = ["overview", "housekeeping", "maintenance", "lostFound", "roomBoard"];
+
 export function OperationsPanel() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("overview");
+  // Deep-linkable initial tab (?tab=maintenance — the topbar quick actions):
+  // read once on mount, tabs themselves stay local state as before.
+  const requested = useSearchParams().get("tab");
+  const [tab, setTab] = useState(
+    requested && TAB_KEYS.includes(requested) ? requested : "overview",
+  );
 
   const tabs: TabItem[] = [
     { key: "overview", label: t.operations.tabs.overview, icon: LayoutDashboard },

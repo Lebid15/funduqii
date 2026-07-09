@@ -2236,5 +2236,21 @@
       "openHousekeeping": "Open housekeeping tasks",
       "openMaintenance": "Open maintenance requests"
     }
+  },
+  "quickActions": {
+    "title": "Quick Actions",
+    "newReservation": "New Reservation",
+    "checkIn": "Check In",
+    "checkOut": "Check Out",
+    "addGuest": "Add Guest",
+    "guestFolio": "Guest Folio",
+    "recordPayment": "Record Payment",
+    "addExpense": "Add Expense",
+    "serviceOrder": "Service Order",
+    "housekeepingTask": "Housekeeping Task",
+    "maintenance": "Maintenance",
+    "quickReport": "Quick Report",
+    "settings": "Settings",
+    "more": "More"
   }
 }
