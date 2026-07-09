@@ -210,9 +210,9 @@ a {
   min-width: 0;
 }
 .topbar-brand__logo {
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-md);
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-lg);
   object-fit: cover;
   border: 1px solid var(--color-border);
   background: var(--color-surface-muted);
@@ -221,24 +221,40 @@ a {
 .topbar-brand__mark {
   display: grid;
   place-items: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-md);
-  background: var(--color-primary-soft);
-  color: var(--color-primary-active);
-  font-size: var(--font-size-xs);
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-lg);
+  background: var(--gradient-brand);
+  color: var(--color-primary-contrast);
+  box-shadow: var(--shadow-brand);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-extrabold);
   letter-spacing: var(--tracking-tight);
   flex: none;
 }
 .topbar-brand__name {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
   color: var(--color-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 16rem;
+  max-width: 18rem;
+}
+.topbar-plan {
+  flex: none;
+}
+@media (max-width: 640px) {
+  .topbar-brand__logo,
+  .topbar-brand__mark {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+  .topbar-brand__name {
+    font-size: var(--font-size-base);
+    max-width: 9rem;
+  }
 }
 @media (max-width: 420px) {
   /* Very tight screens keep the hotel mark only. */
@@ -377,8 +393,11 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  min-height: var(--topbar-height);
+  gap: var(--space-4);
+  /* Owner review: a taller, statelier bar — the hotel identity must read
+     clearly without crowding. */
+  min-height: 4.75rem;
+  padding-block: var(--space-3);
   padding-inline: var(--space-6);
   background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
@@ -403,7 +422,10 @@ a {
   background: var(--color-border);
 }
 
-.app-sidebar__toggle {
+/* The mobile drawer toggle: desktop never shows it (the selector outranks
+ * the later .icon-btn display rule — the previous single-class rule lost
+ * that specificity fight and the hamburger leaked onto desktop). */
+.app-topbar .app-sidebar__toggle {
   display: none;
 }
 
@@ -442,7 +464,7 @@ a {
   .app-sidebar[data-open="true"] {
     transform: translateX(0);
   }
-  .app-sidebar__toggle {
+  .app-topbar .app-sidebar__toggle {
     display: inline-flex;
   }
   .app-topbar__title {

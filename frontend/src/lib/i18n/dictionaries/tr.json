@@ -1923,7 +1923,12 @@
     "suspended": "Bu otel platform tarafından askıya alındı. Veriler salt okunur; lütfen platform sahibiyle iletişime geçin.",
     "expired": "Otelin aboneliği sona erdi. Platform sahibi yeni bir abonelik etkinleştirene kadar önemli işlemler kısıtlıdır — hiçbir veri kaybolmaz.",
     "expiringSoon": "Otelin aboneliği {days} gün içinde sona eriyor. Yenilemek için platform sahibiyle iletişime geçin.",
-    "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin."
+    "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin.",
+    "badgeTrial": "Ücretsiz deneme — {days} gün",
+    "badgePaid": "{plan} — {days} gün",
+    "badgeExpired": "Süresi doldu",
+    "badgeSuspended": "Askıda",
+    "badgeNone": "Abonelik yok"
   },
   "hotelSubscription": {
     "title": "Abonelik ve Planlar",

@@ -23,7 +23,7 @@ export function LogoutButton() {
 
   return (
     <Button
-      variant="dangerSoft"
+      variant="danger"
       size="sm"
       icon={LogOut}
       onClick={handleLogout}

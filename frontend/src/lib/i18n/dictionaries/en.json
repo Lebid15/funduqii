@@ -1923,7 +1923,12 @@
     "suspended": "This hotel is suspended by the platform. Data is read-only; contact the platform owner.",
     "expired": "The hotel's subscription has ended. Important operations are restricted until the platform owner activates a subscription — no data is lost.",
     "expiringSoon": "The hotel's subscription ends in {days} days. Contact the platform owner to renew.",
-    "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner."
+    "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner.",
+    "badgeTrial": "Free trial — {days} days",
+    "badgePaid": "{plan} — {days} days",
+    "badgeExpired": "Expired",
+    "badgeSuspended": "Suspended",
+    "badgeNone": "No subscription"
   },
   "hotelSubscription": {
     "title": "Subscription & Plans",

@@ -2,8 +2,8 @@
 
 import { Hotel, Menu } from "lucide-react";
 
-import { Icon, IconButton } from "@/components/ui";
-import type { CurrentUser } from "@/lib/api/types";
+import { Badge, Icon, IconButton, type BadgeTone } from "@/components/ui";
+import type { CurrentUser, HotelSubscriptionState } from "@/lib/api/types";
 import { initials } from "@/lib/format";
 import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -21,10 +21,10 @@ interface TopbarProps {
 }
 
 /**
- * Central top bar (owner correction): the START side carries the HOTEL
- * identity (uploaded logo or monogram + hotel name) in the hotel console —
- * the platform console keeps its scope label. The END side carries the
- * user tools: bell, language menu, user chip and the red logout.
+ * Central top bar (owner spec): the START side carries the HOTEL identity
+ * (logo/monogram + name) and the subscription badge; the END side carries
+ * the user tools (bell, language menu, user chip, solid-red logout). The
+ * platform console keeps its scope label. The menu toggle is mobile-only.
  */
 export function Topbar({
   variant = "platform",
@@ -49,25 +49,28 @@ export function Topbar({
           onClick={onMenuToggle}
         />
         {variant === "hotel" ? (
-          <span className="topbar-brand" title={hotelDisplayName}>
-            {logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- hotel-uploaded media
-              <img
-                className="topbar-brand__logo"
-                src={logoUrl}
-                alt={hotelDisplayName}
-              />
-            ) : hotelDisplayName ? (
-              <span className="topbar-brand__mark" aria-hidden="true">
-                {initials(hotelDisplayName)}
-              </span>
-            ) : (
-              <span className="topbar-brand__mark" aria-hidden="true">
-                <Icon icon={Hotel} size="sm" />
-              </span>
-            )}
-            <span className="topbar-brand__name">{hotelDisplayName}</span>
-          </span>
+          <>
+            <span className="topbar-brand" title={hotelDisplayName}>
+              {logoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- hotel-uploaded media
+                <img
+                  className="topbar-brand__logo"
+                  src={logoUrl}
+                  alt={hotelDisplayName}
+                />
+              ) : hotelDisplayName ? (
+                <span className="topbar-brand__mark" aria-hidden="true">
+                  {initials(hotelDisplayName)}
+                </span>
+              ) : (
+                <span className="topbar-brand__mark" aria-hidden="true">
+                  <Icon icon={Hotel} size="md" />
+                </span>
+              )}
+              <span className="topbar-brand__name">{hotelDisplayName}</span>
+            </span>
+            <SubscriptionBadge state={profile?.subscription_state ?? null} />
+          </>
         ) : (
           <span className="app-topbar__title">{t.nav.platformOwner}</span>
         )}
@@ -78,7 +81,7 @@ export function Topbar({
         {/* Name only — no email. The avatar span is the future
             profile-picture slot; no upload exists today. */}
         <span className="topbar-user" title={user.full_name}>
-          <span className="avatar avatar--sm" aria-hidden="true">
+          <span className="avatar avatar--md" aria-hidden="true">
             {initials(user.full_name)}
           </span>
           <span className="topbar-user__name">{user.full_name}</span>
@@ -87,5 +90,48 @@ export function Topbar({
         <LogoutButton />
       </div>
     </header>
+  );
+}
+
+/** The hotel's plan/subscription pill (display only — Phase 16 data): plan
+ * and remaining days for live subscriptions, clear states otherwise. */
+function SubscriptionBadge({
+  state,
+}: {
+  state: HotelSubscriptionState | null;
+}) {
+  const { t } = useI18n();
+  if (!state) return null;
+
+  let tone: BadgeTone = "neutral";
+  let label = t.subscriptionState.badgeNone;
+
+  if (state.suspended) {
+    tone = "danger";
+    label = t.subscriptionState.badgeSuspended;
+  } else if (state.expired) {
+    tone = "danger";
+    label = t.subscriptionState.badgeExpired;
+  } else if (state.status === "trial") {
+    tone = "info";
+    label = t.subscriptionState.badgeTrial.replace(
+      "{days}",
+      String(state.days_left ?? 0),
+    );
+  } else if (state.status) {
+    tone = "success";
+    const plan = state.plan_name ?? "";
+    label =
+      state.days_left !== null
+        ? t.subscriptionState.badgePaid
+            .replace("{plan}", plan)
+            .replace("{days}", String(state.days_left))
+        : plan || t.subscriptionState.badgeNone;
+  }
+
+  return (
+    <span className="topbar-plan">
+      <Badge tone={tone}>{label}</Badge>
+    </span>
   );
 }
