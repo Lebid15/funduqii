@@ -81,7 +81,7 @@ export function Topbar({
         {/* Name only — no email. The avatar span is the future
             profile-picture slot; no upload exists today. */}
         <span className="topbar-user" title={user.full_name}>
-          <span className="avatar avatar--md" aria-hidden="true">
+          <span className="avatar avatar--lg" aria-hidden="true">
             {initials(user.full_name)}
           </span>
           <span className="topbar-user__name">{user.full_name}</span>

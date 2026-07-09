@@ -2,9 +2,9 @@ import type { LucideIcon } from "lucide-react";
 
 import { cx } from "@/lib/utils";
 
-type IconSize = "sm" | "md" | "lg";
+type IconSize = "sm" | "md" | "lg" | "xl";
 
-const SIZE_PX: Record<IconSize, number> = { sm: 16, md: 18, lg: 22 };
+const SIZE_PX: Record<IconSize, number> = { sm: 16, md: 18, lg: 22, xl: 28 };
 
 interface IconProps {
   /** A lucide-react icon component (the single, central icon library). */

@@ -24,7 +24,7 @@ export function LogoutButton() {
   return (
     <Button
       variant="danger"
-      size="sm"
+      className="topbar-logout"
       icon={LogOut}
       onClick={handleLogout}
       disabled={busy}

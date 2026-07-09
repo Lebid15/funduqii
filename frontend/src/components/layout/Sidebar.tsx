@@ -166,7 +166,7 @@ export function Sidebar({
     <>
       <div className="app-sidebar__brand">
         <span className="brand-mark">
-          <Icon icon={Hotel} size="lg" />
+          <Icon icon={Hotel} size="xl" />
         </span>
         <span className="app-sidebar__brand-text">
           <span className="app-sidebar__brand-name">{t.app.name}</span>
