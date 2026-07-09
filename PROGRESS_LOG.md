@@ -60,11 +60,15 @@
 | 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | مكتملة ✅ | 2026-07-07 |
 | 9 | Restaurant / Café / Room Service Orders | مكتملة ✅ | 2026-07-08 |
-| 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
-| 11 | Shifts + Daily Close | لم تبدأ ⏳ | — |
-| 12 | Public Website + Public Booking | لم تبدأ ⏳ | — |
-| 13 | Reports + Notifications + Audit Logs | لم تبدأ ⏳ | — |
-| 14 | Full Testing + Production Readiness | لم تبدأ ⏳ | — |
+| 10 | Housekeeping + Maintenance + Lost & Found | مكتملة ✅ | 2026-07-08 |
+| 11 | Staff + Permissions Management UI | مكتملة ✅ | 2026-07-08 |
+| 12 | Shifts + Handover + Daily Close | مكتملة ✅ | 2026-07-08 |
+| 13 | Reports + Analytics | مكتملة ✅ | 2026-07-08 |
+| 14 | Notifications + Activity Center | مكتملة ✅ | 2026-07-09 |
+| 15 | Public Website + Public Booking | مكتملة ✅ | 2026-07-09 |
+| 16 | Platform Owner Panel Completion | مكتملة ✅ | 2026-07-09 |
+| 17 | Mobile / PWA / Offline / Performance | بانتظار الاعتماد 🔎 | — |
+| 18 | Hardening + QA + Release | لم تبدأ ⏳ | — |
 
 ### ملاحظات شاملة (Cross-cutting mandates)
 - **إلزام الواجهة المركزية (UI/UX/Responsive/Translation) — نافذ من Phase 3 فصاعدًا** (2026-07-07): ممنوع بناء أي صفحة/مكوّن بشكل عشوائي؛ يجب استخدام design tokens + مكوّنات مركزية + الترجمة المركزية (ar/en/tr مع RTL/LTR تلقائي) + layout مركزي + حالات موحّدة (loading/empty/error/…) + responsive حقيقي + accessibility + API client المركزي، مع احترام الصلاحيات وfeature flags وبقاء الباكند مصدر الحقيقة. المرجع: `docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md` + `DEVELOPMENT_RULES.md` (قسم 16) + ملحق في `PROJECT_BLUEPRINT.md`. (توثيق قواعد؛ ليس مرحلة وليس بناء واجهات.)
