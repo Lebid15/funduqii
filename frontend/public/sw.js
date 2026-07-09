@@ -14,7 +14,8 @@
  *  - No background sync, no push, no write queue, no offline operations.
  *  - Every non-navigation request passes straight to the network.
  */
-const CACHE_NAME = "funduqii-offline-v1";
+// v2: "Grand Lobby" redesign — offline page + icons recolored (#166a53).
+const CACHE_NAME = "funduqii-offline-v2";
 const OFFLINE_URL = "/offline.html";
 const PRECACHE = [
   OFFLINE_URL,

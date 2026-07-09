@@ -1,69 +1,87 @@
 /**
  * Design tokens — the single source of truth for visual style.
  *
- * Premium visual identity (Phase 3.1): a deep, refined teal brand with a calm
- * sea accent on a warm-neutral canvas, crisp layered surfaces, tinted brand
- * shadows, soft gradients used sparingly, generous radii, restrained motion.
+ * "Grand Lobby" identity (full redesign): the feeling of a well-run luxury
+ * hotel lobby. Deep forest-emerald chrome (sidebar, heroes, footers), warm
+ * ivory canvas for the operational surfaces staff stare at all day, brass
+ * accents used sparingly, an engraved serif for display titles (Marcellus,
+ * with Cairo carrying Arabic), and calm, restrained motion.
+ *
  * Components and pages reference these variables only — never hardcode values.
+ * All measured contrasts are documented in docs/UI_BLUEPRINT.md (WCAG AA+).
  */
 :root {
-  /* --- Brand (deep teal) --------------------------------------------- */
-  --color-primary: #0d6e64;
-  --color-primary-hover: #0a5a52;
-  --color-primary-active: #084b45;
-  --color-primary-strong: #063f3a;
-  --color-primary-soft: #e7f6f2;
-  --color-primary-soft-hover: #d3efe8;
+  /* --- Brand (emerald) ------------------------------------------------ */
+  --color-primary: #166a53; /* 6.52:1 vs white */
+  --color-primary-hover: #125743; /* 8.50:1 vs white */
+  --color-primary-active: #0e4736;
+  --color-primary-strong: #0b3a2d;
+  --color-primary-soft: #e6f3ec;
+  --color-primary-soft-hover: #d7ecdf;
   --color-primary-contrast: #ffffff;
+  /* Legacy alias — some rules reference --color-brand. */
+  --color-brand: var(--color-primary);
 
-  /* --- Sea / emerald accent (used sparingly) ------------------------- */
-  --color-accent: #0e7c8b;
-  --color-accent-soft: #e2f4f6;
+  /* --- Ink (deep forest — dark chrome surfaces) ----------------------- */
+  --color-ink: #0d2f26;
+  --color-ink-raised: #144439;
+  --color-ink-border: rgba(246, 244, 238, 0.12);
 
-  /* --- Canvas & surfaces (warm neutral) ----------------------------- */
-  --color-bg: #f4f5f3;
-  --color-bg-subtle: #eceeea;
+  /* --- Brass / gold accent (used sparingly) --------------------------- */
+  --color-accent: #b88a33; /* decorative: bars, marks, icons */
+  --color-accent-strong: #8a6519; /* 5.31:1 vs white — AA text on light */
+  --color-accent-bright: #d9bd7f; /* 7.95:1 vs ink — AA text on dark */
+  --color-accent-soft: #f4edda;
+
+  /* --- Canvas & surfaces (warm ivory) --------------------------------- */
+  --color-bg: #f6f4ee;
+  --color-bg-subtle: #efece2;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-muted: #f8f9f7;
-  --color-surface-sunken: #f2f4f1;
+  --color-surface-muted: #faf8f2;
+  --color-surface-sunken: #f2efe6;
 
-  /* --- Borders (soft) ----------------------------------------------- */
-  --color-border: #e6e8e2;
-  --color-border-subtle: #eef0ea;
-  --color-border-strong: #d6dad1;
+  /* --- Borders (warm hairlines) ---------------------------------------- */
+  --color-border: #e6e2d6;
+  --color-border-subtle: #eeebe1;
+  --color-border-strong: #d5d0c0;
 
-  /* --- Text --------------------------------------------------------- */
-  --color-fg: #15211d;
-  --color-fg-muted: #566159;
-  --color-fg-subtle: #909a90;
-  --color-fg-inverse: #ffffff;
+  /* --- Text ------------------------------------------------------------ */
+  --color-fg: #1b2620; /* 14.2:1 on ivory */
+  --color-fg-muted: #4c5a52; /* 6.60:1 on ivory */
+  --color-fg-subtle: #5f6d63; /* 4.95:1 on ivory — AA for captions */
+  --color-fg-inverse: #f6f4ee;
 
-  /* --- Feedback (calm, not neon) ------------------------------------ */
-  --color-success: #0f9d6e;
-  --color-success-soft: #e5f6ef;
-  --color-warning: #b5771c;
-  --color-warning-soft: #faf1e0;
-  --color-danger: #d24a44;
-  --color-danger-hover: #bd3d38;
-  --color-danger-soft: #fcecea;
-  --color-info: #2f6feb;
+  /* --- Feedback (calm, warm-tuned) ------------------------------------- */
+  --color-success: #157f5f;
+  --color-success-soft: #e7f5ee;
+  --color-warning: #96690f; /* brass family — stars, warnings */
+  --color-warning-soft: #faf3e1;
+  --color-danger: #c2453f;
+  --color-danger-hover: #ab3833;
+  --color-danger-soft: #fdeeec;
+  --color-info: #2563eb;
   --color-info-soft: #eaf1fe;
-  --color-neutral-soft: #eef0ea;
+  --color-neutral-soft: #eeebe1;
 
-  /* --- Gradients (soft, premium) ------------------------------------ */
-  --gradient-brand: linear-gradient(135deg, #0e7c72 0%, #0a544e 100%);
+  /* --- Gradients (soft, premium) --------------------------------------- */
+  --gradient-brand: linear-gradient(135deg, #1b7a5f 0%, #10513f 100%);
+  --gradient-gold: linear-gradient(135deg, #cfa64e 0%, #a87c2b 100%);
+  --gradient-ink: linear-gradient(180deg, #113429 0%, #0b291f 100%);
   --gradient-hero:
-    radial-gradient(80% 120% at 15% 0%, rgba(23, 140, 128, 0.55), transparent 55%),
-    radial-gradient(70% 120% at 100% 100%, rgba(14, 124, 139, 0.5), transparent 55%),
-    linear-gradient(150deg, #0d6e64 0%, #0a4f49 55%, #073f3a 100%);
-  --gradient-surface: linear-gradient(180deg, #ffffff 0%, #fbfcfa 100%);
+    radial-gradient(70% 110% at 12% 0%, rgba(207, 166, 78, 0.16), transparent 55%),
+    radial-gradient(80% 130% at 100% 100%, rgba(27, 122, 95, 0.45), transparent 60%),
+    linear-gradient(150deg, #16483a 0%, #0e352a 55%, #0a2a21 100%);
+  --gradient-surface: linear-gradient(180deg, #ffffff 0%, #fdfcf8 100%);
 
-  /* --- Focus ring ---------------------------------------------------- */
-  --ring-color: rgba(13, 110, 100, 0.35);
+  /* --- Focus ring -------------------------------------------------------- */
+  --ring-color: rgba(22, 106, 83, 0.35);
   --focus-ring: 0 0 0 3px var(--ring-color);
+  /* On dark chrome (sidebar, heroes) the emerald ring vanishes — use brass. */
+  --ring-color-inverse: rgba(217, 189, 127, 0.55);
+  --focus-ring-inverse: 0 0 0 3px var(--ring-color-inverse);
 
-  /* --- Spacing scale (4px base) -------------------------------------- */
+  /* --- Spacing scale (4px base) ------------------------------------------ */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -76,7 +94,7 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* --- Radius -------------------------------------------------------- */
+  /* --- Radius ------------------------------------------------------------ */
   --radius-sm: 0.375rem;
   --radius-md: 0.625rem;
   --radius-lg: 0.875rem;
@@ -84,17 +102,21 @@
   --radius-2xl: 1.75rem;
   --radius-full: 999px;
 
-  /* --- Typography ---------------------------------------------------- */
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
-    "Noto Sans Arabic", "Noto Kufi Arabic", Arial, sans-serif;
+  /* --- Typography --------------------------------------------------------- */
+  --font-sans: "Manrope", "Cairo", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Noto Sans Arabic", Arial, sans-serif;
+  --font-display: "Marcellus", "Cairo", "Times New Roman", serif;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
+  /* Legacy alias — a few rules reference --font-size-md. */
+  --font-size-md: 1rem;
   --font-size-lg: 1.125rem;
   --font-size-xl: 1.25rem;
   --font-size-2xl: 1.5rem;
   --font-size-3xl: 1.875rem;
   --font-size-4xl: 2.25rem;
+  --font-size-5xl: 2.75rem;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
@@ -105,36 +127,48 @@
   --tracking-tight: -0.02em;
   --tracking-snug: -0.01em;
   --tracking-wide: 0.06em;
+  /* Display serif breathes with a hint of positive tracking (Latin only). */
+  --tracking-display: 0.01em;
 
-  /* --- Layout -------------------------------------------------------- */
+  /* --- Layout -------------------------------------------------------------- */
   --container-max: 84rem;
   --sidebar-width: 16.75rem;
   --topbar-height: 4rem;
   --page-pad: var(--space-8);
 
-  /* --- Elevation (subtle, layered) ---------------------------------- */
-  --shadow-xs: 0 1px 2px rgba(20, 33, 29, 0.05);
-  --shadow-sm: 0 1px 3px rgba(20, 33, 29, 0.07), 0 1px 2px rgba(20, 33, 29, 0.04);
-  --shadow-md: 0 8px 20px -8px rgba(20, 33, 29, 0.12),
-    0 2px 6px -2px rgba(20, 33, 29, 0.06);
-  --shadow-lg: 0 20px 48px -16px rgba(20, 33, 29, 0.22),
-    0 8px 18px -8px rgba(20, 33, 29, 0.12);
-  --shadow-brand: 0 10px 26px -8px rgba(13, 110, 100, 0.45);
+  /* --- Elevation (warm-ink tinted, layered) --------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(24, 34, 29, 0.05);
+  --shadow-sm: 0 1px 3px rgba(24, 34, 29, 0.07), 0 1px 2px rgba(24, 34, 29, 0.04);
+  --shadow-md: 0 8px 20px -8px rgba(24, 34, 29, 0.14),
+    0 2px 6px -2px rgba(24, 34, 29, 0.06);
+  --shadow-lg: 0 20px 48px -16px rgba(24, 34, 29, 0.24),
+    0 8px 18px -8px rgba(24, 34, 29, 0.12);
+  --shadow-brand: 0 10px 26px -8px rgba(22, 106, 83, 0.42);
+  --shadow-gold: 0 8px 22px -8px rgba(168, 124, 43, 0.5);
 
-  /* --- Motion -------------------------------------------------------- */
+  /* --- Motion ---------------------------------------------------------------- */
   --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
   --transition-fast: 130ms var(--ease-out);
   --transition-base: 220ms var(--ease-out);
 
-  /* --- Icons --------------------------------------------------------- */
+  /* --- Icons ------------------------------------------------------------------ */
   --icon-sm: 16px;
   --icon-md: 18px;
   --icon-lg: 22px;
   --icon-stroke: 1.75;
 
-  /* --- Z-index scale ------------------------------------------------- */
+  /* --- Z-index scale ------------------------------------------------------------ */
   --z-sidebar: 40;
   --z-overlay: 50;
   --z-modal: 60;
   --z-toast: 70;
+}
+
+/* Arabic is NEVER letter-spaced: tracking devices are Latin-only, so RTL
+ * zeroes every tracking token in one place. (dir="rtl" ⇔ lang="ar" here.) */
+[dir="rtl"] {
+  --tracking-tight: 0em;
+  --tracking-snug: 0em;
+  --tracking-wide: 0em;
+  --tracking-display: 0em;
 }
