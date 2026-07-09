@@ -47,6 +47,23 @@
     "mainSection": "Ana",
     "publicSite": "Genel site"
   },
+  "sidebar": {
+    "roomsFloors": "Odalar ve Katlar",
+    "reservations": "Rezervasyonlar",
+    "checkInOut": "Giriş ve Çıkış",
+    "guests": "Misafirler",
+    "housekeeping": "Kat Hizmetleri",
+    "restaurant": "Restoran ve Kafe",
+    "guestFolio": "Misafir Folyosu",
+    "expenses": "Giderler",
+    "staff": "Personel",
+    "shifts": "Vardiyalar",
+    "dailyClose": "Günlük Kapanış",
+    "finance": "Finans",
+    "reports": "Raporlar",
+    "subscription": "Abonelik ve Planlar",
+    "settings": "Ayarlar"
+  },
   "auth": {
     "loginTitle": "Giriş yap",
     "loginSubtitle": "Platform sahibi konsolu",
@@ -1907,6 +1924,18 @@
     "expired": "Otelin aboneliği sona erdi. Platform sahibi yeni bir abonelik etkinleştirene kadar önemli işlemler kısıtlıdır — hiçbir veri kaybolmaz.",
     "expiringSoon": "Otelin aboneliği {days} gün içinde sona eriyor. Yenilemek için platform sahibiyle iletişime geçin.",
     "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin."
+  },
+  "hotelSubscription": {
+    "title": "Abonelik ve Planlar",
+    "subtitle": "Otelin mevcut aboneliği ve planı — salt okunur.",
+    "currentPlan": "Mevcut abonelik",
+    "managedByPlatform": "Planlar, etkinleştirme ve yenilemeler yalnızca platform yönetimi tarafından yapılır.",
+    "plan": "Plan",
+    "endsAt": "Bitiş tarihi",
+    "daysLeft": "Kalan gün",
+    "noSubscription": "Bu otelin şu anda aktif bir aboneliği yok.",
+    "renewalTitle": "Yenileme",
+    "contactOwner": "Planı etkinleştirmek, yenilemek veya değiştirmek için lütfen Funduqii platform yönetimiyle iletişime geçin — konsol içinde çevrimiçi ödeme yoktur."
   },
   "publicSiteAdmin": {
     "title": "Genel site",

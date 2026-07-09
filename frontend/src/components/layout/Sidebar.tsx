@@ -1,26 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   BarChart3,
   BedDouble,
-  Bell,
   Building2,
   CalendarCheck,
+  CalendarClock,
   ClipboardList,
   Clock,
-  ConciergeBell,
   CreditCard,
+  DoorOpen,
+  FileText,
   Globe,
   Hotel,
+  Landmark,
   LayoutDashboard,
   Package,
-  Receipt,
   Settings,
   UserCog,
   Users,
   UtensilsCrossed,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +40,9 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   exact?: boolean;
+  /** Overrides the route-map permission lookup for this item. An empty
+   * array means the item is visible to every active member. */
+  access?: string[];
 }
 
 /** Central navigation with brand block, icon nav, and a user card. Serves both
@@ -55,6 +60,7 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const access = useHotelAccess();
 
   const platformItems: NavItem[] = [
@@ -65,22 +71,62 @@ export function Sidebar({
     { href: "/platform/public-site", label: t.nav.publicSite, icon: Globe },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
+  // The OFFICIAL hotel sidebar (owner-approved order and labels). Merged
+  // consoles are split into separate entries via tab deep-links — the pages
+  // themselves keep their existing services and tabs; notifications live in
+  // the topbar bell only (the route stays reachable, just not listed here).
   const allHotelItems: NavItem[] = [
-    { href: "/hotel/front-desk", label: t.frontDesk.nav, icon: ConciergeBell },
-    { href: "/hotel/reservations", label: t.reservations.nav, icon: CalendarCheck },
-    { href: "/hotel/guests", label: t.guests.nav, icon: Users },
-    { href: "/hotel/finance", label: t.finance.nav, icon: Receipt },
-    { href: "/hotel/services", label: t.services.nav, icon: UtensilsCrossed },
-    { href: "/hotel/operations", label: t.operations.nav, icon: ClipboardList },
-    { href: "/hotel/staff", label: t.staff.nav, icon: UserCog },
-    { href: "/hotel/shifts", label: t.shifts.nav, icon: Clock },
-    { href: "/hotel/reports", label: t.reports.nav, icon: BarChart3 },
-    { href: "/hotel/notifications", label: t.notifications.nav, icon: Bell },
-    { href: "/hotel/rooms", label: t.rooms.nav, icon: BedDouble },
-    { href: "/hotel/settings", label: t.hotel.nav.settings, icon: Settings },
+    { href: "/hotel/rooms", label: t.sidebar.roomsFloors, icon: BedDouble },
+    { href: "/hotel/reservations", label: t.sidebar.reservations, icon: CalendarCheck },
+    { href: "/hotel/front-desk", label: t.sidebar.checkInOut, icon: DoorOpen },
+    { href: "/hotel/guests", label: t.sidebar.guests, icon: Users },
+    { href: "/hotel/operations", label: t.sidebar.housekeeping, icon: ClipboardList },
+    { href: "/hotel/services", label: t.sidebar.restaurant, icon: UtensilsCrossed },
+    {
+      href: "/hotel/finance?tab=folios",
+      label: t.sidebar.guestFolio,
+      icon: FileText,
+      access: ["finance.view"],
+    },
+    {
+      href: "/hotel/finance?tab=expenses",
+      label: t.sidebar.expenses,
+      icon: Wallet,
+      access: ["expenses.view"],
+    },
+    { href: "/hotel/staff", label: t.sidebar.staff, icon: UserCog },
+    {
+      href: "/hotel/shifts",
+      label: t.sidebar.shifts,
+      icon: Clock,
+      access: ["shifts.view"],
+    },
+    {
+      href: "/hotel/shifts?tab=dailyClose",
+      label: t.sidebar.dailyClose,
+      icon: CalendarClock,
+      access: ["daily_close.view"],
+    },
+    {
+      href: "/hotel/finance",
+      label: t.sidebar.finance,
+      icon: Landmark,
+      access: ["finance.view"],
+    },
+    { href: "/hotel/reports", label: t.sidebar.reports, icon: BarChart3 },
+    {
+      href: "/hotel/subscription",
+      label: t.sidebar.subscription,
+      icon: CreditCard,
+      // Read-only billing state — the same information every member already
+      // sees in the shell banner, so no permission code gates it.
+      access: [],
+    },
+    { href: "/hotel/settings", label: t.sidebar.settings, icon: Settings },
   ];
   // Phase 11: the sidebar respects permissions — a link only shows when the
-  // user holds ANY of the route's view codes (manager: all). While the
+  // user holds ANY of its view codes (manager: all). Split entries carry
+  // their own `access` override; others use the central route map. While the
   // context loads, nothing is shown rather than flashing forbidden links.
   // Hiding is cosmetic; every API enforces the same permissions itself.
   const hotelItems =
@@ -89,8 +135,8 @@ export function Sidebar({
       : access.loading
         ? []
         : allHotelItems.filter((item) => {
-            const required = HOTEL_ROUTE_ACCESS[item.href];
-            return !required || access.can(...required);
+            const required = item.access ?? HOTEL_ROUTE_ACCESS[item.href];
+            return !required || required.length === 0 || access.can(...required);
           });
 
   const items = variant === "hotel" ? hotelItems : platformItems;
@@ -101,8 +147,21 @@ export function Sidebar({
   const navLabel = variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
 
   function isActive(item: NavItem): boolean {
-    if (item.exact) return pathname === item.href;
-    return pathname === item.href || pathname.startsWith(`${item.href}/`);
+    const [basePath, query] = item.href.split("?");
+    if (item.exact) return pathname === basePath;
+    if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) {
+      return false;
+    }
+    // Split entries deep-link tabs on a shared page: an item with a ?tab=
+    // is active only for its own tab, and the plain item only when the
+    // current tab is not claimed by one of its siblings.
+    const itemTab = query ? new URLSearchParams(query).get("tab") : null;
+    const currentTab = searchParams.get("tab");
+    if (itemTab) return currentTab === itemTab;
+    const siblingTabs = items
+      .filter((other) => other !== item && other.href.startsWith(`${basePath}?`))
+      .map((other) => new URLSearchParams(other.href.split("?")[1]).get("tab"));
+    return !currentTab || !siblingTabs.includes(currentTab);
   }
 
   return (
