@@ -638,7 +638,9 @@ a {
 /* --- Stat cards ----------------------------------------------------------- */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  /* min(100%, …) keeps cards from forcing horizontal overflow on narrow
+     phones (Phase 17). */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
   gap: var(--space-4);
 }
 .stat-card {
@@ -1874,7 +1876,7 @@ a {
 /* --- Detail / description lists ------------------------------------------- */
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
   gap: var(--space-5);
 }
 .detail-item {
@@ -2769,4 +2771,119 @@ a {
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
+}
+
+/* --- Mobile / tablet polish (Phase 17) -------------------------------------
+ * Central, token-only refinements so every console page (hotel + platform)
+ * and the public site behave professionally on phones and tablets. No page
+ * builds its own layout; these rules refine the shared primitives only. */
+
+/* Touch devices: comfortable tap targets on the interactive primitives. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 2.75rem;
+  }
+  .input,
+  .select,
+  .lang-switcher {
+    min-height: 2.75rem;
+  }
+  .tabs__tab {
+    min-height: 2.5rem;
+  }
+  .pagination button {
+    min-height: 2.5rem;
+  }
+}
+
+/* Small screens: tighter paddings, readable titles, no crowding. */
+@media (max-width: 640px) {
+  .page-header__title {
+    font-size: var(--font-size-2xl);
+  }
+  .hero__title {
+    font-size: var(--font-size-xl);
+  }
+  /* Modals read as sheets: edge padding shrinks, inner paddings relax. */
+  .modal-overlay {
+    padding: var(--space-2);
+  }
+  .modal {
+    max-height: 96dvh;
+    border-radius: var(--radius-xl);
+  }
+  .modal__header,
+  .modal__body {
+    padding: var(--space-4);
+  }
+  .modal__footer {
+    padding: var(--space-3) var(--space-4);
+    flex-wrap: wrap;
+  }
+  /* Tables stay scrollable but denser; the wrapper already scrolls. */
+  .table th,
+  .table td {
+    padding: 0.65rem 0.8rem;
+  }
+  /* Section headers with actions wrap instead of squeezing. */
+  .section-header {
+    flex-wrap: wrap;
+  }
+  /* Filter rows become a clean single column. */
+  .filter-bar > * {
+    flex-basis: 100%;
+  }
+  .filter-bar__actions {
+    flex-basis: 100%;
+  }
+  .filter-bar__actions .btn {
+    width: 100%;
+  }
+  /* Detail pages: comfortable value wrapping. */
+  .detail-item__value {
+    overflow-wrap: anywhere;
+  }
+  /* Public site */
+  .public-hero {
+    padding: var(--space-6) var(--space-3);
+  }
+  .public-hero__title {
+    font-size: var(--font-size-2xl);
+  }
+  .public-header__actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .public-main {
+    padding: var(--space-4) var(--space-3);
+    gap: var(--space-6);
+  }
+  .public-booking__dates {
+    grid-template-columns: 1fr;
+  }
+  .public-footer__inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  /* Mini lists (histories) wrap on narrow screens. */
+  .mini-list__row {
+    flex-wrap: wrap;
+  }
+  /* Toasts stay inside the viewport. */
+  .toast-region {
+    inset-inline: var(--space-3);
+  }
+  .toast {
+    max-width: 100%;
+  }
+}
+
+/* Tablets: keep two-column form grids usable, relax wide boards. */
+@media (min-width: 641px) and (max-width: 900px) {
+  .public-hotel-layout {
+    grid-template-columns: 1fr;
+  }
+  .public-hotel-aside {
+    position: static;
+  }
 }

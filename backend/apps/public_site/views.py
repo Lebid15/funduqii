@@ -85,7 +85,7 @@ class PublicSiteSettingsView(PublicAPIView):
         )
 
 
-def _hotel_card(settings_obj) -> dict:
+def _hotel_card(settings_obj, *, subscription_blocked: bool | None = None) -> dict:
     media = services.hotel_media_payload(settings_obj.hotel)
     return {
         "slug": settings_obj.public_slug,
@@ -95,7 +95,9 @@ def _hotel_card(settings_obj) -> dict:
         "country": settings_obj.country,
         "star_rating": settings_obj.star_rating,
         "featured": settings_obj.public_featured,
-        "booking_enabled": services.booking_open(settings_obj),
+        "booking_enabled": services.booking_open(
+            settings_obj, subscription_blocked=subscription_blocked
+        ),
         "cover_url": media["cover_url"],
         "logo_url": media["logo_url"],
     }
@@ -116,7 +118,28 @@ class PublicHotelListView(PublicAPIView):
             qs = qs.filter(city__iexact=p["city"])
         if p.get("country"):
             qs = qs.filter(country__iexact=p["country"])
-        rows = [_hotel_card(s) for s in qs.distinct()[:60]]
+        # Phase 17 — no N+1 on a public endpoint: ACTIVE media comes via ONE
+        # filtered prefetch and the subscription answer via ONE batch
+        # (identical rule to the per-hotel check; parity covered by tests).
+        from django.db.models import Prefetch
+
+        from apps.hotels.models import HotelMedia
+
+        rows_qs = list(
+            qs.distinct().prefetch_related(
+                Prefetch(
+                    "hotel__media",
+                    queryset=HotelMedia.objects.filter(is_active=True),
+                )
+            )[:60]
+        )
+        from apps.subscriptions.enforcement import subscription_blocked_hotel_ids
+
+        blocked = subscription_blocked_hotel_ids(s.hotel_id for s in rows_qs)
+        rows = [
+            _hotel_card(s, subscription_blocked=s.hotel_id in blocked)
+            for s in rows_qs
+        ]
         return Response({"count": len(rows), "results": rows})
 
 

@@ -89,7 +89,13 @@ def _media_url(media: HotelMedia | None) -> str:
 
 
 def hotel_media_payload(hotel: Hotel) -> dict:
-    media = list(hotel.media.filter(is_active=True))
+    # Phase 17: the public LIST prefetches active media (one query for all
+    # cards) — use that cache when present; single-hotel endpoints keep the
+    # filtered query so inactive media are never loaded (PR #16 review note).
+    if "media" in getattr(hotel, "_prefetched_objects_cache", {}):
+        media = [m for m in hotel.media.all() if m.is_active]
+    else:
+        media = list(hotel.media.filter(is_active=True))
     cover = next((m for m in media if m.kind == MediaKind.COVER), None)
     logo = next((m for m in media if m.kind == MediaKind.LOGO), None)
     gallery = [m for m in media if m.kind == MediaKind.GALLERY]
@@ -146,16 +152,24 @@ def validate_public_dates(settings_obj: HotelSettings, check_in, check_out) -> N
         )
 
 
-def booking_open(settings_obj: HotelSettings) -> bool:
+def booking_open(
+    settings_obj: HotelSettings, *, subscription_blocked: bool | None = None
+) -> bool:
     # Phase 16: an expired/inactive subscription stops PUBLIC BOOKING too —
     # the hotel may stay listed, but visitors cannot book it.
-    from apps.subscriptions.enforcement import subscription_blocks_writes
+    # Phase 17: list endpoints precompute the subscription answer in a batch
+    # (subscription_blocked_hotel_ids) and pass it in to avoid N+1 queries;
+    # single-hotel paths keep the per-hotel check.
+    if subscription_blocked is None:
+        from apps.subscriptions.enforcement import subscription_blocks_writes
+
+        subscription_blocked = subscription_blocks_writes(settings_obj.hotel)
 
     return (
         settings_obj.hotel.status == HotelStatus.ACTIVE
         and settings_obj.public_is_listed
         and settings_obj.allow_public_booking
-        and not subscription_blocks_writes(settings_obj.hotel)
+        and not subscription_blocked
     )
 
 

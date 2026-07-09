@@ -266,7 +266,9 @@ class HotelListCreateView(PlatformOwnerMixin, generics.ListCreateAPIView):
         return HotelSerializer
 
     def get_queryset(self):
-        qs = Hotel.objects.all()
+        # Phase 17 — the serializer reads settings + status_changed_by per
+        # row; one JOIN instead of two queries per hotel (PR #15 review note).
+        qs = Hotel.objects.select_related("settings", "status_changed_by").all()
         status_filter = self.request.query_params.get("status")
         valid = {c for c, _ in HotelStatus.choices}
         if status_filter in valid:

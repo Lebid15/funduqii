@@ -60,11 +60,15 @@
 | 7 | Guests + Check-in + Check-out | مكتملة ✅ | 2026-07-07 |
 | 8 | Payments + Expenses + Folio + Invoices | مكتملة ✅ | 2026-07-07 |
 | 9 | Restaurant / Café / Room Service Orders | مكتملة ✅ | 2026-07-08 |
-| 10 | Housekeeping + Maintenance + Lost & Found | لم تبدأ ⏳ | — |
-| 11 | Shifts + Daily Close | لم تبدأ ⏳ | — |
-| 12 | Public Website + Public Booking | لم تبدأ ⏳ | — |
-| 13 | Reports + Notifications + Audit Logs | لم تبدأ ⏳ | — |
-| 14 | Full Testing + Production Readiness | لم تبدأ ⏳ | — |
+| 10 | Housekeeping + Maintenance + Lost & Found | مكتملة ✅ | 2026-07-08 |
+| 11 | Staff + Permissions Management UI | مكتملة ✅ | 2026-07-08 |
+| 12 | Shifts + Handover + Daily Close | مكتملة ✅ | 2026-07-08 |
+| 13 | Reports + Analytics | مكتملة ✅ | 2026-07-08 |
+| 14 | Notifications + Activity Center | مكتملة ✅ | 2026-07-09 |
+| 15 | Public Website + Public Booking | مكتملة ✅ | 2026-07-09 |
+| 16 | Platform Owner Panel Completion | مكتملة ✅ | 2026-07-09 |
+| 17 | Mobile / PWA / Offline / Performance | بانتظار الاعتماد 🔎 | — |
+| 18 | Hardening + QA + Release | لم تبدأ ⏳ | — |
 
 ### ملاحظات شاملة (Cross-cutting mandates)
 - **إلزام الواجهة المركزية (UI/UX/Responsive/Translation) — نافذ من Phase 3 فصاعدًا** (2026-07-07): ممنوع بناء أي صفحة/مكوّن بشكل عشوائي؛ يجب استخدام design tokens + مكوّنات مركزية + الترجمة المركزية (ar/en/tr مع RTL/LTR تلقائي) + layout مركزي + حالات موحّدة (loading/empty/error/…) + responsive حقيقي + accessibility + API client المركزي، مع احترام الصلاحيات وfeature flags وبقاء الباكند مصدر الحقيقة. المرجع: `docs/FRONTEND_DESIGN_SYSTEM_GUIDELINES.md` + `DEVELOPMENT_RULES.md` (قسم 16) + ملحق في `PROJECT_BLUEPRINT.md`. (توثيق قواعد؛ ليس مرحلة وليس بناء واجهات.)
@@ -1419,3 +1423,61 @@
 - **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #15 — قرار المالك النصي: «PR #15 — Phase 16: Approved to merge ✅». المراجعة النهائية جرت على base ‏`origin/main@0350ae9` (merge-base مطابق، mergeable_state: clean)، وشملت معالجة تعليقات Copilot الأربعة: إصلاحان مانعان نُفذا في `4187f7f` (رفض الروابط protocol-relative ‏`//host` في `_validate_safe_url` + إخفاء زر «تجديد» عن اشتراكات التجربة) وملاحظتا أداء N+1 غير مانعتين وُثقتا؛ وبعد الإصلاحات: backend ‏**679/679**، frontend ‏lint/tsc/build نظيفة، فحص حي 31/31 + 7/7. نقطة «فندق بلا سجل اشتراك لا يُحجب» سلوك موثّق ومقبول (لا مسار استغلال من جهة العميل — الفوترة بيد المالك حصرًا) مع اقتراح تشديد اختياري مستقبلي بقرار المالك.
 - الدمج: squash merge لـ PR #15 (كوميتا `2500bcc` + `4187f7f`) → ‏`origin/main@0de328c` بعنوان «Phase 16 — Platform Owner Panel Completion (#15)».
 - ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 17 لا تبدأ إلا برسالتها الرسمية.**
+
+---
+
+## Phase 17 — Mobile / PWA / Offline / Performance
+- الحالة: **بانتظار الاعتماد 🔎** (التنفيذ مكتمل — بانتظار المراجعة النهائية من المالك)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09
+- الهدف: جاهزية احترافية على الموبايل والتابلت + أساس PWA آمن + fallback محدود لعدم الاتصال + تحسينات أداء — **بلا أي ميزة تجارية جديدة**.
+- الأساس: بُنيت من **`origin/main`** (fd26448، بعد اعتماد Phase 16).
+
+### ما نُفّذ (Mobile & Tablet)
+- **جرد أولًا:** النظام المركزي كان يملك أساسًا قويًا (سايدبار Drawer ≤900px، ‏`.table-scroll` لكل الجداول، التفاف page-header/filter-bar، مودال 90dvh، ‏form-grid عمود واحد ≤560px، شبكات auto-fill، شبكات الموقع العام) — لذلك أضيفت **طبقة صقل مركزية واحدة** لا تخطيطات لكل صفحة:
+- **حراسة overflow:** ‏`minmax(min(100%, 14rem), 1fr)` لشبكتي الإحصاء والتفاصيل (لا تمرير أفقي قسري على الهواتف الضيقة) + `overflow-wrap: anywhere` لقيم التفاصيل.
+- **أهداف لمس** (`pointer: coarse`): أزرار/حقول/select/مبدّل اللغة ≥2.75rem وتبويبات وترقيم ≥2.5rem.
+- **كتلة ≤640px:** عناوين أصغر، مودالات كالـ sheets (حواف ضيقة + footer يلتف)، خلايا جداول أكثف مع بقاء التمرير، التفاف section-header وmini-list، فلاتر بعمود واحد وأزرارها بعرض كامل، ضبط hero/هيدر/فوتر/تواريخ الحجز في الموقع العام، توست داخل الشاشة.
+- **تابلت (641–900px):** صفحة الفندق العامة تكدّس لوحة الحجز تحت المحتوى بدل aside مضغوط.
+- كل القواعد بالتوكنات حصرًا وبخصائص منطقية (RTL/LTR سليم) وتخدم الكونسولين والموقع العام معًا.
+
+### ما نُفّذ (PWA)
+- **`app/manifest.ts`**: الاسم «Funduqii — فندقي» + short_name + وصف + `display: standalone` + `start_url: "/"` + ألوان theme/background من التوكنات + **5 أيقونات مولّدة** (192/512 + maskable 192/512 + apple-touch 180) في `public/icons/`.
+- **layout الجذري:** ‏`viewport` (device-width/scale/theme-color) + بيانات تثبيت Apple — القابلية للتثبيت مكتملة (manifest ✓ أيقونات ✓ SW ✓).
+- **الممنوع لم يُبنَ:** لا Push ولا Background sync ولا اختصارات ولا أي offline للبيانات.
+
+### ما نُفّذ (Offline fallback الآمن)
+- **`public/sw.js` أدنى حد ممكن:** يخزّن مسبقًا **3 أصول عامة ثابتة فقط** (offline.html + أيقونتان)، يعترض **failed navigations فقط** ويجيب بصفحة offline؛ **كل ما عداها network-only**.
+- **`public/offline.html`:** صفحة ثابتة ثلاثية اللغات (ar/en/tr معًا — لا قاموس تطبيق متاح offline) بزر إعادة محاولة، بألوان التوكنات.
+- **قرارات أمنية موثقة (رفض صريح):** لا caching لأي API أو صفحة كونسول (بيانات الفنادق/النزلاء/المالية/الصلاحيات لا تدخل أي cache — لا تسرب بين مستخدمين/مستأجرين ولا بيانات قديمة بعد تبديل مستخدم/فندق) · لا tokens/JWT قرب أي cache (الجلسات HttpOnly كما هي) · **لا كتابات offline إطلاقًا** (لا حجز/check-in/دفعات/فواتير/طوابير/قاعدة محلية) — الوضع الكامل يتطلب cache واعيًا بالمصادقة ومقسّمًا بالمستأجر فوُثق تأجيله بدل بنائه ناقص الأمان.
+- التسجيل عبر مكوّن صغير يفشل بصمت — لا شيء في التطبيق يعتمد على الـ SW.
+
+### ما نُفّذ (Performance — Backend محدود وبلا كسر عقود)
+- **إزالة N+1 من قائمة الفنادق العامة** (ملاحظة مراجعة PR #15): جواب الاشتراك لبطاقات حتى 60 فندقًا صار **دفعة واحدة** (`subscription_blocked_hotel_ids` — استعلامان إجمالًا بدل اثنين لكل فندق) والوسائط عبر `prefetch_related` واحد (+تعديل `hotel_media_payload` للترشيح في Python) — و`booking_open` بالقاعدة ذاتها مع **اختبار تكافؤ** يقارن الدفعة بالفحص الفردي عبر 6 حالات اشتراك.
+- **قائمة فنادق المالك:** ‏`select_related("settings", "status_changed_by")` (JOIN واحد بدل استعلامين لكل صف — ملاحظة PR #15 الثانية).
+- **فهرس `HotelSubscription (hotel, status)`:** ‏enforcement ‏Phase 16 يستشير هذا الزوج في **كل** طلب كتابة — صار مفهرسًا (migration ‏`subscriptions.0003`).
+- الواجهة: الصور العامة lazy أصلًا وحالات التحميل/الخطأ/الفراغ مركزية أصلًا — لا مكتبات جديدة ولا تغيير معماري ولا تغيير أي contract.
+
+### الملفات المضافة/المعدّلة
+- **جديدة:** `frontend/src/app/manifest.ts` · `frontend/src/components/PwaRegistration.tsx` · `frontend/public/{sw.js,offline.html}` · `frontend/public/icons/` (5 أيقونات) · `docs/MOBILE_PWA_PERFORMANCE_STRATEGY.md` · migration `subscriptions.0003` (فهرس).
+- **معدّلة:** `frontend/src/styles/globals.css` (قسم Phase 17 + حارسا الشبكتين) · `frontend/src/app/layout.tsx` (viewport/apple + تسجيل SW) · `backend/apps/subscriptions/{models,enforcement,tests_enforcement}.py` · `backend/apps/public_site/{services,views}.py` · `backend/apps/platform/views.py` · التوثيق (README، DEVELOPMENT_RULES §8n، docs/README).
+- **الترجمة:** لا مفاتيح جديدة لزمت (صفحة offline ثابتة ثلاثية اللغات بالتصميم) — تكافؤ ar/en/tr باقٍ **1856=1856=1856**.
+
+### الفحوصات والنتائج
+| الفحص | النتيجة |
+|---|---|
+| `manage.py check` | ✅ لا مشاكل |
+| `makemigrations --check` | ✅ No changes detected |
+| `manage.py test` | ✅ الحزمة الكاملة ناجحة (بما فيها المصادقة والصلاحيات والحجوزات وcheck-in/out والدفعات والخدمات والتنظيف والورديات والتقارير والإشعارات والحجز العام وenforcement الاشتراك + اختبار تكافؤ الدفعة الجديد) |
+| Frontend `lint` / `tsc --noEmit` / `build` | ✅ الكل ناجح |
+| فحص حيّ | ✅ ‏`manifest.webmanifest` ‏200 بمحتواه الكامل (الاسم/standalone/الألوان/4 أيقونات) · ‏`sw.js` و`offline.html` والأيقونات 200 · روابط الـ head (viewport/theme-color/manifest/apple-touch) في الصفحة المقدَّمة · صفحات الموقع العام والدخول 200 |
+
+### ملاحظات وقرارات
+- خط الأمان في offline (لا بيانات، لا tokens، لا كتابات) قرار موثّق في الوثيقة و§8n — الوضع الكامل مؤجل بقرار لا نقصًا.
+- ملاحظتا الأداء غير المانعتين من مراجعة PR #15 عولجتا هنا ضمن نطاق Phase 17 المسموح (تحسين query واضح).
+- المؤجل موثّقًا: offline كامل مقسّم بالمستأجر · Push · جداول virtualized للبيانات الضخمة · خط أنابيب لتحسين صور الفنادق المرفوعة.
+
+### ما لم يُنفَّذ (خارج المرحلة، عمدًا)
+- **لا Payment Gateway/Stripe/PayPal · لا حسابات عملاء · لا WhatsApp/Email/SMS/Push · لا OTA/Channel Manager · لا Marketplace/CRM/Coupons/Payroll/Accounting/Inventory/POS المتقدمة · لا offline للبيانات أو العمليات.** **لم تبدأ Phase 18.**
+
+### الاعتماد
+- **بانتظار الاعتماد 🔎** — لا يُدمج ولا يُعتمد إلا بقرار صريح من المالك بعد المراجعة.

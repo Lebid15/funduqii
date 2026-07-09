@@ -22,6 +22,7 @@ from apps.hotels.models import HotelSettings
 from apps.rooms.models import Floor, RoomType
 from apps.subscriptions.enforcement import (
     ensure_hotel_operational,
+    subscription_blocked_hotel_ids,
     subscription_blocks_writes,
     subscription_state,
 )
@@ -103,6 +104,48 @@ class EnforcementUnitTests(APITestCase):
         self.assertTrue(state["expired"])
         self.assertTrue(state["write_blocked"])
         self.assertEqual(state["blocked_reason"], "subscription_inactive")
+
+    def test_batch_blocked_ids_matches_per_hotel_rule(self):
+        """Phase 17: the batch used by list endpoints must agree with the
+        per-hotel check for every subscription situation."""
+        plan = SubscriptionPlan.objects.create(name="P", slug="batch-p", price=0)
+        no_history = Hotel.objects.create(
+            name="N", slug="n", status=HotelStatus.ACTIVE
+        )
+        active = Hotel.objects.create(name="A", slug="a", status=HotelStatus.ACTIVE)
+        HotelSubscription.objects.create(
+            hotel=active,
+            plan=plan,
+            status=SubscriptionStatus.ACTIVE,
+            ends_at=timezone.now() + datetime.timedelta(days=10),
+        )
+        open_ended = Hotel.objects.create(
+            name="O", slug="o", status=HotelStatus.ACTIVE
+        )
+        HotelSubscription.objects.create(
+            hotel=open_ended, plan=plan, status=SubscriptionStatus.ACTIVE
+        )
+        trial_over = Hotel.objects.create(
+            name="T", slug="t", status=HotelStatus.ACTIVE
+        )
+        HotelSubscription.objects.create(
+            hotel=trial_over,
+            plan=plan,
+            status=SubscriptionStatus.TRIAL,
+            trial_ends_at=timezone.now() - datetime.timedelta(hours=1),
+        )
+        expired = Hotel.objects.create(name="E", slug="e", status=HotelStatus.ACTIVE)
+        expire_hotel_subscription(expired)
+
+        hotels = [self.hotel, no_history, active, open_ended, trial_over, expired]
+        batch = subscription_blocked_hotel_ids([h.id for h in hotels])
+        for hotel in hotels:
+            self.assertEqual(
+                hotel.id in batch,
+                subscription_blocks_writes(hotel),
+                hotel.name,
+            )
+        self.assertEqual(batch, {trial_over.id, expired.id})
 
 
 class EnforcementAPITests(APITestCase):
