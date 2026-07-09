@@ -23,8 +23,8 @@ export function LogoutButton() {
 
   return (
     <Button
-      variant="secondary"
-      size="sm"
+      variant="danger"
+      className="topbar-logout"
       icon={LogOut}
       onClick={handleLogout}
       disabled={busy}

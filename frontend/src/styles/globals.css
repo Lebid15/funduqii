@@ -70,22 +70,35 @@ a {
   padding-inline: var(--space-4);
 }
 
+/* The console CONTENT CARD (owner-approved shell = three detached cards:
+ * sidebar / topbar / content). Used only inside the AppShell.
+ * FLUID by design (owner fix): it fills the main column edge-to-edge so it
+ * aligns with the topbar and tables/cards get the whole screen — no
+ * max-width and no auto centering inside the admin console. */
 .content-container {
   width: 100%;
-  max-width: var(--container-max);
-  margin-inline: auto;
+  max-width: none;
+  flex: 1;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  /* Inner padding comes from .page-container inside each page. */
+  overflow: clip;
 }
 
 .page-container {
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-  padding: var(--page-pad);
+  /* Owner fix: modest inner padding — the shell gap + card border already
+     frame the content, so paddings must not stack up. */
+  padding: var(--space-5) var(--space-4);
 }
 
 @media (max-width: 640px) {
   .page-container {
-    padding: var(--space-4);
+    padding: var(--space-3);
     gap: var(--space-5);
   }
 }
@@ -128,10 +141,17 @@ a {
 }
 
 /* --- App shell ------------------------------------------------------------ */
+/* Three detached cards inside a padded screen: sidebar / topbar / content.
+ * `--shell-gap` drives the outer padding AND the gaps between the cards so
+ * the rhythm stays consistent (and shrinks together on small screens). */
 .app-shell {
+  --shell-gap: var(--space-3);
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
+  gap: var(--shell-gap);
   min-height: 100dvh;
+  padding: var(--shell-gap);
+  background: var(--color-bg);
 }
 
 .app-sidebar {
@@ -139,21 +159,31 @@ a {
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
-  border-inline-end: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   padding: var(--space-5) var(--space-4);
   position: sticky;
-  top: 0;
-  height: 100dvh;
-  overflow-y: auto;
+  top: var(--shell-gap);
+  height: calc(100dvh - 2 * var(--shell-gap));
+  /* Owner rule: the sidebar is a FIXED panel on desktop — never a scroll
+     container. `clip` (not auto/hidden+scroll) means the wheel always moves
+     the page, i.e. the content card, while the sticky sidebar stays put.
+     The compact height tier below guarantees all 15 items fit, so nothing
+     is ever clipped on real screens. */
+  overflow: clip;
   z-index: var(--z-sidebar);
 }
 
+/* Platform brand area (owner review): a REAL brand block, not a small icon —
+ * a taller zone with a big mark and a present name, soaking up the column's
+ * breathing room without adding any new elements. */
 .app-sidebar__brand {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) var(--space-2) var(--space-5);
-  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-2) var(--space-6);
+  margin-bottom: var(--space-5);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -167,26 +197,100 @@ a {
   flex: none;
 }
 .app-sidebar__brand .brand-mark {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: var(--radius-xl);
+}
+
+/* Hotel identity in the TOPBAR (owner correction): the uploaded logo, or an
+ * elegant monogram fallback + the hotel name. The sidebar carries the
+ * platform brand only. */
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.topbar-brand__logo {
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-lg);
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  flex: none;
+}
+.topbar-brand__mark {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-lg);
+  background: var(--gradient-brand);
+  color: var(--color-primary-contrast);
+  box-shadow: var(--shadow-brand);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+  flex: none;
+}
+.topbar-brand__name {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 18rem;
+}
+/* Clickable (owner decision): the badge is THE entry to /hotel/subscription
+ * now that the sidebar item is gone — give it a link affordance. */
+.topbar-plan {
+  flex: none;
+  display: inline-flex;
+  border-radius: var(--radius-full);
+  transition: transform var(--transition-fast), filter var(--transition-fast);
+}
+.topbar-plan:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+@media (max-width: 640px) {
+  .topbar-brand__logo,
+  .topbar-brand__mark {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+  .topbar-brand__name {
+    font-size: var(--font-size-base);
+    max-width: 9rem;
+  }
+}
+@media (max-width: 420px) {
+  /* Very tight screens keep the hotel mark only. */
+  .topbar-brand__name {
+    display: none;
+  }
 }
 
 .app-sidebar__brand-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  gap: 2px;
+  line-height: 1.15;
   min-width: 0;
 }
 
 .app-sidebar__brand-name {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-extrabold);
   letter-spacing: var(--tracking-tight);
   color: var(--color-fg);
 }
 
 .app-sidebar__brand-sub {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-fg-subtle);
 }
@@ -194,7 +298,7 @@ a {
 .app-nav {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   flex: 1;
 }
 
@@ -217,6 +321,7 @@ a {
   color: var(--color-fg-muted);
   font-weight: var(--font-weight-medium);
   font-size: var(--font-size-sm);
+  line-height: 1.3;
   transition: background var(--transition-fast), color var(--transition-fast),
     box-shadow var(--transition-fast);
 }
@@ -241,35 +346,36 @@ a {
   color: var(--color-primary-contrast);
 }
 
-.app-sidebar__user {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-  padding: var(--space-3);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border-subtle);
-}
-.app-sidebar__user-meta {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-  min-width: 0;
-}
-.app-sidebar__user-name {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.app-sidebar__user-email {
-  font-size: var(--font-size-xs);
-  color: var(--color-fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Short viewports (typical laptops): densify the column so the FULL official
+ * list fits with no internal scroll — the owner's hard rule. The identity
+ * stays a clear brand area, just tighter; nothing is hidden or reordered. */
+@media (max-height: 900px) {
+  .app-shell {
+    --shell-gap: var(--space-2);
+  }
+  .app-sidebar {
+    padding-block: var(--space-3);
+  }
+  .app-sidebar__brand {
+    padding: var(--space-2) var(--space-2) var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+  .app-sidebar__brand .brand-mark {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .app-sidebar__brand-name {
+    font-size: var(--font-size-lg);
+  }
+  .app-nav {
+    gap: 2px;
+  }
+  .app-nav__section {
+    padding-block: var(--space-1);
+  }
+  .app-nav__link {
+    padding-block: 0.4rem;
+  }
 }
 
 .avatar {
@@ -282,31 +388,73 @@ a {
   font-size: var(--font-size-sm);
   flex: none;
 }
+.avatar--lg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
 .avatar--md {
   width: 2.25rem;
   height: 2.25rem;
+}
+.avatar--sm {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: var(--font-size-xs);
+}
+
+/* The topbar user chip (moved from the sidebar — owner decision): a small
+ * avatar + the name only, no email. The avatar span is the future
+ * profile-picture slot. */
+.topbar-user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.topbar-user__name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+@media (max-width: 640px) {
+  /* Tight screens keep the avatar only — the name would crowd the bar. */
+  .topbar-user__name {
+    display: none;
+  }
 }
 
 .app-main {
   grid-column: 2;
   display: flex;
   flex-direction: column;
+  gap: var(--shell-gap);
   min-width: 0;
 }
 
 .app-topbar {
   position: sticky;
-  top: 0;
+  top: var(--shell-gap);
   z-index: var(--z-sidebar);
+  /* One clean row (owner correction): identity + tools only — the quick
+     operations live on the dashboard, not here. */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  min-height: var(--topbar-height);
+  gap: var(--space-4);
+  /* Owner review: a taller, statelier bar — the hotel identity must read
+     clearly without crowding. */
+  min-height: 5rem;
+  padding-block: var(--space-3);
   padding-inline: var(--space-6);
-  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 .app-topbar__start,
 .app-topbar__end {
@@ -325,7 +473,10 @@ a {
   background: var(--color-border);
 }
 
-.app-sidebar__toggle {
+/* The mobile drawer toggle: desktop never shows it (the selector outranks
+ * the later .icon-btn display rule — the previous single-class rule lost
+ * that specificity fight and the hamburger leaked onto desktop). */
+.app-topbar .app-sidebar__toggle {
   display: none;
 }
 
@@ -337,19 +488,33 @@ a {
 
 @media (max-width: 900px) {
   .app-shell {
+    --shell-gap: var(--space-2);
     grid-template-columns: 1fr;
   }
   .app-main {
     grid-column: 1;
   }
+  /* The sidebar becomes a full-height drawer again: square on the leading
+     edge, rounded on the trailing edge only (RTL-safe logical corners). */
   .app-sidebar {
     position: fixed;
     inset-block: 0;
     inset-inline-start: 0;
+    height: 100dvh;
     width: min(var(--sidebar-width), 86vw);
+    border-radius: 0;
+    border-start-end-radius: var(--radius-xl);
+    border-end-end-radius: var(--radius-xl);
     transform: translateX(-105%);
     transition: transform var(--transition-base);
     box-shadow: var(--shadow-lg);
+    /* The DRAWER alone may scroll (very short phones) — invisible bar so
+       every nav item stays reachable. Desktop never scrolls internally. */
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .app-sidebar::-webkit-scrollbar {
+    display: none;
   }
   [dir="rtl"] .app-sidebar {
     transform: translateX(105%);
@@ -357,11 +522,14 @@ a {
   .app-sidebar[data-open="true"] {
     transform: translateX(0);
   }
-  .app-sidebar__toggle {
+  .app-topbar .app-sidebar__toggle {
     display: inline-flex;
   }
   .app-topbar__title {
     display: none;
+  }
+  .app-topbar {
+    padding-inline: var(--space-4);
   }
   .sidebar-overlay[data-open="true"] {
     display: block;
@@ -379,35 +547,147 @@ a {
   }
 }
 
-/* --- Language switcher ---------------------------------------------------- */
-.lang-switcher {
+/* --- Quick operations (dashboard only — owner correction) -------------------
+ * A titled section on /hotel: small direct-operation buttons (icon+label),
+ * permission-filtered. Desktop: one tidy wrapping row. Mobile (≤640px): a
+ * two-column grid — no horizontal overflow, no scrollbar, ever. */
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.quick-actions__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--shadow-xs);
+  white-space: nowrap;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.quick-actions__btn .icon {
+  color: var(--color-primary);
+}
+.quick-actions__btn:hover {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-fg);
+}
+.quick-actions__btn--primary {
+  background: var(--gradient-brand);
+  border-color: transparent;
+  color: var(--color-primary-contrast);
+  box-shadow: var(--shadow-brand);
+}
+.quick-actions__btn--primary .icon {
+  color: var(--color-primary-contrast);
+}
+.quick-actions__btn--primary:hover {
+  background: var(--gradient-brand);
+  border-color: transparent;
+  color: var(--color-primary-contrast);
+  filter: brightness(1.06);
+}
+@media (max-width: 640px) {
+  .quick-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .quick-actions__btn {
+    border-radius: var(--radius-md);
+    white-space: normal;
+  }
+}
+
+/* --- Language menu ---------------------------------------------------------
+ * A quiet pill + custom dropdown (owner review): no raw native select menu. */
+.lang-menu {
+  position: relative;
+}
+.lang-menu__button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   padding-inline: var(--space-3);
   height: 2.25rem;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
   background: var(--color-surface);
-  color: var(--color-fg-muted);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-}
-.lang-switcher:focus-within {
-  border-color: var(--color-primary);
-  box-shadow: var(--focus-ring);
-}
-.lang-switcher__select {
-  border: none;
-  background: transparent;
+  color: var(--color-fg);
   font-family: inherit;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  color: var(--color-fg);
   cursor: pointer;
-  padding-inline-end: var(--space-2);
+  transition: border-color var(--transition-fast), background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
-.lang-switcher__select:focus {
+.lang-menu__button .icon {
+  color: var(--color-fg-subtle);
+}
+.lang-menu__button:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border-strong);
+}
+.lang-menu__button:focus-visible {
   outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+.lang-menu__chevron {
+  transition: transform var(--transition-fast);
+}
+.lang-menu__button[aria-expanded="true"] .lang-menu__chevron {
+  transform: rotate(180deg);
+}
+.lang-menu__list {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + var(--space-2));
+  min-width: 10rem;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-modal);
+  animation: pop-in var(--transition-fast);
+}
+.lang-menu__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.lang-menu__option:hover {
+  background: var(--color-surface-sunken);
+}
+.lang-menu__option[aria-selected="true"] {
+  color: var(--color-primary-active);
+  background: var(--color-primary-soft);
+}
+.lang-menu__option .icon {
+  color: var(--color-primary);
 }
 
 /* --- Buttons -------------------------------------------------------------- */
@@ -464,6 +744,25 @@ a {
 }
 .btn--danger:not(:disabled):hover {
   background: var(--color-danger-hover);
+}
+/* The topbar logout (owner review): unmistakably an exit — dark red with
+ * white BOLD text, a notch bigger than a regular small button. */
+.topbar-logout {
+  font-weight: var(--font-weight-bold);
+}
+/* Soft-danger (owner review): unmistakably an exit/destructive action but
+ * calm — danger text on a soft danger wash, deepening on hover. */
+.btn--dangerSoft {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
+}
+.btn--dangerSoft .icon {
+  color: var(--color-danger);
+}
+.btn--dangerSoft:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-danger) 14%, var(--color-danger-soft));
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 .btn--ghost {
   background: transparent;
@@ -633,6 +932,48 @@ a {
   .hero__title {
     font-size: var(--font-size-2xl);
   }
+}
+
+/* --- Dashboard quick-access shortcuts -------------------------------------- */
+/* Permission-aware section tiles on the hotel dashboard (same nav config as
+ * the sidebar). Icon chip + label only — fast, readable, mobile-friendly. */
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-3);
+}
+.shortcut-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.shortcut-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-2px);
+}
+.shortcut-card__icon {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  flex: none;
+}
+.shortcut-card__label {
+  min-width: 0;
 }
 
 /* --- Stat cards ----------------------------------------------------------- */
@@ -2785,7 +3126,7 @@ a {
   }
   .input,
   .select,
-  .lang-switcher {
+  .lang-menu__button {
     min-height: 2.75rem;
   }
   .tabs__tab {

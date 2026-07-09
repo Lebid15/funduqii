@@ -62,7 +62,8 @@
     "finance": "Finans",
     "reports": "Raporlar",
     "subscription": "Abonelik ve Planlar",
-    "settings": "Ayarlar"
+    "settings": "Ayarlar",
+    "dashboard": "Kontrol Paneli"
   },
   "auth": {
     "loginTitle": "Giriş yap",
@@ -1923,7 +1924,12 @@
     "suspended": "Bu otel platform tarafından askıya alındı. Veriler salt okunur; lütfen platform sahibiyle iletişime geçin.",
     "expired": "Otelin aboneliği sona erdi. Platform sahibi yeni bir abonelik etkinleştirene kadar önemli işlemler kısıtlıdır — hiçbir veri kaybolmaz.",
     "expiringSoon": "Otelin aboneliği {days} gün içinde sona eriyor. Yenilemek için platform sahibiyle iletişime geçin.",
-    "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin."
+    "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin.",
+    "badgeTrial": "Ücretsiz deneme — {days} gün",
+    "badgePaid": "{plan} — {days} gün",
+    "badgeExpired": "Süresi doldu",
+    "badgeSuspended": "Askıda",
+    "badgeNone": "Abonelik yok"
   },
   "hotelSubscription": {
     "title": "Abonelik ve Planlar",
@@ -2209,5 +2215,42 @@
     "conflict": "Bu işlem mevcut durumla çakışıyor.",
     "validation": "Lütfen vurgulanan alanları kontrol edin.",
     "sessionExpired": "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın."
+  },
+  "hotelDashboard": {
+    "title": "Kontrol Paneli",
+    "subtitle": "Otelinizin bugünkü durumuna hızlı bakış",
+    "todayHeading": "Bugüne genel bakış",
+    "quickAccess": "Hızlı erişim",
+    "cards": {
+      "roomsTotal": "Toplam oda",
+      "roomsAvailable": "Müsait odalar",
+      "inHouse": "Şu an konaklayanlar",
+      "roomsDirty": "Temizlik bekleyen",
+      "roomsMaintenance": "Bakımda",
+      "todayReservations": "Bugünkü rezervasyonlar",
+      "todayArrivals": "Bugünkü girişler",
+      "todayDepartures": "Bugünkü çıkışlar",
+      "todayPayments": "Bugünkü tahsilatlar",
+      "todayExpenses": "Bugünkü giderler",
+      "todayOrders": "Bugünkü servis siparişleri",
+      "openHousekeeping": "Açık kat hizmeti görevleri",
+      "openMaintenance": "Açık bakım talepleri"
+    }
+  },
+  "quickActions": {
+    "title": "Hızlı İşlemler",
+    "newReservation": "Yeni Rezervasyon",
+    "checkIn": "Giriş Yap",
+    "checkOut": "Çıkış Yap",
+    "addGuest": "Misafir Ekle",
+    "guestFolio": "Misafir Folyosu",
+    "recordPayment": "Ödeme Kaydet",
+    "addExpense": "Gider Ekle",
+    "serviceOrder": "Servis Siparişi",
+    "housekeepingTask": "Kat Hizmeti Görevi",
+    "maintenance": "Bakım",
+    "quickReport": "Hızlı Rapor",
+    "settings": "Ayarlar",
+    "more": "Daha Fazla"
   }
 }

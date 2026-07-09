@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import type { CurrentUser } from "@/lib/api/types";
 import { CurrentUserProvider } from "@/lib/session/CurrentUserContext";
+import { HotelProfileProvider } from "@/lib/session/HotelProfileContext";
 import { SubscriptionBanner } from "@/components/hotel/SubscriptionBanner";
 
 import { ContentContainer } from "./ContentContainer";
@@ -29,15 +30,10 @@ export function AppShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const close = () => setSidebarOpen(false);
 
-  return (
+  const shell = (
     <div className="app-shell">
       <aside className="app-sidebar" data-open={sidebarOpen}>
-        <Sidebar
-          variant={variant}
-          user={user}
-          hotelName={hotelName}
-          onNavigate={close}
-        />
+        <Sidebar variant={variant} onNavigate={close} />
       </aside>
       <button
         type="button"
@@ -48,7 +44,12 @@ export function AppShell({
         onClick={close}
       />
       <div className="app-main">
-        <Topbar variant={variant} onMenuToggle={() => setSidebarOpen((v) => !v)} />
+        <Topbar
+          variant={variant}
+          user={user}
+          hotelName={hotelName}
+          onMenuToggle={() => setSidebarOpen((v) => !v)}
+        />
         <ContentContainer>
           <CurrentUserProvider user={user}>
             {variant === "hotel" ? <SubscriptionBanner /> : null}
@@ -57,5 +58,13 @@ export function AppShell({
         </ContentContainer>
       </div>
     </div>
+  );
+
+  // The hotel shell shares ONE profile load (sidebar brand slot + the
+  // subscription banner); the platform shell has no hotel profile.
+  return variant === "hotel" ? (
+    <HotelProfileProvider>{shell}</HotelProfileProvider>
+  ) : (
+    shell
   );
 }

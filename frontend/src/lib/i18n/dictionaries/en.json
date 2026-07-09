@@ -62,7 +62,8 @@
     "finance": "Finance",
     "reports": "Reports",
     "subscription": "Subscription & Plans",
-    "settings": "Settings"
+    "settings": "Settings",
+    "dashboard": "Dashboard"
   },
   "auth": {
     "loginTitle": "Sign in",
@@ -1923,7 +1924,12 @@
     "suspended": "This hotel is suspended by the platform. Data is read-only; contact the platform owner.",
     "expired": "The hotel's subscription has ended. Important operations are restricted until the platform owner activates a subscription — no data is lost.",
     "expiringSoon": "The hotel's subscription ends in {days} days. Contact the platform owner to renew.",
-    "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner."
+    "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner.",
+    "badgeTrial": "Free trial — {days} days",
+    "badgePaid": "{plan} — {days} days",
+    "badgeExpired": "Expired",
+    "badgeSuspended": "Suspended",
+    "badgeNone": "No subscription"
   },
   "hotelSubscription": {
     "title": "Subscription & Plans",
@@ -2209,5 +2215,42 @@
     "conflict": "This action conflicts with the current state.",
     "validation": "Please check the highlighted fields.",
     "sessionExpired": "Your session expired. Please sign in again."
+  },
+  "hotelDashboard": {
+    "title": "Dashboard",
+    "subtitle": "A quick look at your hotel today",
+    "todayHeading": "Today at a glance",
+    "quickAccess": "Quick access",
+    "cards": {
+      "roomsTotal": "Total rooms",
+      "roomsAvailable": "Available rooms",
+      "inHouse": "In-house now",
+      "roomsDirty": "Need cleaning",
+      "roomsMaintenance": "Under maintenance",
+      "todayReservations": "Today's reservations",
+      "todayArrivals": "Today's check-ins",
+      "todayDepartures": "Today's check-outs",
+      "todayPayments": "Today's payments",
+      "todayExpenses": "Today's expenses",
+      "todayOrders": "Today's service orders",
+      "openHousekeeping": "Open housekeeping tasks",
+      "openMaintenance": "Open maintenance requests"
+    }
+  },
+  "quickActions": {
+    "title": "Quick Actions",
+    "newReservation": "New Reservation",
+    "checkIn": "Check In",
+    "checkOut": "Check Out",
+    "addGuest": "Add Guest",
+    "guestFolio": "Guest Folio",
+    "recordPayment": "Record Payment",
+    "addExpense": "Add Expense",
+    "serviceOrder": "Service Order",
+    "housekeepingTask": "Housekeeping Task",
+    "maintenance": "Maintenance",
+    "quickReport": "Quick Report",
+    "settings": "Settings",
+    "more": "More"
   }
 }

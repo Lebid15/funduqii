@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Brush, Play, Plus, UserCheck } from "lucide-react";
 
+import { useQuickAction } from "@/lib/useQuickAction";
+
 import {
   Alert,
   Badge,
@@ -76,6 +78,8 @@ export function HousekeepingTab() {
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING task modal once.
+  useQuickAction("new", () => setCreateOpen(true));
   const [completeTask, setCompleteTask] = useState<HousekeepingTaskListItem | null>(null);
   const [cancelTask, setCancelTask] = useState<HousekeepingTaskListItem | null>(null);
 

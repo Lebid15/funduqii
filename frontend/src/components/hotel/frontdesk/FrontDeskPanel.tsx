@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   DoorOpen,
   LogOut,
@@ -50,9 +51,23 @@ import type {
 import { formatDate, stayStatusLabel, stayStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
+const TAB_KEYS = ["arrivals", "current", "departures"];
+
 export function FrontDeskPanel() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("arrivals");
+  // Deep-linkable tab (?tab=departures — the topbar quick actions): initial
+  // read + follow URL changes so a quick action fired while ALREADY on this
+  // page still lands on its tab. Manual tab clicks stay local as before.
+  const searchParams = useSearchParams();
+  const requested = searchParams.get("tab");
+  const search = searchParams.toString();
+  const [tab, setTab] = useState(
+    requested && TAB_KEYS.includes(requested) ? requested : "arrivals",
+  );
+  useEffect(() => {
+    if (requested && TAB_KEYS.includes(requested)) setTab(requested);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is the trigger
+  }, [search]);
   const [reloadKey, setReloadKey] = useState(0);
   const refresh = () => setReloadKey((k) => k + 1);
   const [counts, setCounts] = useState<{

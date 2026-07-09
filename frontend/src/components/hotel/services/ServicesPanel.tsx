@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ChefHat, LayoutDashboard, ListOrdered, UtensilsCrossed } from "lucide-react";
 
 import { Tabs, type TabItem } from "@/components/ui";
@@ -10,9 +11,23 @@ import { CatalogTab } from "./CatalogTab";
 import { OrdersTab } from "./OrdersTab";
 import { OverviewTab } from "./OverviewTab";
 
+const TAB_KEYS = ["overview", "catalog", "orders", "board"];
+
 export function ServicesPanel() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("overview");
+  // Deep-linkable tab (?tab=orders — the topbar quick actions): initial
+  // read + follow URL changes so a quick action fired while ALREADY on this
+  // page still lands on its tab. Manual tab clicks stay local as before.
+  const searchParams = useSearchParams();
+  const requested = searchParams.get("tab");
+  const search = searchParams.toString();
+  const [tab, setTab] = useState(
+    requested && TAB_KEYS.includes(requested) ? requested : "overview",
+  );
+  useEffect(() => {
+    if (requested && TAB_KEYS.includes(requested)) setTab(requested);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is the trigger
+  }, [search]);
 
   const tabs: TabItem[] = [
     { key: "overview", label: t.services.tabs.overview, icon: LayoutDashboard },

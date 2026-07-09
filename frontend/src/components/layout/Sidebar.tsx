@@ -3,59 +3,36 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
-  BarChart3,
-  BedDouble,
   Building2,
-  CalendarCheck,
-  CalendarClock,
-  ClipboardList,
-  Clock,
   CreditCard,
-  DoorOpen,
-  FileText,
   Globe,
   Hotel,
-  Landmark,
   LayoutDashboard,
   Package,
   Settings,
-  UserCog,
-  Users,
-  UtensilsCrossed,
-  Wallet,
-  type LucideIcon,
 } from "lucide-react";
 
 import { Icon } from "@/components/ui";
-import type { CurrentUser } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { initials } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
-import { HOTEL_ROUTE_ACCESS } from "@/lib/session/hotelRouteAccess";
+
+import {
+  hotelNavItems,
+  visibleHotelNavItems,
+  type HotelNavItem,
+} from "./hotelNav";
 
 type ShellVariant = "platform" | "hotel";
 
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  exact?: boolean;
-  /** Overrides the route-map permission lookup for this item. An empty
-   * array means the item is visible to every active member. */
-  access?: string[];
-}
-
-/** Central navigation with brand block, icon nav, and a user card. Serves both
- * the platform-owner and hotel-side shells via the `variant` prop. */
+/** Central navigation: the PLATFORM identity on top and the nav list only —
+ * the hotel identity and the user chip live in the topbar (owner decision).
+ * Serves both shells via the `variant` prop. The hotel list itself comes
+ * from the shared hotelNav config (also feeds the dashboard shortcuts). */
 export function Sidebar({
   variant,
-  user,
-  hotelName,
   onNavigate,
 }: {
   variant: ShellVariant;
-  user: CurrentUser;
-  hotelName?: string;
   onNavigate?: () => void;
 }) {
   const { t } = useI18n();
@@ -63,7 +40,7 @@ export function Sidebar({
   const searchParams = useSearchParams();
   const access = useHotelAccess();
 
-  const platformItems: NavItem[] = [
+  const platformItems: HotelNavItem[] = [
     { href: "/platform", label: t.nav.dashboard, icon: LayoutDashboard, exact: true },
     { href: "/platform/hotels", label: t.nav.hotels, icon: Building2 },
     { href: "/platform/plans", label: t.nav.plans, icon: Package },
@@ -71,82 +48,18 @@ export function Sidebar({
     { href: "/platform/public-site", label: t.nav.publicSite, icon: Globe },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
-  // The OFFICIAL hotel sidebar (owner-approved order and labels). Merged
-  // consoles are split into separate entries via tab deep-links — the pages
-  // themselves keep their existing services and tabs; notifications live in
-  // the topbar bell only (the route stays reachable, just not listed here).
-  const allHotelItems: NavItem[] = [
-    { href: "/hotel/rooms", label: t.sidebar.roomsFloors, icon: BedDouble },
-    { href: "/hotel/reservations", label: t.sidebar.reservations, icon: CalendarCheck },
-    { href: "/hotel/front-desk", label: t.sidebar.checkInOut, icon: DoorOpen },
-    { href: "/hotel/guests", label: t.sidebar.guests, icon: Users },
-    { href: "/hotel/operations", label: t.sidebar.housekeeping, icon: ClipboardList },
-    { href: "/hotel/services", label: t.sidebar.restaurant, icon: UtensilsCrossed },
-    {
-      href: "/hotel/finance?tab=folios",
-      label: t.sidebar.guestFolio,
-      icon: FileText,
-      access: ["finance.view"],
-    },
-    {
-      href: "/hotel/finance?tab=expenses",
-      label: t.sidebar.expenses,
-      icon: Wallet,
-      access: ["expenses.view"],
-    },
-    { href: "/hotel/staff", label: t.sidebar.staff, icon: UserCog },
-    {
-      href: "/hotel/shifts",
-      label: t.sidebar.shifts,
-      icon: Clock,
-      access: ["shifts.view"],
-    },
-    {
-      href: "/hotel/shifts?tab=dailyClose",
-      label: t.sidebar.dailyClose,
-      icon: CalendarClock,
-      access: ["daily_close.view"],
-    },
-    {
-      href: "/hotel/finance",
-      label: t.sidebar.finance,
-      icon: Landmark,
-      access: ["finance.view"],
-    },
-    { href: "/hotel/reports", label: t.sidebar.reports, icon: BarChart3 },
-    {
-      href: "/hotel/subscription",
-      label: t.sidebar.subscription,
-      icon: CreditCard,
-      // Read-only billing state — the same information every member already
-      // sees in the shell banner, so no permission code gates it.
-      access: [],
-    },
-    { href: "/hotel/settings", label: t.sidebar.settings, icon: Settings },
-  ];
-  // Phase 11: the sidebar respects permissions — a link only shows when the
-  // user holds ANY of its view codes (manager: all). Split entries carry
-  // their own `access` override; others use the central route map. While the
-  // context loads, nothing is shown rather than flashing forbidden links.
-  // Hiding is cosmetic; every API enforces the same permissions itself.
-  const hotelItems =
-    access === null
-      ? allHotelItems
-      : access.loading
-        ? []
-        : allHotelItems.filter((item) => {
-            const required = item.access ?? HOTEL_ROUTE_ACCESS[item.href];
-            return !required || required.length === 0 || access.can(...required);
-          });
 
-  const items = variant === "hotel" ? hotelItems : platformItems;
-  const brandSubtitle =
+  const items =
     variant === "hotel"
-      ? hotelName || t.hotel.nav.subtitle
-      : t.nav.platformOwner;
-  const navLabel = variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
+      ? visibleHotelNavItems(hotelNavItems(t), access)
+      : platformItems;
+  // Scope label only — never the hotel's name (the hotel identity is in the
+  // topbar per the owner's correction).
+  const brandSubtitle =
+    variant === "hotel" ? t.hotel.nav.subtitle : t.nav.platformOwner;
+  const navLabel = brandSubtitle;
 
-  function isActive(item: NavItem): boolean {
+  function isActive(item: HotelNavItem): boolean {
     const [basePath, query] = item.href.split("?");
     if (item.exact) return pathname === basePath;
     if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) {
@@ -164,11 +77,14 @@ export function Sidebar({
     return !currentTab || !siblingTabs.includes(currentTab);
   }
 
+  // Owner correction: the sidebar carries the PLATFORM identity only —
+  // Funduqii mark + name + the nav list. The HOTEL identity (logo/name)
+  // lives in the topbar; user info lives in the topbar chip.
   return (
     <>
       <div className="app-sidebar__brand">
         <span className="brand-mark">
-          <Icon icon={Hotel} size="lg" />
+          <Icon icon={Hotel} size="xl" />
         </span>
         <span className="app-sidebar__brand-text">
           <span className="app-sidebar__brand-name">{t.app.name}</span>
@@ -191,16 +107,6 @@ export function Sidebar({
           </Link>
         ))}
       </nav>
-
-      <div className="app-sidebar__user">
-        <span className="avatar avatar--md" aria-hidden="true">
-          {initials(user.full_name)}
-        </span>
-        <span className="app-sidebar__user-meta">
-          <span className="app-sidebar__user-name">{user.full_name}</span>
-          <span className="app-sidebar__user-email">{user.email}</span>
-        </span>
-      </div>
     </>
   );
 }
