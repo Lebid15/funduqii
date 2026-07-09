@@ -87,6 +87,10 @@ export default function HotelDashboardPage() {
     <PageContainer>
       <PageHeader title={d.title} subtitle={d.subtitle} />
 
+      {/* Owner order: quick OPERATIONS first — at the very top of the
+          dashboard, above the stats cards. Dashboard-only by design. */}
+      <QuickActionsBar />
+
       {canStats || accessLoading ? (
         <section className="stack" aria-label={d.todayHeading}>
           <SectionHeader title={d.todayHeading} />
@@ -182,11 +186,6 @@ export default function HotelDashboardPage() {
           )}
         </section>
       ) : null}
-
-      {/* Owner correction: the quick OPERATIONS live here on the dashboard —
-          right after the stats, before the section shortcuts. The topbar
-          stays a clean identity/tools card. */}
-      <QuickActionsBar />
 
       <section className="stack" aria-label={d.quickAccess}>
         <SectionHeader title={d.quickAccess} />
