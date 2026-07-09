@@ -67,7 +67,7 @@
 | 14 | Notifications + Activity Center | مكتملة ✅ | 2026-07-09 |
 | 15 | Public Website + Public Booking | مكتملة ✅ | 2026-07-09 |
 | 16 | Platform Owner Panel Completion | مكتملة ✅ | 2026-07-09 |
-| 17 | Mobile / PWA / Offline / Performance | بانتظار الاعتماد 🔎 | — |
+| 17 | Mobile / PWA / Offline / Performance | مكتملة ✅ | 2026-07-09 |
 | 18 | Hardening + QA + Release | لم تبدأ ⏳ | — |
 
 ### ملاحظات شاملة (Cross-cutting mandates)
@@ -1427,8 +1427,8 @@
 ---
 
 ## Phase 17 — Mobile / PWA / Offline / Performance
-- الحالة: **بانتظار الاعتماد 🔎** (التنفيذ مكتمل — بانتظار المراجعة النهائية من المالك)
-- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09
+- الحالة: **مكتملة ✅** (معتمدة نهائيًا من المالك)
+- التاريخ: بدأت 2026-07-09 · اكتملت (تنفيذ) 2026-07-09 · تاريخ الاعتماد: 2026-07-09
 - الهدف: جاهزية احترافية على الموبايل والتابلت + أساس PWA آمن + fallback محدود لعدم الاتصال + تحسينات أداء — **بلا أي ميزة تجارية جديدة**.
 - الأساس: بُنيت من **`origin/main`** (fd26448، بعد اعتماد Phase 16).
 
@@ -1480,4 +1480,6 @@
 - **لا Payment Gateway/Stripe/PayPal · لا حسابات عملاء · لا WhatsApp/Email/SMS/Push · لا OTA/Channel Manager · لا Marketplace/CRM/Coupons/Payroll/Accounting/Inventory/POS المتقدمة · لا offline للبيانات أو العمليات.** **لم تبدأ Phase 18.**
 
 ### الاعتماد
-- **بانتظار الاعتماد 🔎** — لا يُدمج ولا يُعتمد إلا بقرار صريح من المالك بعد المراجعة.
+- **معتمدة نهائيًا من المالك بتاريخ 2026-07-09** بعد Final Acceptance Review لـ PR #16 — قرار المالك النصي: «PR #16 — Phase 17: Approved to merge ✅». المراجعة جرت على base ‏`origin/main@fd26448` (merge-base مطابق، mergeable_state: clean) وشملت معالجة تعليقات Copilot الأربعة على الـ PR في كوميت `9180906` (‏Response احتياطي في sw.js حتى لا يرفض respondWith عند فقدان الـ cache · سمات `lang` لأقسام offline.html الثلاثة · ‏Prefetch مرشّح بالوسائط النشطة للقائمة العامة · فرع واعٍ بالـ cache في hotel_media_payload — مع اختبار جديد يثبت استبعاد الوسائط غير النشطة على المسارين)؛ وبعد الإصلاحات: backend ‏**681/681**، frontend ‏lint/tsc/build نظيفة، فحوص PWA الحية كاملة، ومعاينات بصرية موبايل/ديسكتوب للصفحات العامة نظيفة، مع إصلاح توثيقي سابق لجدول المراحل في `2f015a8`.
+- الدمج: squash merge لـ PR #16 (كوميتات `3db06ef` + `2f015a8` + `9180906`) → ‏`origin/main@c16c746` بعنوان «Phase 17 — Mobile / PWA / Offline / Performance (#16)».
+- ملفات OpenWolf/Graphify محلية فقط ولم تدخل Git؛ استُخدمت الأداتان كمساعدة فقط لا كمصدر قرار. **Phase 18 لا تبدأ إلا برسالتها الرسمية.**
