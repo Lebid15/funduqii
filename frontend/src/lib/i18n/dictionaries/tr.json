@@ -62,7 +62,8 @@
     "finance": "Finans",
     "reports": "Raporlar",
     "subscription": "Abonelik ve Planlar",
-    "settings": "Ayarlar"
+    "settings": "Ayarlar",
+    "dashboard": "Kontrol Paneli"
   },
   "auth": {
     "loginTitle": "Giriş yap",
@@ -2214,5 +2215,26 @@
     "conflict": "Bu işlem mevcut durumla çakışıyor.",
     "validation": "Lütfen vurgulanan alanları kontrol edin.",
     "sessionExpired": "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın."
+  },
+  "hotelDashboard": {
+    "title": "Kontrol Paneli",
+    "subtitle": "Otelinizin bugünkü durumuna hızlı bakış",
+    "todayHeading": "Bugüne genel bakış",
+    "quickAccess": "Hızlı erişim",
+    "cards": {
+      "roomsTotal": "Toplam oda",
+      "roomsAvailable": "Müsait odalar",
+      "inHouse": "Şu an konaklayanlar",
+      "roomsDirty": "Temizlik bekleyen",
+      "roomsMaintenance": "Bakımda",
+      "todayReservations": "Bugünkü rezervasyonlar",
+      "todayArrivals": "Bugünkü girişler",
+      "todayDepartures": "Bugünkü çıkışlar",
+      "todayPayments": "Bugünkü tahsilatlar",
+      "todayExpenses": "Bugünkü giderler",
+      "todayOrders": "Bugünkü servis siparişleri",
+      "openHousekeeping": "Açık kat hizmeti görevleri",
+      "openMaintenance": "Açık bakım talepleri"
+    }
   }
 }

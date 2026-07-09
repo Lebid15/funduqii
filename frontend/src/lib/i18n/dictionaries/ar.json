@@ -62,7 +62,8 @@
     "finance": "المالية",
     "reports": "التقارير",
     "subscription": "الاشتراك والباقات",
-    "settings": "الإعدادات"
+    "settings": "الإعدادات",
+    "dashboard": "لوحة التحكم"
   },
   "auth": {
     "loginTitle": "تسجيل الدخول",
@@ -2214,5 +2215,26 @@
     "conflict": "يتعارض هذا الإجراء مع الحالة الحالية.",
     "validation": "يرجى التحقق من الحقول المميّزة.",
     "sessionExpired": "انتهت جلستك. يرجى تسجيل الدخول مرة أخرى."
+  },
+  "hotelDashboard": {
+    "title": "لوحة التحكم",
+    "subtitle": "نظرة سريعة على وضع الفندق اليوم",
+    "todayHeading": "إحصائيات اليوم",
+    "quickAccess": "الوصول السريع",
+    "cards": {
+      "roomsTotal": "إجمالي الغرف",
+      "roomsAvailable": "الغرف المتاحة",
+      "inHouse": "المقيمون الآن",
+      "roomsDirty": "تحتاج تنظيف",
+      "roomsMaintenance": "تحت الصيانة",
+      "todayReservations": "حجوزات اليوم",
+      "todayArrivals": "دخول اليوم",
+      "todayDepartures": "مغادرة اليوم",
+      "todayPayments": "مدفوعات اليوم",
+      "todayExpenses": "مصروفات اليوم",
+      "todayOrders": "طلبات خدمة اليوم",
+      "openHousekeeping": "مهام تدبير مفتوحة",
+      "openMaintenance": "طلبات صيانة مفتوحة"
+    }
   }
 }

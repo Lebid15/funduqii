@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Hotel, Menu } from "lucide-react";
 
 import { Badge, Icon, IconButton, type BadgeTone } from "@/components/ui";
@@ -93,8 +94,10 @@ export function Topbar({
   );
 }
 
-/** The hotel's plan/subscription pill (display only — Phase 16 data): plan
- * and remaining days for live subscriptions, clear states otherwise. */
+/** The hotel's plan/subscription pill (Phase 16 data, display only — no
+ * checkout, no payment): plan and remaining days for live subscriptions,
+ * clear states otherwise. Clicking it opens the subscription page — that is
+ * the ONLY entry point now that the sidebar item is gone (owner decision). */
 function SubscriptionBadge({
   state,
 }: {
@@ -130,8 +133,12 @@ function SubscriptionBadge({
   }
 
   return (
-    <span className="topbar-plan">
+    <Link
+      href="/hotel/subscription"
+      className="topbar-plan"
+      title={t.sidebar.subscription}
+    >
       <Badge tone={tone}>{label}</Badge>
-    </span>
+    </Link>
   );
 }

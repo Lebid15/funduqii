@@ -62,7 +62,8 @@
     "finance": "Finance",
     "reports": "Reports",
     "subscription": "Subscription & Plans",
-    "settings": "Settings"
+    "settings": "Settings",
+    "dashboard": "Dashboard"
   },
   "auth": {
     "loginTitle": "Sign in",
@@ -2214,5 +2215,26 @@
     "conflict": "This action conflicts with the current state.",
     "validation": "Please check the highlighted fields.",
     "sessionExpired": "Your session expired. Please sign in again."
+  },
+  "hotelDashboard": {
+    "title": "Dashboard",
+    "subtitle": "A quick look at your hotel today",
+    "todayHeading": "Today at a glance",
+    "quickAccess": "Quick access",
+    "cards": {
+      "roomsTotal": "Total rooms",
+      "roomsAvailable": "Available rooms",
+      "inHouse": "In-house now",
+      "roomsDirty": "Need cleaning",
+      "roomsMaintenance": "Under maintenance",
+      "todayReservations": "Today's reservations",
+      "todayArrivals": "Today's check-ins",
+      "todayDepartures": "Today's check-outs",
+      "todayPayments": "Today's payments",
+      "todayExpenses": "Today's expenses",
+      "todayOrders": "Today's service orders",
+      "openHousekeeping": "Open housekeeping tasks",
+      "openMaintenance": "Open maintenance requests"
+    }
   }
 }
