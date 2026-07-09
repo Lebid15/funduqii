@@ -78,8 +78,13 @@ export function HousekeepingTab() {
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  // Topbar quick action: ?action=new opens the EXISTING task modal once.
-  useQuickAction("new", () => setCreateOpen(true));
+  const [quickRoom, setQuickRoom] = useState(0);
+  // Quick action: ?action=new opens the EXISTING task modal once — with an
+  // optional preselected room (operational board deep-link).
+  useQuickAction("new", (params) => {
+    setQuickRoom(Number(params.get("room")) || 0);
+    setCreateOpen(true);
+  });
   const [completeTask, setCompleteTask] = useState<HousekeepingTaskListItem | null>(null);
   const [cancelTask, setCancelTask] = useState<HousekeepingTaskListItem | null>(null);
 
@@ -323,9 +328,11 @@ export function HousekeepingTab() {
       <CreateTaskModal
         open={createOpen}
         rooms={rooms}
-        onClose={() => setCreateOpen(false)}
+        initialRoom={quickRoom}
+        onClose={() => { setCreateOpen(false); setQuickRoom(0); }}
         onSaved={() => {
           setCreateOpen(false);
+          setQuickRoom(0);
           notify(hk.created);
           load();
         }}
@@ -355,11 +362,14 @@ export function HousekeepingTab() {
 function CreateTaskModal({
   open,
   rooms,
+  initialRoom = 0,
   onClose,
   onSaved,
 }: {
   open: boolean;
   rooms: Room[];
+  /** Optional preselected room (operational board deep-link). */
+  initialRoom?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -372,13 +382,13 @@ function CreateTaskModal({
 
   useEffect(() => {
     if (open) {
-      setForm({ room: 0, task_type: "daily_cleaning", priority: "normal", notes: "" });
+      setForm({ room: initialRoom || 0, task_type: "daily_cleaning", priority: "normal", notes: "" });
       setError(null);
       listCurrentResidents()
         .then((res) => setStays(res.results))
         .catch(() => setStays([]));
     }
-  }, [open]);
+  }, [open, initialRoom]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

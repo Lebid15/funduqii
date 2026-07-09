@@ -9,6 +9,7 @@ import type {
   Floor,
   PaginatedResponse,
   Room,
+  RoomOperationalBoard,
   RoomStatus,
   RoomType,
 } from "./types";
@@ -146,6 +147,12 @@ export function updateRoom(
 
 export function deleteRoom(id: number): Promise<void> {
   return hotelJson<void>(`/rooms/${id}`, { method: "DELETE" });
+}
+
+/** READ-ONLY operational board: every room with its computed display status,
+ * current stay and next reservation, plus hotel/floor summaries — one call. */
+export function getOperationalBoard(): Promise<RoomOperationalBoard> {
+  return hotelJson<RoomOperationalBoard>("/rooms/operational-board");
 }
 
 export function changeRoomStatus(

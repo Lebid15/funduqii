@@ -383,3 +383,167 @@ class RegressionTests(APITestCase):
         # (shifts/daily_closes became legitimate in Phase 12.)
         for forbidden in ("restaurant_orders", "stock_items", "payroll", "attendance_records"):
             self.assertNotIn(forbidden, tables)
+
+
+# --- Operational board (owner task) ------------------------------------------
+
+
+class OperationalBoardTests(APITestCase):
+    """READ-ONLY board: computed display statuses, summaries, tenancy."""
+
+    def setUp(self):
+        import datetime
+
+        from django.utils import timezone as dj_tz
+
+        from apps.guests.models import Guest
+        from apps.reservations.models import Reservation, ReservationRoomLine
+        from apps.stays.models import Stay
+
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.floor = make_floor(self.hotel, name="First", number="1")
+        self.rtype = make_type(self.hotel)
+
+        today = datetime.date.today()
+        self.r_available = make_room(self.hotel, self.floor, self.rtype, "101")
+        self.r_occupied = make_room(self.hotel, self.floor, self.rtype, "102")
+        self.r_reserved = make_room(self.hotel, self.floor, self.rtype, "103")
+        self.r_dirty_occupied = make_room(
+            self.hotel, self.floor, self.rtype, "104", status="dirty"
+        )
+        self.r_archived = make_room(
+            self.hotel, self.floor, self.rtype, "199", status="archived"
+        )
+
+        guest = Guest.objects.create(hotel=self.hotel, full_name="Guest One")
+
+        # The active reservation the current stay came from...
+        self.res_current = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-001",
+            check_in_date=today,
+            check_out_date=today + datetime.timedelta(days=2),
+            primary_guest_name="Guest One",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res_current,
+            room_type=self.rtype,
+            room=self.r_occupied,
+            quantity=1,
+        )
+        self.stay = Stay.objects.create(
+            hotel=self.hotel,
+            reservation=self.res_current,
+            room=self.r_occupied,
+            primary_guest=guest,
+            planned_check_in_date=today,
+            planned_check_out_date=today + datetime.timedelta(days=2),
+            actual_check_in_at=dj_tz.now(),
+        )
+        # ...and a FUTURE reservation for the same occupied room.
+        self.res_next = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-002",
+            check_in_date=today + datetime.timedelta(days=3),
+            check_out_date=today + datetime.timedelta(days=5),
+            primary_guest_name="Guest Two",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res_next,
+            room_type=self.rtype,
+            room=self.r_occupied,
+            quantity=1,
+        )
+        # An upcoming confirmed reservation on an otherwise-available room.
+        self.res_upcoming = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-003",
+            check_in_date=today + datetime.timedelta(days=1),
+            check_out_date=today + datetime.timedelta(days=2),
+            primary_guest_name="Guest Three",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res_upcoming,
+            room_type=self.rtype,
+            room=self.r_reserved,
+            quantity=1,
+        )
+        # A stay on the DIRTY room too — the manual state must win the display.
+        guest2 = Guest.objects.create(hotel=self.hotel, full_name="Guest Four")
+        Stay.objects.create(
+            hotel=self.hotel,
+            room=self.r_dirty_occupied,
+            primary_guest=guest2,
+            planned_check_in_date=today,
+            planned_check_out_date=today + datetime.timedelta(days=1),
+            actual_check_in_at=dj_tz.now(),
+        )
+
+    def _get(self):
+        return self.client.get(
+            reverse("rooms:room-operational-board"), **HDR(self.hotel)
+        )
+
+    def test_requires_rooms_view(self):
+        staff = add_member(self.hotel, "np@x.com", perms=["reservations.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self._get().status_code, 403)
+
+    def test_staff_with_rooms_view_allowed(self):
+        staff = add_member(self.hotel, "v@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self._get().status_code, 200)
+
+    def test_display_statuses_and_priority(self):
+        self.client.force_authenticate(self.manager)
+        rooms = {r["number"]: r for r in self._get().data["rooms"]}
+        self.assertEqual(rooms["101"]["display_status"], "available")
+        self.assertEqual(rooms["102"]["display_status"], "occupied")
+        self.assertEqual(rooms["103"]["display_status"], "reserved")
+        # Manual dirty beats the in-house stay (owner priority).
+        self.assertEqual(rooms["104"]["display_status"], "dirty")
+        self.assertEqual(rooms["199"]["display_status"], "archived")
+        # Stored operational status is never rewritten.
+        self.assertEqual(rooms["102"]["operational_status"], "available")
+
+    def test_current_stay_and_next_reservation(self):
+        self.client.force_authenticate(self.manager)
+        rooms = {r["number"]: r for r in self._get().data["rooms"]}
+        occupied = rooms["102"]
+        self.assertEqual(occupied["current_stay"]["guest_name"], "Guest One")
+        self.assertEqual(occupied["current_stay"]["reservation_number"], "R-001")
+        # The stay''s own reservation is skipped — R-002 is the NEXT one.
+        self.assertEqual(
+            occupied["next_reservation"]["reservation_number"], "R-002"
+        )
+        self.assertEqual(
+            rooms["103"]["next_reservation"]["reservation_number"], "R-003"
+        )
+        self.assertIsNone(rooms["101"]["next_reservation"])
+
+    def test_summary_and_floor_counts_exclude_archived(self):
+        self.client.force_authenticate(self.manager)
+        data = self._get().data
+        summary = data["summary"]
+        self.assertEqual(summary["total"], 4)  # 199 archived is excluded
+        self.assertEqual(summary["available"], 1)
+        self.assertEqual(summary["occupied"], 1)
+        self.assertEqual(summary["reserved"], 1)
+        self.assertEqual(summary["dirty"], 1)
+        self.assertEqual(summary["attention"], 1)
+        floor = data["floors"][0]
+        self.assertEqual(floor["total"], 4)
+        self.assertEqual(floor["availability_rate"], 25)
+
+    def test_tenant_isolation(self):
+        other = make_hotel(slug="other")
+        of = make_floor(other, name="O")
+        ot = make_type(other, code="OT")
+        make_room(other, of, ot, "901")
+        self.client.force_authenticate(self.manager)
+        numbers = [r["number"] for r in self._get().data["rooms"]]
+        self.assertNotIn("901", numbers)

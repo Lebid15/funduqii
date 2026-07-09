@@ -426,6 +426,76 @@ export interface Room {
   updated_at: string;
 }
 
+/* --- Rooms operational board (owner task) — READ-ONLY aggregation ---------- */
+
+/** Computed for DISPLAY only — `occupied`/`reserved` are derived from stays
+ * and blocking reservations, never stored on the room. */
+export type RoomDisplayStatus = RoomStatus | "occupied" | "reserved";
+
+export interface RoomBoardStay {
+  id: number;
+  guest_name: string;
+  planned_check_out_date: string;
+  reservation_id: number | null;
+  reservation_number: string | null;
+}
+
+export interface RoomBoardReservation {
+  id: number;
+  reservation_number: string;
+  guest_name: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+}
+
+export interface RoomBoardRoom {
+  id: number;
+  number: string;
+  display_name: string;
+  floor: number;
+  floor_name: string;
+  room_type: number;
+  room_type_name: string;
+  room_type_code: string;
+  base_capacity: number;
+  max_capacity: number;
+  base_rate: string | null;
+  is_active: boolean;
+  operational_status: RoomStatus;
+  display_status: RoomDisplayStatus;
+  status_note: string;
+  status_changed_at: string | null;
+  current_stay: RoomBoardStay | null;
+  next_reservation: RoomBoardReservation | null;
+}
+
+export interface RoomBoardCounts {
+  total: number;
+  available: number;
+  occupied: number;
+  reserved: number;
+  dirty: number;
+  cleaning: number;
+  maintenance: number;
+  out_of_service: number;
+  attention: number;
+}
+
+export interface RoomBoardFloor extends RoomBoardCounts {
+  id: number;
+  name: string;
+  number: string;
+  is_active: boolean;
+  availability_rate: number;
+}
+
+export interface RoomOperationalBoard {
+  summary: RoomBoardCounts;
+  floors: RoomBoardFloor[];
+  rooms: RoomBoardRoom[];
+}
+
 /* ==========================================================================
  * Phase 6 — Reservations & availability DTOs (mirror /api/v1/hotel/).
  * ======================================================================== */

@@ -1,0 +1,113 @@
+"use client";
+
+import Link from "next/link";
+import { RefreshCw } from "lucide-react";
+
+import { Badge, Button, Icon, Modal } from "@/components/ui";
+import type { RoomBoardRoom } from "@/lib/api/types";
+import { formatDate, roomStatusLabel } from "@/lib/format";
+import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import { buildRoomLinks, displayStatusTone } from "./boardShared";
+
+/** Full room details (owner spec) as a central Modal — identity, capacity,
+ * operational + computed status, note, last change, current guest, upcoming
+ * reservation, and the COMPLETE permission-aware action set. */
+export function RoomDetailsDrawer({
+  room,
+  onClose,
+  onChangeStatus,
+}: {
+  room: RoomBoardRoom | null;
+  onClose: () => void;
+  onChangeStatus: (room: RoomBoardRoom) => void;
+}) {
+  const { t, locale } = useI18n();
+  const access = useHotelAccess();
+  const b = t.rooms.board;
+  const can = (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+
+  if (!room) return null;
+  const links = buildRoomLinks(room, t, can);
+  const canStatus = can("rooms.status_update");
+
+  const rows: Array<[string, string]> = [
+    [b.detailFloor, room.floor_name],
+    [b.detailType, room.room_type_name],
+    [b.capacity, `${room.base_capacity}–${room.max_capacity}`],
+    [b.operationalStatus, roomStatusLabel(room.operational_status, t)],
+  ];
+  if (room.base_rate) rows.push([b.baseRate, room.base_rate]);
+  if (room.display_name) rows.push([b.detailDisplayName, room.display_name]);
+  if (room.status_note) rows.push([b.statusNote, room.status_note]);
+  if (room.status_changed_at) {
+    rows.push([b.lastStatusChange, formatDate(room.status_changed_at, locale)]);
+  }
+  if (room.current_stay) {
+    rows.push([b.currentGuest, room.current_stay.guest_name]);
+    rows.push([
+      b.plannedCheckOut,
+      `${formatDate(room.current_stay.planned_check_out_date, locale)}${
+        room.current_stay.reservation_number
+          ? ` · ${room.current_stay.reservation_number}`
+          : ""
+      }`,
+    ]);
+  }
+  if (room.next_reservation) {
+    rows.push([
+      b.upcomingReservation,
+      `${room.next_reservation.guest_name} · ${formatDate(room.next_reservation.check_in_date, locale)} ← ${formatDate(room.next_reservation.check_out_date, locale)} · ${room.next_reservation.reservation_number}`,
+    ]);
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${b.roomDetails} — ${room.number}`}
+      closeLabel={t.common.close}
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          {t.common.close}
+        </Button>
+      }
+    >
+      <div className="stack">
+        <div className="cluster">
+          <Badge tone={displayStatusTone(room.display_status)}>
+            {b.status[room.display_status]}
+          </Badge>
+        </div>
+        <dl className="room-op-details">
+          {rows.map(([label, value]) => (
+            <div key={label} className="room-op-details__row">
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="cluster">
+          {links.map((link) => (
+            <Link key={link.key} href={link.href} className="btn btn--secondary btn--sm">
+              <Icon icon={link.icon} size="sm" />
+              {link.label}
+            </Link>
+          ))}
+          {canStatus ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={RefreshCw}
+              onClick={() => onChangeStatus(room)}
+            >
+              {b.changeStatus}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </Modal>
+  );
+}

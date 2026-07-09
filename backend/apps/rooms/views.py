@@ -203,6 +203,20 @@ class RoomDetailView(_HotelScopedMixin, generics.RetrieveUpdateDestroyAPIView):
         instance.delete()
 
 
+class RoomOperationalBoardView(APIView):
+    """READ-ONLY operational board (owner task): every room with its computed
+    display status (occupied/reserved derived from stays and reservations —
+    never stored), current in-house stay, next upcoming reservation, plus
+    hotel-wide and per-floor summaries. One request feeds the whole board —
+    no pagination (a hotel's room inventory is small), no writes."""
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request) -> Response:
+        return Response(services.operational_board(request.hotel))
+
+
 class RoomStatusView(APIView):
     """Controlled room-status change endpoint (logs to RoomStatusLog)."""
 
