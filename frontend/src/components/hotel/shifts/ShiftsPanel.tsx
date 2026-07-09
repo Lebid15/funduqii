@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeftRight, CalendarCheck2, Clock, LayoutDashboard, UserRound } from "lucide-react";
 
 import { Tabs, type TabItem } from "@/components/ui";
@@ -11,9 +12,30 @@ import { HandoversTab } from "./HandoversTab";
 import { OverviewTab } from "./OverviewTab";
 import { ShiftsTab } from "./ShiftsTab";
 
+const TAB_KEYS = ["overview", "current", "shifts", "handovers", "dailyClose"];
+
 export function ShiftsPanel() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("overview");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // "Daily close" is a separate sidebar entry deep-linking ?tab=dailyClose
+  // on this shared page; the URL mirrors internal tab switches so the
+  // sidebar's active state stays truthful.
+  const requested = searchParams.get("tab");
+  const [tab, setTab] = useState(
+    requested && TAB_KEYS.includes(requested) ? requested : "overview",
+  );
+
+  useEffect(() => {
+    if (requested && TAB_KEYS.includes(requested)) setTab(requested);
+  }, [requested]);
+
+  function changeTab(key: string) {
+    setTab(key);
+    router.replace(`${pathname}?tab=${key}`, { scroll: false });
+  }
 
   const tabs: TabItem[] = [
     { key: "overview", label: t.shifts.tabs.overview, icon: LayoutDashboard },
@@ -25,7 +47,7 @@ export function ShiftsPanel() {
 
   return (
     <>
-      <Tabs tabs={tabs} active={tab} onChange={setTab} />
+      <Tabs tabs={tabs} active={tab} onChange={changeTab} />
       {tab === "overview" ? <OverviewTab /> : null}
       {tab === "current" ? <CurrentShiftTab /> : null}
       {tab === "shifts" ? <ShiftsTab /> : null}

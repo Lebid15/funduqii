@@ -47,6 +47,23 @@
     "mainSection": "Main",
     "publicSite": "Public site"
   },
+  "sidebar": {
+    "roomsFloors": "Rooms & Floors",
+    "reservations": "Reservations",
+    "checkInOut": "Check-in & Check-out",
+    "guests": "Guests",
+    "housekeeping": "Housekeeping",
+    "restaurant": "Restaurant & Café",
+    "guestFolio": "Guest Folio",
+    "expenses": "Expenses",
+    "staff": "Staff",
+    "shifts": "Shifts",
+    "dailyClose": "Daily Close",
+    "finance": "Finance",
+    "reports": "Reports",
+    "subscription": "Subscription & Plans",
+    "settings": "Settings"
+  },
   "auth": {
     "loginTitle": "Sign in",
     "loginSubtitle": "Platform owner console",
@@ -1907,6 +1924,18 @@
     "expired": "The hotel's subscription has ended. Important operations are restricted until the platform owner activates a subscription — no data is lost.",
     "expiringSoon": "The hotel's subscription ends in {days} days. Contact the platform owner to renew.",
     "blockedError": "This operation is unavailable: the hotel has no active subscription. Contact the platform owner."
+  },
+  "hotelSubscription": {
+    "title": "Subscription & Plans",
+    "subtitle": "The hotel's current subscription and plan — read-only.",
+    "currentPlan": "Current subscription",
+    "managedByPlatform": "Plans, activation and renewals are managed by the platform administration only.",
+    "plan": "Plan",
+    "endsAt": "Ends at",
+    "daysLeft": "Days left",
+    "noSubscription": "This hotel has no active subscription at the moment.",
+    "renewalTitle": "Renewal",
+    "contactOwner": "To activate, renew or change the plan, please contact the Funduqii platform administration — there is no online payment inside the console."
   },
   "publicSiteAdmin": {
     "title": "Public website",
