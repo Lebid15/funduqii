@@ -460,6 +460,27 @@ class PublicSiteSettingsTests(APITestCase):
         )
         self.assertEqual(r.status_code, 400)
 
+    def test_protocol_relative_url_rejected(self):
+        # "//evil.com" starts with "/" but resolves to an EXTERNAL host —
+        # must be rejected (PR #15 review finding).
+        self.client.force_authenticate(self.owner)
+        r = self.client.patch(
+            self.url,
+            {"hero_primary_button_url": "//evil.com/phish"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+        # A normal internal path and an explicit https link still pass.
+        r = self.client.patch(
+            self.url,
+            {
+                "hero_primary_button_url": "/hotels",
+                "hero_secondary_button_url": "https://funduqii.example/about",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+
     def test_public_read_endpoint_safe_subset(self):
         self.client.force_authenticate(self.owner)
         self.client.patch(

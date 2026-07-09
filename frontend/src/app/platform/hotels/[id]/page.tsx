@@ -518,13 +518,18 @@ function SubscriptionCard({
           </>
         ) : (
           <>
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => run(() => renewSubscription(hotel.id, {}))}
-            >
-              {t.subscriptions.renew}
-            </Button>
+            {/* Renew applies to active/past_due only — a trial is upgraded
+                via activate-paid, so the button is hidden for trials
+                (PR #15 review finding). */}
+            {sub.status === "active" || sub.status === "past_due" ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => run(() => renewSubscription(hotel.id, {}))}
+              >
+                {t.subscriptions.renew}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="secondary"

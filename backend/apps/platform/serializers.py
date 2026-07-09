@@ -427,7 +427,6 @@ class VoidPaymentSerializer(serializers.Serializer):
 # --- Phase 16: public site settings -------------------------------------------
 
 _I18N_LOCALES = ("ar", "en", "tr")
-_SAFE_URL_PREFIXES = ("/", "http://", "https://")
 
 
 def _validate_i18n_value(value):
@@ -443,8 +442,20 @@ def _validate_i18n_value(value):
 
 
 def _validate_safe_url(value: str) -> str:
+    """Internal path or explicit http(s) only.
+
+    A single leading slash is an internal path, but a PROTOCOL-RELATIVE URL
+    ("//evil.com") also starts with "/" and would resolve to an external host
+    — it is explicitly rejected (Copilot review finding on PR #15).
+    """
     value = (value or "").strip()
-    if value and not value.startswith(_SAFE_URL_PREFIXES):
+    if not value:
+        return value
+    if value.startswith("//"):
+        raise serializers.ValidationError(
+            "Protocol-relative URLs (//...) are not allowed."
+        )
+    if not value.startswith(("/", "http://", "https://")):
         raise serializers.ValidationError(
             "Only internal paths (/...) or http(s) links are allowed."
         )
