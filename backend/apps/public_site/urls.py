@@ -8,11 +8,17 @@ from .views import (
     PublicBookingManageView,
     PublicHotelDetailView,
     PublicHotelListView,
+    PublicSiteSettingsView,
 )
 
 app_name = "public_site"
 
 urlpatterns = [
+    path(
+        "site-settings/",
+        PublicSiteSettingsView.as_view(),
+        name="site-settings",
+    ),
     path("hotels/", PublicHotelListView.as_view(), name="hotel-list"),
     path("hotels/<slug:slug>/", PublicHotelDetailView.as_view(), name="hotel-detail"),
     path(

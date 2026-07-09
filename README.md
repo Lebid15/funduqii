@@ -4,7 +4,7 @@ A multi-tenant **SaaS platform for hotel management**: a full operations system
 for each hotel, a subscription/billing panel for the platform owner, and a
 public website for visitors and bookings.
 
-> **Current status: Phase 15 — Public Website + Public Booking (pending review).**
+> **Current status: Phase 16 — Platform Owner Panel Completion (pending review).**
 > Approved so far: all foundations (0, 1, 1.5, 1.6, 1.7, 1.8, 2), Phase 3
 > (platform-owner console), Phase 3.1 (premium UI), Phase 4 (hotel settings &
 > media), Phase 5 (floors/room types/rooms), Phase 6 (reservations +
@@ -12,23 +12,30 @@ public website for visitors and bookings.
 > check-in/out), Phase 8 + 8.1 (internal finance), Phase 9 (internal service
 > orders), Phase 10 (housekeeping + maintenance + lost & found), Phase 11
 > (staff + flexible permissions), Phase 12 (shifts + handover + daily close),
-> Phase 13 (read-only reports & analytics) and Phase 14 (in-app notifications
-> + activity center, 14 wired event types). Phase 15 adds the **public
-> website**: visitors browse **published** hotels (`public_is_listed` +
-> `public_slug`), see publicly visible room types, check availability through
-> the SAME engine as the console, and book **without payment and without a
-> customer account**. A public booking is always `booking_kind=future`
-> (never auto check-in), defaults to `held` with a documented **72h hold**,
-> and returns a reference plus a **one-time manage token** (only its SHA-256
-> is stored; wrong reference and wrong token are indistinguishable 404s).
-> The manage page shows status and takes a cancellation **request** — it
-> never voids or deletes. Hotels receive public bookings in the existing
-> reservations console (`source=public_website`) and confirm through the
-> existing workflow. Anonymous APIs live under `/api/v1/public/` behind
-> scoped throttling; suspended/unlisted hotels are hidden and nothing
-> internal (staff, finance, folios, notes, room numbers) is ever serialized.
-> **No payment gateway, no customer accounts, no OTA/channel manager, no
-> reviews, no external messaging** — deliberately.
+> Phase 13 (read-only reports & analytics), Phase 14 (in-app notifications +
+> activity center) and Phase 15 (public website + public booking with
+> one-time manage tokens). Phase 16 completes the **platform owner panel**:
+> a real dashboard (counts + expiring-soon + **estimated recurring revenue**
+> per currency — never "profit"), audited hotel lifecycle (activate /
+> suspend-with-reason / unsuspend; status no longer patchable; no hard
+> delete), completed plans (Decimal prices, yearly price, public flag,
+> limits; deactivate instead of deleting used plans), the full subscription
+> lifecycle (**one-time trial as the FIRST subscription only**, manual paid
+> activation with optional manual payment records — cash/bank transfer,
+> void-not-delete, fully separate from hotel finance —, renew, cancel,
+> expire, preserved history) and **central subscription enforcement**: one
+> backend chokepoint refuses every important write (`subscription_inactive`)
+> and stops public booking when a hotel has no effectively-live
+> subscription, while reads/reports/notifications keep working and nothing
+> is deleted; suspension keeps `hotel_suspended` and wins. The hotel console
+> shows subscription banners (expiring soon / expired / suspended), and the
+> platform owner controls the public site's header links/buttons (per-locale
+> label overrides), hero, contact info and footer from a new admin page —
+> consumed by the Phase 15 public site with dictionary fallbacks.
+> Platform events surface in the hotel's activity feed via Phase 14
+> (`hotel.suspended`, `subscription.*`). **No payment gateway, no online
+> subscription payment, no customer accounts, no OTA, no external
+> messaging, no CRM** — deliberately.
 > See
 > [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) for the plan,
 > [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for the engineering rules,
@@ -551,22 +558,42 @@ Public pages: `/`, `/hotels`, `/hotels/[slug]`, `/booking/manage` through the
 auth-less BFF passthrough `/api/public/*`. See
 [docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md](docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md).
 
-### Platform-owner endpoints (Phase 3)
+### Platform-owner endpoints (Phase 3 + Phase 16)
 
 All under `/api/v1/platform/`, every one restricted to the platform owner
 (`IsPlatformOwner`). Hotel users, staff and unauthenticated requests are rejected.
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/v1/platform/overview/` | Dashboard counters + recent activity |
-| `GET/POST /api/v1/platform/hotels/` | List / create hotel tenants (limited) |
-| `GET/PATCH /api/v1/platform/hotels/{id}/` | Hotel detail / update name·slug·status |
-| `POST /api/v1/platform/hotels/{id}/manager/` | Create or link the primary manager |
-| `GET/POST /api/v1/platform/plans/` | List / create subscription plans |
-| `GET/PATCH/DELETE /api/v1/platform/plans/{id}/` | Detail / update / delete (blocked if in use) |
-| `GET/POST /api/v1/platform/subscriptions/` | List / create (start trial or activate paid) |
+| `GET /api/v1/platform/overview/` | Phase 3 counters + recent activity |
+| `GET /api/v1/platform/dashboard/` | Phase 16 dashboard: hotel/subscription counts, expiring soon, public counts, estimated recurring revenue per currency (never "profit"), recent events |
+| `GET/POST /api/v1/platform/hotels/` | List (filters: status/subscription/public/city/search) / create hotel tenants |
+| `GET/PATCH /api/v1/platform/hotels/{id}/` | Hotel detail (enriched: subscription, trial_used, public flags, counts, suspension audit) / update name·slug — status is NOT patchable |
+| `POST .../hotels/{id}/activate|suspend|unsuspend/` | Audited status lifecycle — suspend REQUIRES a reason; who/when recorded; no hard delete anywhere |
+| `POST .../hotels/{id}/manager/` | Create or link the primary manager |
+| `POST .../hotels/{id}/subscriptions/start-trial/` | The ONE-TIME free trial — first subscription only, never re-granted |
+| `POST .../hotels/{id}/subscriptions/activate-paid/` | Manual paid activation (optional manual payment record) — no gateway |
+| `POST .../hotels/{id}/subscriptions/renew|cancel|expire/` | Explicit lifecycle actions; history preserved |
+| `GET .../hotels/{id}/subscriptions/history/` | The hotel's full subscription history |
+| `GET/POST .../subscription-payments/` · `POST .../{id}/void/` | Manual platform payments (Decimal, void-not-delete, separate from hotel finance) |
+| `GET/POST /api/v1/platform/plans/` | List / create plans (+ yearly price, public flag, limits, notes) |
+| `GET/PATCH/DELETE .../plans/{id}/` · `POST .../activate|deactivate/` | Update / delete (blocked if in use → deactivate instead) |
+| `GET/POST /api/v1/platform/subscriptions/` | List (filters incl. `expiring=soon`) / create |
 | `GET/PATCH /api/v1/platform/subscriptions/{id}/` | Detail / cancel·expire |
-| `GET/PATCH /api/v1/platform/settings/` | Read / update basic platform settings |
+| `GET/PATCH /api/v1/platform/settings/` | Basic platform settings |
+| `GET/PATCH /api/v1/platform/public-site-settings/` | Public-site admin: header links/buttons + per-locale label overrides, hero, contact, footer (safe URLs only) — read publicly at `GET /api/v1/public/site-settings/` |
+
+**Subscription enforcement (Phase 16):** one central backend rule
+(`apps/subscriptions/enforcement.py`) refuses every important hotel write —
+reservations, check-in/out, payments/expenses/invoices, service orders,
+housekeeping/maintenance, staff/permissions, shifts/daily close, rooms and
+PUBLIC BOOKING — with `subscription_inactive` when the hotel has no
+effectively-live subscription (suspension keeps `hotel_suspended` and wins).
+Reads, reports and notifications keep working; nothing is deleted; hotels
+with no subscription history (not yet onboarded to billing) are not blocked.
+The hotel console reads its own state from `GET /api/v1/hotel/profile/`
+(`subscription_state`) and shows expiring-soon/expired/suspended banners.
+See [docs/PLATFORM_OWNER_PANEL_STRATEGY.md](docs/PLATFORM_OWNER_PANEL_STRATEGY.md).
 
 ### Running tests on PostgreSQL
 

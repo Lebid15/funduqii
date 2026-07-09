@@ -285,6 +285,36 @@ these rules is a defect, not a shortcut.
   the auth-less `/api/public/*` passthrough (GET/POST only).
 - Full rules: [docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md](docs/PUBLIC_WEBSITE_BOOKING_STRATEGY.md).
 
+### 8m. Platform owner panel & subscription enforcement (from Phase 16)
+- **Access separation is absolute.** `/api/v1/platform/` is platform-owner
+  only; a platform owner without a hotel membership never reaches
+  `/api/v1/hotel/`; platform and hotel permissions never mix.
+- **Hotel status is audited.** Activate/suspend/unsuspend are explicit
+  actions; suspension REQUIRES a reason and records the acting user;
+  `status` is not patchable; hotels are never hard-deleted.
+- **The free trial is granted once, as the hotel's FIRST subscription** —
+  never after any previous subscription (paid, expired or cancelled), never
+  automatically, never re-granted.
+- **Paid subscriptions are manual.** No payment gateway of any kind; the
+  optional `PlatformSubscriptionPayment` record (Decimal, void-not-delete)
+  is platform bookkeeping and NEVER touches hotel finance
+  (Folio/Invoice/Payment).
+- **One enforcement chokepoint.** `ensure_hotel_operational` (in
+  `apps/subscriptions/enforcement.py`) is called by every hotel app's write
+  guard and by the public booking switch: suspended → `hotel_suspended`
+  (wins); no effectively-live subscription → `subscription_inactive`.
+  Time-aware (a live-status subscription past its end blocks). Reads,
+  reports and notifications always keep working; data is never deleted;
+  hotels with no billing history are not blocked (documented).
+- **Frontend is UX only** — banners and disabled buttons mirror the state;
+  the backend refusal is the protection.
+- **Public-site settings are not a CMS**: visibility switches + per-locale
+  label overrides with dictionary fallbacks; URLs restricted to internal
+  paths or http(s); everything in the model is public by design.
+- **Revenue figures are administrative estimates** (Decimal, per currency,
+  yearly normalized) — never named profit, never a legal financial report.
+- Full rules: [docs/PLATFORM_OWNER_PANEL_STRATEGY.md](docs/PLATFORM_OWNER_PANEL_STRATEGY.md).
+
 ## 9. Database & migrations
 - No random/ad-hoc schema. Models follow the conceptual data model in the
   blueprint.

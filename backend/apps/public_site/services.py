@@ -147,10 +147,15 @@ def validate_public_dates(settings_obj: HotelSettings, check_in, check_out) -> N
 
 
 def booking_open(settings_obj: HotelSettings) -> bool:
+    # Phase 16: an expired/inactive subscription stops PUBLIC BOOKING too —
+    # the hotel may stay listed, but visitors cannot book it.
+    from apps.subscriptions.enforcement import subscription_blocks_writes
+
     return (
         settings_obj.hotel.status == HotelStatus.ACTIVE
         and settings_obj.public_is_listed
         and settings_obj.allow_public_booking
+        and not subscription_blocks_writes(settings_obj.hotel)
     )
 
 

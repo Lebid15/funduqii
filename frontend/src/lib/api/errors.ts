@@ -35,6 +35,20 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.hotel.settings.galleryFullError;
     case "hotel_suspended":
       return t.hotel.settings.readOnlySuspended;
+    case "subscription_inactive":
+      return t.subscriptionState.blockedError;
+    case "suspension_reason_required":
+      return t.hotels.suspendReasonRequired;
+    case "invalid_hotel_status_transition":
+      return t.hotels.invalidStatusTransition;
+    case "trial_already_used":
+      return t.subscriptions.errors.trialAlreadyUsed;
+    case "conflicting_subscription":
+      return t.subscriptions.errors.conflicting;
+    case "invalid_subscription_transition":
+      return t.subscriptions.errors.invalidTransition;
+    case "plan_in_use":
+      return t.plans.inUseCannotDelete;
     case "resource_in_use":
       return t.rooms.errors.inUse;
     case "cross_tenant_reference":

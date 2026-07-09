@@ -15,11 +15,11 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import HotelSuspended
 from apps.rbac.permissions import HasHotelMembership, HasHotelPermission
 from apps.rbac.registry import is_valid_permission
 from apps.rbac.services import get_hotel_permissions
-from apps.tenancy.models import HotelMembership, HotelStatus, MembershipType
+from apps.tenancy.models import HotelMembership, MembershipType
+from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
 from .serializers import (
@@ -44,8 +44,10 @@ PermissionsUpdate = HasHotelPermission("staff.permissions_update")
 
 
 def _guard_write(request: Request) -> None:
-    if request.hotel.status == HotelStatus.SUSPENDED:
-        raise HotelSuspended()
+    # Phase 16: ONE central rule decides operational writes — suspended
+    # hotels AND hotels without an active subscription are refused here
+    # (hotel_suspended / subscription_inactive). Reads are never blocked.
+    ensure_hotel_operational(request.hotel)
 
 
 def _get_membership(request: Request, pk: int) -> HotelMembership:

@@ -23,7 +23,9 @@ import {
   type Column,
 } from "@/components/ui";
 import {
+  activatePlan,
   createPlan,
+  deactivatePlan,
   deletePlan,
   listPlans,
   updatePlan,
@@ -70,7 +72,9 @@ export default function PlansPage() {
 
   async function toggleActive(plan: SubscriptionPlan) {
     try {
-      await updatePlan(plan.id, { is_active: !plan.is_active });
+      // Phase 16: explicit activate/deactivate actions — deactivation is the
+      // safe alternative to deleting a used plan.
+      await (plan.is_active ? deactivatePlan(plan.id) : activatePlan(plan.id));
       notify(t.settings.saved);
       load();
     } catch (err) {
@@ -251,6 +255,10 @@ function PlanModal({
   const [roomLimit, setRoomLimit] = useState("");
   const [userLimit, setUserLimit] = useState("");
   const [features, setFeatures] = useState("");
+  const [priceYearly, setPriceYearly] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  const [maxPublicBookings, setMaxPublicBookings] = useState("");
+  const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -267,6 +275,14 @@ function PlanModal({
     setRoomLimit(plan?.room_limit != null ? String(plan.room_limit) : "");
     setUserLimit(plan?.user_limit != null ? String(plan.user_limit) : "");
     setFeatures((plan?.feature_codes ?? []).join(", "));
+    setPriceYearly(plan?.price_yearly ?? "");
+    setIsPublic(plan?.is_public ?? true);
+    setMaxPublicBookings(
+      plan?.max_public_bookings_per_month != null
+        ? String(plan.max_public_bookings_per_month)
+        : "",
+    );
+    setNotes(plan?.notes ?? "");
     setError(null);
   }, [open, plan]);
 
@@ -278,11 +294,16 @@ function PlanModal({
       slug: slug.trim(),
       description: description.trim(),
       price,
+      price_yearly: priceYearly === "" ? null : priceYearly,
       currency: currency.trim() || "USD",
       billing_cycle: billingCycle as PlanWriteBody["billing_cycle"],
       trial_days: Number(trialDays) || 0,
       room_limit: roomLimit === "" ? null : Number(roomLimit),
       user_limit: userLimit === "" ? null : Number(userLimit),
+      max_public_bookings_per_month:
+        maxPublicBookings === "" ? null : Number(maxPublicBookings),
+      is_public: isPublic,
+      notes: notes.trim(),
       feature_codes: features
         .split(",")
         .map((code) => code.trim())
@@ -404,7 +425,42 @@ function PlanModal({
               onChange={(event) => setUserLimit(event.target.value)}
             />
           </FormField>
+          <FormField
+            label={t.plans.priceYearly}
+            htmlFor="plan-price-yearly"
+            hint={t.plans.priceYearlyHint}
+          >
+            <Input
+              id="plan-price-yearly"
+              type="number"
+              min="0"
+              step="0.01"
+              value={priceYearly}
+              onChange={(event) => setPriceYearly(event.target.value)}
+            />
+          </FormField>
+          <FormField
+            label={t.plans.maxPublicBookings}
+            htmlFor="plan-public-bookings"
+            hint={t.plans.unlimited}
+          >
+            <Input
+              id="plan-public-bookings"
+              type="number"
+              min="0"
+              value={maxPublicBookings}
+              onChange={(event) => setMaxPublicBookings(event.target.value)}
+            />
+          </FormField>
         </div>
+        <label className="cluster">
+          <input
+            type="checkbox"
+            checked={isPublic}
+            onChange={(event) => setIsPublic(event.target.checked)}
+          />
+          <span>{t.plans.isPublic}</span>
+        </label>
         <FormField
           label={t.plans.features}
           htmlFor="plan-features"
@@ -421,6 +477,13 @@ function PlanModal({
             id="plan-desc"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
+          />
+        </FormField>
+        <FormField label={t.plans.notes} htmlFor="plan-notes" hint={t.plans.notesHint}>
+          <Textarea
+            id="plan-notes"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
           />
         </FormField>
       </form>

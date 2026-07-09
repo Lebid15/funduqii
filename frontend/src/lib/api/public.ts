@@ -132,7 +132,59 @@ export interface PublicBooking {
   manage_token?: string;
 }
 
+export interface PublicI18nText {
+  ar: string;
+  en: string;
+  tr: string;
+}
+
+export interface PublicSiteSettings {
+  header: {
+    show_home_link: boolean;
+    show_hotels_link: boolean;
+    show_contact_link: boolean;
+    show_book_now_button: boolean;
+    show_trial_button: boolean;
+    home_label: PublicI18nText;
+    hotels_label: PublicI18nText;
+    contact_label: PublicI18nText;
+    book_now_label: PublicI18nText;
+    trial_label: PublicI18nText;
+  };
+  hero: {
+    title: PublicI18nText;
+    subtitle: PublicI18nText;
+    primary_button_label: PublicI18nText;
+    primary_button_url: string;
+    secondary_button_label: PublicI18nText;
+    secondary_button_url: string;
+  };
+  contact: {
+    phone: string;
+    whatsapp: string;
+    email: string;
+    address: string;
+    facebook_url: string;
+    instagram_url: string;
+    website_url: string;
+  };
+  footer: { text: PublicI18nText };
+}
+
+/** Resolve a per-locale admin override; empty means "use the fallback". */
+export function resolvePublicText(
+  text: PublicI18nText | undefined,
+  locale: "ar" | "en" | "tr",
+  fallback: string,
+): string {
+  return text?.[locale]?.trim() || fallback;
+}
+
 // --- Calls -------------------------------------------------------------------
+
+export function getPublicSiteSettings(): Promise<PublicSiteSettings> {
+  return publicFetch("/site-settings");
+}
 
 export function listPublicHotels(params?: {
   q?: string;

@@ -13,12 +13,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import HotelSuspended, ResourceInUse
+from apps.common.exceptions import ResourceInUse
 from apps.finance.services import money
 from apps.rbac.permissions import HasHotelPermission
 from apps.rooms.models import Room
 from apps.stays.models import Stay
-from apps.tenancy.models import HotelStatus
+from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
 from .models import (
@@ -54,8 +54,10 @@ OrdersPost = HasHotelPermission("service_orders.post_to_folio")
 
 
 def _guard_write(request: Request) -> None:
-    if request.hotel.status == HotelStatus.SUSPENDED:
-        raise HotelSuspended()
+    # Phase 16: ONE central rule decides operational writes — suspended
+    # hotels AND hotels without an active subscription are refused here
+    # (hotel_suspended / subscription_inactive). Reads are never blocked.
+    ensure_hotel_operational(request.hotel)
 
 
 def _get(model, request, pk):

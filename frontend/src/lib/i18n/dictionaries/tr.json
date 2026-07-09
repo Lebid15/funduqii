@@ -44,7 +44,8 @@
     "platformOwner": "Platform sahibi",
     "openMenu": "Menüyü aç",
     "closeMenu": "Menüyü kapat",
-    "mainSection": "Ana"
+    "mainSection": "Ana",
+    "publicSite": "Genel site"
   },
   "auth": {
     "loginTitle": "Giriş yap",
@@ -1792,7 +1793,10 @@
       "hotels": "Oteller",
       "manageBooking": "Rezervasyonumu yönet",
       "login": "Giriş yap",
-      "freeTrial": "Ücretsiz deneme"
+      "freeTrial": "Ücretsiz deneme",
+      "home": "Ana sayfa",
+      "contact": "Bize ulaşın",
+      "bookNow": "Şimdi rezerve et"
     },
     "footer": {
       "tagline": "Otel yönetim platformu — hesap gerektirmeyen çevrimiçi rezervasyon."
@@ -1898,6 +1902,51 @@
       "expired": "Süresi doldu"
     }
   },
+  "subscriptionState": {
+    "suspended": "Bu otel platform tarafından askıya alındı. Veriler salt okunur; lütfen platform sahibiyle iletişime geçin.",
+    "expired": "Otelin aboneliği sona erdi. Platform sahibi yeni bir abonelik etkinleştirene kadar önemli işlemler kısıtlıdır — hiçbir veri kaybolmaz.",
+    "expiringSoon": "Otelin aboneliği {days} gün içinde sona eriyor. Yenilemek için platform sahibiyle iletişime geçin.",
+    "blockedError": "Bu işlem kullanılamıyor: otelin aktif aboneliği yok. Lütfen platform sahibiyle iletişime geçin."
+  },
+  "publicSiteAdmin": {
+    "title": "Genel site",
+    "subtitle": "Genel sitenin üst menüsünü, ana metinlerini, iletişim bilgilerini ve alt bilgisini yönetin. Boş etiketler yerleşik çevirilere döner.",
+    "saved": "Genel site ayarları kaydedildi",
+    "sectionHeader": "Üst menü bağlantıları ve düğmeleri",
+    "sectionHeaderDesc": "Ziyaretçilerin göreceği bağlantı ve düğmeleri seçin; dilerseniz etiketlerini dile göre değiştirin.",
+    "showHome": "Ana sayfa bağlantısını göster",
+    "showHotels": "Oteller bağlantısını göster",
+    "showContact": "İletişim bağlantısını göster",
+    "showBookNow": "Şimdi rezerve et düğmesini göster",
+    "showTrial": "Ücretsiz deneme düğmesini göster",
+    "homeLabel": "Ana sayfa etiketi",
+    "hotelsLabel": "Oteller etiketi",
+    "contactLabel": "İletişim etiketi",
+    "bookNowLabel": "Şimdi rezerve et etiketi",
+    "trialLabel": "Ücretsiz deneme etiketi",
+    "sectionHero": "Ana sayfa girişi",
+    "sectionHeroDesc": "Genel ana sayfadaki ana başlık, alt başlık ve düğmeler.",
+    "heroTitle": "Giriş başlığı",
+    "heroSubtitle": "Giriş alt başlığı",
+    "heroPrimaryLabel": "Birincil düğme etiketi",
+    "heroPrimaryUrl": "Birincil düğme adresi",
+    "heroSecondaryLabel": "İkincil düğme etiketi",
+    "heroSecondaryUrl": "İkincil düğme adresi",
+    "urlHint": "Dahili yol (/...) veya tam http(s) bağlantısı.",
+    "sectionContact": "Platform iletişim bilgileri",
+    "sectionContactDesc": "Sitenin alt bilgisinde herkese gösterilir.",
+    "phone": "Telefon",
+    "whatsapp": "WhatsApp (yalnızca görüntü)",
+    "email": "E-posta",
+    "address": "Adres",
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "website": "Web sitesi",
+    "sectionFooter": "Alt bilgi",
+    "sectionFooterDesc": "Platform adının altındaki kısa metin.",
+    "footerText": "Alt bilgi metni",
+    "overrideHint": "Yerleşik çeviriyi kullanmak için boş bırakın."
+  },
   "language": {
     "label": "Dil",
     "ar": "العربية",
@@ -1930,7 +1979,11 @@
       "activeTrials": "Süren ücretsiz denemeler",
       "activeSubscriptions": "Ücretli ve aktif",
       "expiringSoon": "Önümüzdeki 14 gün içinde",
-      "expired": "Artık aktif değil"
+      "expired": "Artık aktif değil",
+      "trialHotels": "Ücretsiz denemesi süren oteller",
+      "paidHotels": "Aktif ücretli aboneliği olan oteller",
+      "publicListed": "Genel sitede listelenen aktif oteller",
+      "totalPlans": "Tüm abonelik paketleri"
     },
     "hotelsTotal": "Toplam otel",
     "hotelsActive": "Aktif oteller",
@@ -1943,7 +1996,14 @@
     "recentHotels": "Son oteller",
     "recentSubscriptions": "Son abonelik etkinliği",
     "noHotels": "Henüz kayıtlı otel yok.",
-    "noSubscriptions": "Henüz abonelik etkinliği yok."
+    "noSubscriptions": "Henüz abonelik etkinliği yok.",
+    "trialHotels": "Denemedeki oteller",
+    "paidHotels": "Ücretli oteller",
+    "publicListed": "Genelde listelenen",
+    "totalPlans": "Paketler",
+    "revenueTitle": "Tahmini aylık yinelenen gelir",
+    "revenueHint": "Manuel etkinleştirilen aboneliklerden idari bir tahmin (yıllık paketler aylığa çevrilir). Kâr değildir ve yasal bir mali rapor değildir.",
+    "revenueEmpty": "Henüz aktif ücretli abonelik yok."
   },
   "hotels": {
     "title": "Oteller",
@@ -1976,7 +2036,27 @@
     "empty": "Henüz otel yok",
     "emptyHint": "Başlamak için ilk otelinizi ekleyin.",
     "nameRequired": "Ad zorunludur.",
-    "slugRequired": "Slug zorunludur."
+    "slugRequired": "Slug zorunludur.",
+    "city": "Şehir",
+    "subscription": "Abonelik",
+    "publicListed": "Genel listeleme",
+    "publicBookingEnabled": "Genel rezervasyon",
+    "trialUsed": "Deneme kullanıldı",
+    "roomsCount": "Odalar",
+    "staffCount": "Personel",
+    "reservationsCount": "Rezervasyonlar",
+    "unsuspend": "Askıyı kaldır",
+    "suspendTitle": "Oteli askıya al",
+    "suspendBody": "Askıya alma otelin önemli işlemlerini engeller ve genel siteden gizler. Hiçbir veri silinmez.",
+    "suspendReason": "Askıya alma nedeni",
+    "suspendReasonRequired": "Askıya alma nedeni gereklidir.",
+    "suspendedReasonLabel": "Askıya alma nedeni",
+    "invalidStatusTransition": "Bu otel durumu değişikliğine izin verilmiyor.",
+    "filterSubscription": "Abonelik",
+    "subscriptionSection": "Abonelik",
+    "subscriptionSectionDesc": "Otelin mevcut aboneliği, yaşam döngüsü işlemleri ve korunan geçmişi. Ücretli etkinleştirme manueldir — ödeme ağı yoktur.",
+    "subscriptionHistory": "Abonelik geçmişi",
+    "paymentsHistory": "Manuel ödemeler"
   },
   "plans": {
     "title": "Abonelik paketleri",
@@ -2010,7 +2090,13 @@
     "empty": "Henüz paket yok",
     "emptyHint": "İlk abonelik paketinizi oluşturun.",
     "active": "Aktif",
-    "inactive": "Pasif"
+    "inactive": "Pasif",
+    "priceYearly": "Yıllık fiyat",
+    "priceYearlyHint": "İsteğe bağlı — taban fiyatın yanında gösterilir.",
+    "maxPublicBookings": "Genel rezervasyon / ay",
+    "isPublic": "Bu paketi genel olarak göster",
+    "notes": "Dahili notlar",
+    "notesHint": "Yalnızca platform sahibi görür."
   },
   "subscriptions": {
     "title": "Otel abonelikleri",
@@ -2043,7 +2129,24 @@
     "trialAlreadyUsed": "Bu otel tek seferlik ücretsiz denemesini zaten kullandı.",
     "conflict": "Bu otelin zaten aktif bir aboneliği var.",
     "empty": "Henüz abonelik yok",
-    "emptyHint": "Oluşturmak için bir otele paket atayın."
+    "emptyHint": "Oluşturmak için bir otele paket atayın.",
+    "startTrial": "Ücretsiz denemeyi başlat",
+    "activatePaid": "Ücretli abonelik etkinleştir",
+    "renew": "Yenile",
+    "expiringSoonFilter": "Yalnızca yakında bitecekler",
+    "trialAlreadyUsedHint": "Bu otel tek seferlik ücretsiz denemesini zaten kullandı.",
+    "voided": "İptal edildi",
+    "methods": {
+      "cash": "Nakit",
+      "bank_transfer": "Banka havalesi",
+      "manual": "Manuel",
+      "other": "Diğer"
+    },
+    "errors": {
+      "trialAlreadyUsed": "Ücretsiz deneme yalnızca bir kez, otelin ilk aboneliği olarak verilir.",
+      "conflicting": "Bu otelin zaten aktif bir aboneliği var.",
+      "invalidTransition": "Bu abonelik işlemi mevcut durumda yapılamaz."
+    }
   },
   "settings": {
     "title": "Platform ayarları",

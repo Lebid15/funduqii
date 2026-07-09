@@ -12,6 +12,7 @@ import {
   Clock,
   ConciergeBell,
   CreditCard,
+  Globe,
   Hotel,
   LayoutDashboard,
   Package,
@@ -61,6 +62,7 @@ export function Sidebar({
     { href: "/platform/hotels", label: t.nav.hotels, icon: Building2 },
     { href: "/platform/plans", label: t.nav.plans, icon: Package },
     { href: "/platform/subscriptions", label: t.nav.subscriptions, icon: CreditCard },
+    { href: "/platform/public-site", label: t.nav.publicSite, icon: Globe },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];
   const allHotelItems: NavItem[] = [

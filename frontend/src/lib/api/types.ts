@@ -106,8 +106,21 @@ export interface Hotel {
   name: string;
   slug: string;
   status: HotelStatus;
+  suspension_reason: string;
+  status_changed_at: string | null;
+  status_changed_by: string | null;
   primary_manager: PrimaryManagerSummary | null;
   current_subscription: HotelSubscriptionSummary | null;
+  trial_used: boolean;
+  city: string;
+  country: string;
+  contact_phone: string;
+  contact_email: string;
+  public_is_listed: boolean;
+  public_booking_enabled: boolean;
+  rooms_count: number;
+  staff_count: number;
+  reservations_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -118,14 +131,18 @@ export interface SubscriptionPlan {
   slug: string;
   description: string;
   price: string;
+  price_yearly: string | null;
   currency: string;
   billing_cycle: BillingCycle;
   trial_days: number;
   room_limit: number | null;
   user_limit: number | null;
+  max_public_bookings_per_month: number | null;
   feature_codes: string[];
   is_active: boolean;
+  is_public: boolean;
   sort_order: number;
+  notes: string;
   is_in_use: boolean;
   created_at: string;
   updated_at: string;
@@ -176,6 +193,93 @@ export interface PlatformOverview {
   };
   recent_hotels: Hotel[];
   recent_subscriptions: HotelSubscription[];
+}
+
+/* Phase 16 — platform owner panel completion. */
+
+export interface PlatformDashboard {
+  total_hotels: number;
+  active_hotels: number;
+  setup_hotels: number;
+  suspended_hotels: number;
+  trial_hotels: number;
+  paid_hotels: number;
+  expired_subscriptions: number;
+  expiring_soon_subscriptions: number;
+  total_plans: number;
+  public_listed_hotels: number;
+  public_booking_enabled_hotels: number;
+  /** Estimated recurring revenue per currency — an administrative figure,
+   * never "profit" and never a legal financial report. */
+  estimated_monthly_recurring_revenue: Record<string, string>;
+  revenue_excluded_custom_cycles: number;
+  recent_hotels: Hotel[];
+  recent_subscription_events: HotelSubscription[];
+}
+
+export type PlatformPaymentMethod = "cash" | "bank_transfer" | "manual" | "other";
+
+export interface PlatformPayment {
+  id: number;
+  hotel: number;
+  hotel_name: string;
+  subscription: number | null;
+  amount: string;
+  currency: string;
+  method: PlatformPaymentMethod;
+  reference: string;
+  note: string;
+  received_at: string;
+  recorded_by: string | null;
+  is_voided: boolean;
+  voided_at: string | null;
+  void_reason: string;
+  created_at: string;
+}
+
+/** A translatable admin text override — empty strings fall back to the
+ * built-in dictionary translation. */
+export type I18nText = { ar: string; en: string; tr: string };
+
+export interface PlatformPublicSettings {
+  show_home_link: boolean;
+  show_hotels_link: boolean;
+  show_contact_link: boolean;
+  show_book_now_button: boolean;
+  show_trial_button: boolean;
+  header_home_label: I18nText;
+  header_hotels_label: I18nText;
+  header_contact_label: I18nText;
+  header_book_now_label: I18nText;
+  header_trial_label: I18nText;
+  hero_title: I18nText;
+  hero_subtitle: I18nText;
+  hero_primary_button_label: I18nText;
+  hero_primary_button_url: string;
+  hero_secondary_button_label: I18nText;
+  hero_secondary_button_url: string;
+  public_phone: string;
+  public_whatsapp_display: string;
+  public_email: string;
+  public_address: string;
+  facebook_url: string;
+  instagram_url: string;
+  website_url: string;
+  footer_text: I18nText;
+  updated_at: string;
+}
+
+export interface HotelSubscriptionState {
+  has_subscription: boolean;
+  status: SubscriptionStatus | null;
+  plan_name: string | null;
+  ends_at: string | null;
+  days_left: number | null;
+  expiring_soon: boolean;
+  expired: boolean;
+  suspended: boolean;
+  write_blocked: boolean;
+  blocked_reason: "hotel_suspended" | "subscription_inactive" | null;
 }
 
 /* ==========================================================================
@@ -253,6 +357,7 @@ export interface HotelProfile {
   logo: HotelMedia | null;
   cover: HotelMedia | null;
   gallery_count: number;
+  subscription_state: HotelSubscriptionState;
 }
 
 /* ==========================================================================

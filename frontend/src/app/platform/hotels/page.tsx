@@ -26,14 +26,21 @@ import {
   type Column,
 } from "@/components/ui";
 import {
+  activateHotel,
   createHotel,
   listHotels,
-  updateHotel,
+  suspendHotel,
+  unsuspendHotel,
   type HotelCreateBody,
 } from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
 import type { Hotel } from "@/lib/api/types";
-import { hotelStatusLabel, hotelStatusTone } from "@/lib/format";
+import {
+  hotelStatusLabel,
+  hotelStatusTone,
+  subscriptionStatusLabel,
+  subscriptionStatusTone,
+} from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 const PAGE_SIZE = 25;
@@ -46,11 +53,14 @@ export default function HotelsPage() {
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
+  const [subscription, setSubscription] = useState("");
+  const [publicListed, setPublicListed] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [suspendTarget, setSuspendTarget] = useState<Hotel | null>(null);
 
   // Await-first so the mount effect performs no synchronous setState; the
   // spinner for user-initiated refetches is set by the handlers below.
@@ -59,6 +69,8 @@ export default function HotelsPage() {
       const data = await listHotels({
         page,
         status: status || undefined,
+        subscription: subscription || undefined,
+        public: publicListed || undefined,
         search: query || undefined,
       });
       setRows(data.results);
@@ -69,7 +81,7 @@ export default function HotelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, query, t]);
+  }, [page, status, subscription, publicListed, query, t]);
 
   useEffect(() => {
     load();
@@ -86,10 +98,9 @@ export default function HotelsPage() {
     [t],
   );
 
-  async function toggleStatus(hotel: Hotel) {
-    const next = hotel.status === "active" ? "suspended" : "active";
+  async function runAction(action: () => Promise<Hotel>) {
     try {
-      await updateHotel(hotel.id, { status: next });
+      await action();
       notify(t.settings.saved);
       load();
     } catch (err) {
@@ -107,13 +118,38 @@ export default function HotelsPage() {
         </Link>
       ),
     },
-    { key: "slug", header: t.hotels.slug },
+    {
+      key: "city",
+      header: t.hotels.city,
+      render: (row) => row.city || <span className="muted">—</span>,
+    },
     {
       key: "status",
       header: t.common.status,
       render: (row) => (
         <Badge tone={hotelStatusTone(row.status)}>
           {hotelStatusLabel(row.status, t)}
+        </Badge>
+      ),
+    },
+    {
+      key: "subscription",
+      header: t.hotels.subscription,
+      render: (row) =>
+        row.current_subscription ? (
+          <Badge tone={subscriptionStatusTone(row.current_subscription.status)}>
+            {subscriptionStatusLabel(row.current_subscription.status, t)}
+          </Badge>
+        ) : (
+          <span className="muted">{t.hotels.noSubscription}</span>
+        ),
+    },
+    {
+      key: "public",
+      header: t.hotels.publicListed,
+      render: (row) => (
+        <Badge tone={row.public_is_listed ? "success" : "neutral"}>
+          {row.public_is_listed ? t.common.yes : t.common.no}
         </Badge>
       ),
     },
@@ -133,9 +169,29 @@ export default function HotelsPage() {
       align: "end",
       render: (row) => (
         <div className="table__actions">
-          <Button variant="secondary" size="sm" onClick={() => toggleStatus(row)}>
-            {row.status === "active" ? t.hotels.suspend : t.hotels.activate}
-          </Button>
+          {row.status === "setup" ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => runAction(() => activateHotel(row.id))}
+            >
+              {t.hotels.activate}
+            </Button>
+          ) : null}
+          {row.status === "active" ? (
+            <Button variant="danger" size="sm" onClick={() => setSuspendTarget(row)}>
+              {t.hotels.suspend}
+            </Button>
+          ) : null}
+          {row.status === "suspended" ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => runAction(() => unsuspendHotel(row.id))}
+            >
+              {t.hotels.unsuspend}
+            </Button>
+          ) : null}
         </div>
       ),
     },
@@ -181,6 +237,40 @@ export default function HotelsPage() {
                   setLoading(true);
                   setPage(1);
                   setStatus(event.target.value);
+                }}
+              />
+            </FormField>
+            <FormField label={t.hotels.filterSubscription} htmlFor="hotel-sub">
+              <Select
+                id="hotel-sub"
+                value={subscription}
+                placeholder={t.common.all}
+                options={[
+                  { value: "trial", label: t.subscriptions.statusTrial },
+                  { value: "active", label: t.subscriptions.statusActive },
+                  { value: "expired", label: t.subscriptions.statusExpired },
+                  { value: "cancelled", label: t.subscriptions.statusCancelled },
+                ]}
+                onChange={(event) => {
+                  setLoading(true);
+                  setPage(1);
+                  setSubscription(event.target.value);
+                }}
+              />
+            </FormField>
+            <FormField label={t.hotels.publicListed} htmlFor="hotel-public">
+              <Select
+                id="hotel-public"
+                value={publicListed}
+                placeholder={t.common.all}
+                options={[
+                  { value: "true", label: t.common.yes },
+                  { value: "false", label: t.common.no },
+                ]}
+                onChange={(event) => {
+                  setLoading(true);
+                  setPage(1);
+                  setPublicListed(event.target.value);
                 }}
               />
             </FormField>
@@ -256,7 +346,88 @@ export default function HotelsPage() {
           load();
         }}
       />
+      <SuspendHotelModal
+        hotel={suspendTarget}
+        onClose={() => setSuspendTarget(null)}
+        onDone={() => {
+          setSuspendTarget(null);
+          notify(t.settings.saved);
+          load();
+        }}
+      />
     </PageContainer>
+  );
+}
+
+/** Suspension always records a REASON (and who did it, on the backend). */
+function SuspendHotelModal({
+  hotel,
+  onClose,
+  onDone,
+}: {
+  hotel: Hotel | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (hotel) {
+      setReason("");
+      setError(null);
+    }
+  }, [hotel]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!hotel || !reason.trim()) {
+      setError(t.hotels.suspendReasonRequired);
+      return;
+    }
+    setBusy(true);
+    try {
+      await suspendHotel(hotel.id, reason.trim());
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={hotel !== null}
+      onClose={onClose}
+      title={t.hotels.suspendTitle}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          <Button form="suspend-hotel-form" type="submit" variant="danger" loading={busy}>
+            {t.hotels.suspend}
+          </Button>
+        </>
+      }
+    >
+      <form id="suspend-hotel-form" className="stack" onSubmit={submit} noValidate>
+        <p className="muted">{t.hotels.suspendBody}</p>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={t.hotels.suspendReason} htmlFor="suspend-reason">
+          <Input
+            id="suspend-reason"
+            value={reason}
+            required
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </FormField>
+      </form>
+    </Modal>
   );
 }
 

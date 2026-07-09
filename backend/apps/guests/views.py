@@ -10,9 +10,8 @@ from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.common.exceptions import HotelSuspended
 from apps.rbac.permissions import HasHotelPermission
-from apps.tenancy.models import HotelStatus
+from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from .models import Guest
 from .serializers import GuestSerializer
@@ -24,8 +23,10 @@ CanDelete = HasHotelPermission("guests.delete")
 
 
 def _guard_write(request: Request) -> None:
-    if request.hotel.status == HotelStatus.SUSPENDED:
-        raise HotelSuspended()
+    # Phase 16: ONE central rule decides operational writes — suspended
+    # hotels AND hotels without an active subscription are refused here
+    # (hotel_suspended / subscription_inactive). Reads are never blocked.
+    ensure_hotel_operational(request.hotel)
 
 
 class _GuestScopedMixin:

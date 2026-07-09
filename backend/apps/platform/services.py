@@ -9,9 +9,14 @@ membership. No hotel settings, images, rooms, etc.
 from __future__ import annotations
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.accounts.models import AccountType, User
-from apps.tenancy.models import Hotel, HotelMembership, MembershipType
+from apps.common.exceptions import (
+    InvalidHotelStatusTransition,
+    SuspensionReasonRequired,
+)
+from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
 
 
 def get_primary_manager(hotel: Hotel) -> User | None:
@@ -29,6 +34,90 @@ def create_hotel(*, name: str, slug: str, status: str | None = None) -> Hotel:
     if status:
         fields["status"] = status
     return Hotel.objects.create(**fields)
+
+
+# --- Hotel status lifecycle (Phase 16) ---------------------------------------
+
+
+def _record_hotel_event(hotel, *, event_type, title, message="", actor=None):
+    """Surface a platform status action in the hotel's activity feed
+    (category `system` → the hotel's managers only; Phase 14 pattern)."""
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type=event_type,
+        title=title,
+        message=message,
+        actor=actor,
+        related_object=hotel,
+    )
+
+
+def _set_hotel_status(hotel, status, *, reason="", actor=None) -> Hotel:
+    hotel.status = status
+    hotel.suspension_reason = reason
+    hotel.status_changed_at = timezone.now()
+    hotel.status_changed_by = actor if getattr(actor, "is_authenticated", False) else None
+    hotel.save(
+        update_fields=[
+            "status",
+            "suspension_reason",
+            "status_changed_at",
+            "status_changed_by",
+            "updated_at",
+        ]
+    )
+    return hotel
+
+
+@transaction.atomic
+def activate_hotel(hotel: Hotel, *, actor=None) -> Hotel:
+    """Move a hotel from setup to active. Suspended hotels use unsuspend."""
+    if hotel.status != HotelStatus.SETUP:
+        raise InvalidHotelStatusTransition()
+    return _set_hotel_status(hotel, HotelStatus.ACTIVE, actor=actor)
+
+
+@transaction.atomic
+def suspend_hotel(hotel: Hotel, *, reason: str, actor=None) -> Hotel:
+    """Suspend a hotel — a REASON and the acting user are recorded.
+
+    Suspension deletes nothing: reads stay available, important writes are
+    refused (`hotel_suspended`), and the hotel disappears from the public
+    site (Phase 15 filters on ACTIVE).
+    """
+    if not (reason or "").strip():
+        raise SuspensionReasonRequired()
+    if hotel.status == HotelStatus.SUSPENDED:
+        raise InvalidHotelStatusTransition()
+    hotel = _set_hotel_status(
+        hotel, HotelStatus.SUSPENDED, reason=reason.strip()[:255], actor=actor
+    )
+    _record_hotel_event(
+        hotel,
+        event_type="hotel.suspended",
+        title="The hotel was suspended by the platform",
+        message=reason.strip()[:255],
+        actor=actor,
+    )
+    return hotel
+
+
+@transaction.atomic
+def unsuspend_hotel(hotel: Hotel, *, actor=None) -> Hotel:
+    """Lift a suspension: back to active. Operations resume according to the
+    hotel's subscription state (enforcement stays in charge)."""
+    if hotel.status != HotelStatus.SUSPENDED:
+        raise InvalidHotelStatusTransition()
+    hotel = _set_hotel_status(hotel, HotelStatus.ACTIVE, actor=actor)
+    _record_hotel_event(
+        hotel,
+        event_type="hotel.unsuspended",
+        title="The hotel suspension was lifted",
+        actor=actor,
+    )
+    return hotel
 
 
 @transaction.atomic

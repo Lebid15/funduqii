@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import type { CurrentUser } from "@/lib/api/types";
 import { CurrentUserProvider } from "@/lib/session/CurrentUserContext";
+import { SubscriptionBanner } from "@/components/hotel/SubscriptionBanner";
 
 import { ContentContainer } from "./ContentContainer";
 import { Sidebar } from "./Sidebar";
@@ -49,7 +50,10 @@ export function AppShell({
       <div className="app-main">
         <Topbar variant={variant} onMenuToggle={() => setSidebarOpen((v) => !v)} />
         <ContentContainer>
-          <CurrentUserProvider user={user}>{children}</CurrentUserProvider>
+          <CurrentUserProvider user={user}>
+            {variant === "hotel" ? <SubscriptionBanner /> : null}
+            {children}
+          </CurrentUserProvider>
         </ContentContainer>
       </div>
     </div>
