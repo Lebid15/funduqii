@@ -118,10 +118,21 @@ class PublicHotelListView(PublicAPIView):
             qs = qs.filter(city__iexact=p["city"])
         if p.get("country"):
             qs = qs.filter(country__iexact=p["country"])
-        # Phase 17 — no N+1 on a public endpoint: media comes via ONE prefetch
-        # and the subscription answer via ONE batch (identical rule to the
-        # per-hotel check; parity is covered by tests).
-        rows_qs = list(qs.distinct().prefetch_related("hotel__media")[:60])
+        # Phase 17 — no N+1 on a public endpoint: ACTIVE media comes via ONE
+        # filtered prefetch and the subscription answer via ONE batch
+        # (identical rule to the per-hotel check; parity covered by tests).
+        from django.db.models import Prefetch
+
+        from apps.hotels.models import HotelMedia
+
+        rows_qs = list(
+            qs.distinct().prefetch_related(
+                Prefetch(
+                    "hotel__media",
+                    queryset=HotelMedia.objects.filter(is_active=True),
+                )
+            )[:60]
+        )
         from apps.subscriptions.enforcement import subscription_blocked_hotel_ids
 
         blocked = subscription_blocked_hotel_ids(s.hotel_id for s in rows_qs)

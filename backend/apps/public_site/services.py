@@ -89,9 +89,13 @@ def _media_url(media: HotelMedia | None) -> str:
 
 
 def hotel_media_payload(hotel: Hotel) -> dict:
-    # Filter in Python over .all() so a list view's prefetch_related cache is
-    # used (Phase 17 — avoids one media query per hotel card).
-    media = [m for m in hotel.media.all() if m.is_active]
+    # Phase 17: the public LIST prefetches active media (one query for all
+    # cards) — use that cache when present; single-hotel endpoints keep the
+    # filtered query so inactive media are never loaded (PR #16 review note).
+    if "media" in getattr(hotel, "_prefetched_objects_cache", {}):
+        media = [m for m in hotel.media.all() if m.is_active]
+    else:
+        media = list(hotel.media.filter(is_active=True))
     cover = next((m for m in media if m.kind == MediaKind.COVER), None)
     logo = next((m for m in media if m.kind == MediaKind.LOGO), None)
     gallery = [m for m in media if m.kind == MediaKind.GALLERY]

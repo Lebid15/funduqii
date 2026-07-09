@@ -46,6 +46,17 @@ self.addEventListener("fetch", (event) => {
   // Only NAVIGATIONS get a fallback; everything else is network-only.
   if (event.request.mode !== "navigate") return;
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(OFFLINE_URL)),
+    fetch(event.request).catch(() =>
+      caches.match(OFFLINE_URL).then(
+        (cached) =>
+          // Never let respondWith reject: if the precache is missing (e.g.
+          // storage was cleared), answer with a minimal plain response.
+          cached ||
+          new Response("Offline — لا يوجد اتصال بالإنترنت", {
+            status: 503,
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          }),
+      ),
+    ),
   );
 });

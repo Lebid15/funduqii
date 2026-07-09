@@ -101,6 +101,34 @@ class PublicHotelsTests(APITestCase, PublicMixin):
         r = self.client.get(reverse("public_site:hotel-detail", args=["hidden"]))
         self.assertEqual(r.status_code, 404)
 
+    def test_inactive_media_never_served(self):
+        # Phase 17: the list prefetches ACTIVE media only and the detail path
+        # keeps its filtered query — inactive images must never appear.
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.hotels.models import HotelMedia, MediaKind
+
+        hotel, _, _ = make_public_hotel("media-h")
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+            b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc"
+            b"\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        for name, active in (("on.png", True), ("off.png", False)):
+            HotelMedia.objects.create(
+                hotel=hotel,
+                kind=MediaKind.GALLERY,
+                file=SimpleUploadedFile(name, png, content_type="image/png"),
+                alt_text=name,
+                is_active=active,
+            )
+        detail = self.client.get(
+            reverse("public_site:hotel-detail", args=["media-h"])
+        ).data
+        self.assertEqual([g["alt"] for g in detail["gallery"]], ["on.png"])
+        listed = self.client.get(reverse("public_site:hotel-list")).data
+        self.assertNotIn("off.png", str(listed))
+
     def test_suspended_hotel_hidden(self):
         make_public_hotel("susp", status=HotelStatus.SUSPENDED)
         self.assertEqual(
