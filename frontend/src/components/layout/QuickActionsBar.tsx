@@ -3,15 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  BarChart3,
   Brush,
   CalendarPlus,
   ChevronDown,
-  FileText,
   LogIn,
   LogOut,
   Receipt,
-  Settings,
   UserPlus,
   UtensilsCrossed,
   Wallet,
@@ -35,43 +32,54 @@ interface QuickAction {
   primary?: boolean;
 }
 
-/** Daily operations in operational-priority order (owner spec). Every href
- * is an EXISTING page — deep-link tabs where the page supports them; no new
+/** DIRECT daily operations in priority order (owner correction): every
+ * button lands in the EXISTING create form/modal — `action=new` is consumed
+ * once by the owning component (useQuickAction) which opens its modal and
+ * strips the param. Check-in/out and payment are entity-scoped by design,
+ * so their buttons open the existing selection surface (today's arrivals /
+ * departures, the folio list) where the action lives on each row. No new
  * flows, no new modals, no new backend. */
 const ACTIONS: QuickAction[] = [
   {
     key: "newReservation",
-    href: "/hotel/reservations",
+    href: "/hotel/reservations?tab=reservations&action=new",
     icon: CalendarPlus,
     access: ["reservations.view"],
     primary: true,
   },
   { key: "checkIn", href: "/hotel/front-desk?tab=arrivals", icon: LogIn, access: ["stays.view"] },
   { key: "checkOut", href: "/hotel/front-desk?tab=departures", icon: LogOut, access: ["stays.view"] },
-  { key: "addGuest", href: "/hotel/guests", icon: UserPlus, access: ["guests.view"] },
-  { key: "guestFolio", href: "/hotel/finance?tab=folios", icon: FileText, access: ["finance.view"] },
-  { key: "recordPayment", href: "/hotel/finance?tab=payments", icon: Receipt, access: ["finance.view"] },
-  { key: "addExpense", href: "/hotel/finance?tab=expenses", icon: Wallet, access: ["expenses.view"] },
+  { key: "addGuest", href: "/hotel/guests?action=new", icon: UserPlus, access: ["guests.view"] },
+  {
+    key: "recordPayment",
+    href: "/hotel/finance?tab=folios",
+    icon: Receipt,
+    access: ["finance.view"],
+  },
+  {
+    key: "addExpense",
+    href: "/hotel/finance?tab=expenses&action=new",
+    icon: Wallet,
+    access: ["expenses.view"],
+  },
   {
     key: "serviceOrder",
-    href: "/hotel/services?tab=orders",
+    href: "/hotel/services?tab=orders&action=new",
     icon: UtensilsCrossed,
     access: ["services.view", "service_orders.view"],
   },
   {
     key: "housekeepingTask",
-    href: "/hotel/operations?tab=housekeeping",
+    href: "/hotel/operations?tab=housekeeping&action=new",
     icon: Brush,
     access: ["housekeeping.view"],
   },
   {
     key: "maintenance",
-    href: "/hotel/operations?tab=maintenance",
+    href: "/hotel/operations?tab=maintenance&action=new",
     icon: Wrench,
     access: ["maintenance.view"],
   },
-  { key: "quickReport", href: "/hotel/reports", icon: BarChart3, access: ["reports.view"] },
-  { key: "settings", href: "/hotel/settings", icon: Settings, access: ["settings.view"] },
 ];
 
 /**

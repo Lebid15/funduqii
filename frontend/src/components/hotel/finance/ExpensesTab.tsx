@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { PiggyBank, Plus, Printer } from "lucide-react";
 
+import { useQuickAction } from "@/lib/useQuickAction";
+
 import {
   Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, FilterBar, FormField,
   Input, LoadingState, Modal, Pagination, PrintDocumentLayout, Select, Textarea, useToast, type Column,
@@ -30,6 +32,8 @@ export function ExpensesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING expense modal once.
+  useQuickAction("new", () => setCreating(true));
   const [voidTarget, setVoidTarget] = useState<Expense | null>(null);
   const [voucher, setVoucher] = useState<{ hotel: HotelHeader; expense: Expense } | null>(null);
 

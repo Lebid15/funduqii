@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Pencil, Plus, Trash2, Users } from "lucide-react";
 
+import { useQuickAction } from "@/lib/useQuickAction";
+
 import {
   Alert,
   Badge,
@@ -49,6 +51,8 @@ export function GuestsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING guest modal once.
+  useQuickAction("new", () => setCreating(true));
   const [editing, setEditing] = useState<Guest | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Guest | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);

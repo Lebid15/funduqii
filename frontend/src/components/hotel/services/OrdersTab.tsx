@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+
+import { useQuickAction } from "@/lib/useQuickAction";
 import {
   BellRing,
   ChefHat,
@@ -81,6 +83,8 @@ export function OrdersTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING order modal once.
+  useQuickAction("new", () => setCreating(true));
   const [detail, setDetail] = useState<ServiceOrder | null>(null);
 
   const load = useCallback(async () => {

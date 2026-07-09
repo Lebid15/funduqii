@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { CheckCircle2, Play, Plus, UserCheck, Wrench } from "lucide-react";
 
+import { useQuickAction } from "@/lib/useQuickAction";
+
 import {
   Alert,
   Badge,
@@ -79,6 +81,8 @@ export function MaintenanceTab() {
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING request modal once.
+  useQuickAction("new", () => setCreateOpen(true));
   const [closeReq, setCloseReq] = useState<MaintenanceRequestListItem | null>(null);
   const [cancelReq, setCancelReq] = useState<MaintenanceRequestListItem | null>(null);
 

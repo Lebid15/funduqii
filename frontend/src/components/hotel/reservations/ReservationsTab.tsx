@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+
+import { useQuickAction } from "@/lib/useQuickAction";
 import {
   BedDouble,
   CalendarCheck,
@@ -79,6 +81,8 @@ export function ReservationsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  // Topbar quick action: ?action=new opens the EXISTING create modal once.
+  useQuickAction("new", () => setCreating(true));
   const [editing, setEditing] = useState<Reservation | null>(null);
   const [details, setDetails] = useState<Reservation | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null);
