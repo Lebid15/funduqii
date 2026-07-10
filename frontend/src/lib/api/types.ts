@@ -623,8 +623,83 @@ export interface Guest {
   address: string;
   notes: string;
   is_active: boolean;
+  is_vip: boolean;
+  is_blocked: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** DELETE /guests/<id> — delete hardening distinguishes the outcomes. */
+export interface GuestDeleteResult {
+  result: "deleted" | "deactivated";
+  guest?: Guest;
+}
+
+/** GET /guests/directory — a directory row with derived stats. */
+export interface GuestDirectoryRow {
+  id: number;
+  full_name: string;
+  phone: string;
+  nationality: string;
+  document_type: DocumentType;
+  document_number: string;
+  is_active: boolean;
+  is_vip: boolean;
+  is_blocked: boolean;
+  stays_count: number;
+  nights_total: number;
+  first_stay_date: string | null;
+  last_stay_date: string | null;
+  is_repeat: boolean;
+  is_resident: boolean;
+  current_room_number: string | null;
+}
+
+/** GET /guests/<id>/profile — one stay-history row (read-only). */
+export interface GuestProfileStay {
+  stay_id: number;
+  status: StayStatus;
+  is_current: boolean;
+  reservation_id: number | null;
+  reservation_number: string | null;
+  room_number: string;
+  room_type_name: string;
+  check_in_date: string;
+  check_out_date: string;
+  actual_check_out_at: string | null;
+  nights: number;
+  folio_id: number | null;
+  folio_number: string | null;
+  folio_status: string | null;
+}
+
+/** GET /guests/<id>/profile — the central read-only profile. */
+export interface GuestProfile extends GuestDirectoryRow {
+  email: string;
+  gender: Gender;
+  date_of_birth: string | null;
+  address: string;
+  notes: string;
+  vip_marked_at: string | null;
+  vip_marked_by: string | null;
+  blocked_at: string | null;
+  blocked_by: string | null;
+  /** Only present for holders of guests.block. */
+  block_reason: string | null;
+  current: {
+    stay_id: number;
+    room_number: string;
+    reservation_id: number | null;
+    reservation_number: string | null;
+    folio_id: number | null;
+    folio_number: string | null;
+    folio_status: string | null;
+  } | null;
+  stays: GuestProfileStay[];
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  updated_by: string | null;
 }
 
 export type StayStatus = "in_house" | "checked_out" | "cancelled";
@@ -647,6 +722,7 @@ export interface Stay {
   room_type_name: string;
   primary_guest: number;
   primary_guest_name: string;
+  primary_guest_is_vip: boolean;
   status: StayStatus;
   planned_check_in_date: string;
   planned_check_out_date: string;

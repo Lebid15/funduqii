@@ -23,6 +23,9 @@ class StaySerializer(serializers.ModelSerializer):
     primary_guest_name = serializers.CharField(
         source="primary_guest.full_name", read_only=True
     )
+    primary_guest_is_vip = serializers.BooleanField(
+        source="primary_guest.is_vip", read_only=True
+    )
     reservation_number = serializers.CharField(
         source="reservation.reservation_number", read_only=True, default=None
     )
@@ -43,6 +46,7 @@ class StaySerializer(serializers.ModelSerializer):
             "room_type_name",
             "primary_guest",
             "primary_guest_name",
+            "primary_guest_is_vip",
             "status",
             "planned_check_in_date",
             "planned_check_out_date",

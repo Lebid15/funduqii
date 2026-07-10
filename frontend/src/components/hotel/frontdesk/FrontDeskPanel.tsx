@@ -12,6 +12,7 @@ import {
   PlaneLanding,
   PlaneTakeoff,
   Plus,
+  Star,
   Users,
   Wallet,
 } from "lucide-react";
@@ -308,7 +309,12 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
           <article className="stay-card" key={stay.id}>
             <div className="stay-card__head">
               <span className="stay-card__room">{stay.room_number}</span>
-              <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
+              <span className="cluster" style={{ gap: "0.35rem" }}>
+                {stay.primary_guest_is_vip ? (
+                  <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
+                ) : null}
+                <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
+              </span>
             </div>
             <div className="stay-card__meta">
               <span><Users size={14} aria-hidden /> {stay.primary_guest_name}</span>

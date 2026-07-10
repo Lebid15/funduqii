@@ -258,6 +258,11 @@ class CheckInService:
         for companion in companions:
             if companion.hotel_id != hotel.id:
                 raise CrossTenantReference({"field": "companion"})
+        # Guests final closure: a guest blocked in THIS hotel is never
+        # admitted — as primary or companion (lazy import, no app cycle).
+        from apps.guests.services import ensure_guest_not_blocked
+
+        ensure_guest_not_blocked(primary_guest, *companions)
 
         actor = user if getattr(user, "is_authenticated", False) else None
         stay = Stay.objects.create(

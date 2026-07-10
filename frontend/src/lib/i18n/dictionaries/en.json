@@ -746,7 +746,55 @@
     "deleteTitle": "Delete guest",
     "deleteBody": "A guest linked to a stay is deactivated instead of deleted.",
     "active": "Active",
-    "inactive": "Inactive"
+    "inactive": "Inactive",
+    "directory": {
+      "residency": "Residency",
+      "resident": "In house",
+      "notResident": "Not staying",
+      "stays": "Stays",
+      "lastStay": "Last stay",
+      "repeat": "Repeat",
+      "firstTime": "New",
+      "openProfile": "Open profile",
+      "empty": "No guests yet",
+      "emptyHint": "Every guest with at least one stay — current or past — appears here."
+    },
+    "profile": {
+      "title": "Guest profile",
+      "nights": "Nights",
+      "firstStay": "First stay",
+      "currentStay": "Current stay",
+      "openFrontDesk": "Open front desk",
+      "openFolio": "Open folio",
+      "stayHistory": "Stay history",
+      "noStays": "No stays recorded.",
+      "currentBadge": "Current"
+    },
+    "vip": {
+      "badge": "VIP",
+      "mark": "Mark VIP",
+      "unmark": "Remove VIP"
+    },
+    "block": {
+      "badge": "Blocked",
+      "block": "Block guest",
+      "unblock": "Unblock",
+      "title": "Block guest",
+      "reason": "Block reason (required)",
+      "reasonRequired": "A block reason is required.",
+      "scopeNote": "The block applies inside THIS hotel only and prevents bookings and check-in until lifted.",
+      "activeNotice": "This guest is blocked in this hotel",
+      "blockedToast": "Guest blocked.",
+      "unblocked": "Block lifted."
+    },
+    "deleteResult": {
+      "deleted": "Profile permanently deleted (no history).",
+      "deactivated": "Profile deactivated only — history is preserved."
+    },
+    "errors": {
+      "blocked": "This guest is blocked in this hotel — the operation cannot proceed.",
+      "blockReasonRequired": "A block reason is required."
+    }
   },
   "frontDesk": {
     "nav": "Front desk",
