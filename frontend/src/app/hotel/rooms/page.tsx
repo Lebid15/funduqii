@@ -38,7 +38,12 @@ export default function RoomsPage() {
 
   return (
     <PageContainer>
-      <PageHeader title={t.rooms.title} subtitle={t.rooms.subtitle} />
+      <PageHeader
+        title={t.rooms.title}
+        subtitle={t.rooms.subtitle}
+        icon={BedDouble}
+        tone="teal"
+      />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "overview" ? <RoomOperationalBoard key={refreshKey} /> : null}
       {tab === "floors" ? <FloorsTab key={refreshKey} /> : null}

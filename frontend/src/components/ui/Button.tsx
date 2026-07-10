@@ -9,6 +9,8 @@ type Variant =
   | "primary"
   | "secondary"
   | "success"
+  | "info"
+  | "indigo"
   | "warning"
   | "danger"
   | "dangerSoft"

@@ -22,7 +22,6 @@ import {
   Button,
   Card,
   ConfirmDialog,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -35,7 +34,6 @@ import {
   Switch,
   Textarea,
   useToast,
-  type Column,
 } from "@/components/ui";
 import {
   blockGuest,
@@ -121,65 +119,6 @@ export function GuestsPanel() {
     setQuery(search);
   }
 
-  const columns: Column<GuestDirectoryRow>[] = [
-    {
-      key: "full_name",
-      header: t.guests.list.name,
-      render: (r) => (
-        <span className="cluster" style={{ gap: "0.5rem", flexWrap: "nowrap" }}>
-          <span className="avatar" aria-hidden="true">{initials(r.full_name)}</span>
-          <span className="cluster" style={{ gap: "0.35rem" }}>
-            {r.full_name}
-            {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-            {r.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
-            {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
-          </span>
-        </span>
-      ),
-    },
-    { key: "phone", header: t.guests.list.phone, render: (r) => r.phone || "—" },
-    { key: "nationality", header: t.guests.list.nationality, render: (r) => r.nationality || "—" },
-    {
-      key: "residency",
-      header: t.guests.directory.residency,
-      render: (r) =>
-        r.is_resident ? (
-          <Badge tone="inhouse">
-            {t.guests.directory.resident}{r.current_room_number ? ` · ${r.current_room_number}` : ""}
-          </Badge>
-        ) : (
-          <span className="muted">{t.guests.directory.notResident}</span>
-        ),
-    },
-    {
-      key: "stays",
-      header: t.guests.directory.stays,
-      render: (r) => (
-        <span>
-          {r.stays_count} · {r.nights_total} {t.frontDesk.current.nights}{" "}
-          <Badge tone={r.is_repeat ? "info" : "neutral"}>
-            {r.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
-          </Badge>
-        </span>
-      ),
-    },
-    {
-      key: "last_stay",
-      header: t.guests.directory.lastStay,
-      render: (r) => (r.last_stay_date ? formatDate(r.last_stay_date, locale) : "—"),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => (
-        <Button variant="secondary" size="sm" anim="open" icon={User} onClick={() => setProfileId(r.id)}>
-          {t.guests.directory.openProfile}
-        </Button>
-      ),
-    },
-  ];
-
   return (
     <>
       <Card>
@@ -211,7 +150,58 @@ export function GuestsPanel() {
           />
         ) : (
           <>
-            <DataTable caption={t.guests.title} columns={columns} rows={rows} rowKey={(r) => r.id} />
+            <div className="guest-grid" role="list" aria-label={t.guests.title}>
+              {rows.map((r) => (
+                <article
+                  key={r.id}
+                  role="listitem"
+                  className={[
+                    "guest-card",
+                    r.is_blocked
+                      ? "guest-card--blocked"
+                      : r.is_vip
+                        ? "guest-card--vip"
+                        : r.is_resident
+                          ? "guest-card--resident"
+                          : "",
+                  ].join(" ")}
+                >
+                  <div className="guest-card__head">
+                    <span className="avatar avatar--lg" aria-hidden="true">{initials(r.full_name)}</span>
+                    <div>
+                      <div className="guest-card__name">{r.full_name}</div>
+                      <div className="cluster" style={{ gap: "0.3rem" }}>
+                        {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+                        {r.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
+                        {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
+                        {r.is_resident ? (
+                          <Badge tone="inhouse">
+                            {t.guests.directory.resident}{r.current_room_number ? ` · ${r.current_room_number}` : ""}
+                          </Badge>
+                        ) : null}
+                        <Badge tone={r.is_repeat ? "reserved" : "info"}>
+                          {r.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="guest-card__meta">
+                    <span>{t.guests.list.phone}: {r.phone || "—"}</span>
+                    <span>{t.guests.list.nationality}: {r.nationality || "—"}</span>
+                  </div>
+                  <div className="guest-card__stats">
+                    <span>{t.guests.directory.stays}: <strong>{r.stays_count}</strong></span>
+                    <span>{t.guests.profile.nights}: <strong>{r.nights_total}</strong></span>
+                    <span>{t.guests.directory.lastStay}: <strong>{r.last_stay_date ? formatDate(r.last_stay_date, locale) : "—"}</strong></span>
+                  </div>
+                  <div className="guest-card__footer">
+                    <Button variant="secondary" size="sm" anim="open" icon={User} onClick={() => setProfileId(r.id)}>
+                      {t.guests.directory.openProfile}
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
             <Pagination
               page={page}
               totalPages={totalPages}
@@ -404,7 +394,7 @@ function GuestProfileModal({
               <div><dt>{t.guests.form.dateOfBirth}</dt><dd>{p.date_of_birth ? formatDate(p.date_of_birth, locale) : "—"}</dd></div>
             </dl>
 
-            <dl className="detail-grid">
+            <dl className="profile-stats">
               <div><dt>{t.guests.directory.stays}</dt><dd>{p.stays_count}</dd></div>
               <div><dt>{t.guests.profile.nights}</dt><dd>{p.nights_total}</dd></div>
               <div><dt>{t.guests.profile.firstStay}</dt><dd>{p.first_stay_date ? formatDate(p.first_stay_date, locale) : "—"}</dd></div>

@@ -4429,3 +4429,481 @@ a {
 [data-theme="dark"] .empty-state {
   box-shadow: var(--shadow-sm);
 }
+
+
+/* ==========================================================================
+   UI POLISH — REVISION 2 (owner visual spec): gradient KPI cards, gradient
+   hero pickers, rooms/floors board upgrade, guest card grid, purpose-colored
+   buttons (info/indigo), gradient icon circles everywhere. Token-driven,
+   transform/opacity motion, reduced-motion safe.
+   ========================================================================== */
+
+:root {
+  /* KPI gradients — one per meaning, used across every section. */
+  --kpi-teal: linear-gradient(135deg, #0e8b7b 0%, #07564c 100%);
+  --kpi-green: linear-gradient(135deg, #12ad74 0%, #077a51 100%);
+  --kpi-blue: linear-gradient(135deg, #3d76ef 0%, #2450b5 100%);
+  --kpi-indigo: linear-gradient(135deg, #5b52cc 0%, #3d369e 100%);
+  --kpi-purple: linear-gradient(135deg, #7d5cd8 0%, #5a3eae 100%);
+  --kpi-amber: linear-gradient(135deg, #f0a01a 0%, #d67c05 100%);
+  --kpi-orange: linear-gradient(135deg, #ee8434 0%, #cf5f0a 100%);
+  --kpi-red: linear-gradient(135deg, #e25563 0%, #bf2e46 100%);
+  --kpi-slate: linear-gradient(135deg, #64748b 0%, #45536a 100%);
+}
+[data-theme="dark"] {
+  --kpi-teal: linear-gradient(135deg, #10685d 0%, #093f38 100%);
+  --kpi-green: linear-gradient(135deg, #0f8a5e 0%, #085c40 100%);
+  --kpi-blue: linear-gradient(135deg, #2f5cc0 0%, #1e3d85 100%);
+  --kpi-indigo: linear-gradient(135deg, #453da8 0%, #322c7d 100%);
+  --kpi-purple: linear-gradient(135deg, #6448b3 0%, #47328a 100%);
+  --kpi-amber: linear-gradient(135deg, #c07d10 0%, #8f5c07 100%);
+  --kpi-orange: linear-gradient(135deg, #c2661f 0%, #8f4a10 100%);
+  --kpi-red: linear-gradient(135deg, #b93c4c 0%, #8c2334 100%);
+  --kpi-slate: linear-gradient(135deg, #4b586d 0%, #333e50 100%);
+}
+
+/* --- Gradient KPI cards (board-stat: rooms + reservations summaries) ------ */
+.board-stat {
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  background: var(--kpi, var(--kpi-slate));
+  box-shadow: var(--shadow-md);
+  transition: transform var(--transition-base), box-shadow var(--transition-base),
+    filter var(--transition-base);
+}
+.board-stat::before {
+  /* decorative circle */
+  content: "";
+  position: absolute;
+  inset-inline-end: -2.2rem;
+  inset-block-start: -2.2rem;
+  width: 6.5rem;
+  height: 6.5rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.board-stat::after {
+  /* sheen line */
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+.board-stat:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-lg);
+  filter: brightness(1.06);
+}
+.board-stat:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring), var(--shadow-lg);
+}
+.board-stat--active {
+  transform: translateY(-3px);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85), 0 0 0 5.5px var(--color-primary),
+    var(--shadow-lg);
+}
+.board-stat--active::marker { content: ""; }
+.board-stat__icon {
+  background: rgba(255, 255, 255, 0.18) !important;
+  color: #fff !important;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  transition: transform var(--transition-base);
+}
+.board-stat:hover .board-stat__icon {
+  transform: rotate(10deg) scale(1.08);
+}
+.board-stat__value {
+  color: #fff;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-extrabold);
+}
+.board-stat__label {
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: var(--font-weight-bold);
+}
+.board-stat__caption {
+  color: rgba(255, 255, 255, 0.72);
+}
+/* Meaning → gradient (tone rides on the icon class). */
+.board-stat:has(.board-stat__icon--primary) { --kpi: var(--kpi-teal); }
+.board-stat:has(.board-stat__icon--success) { --kpi: var(--kpi-green); }
+.board-stat:has(.board-stat__icon--info) { --kpi: var(--kpi-blue); }
+.board-stat:has(.board-stat__icon--warning) { --kpi: var(--kpi-amber); }
+.board-stat:has(.board-stat__icon--danger) { --kpi: var(--kpi-red); }
+.board-stat:has(.board-stat__icon--neutral) { --kpi: var(--kpi-slate); }
+
+/* --- Front-desk workflow tiles become gradient KPI cards too --------------- */
+.workflow-card {
+  border: none;
+  color: #fff;
+  background: var(--wf-bg, var(--kpi-slate));
+  box-shadow: var(--shadow-md);
+}
+.workflow-card::before {
+  height: 0; /* replace the old strip with the decorative circle */
+}
+.workflow-card::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: -2.4rem;
+  inset-block-start: -2.4rem;
+  width: 7rem;
+  height: 7rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.workflow-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-lg);
+  filter: brightness(1.05);
+}
+.workflow-card--primary { --wf-bg: var(--kpi-teal); }
+.workflow-card--success { --wf-bg: var(--kpi-green); }
+.workflow-card--info    { --wf-bg: var(--kpi-blue); }
+.workflow-card--warning { --wf-bg: var(--kpi-orange); }
+.workflow-card--danger  { --wf-bg: var(--kpi-red); }
+.workflow-card--neutral { --wf-bg: var(--kpi-slate); }
+.workflow-card .stat-card__icon {
+  background: rgba(255, 255, 255, 0.18) !important;
+  color: #fff !important;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  transition: transform var(--transition-base);
+}
+.workflow-card:hover .stat-card__icon {
+  transform: rotate(10deg) scale(1.08);
+}
+.workflow-card__value { color: #fff; }
+.workflow-card__title { color: rgba(255, 255, 255, 0.96); }
+.workflow-card__desc { color: rgba(255, 255, 255, 0.75); }
+.workflow-card .btn--secondary {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: transparent;
+}
+.workflow-card .btn--primary {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* --- Buttons: info + indigo variants --------------------------------------- */
+.btn--info {
+  background: var(--kpi-blue);
+  color: #fff;
+  box-shadow: 0 8px 20px -8px rgba(47, 111, 235, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn--info:not(:disabled):hover { filter: brightness(1.07); }
+.btn--indigo {
+  background: var(--kpi-indigo);
+  color: #fff;
+  box-shadow: 0 8px 20px -8px rgba(79, 70, 189, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn--indigo:not(:disabled):hover { filter: brightness(1.07); }
+/* Warning becomes clearly orange (shorten). */
+.btn--warning {
+  background: var(--kpi-orange);
+  color: #fff;
+  box-shadow: 0 8px 20px -8px rgba(207, 95, 10, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+.btn--warning .icon { color: #fff; }
+.btn--warning:not(:disabled):hover {
+  background: var(--kpi-orange);
+  filter: brightness(1.06);
+}
+
+/* --- Page header: gradient icon chip + decorative circle ------------------- */
+.page-header__icon {
+  background: var(--header-grad, var(--kpi-teal));
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: var(--shadow-md);
+}
+.page-header::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: -3rem;
+  inset-block-start: -3.5rem;
+  width: 9rem;
+  height: 9rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--header-accent, var(--color-primary)) 8%, transparent);
+  pointer-events: none;
+}
+.page-header--teal, .page-header--emerald { --header-grad: var(--kpi-teal); }
+.page-header--indigo { --header-grad: var(--kpi-indigo); }
+.page-header--violet { --header-grad: var(--kpi-purple); }
+
+/* --- Rooms board: floors + room cards --------------------------------------- */
+.floor-card {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+.floor-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+.floor-card__icon {
+  background: var(--kpi-teal);
+  color: #fff;
+  border-radius: 50%;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-xs);
+}
+.floor-card--active,
+.floor-card[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--color-primary), var(--shadow-md);
+  transform: translateY(-2px);
+}
+.room-op-card {
+  border-radius: var(--radius-lg);
+  border-inline-start-width: 5px;
+  box-shadow: var(--shadow-sm);
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--room-accent, var(--color-border-strong)) 7%, transparent) 0%, transparent 45%),
+    var(--color-surface);
+}
+.room-op-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+.room-op-card__number-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 3.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--room-accent, var(--color-fg-muted)) 14%, transparent);
+  color: color-mix(in srgb, var(--room-accent, var(--color-fg)) 80%, var(--color-fg));
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-extrabold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--room-accent, var(--color-border-strong)) 30%, transparent);
+}
+.room-op-card__actions {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* --- Guest card grid ---------------------------------------------------------- */
+.guest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: var(--space-4);
+}
+.guest-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--color-secondary) 6%, transparent) 0%, transparent 45%),
+    var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+.guest-card::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  height: 4px;
+  background: var(--guest-accent, var(--kpi-indigo));
+}
+.guest-card--resident { --guest-accent: var(--kpi-green); }
+.guest-card--vip { --guest-accent: linear-gradient(90deg, #d9b44a, #9a7514); }
+.guest-card--blocked { --guest-accent: var(--kpi-red); }
+.guest-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+.guest-card:hover .avatar {
+  transform: scale(1.06);
+}
+.guest-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.guest-card__name {
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-base);
+}
+.guest-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.guest-card__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-subtle);
+}
+.guest-card__footer {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  display: flex;
+  justify-content: flex-end;
+}
+.avatar {
+  background: var(--kpi-indigo);
+  color: #fff;
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--transition-base);
+}
+.avatar--lg {
+  box-shadow: var(--shadow-md);
+}
+
+/* --- Chooser cards: FULL gradient heroes -------------------------------------- */
+.choice-card {
+  border: none;
+  color: #fff;
+  box-shadow: var(--shadow-md);
+}
+.choice-card--instant {
+  background: var(--kpi-green);
+  border-inline-start: none;
+}
+.choice-card--future {
+  background: var(--kpi-indigo);
+  border-inline-start: none;
+}
+.choice-card::before {
+  content: "";
+  position: absolute;
+  inset-inline-end: -2.4rem;
+  inset-block-end: -2.4rem;
+  width: 7rem;
+  height: 7rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.choice-card--instant .choice-card__icon,
+.choice-card--future .choice-card__icon {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+.choice-card > strong {
+  color: #fff;
+}
+.choice-card .muted {
+  color: rgba(255, 255, 255, 0.82);
+}
+.choice-card::after {
+  color: rgba(255, 255, 255, 0.9);
+}
+.choice-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  filter: brightness(1.05);
+  border-color: transparent;
+}
+.choice-card:disabled {
+  opacity: var(--disabled-opacity);
+  filter: grayscale(0.4);
+}
+
+/* --- Stay / arrival / departure cards ------------------------------------------ */
+.stay-card {
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--status-inhouse) 7%, transparent) 0%, transparent 45%),
+    var(--color-surface);
+}
+.stay-card__room {
+  background: var(--kpi-green);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  font-weight: var(--font-weight-extrabold);
+}
+.action-card__icon {
+  background: var(--kpi-teal);
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: var(--shadow-xs);
+}
+.action-card:hover .action-card__icon {
+  background: var(--kpi-teal);
+  color: #fff;
+}
+
+/* --- Empty states / modal close ------------------------------------------------- */
+.state__icon {
+  background: var(--kpi-teal);
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: var(--shadow-sm);
+}
+.state__icon--error {
+  background: var(--kpi-red);
+  color: #fff;
+}
+
+/* --- Profile stat chips ----------------------------------------------------------- */
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: var(--space-3);
+}
+.profile-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-secondary-soft);
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, transparent);
+}
+.profile-stats dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.profile-stats dd {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-extrabold);
+  color: var(--color-secondary-active);
+}
+
+/* --- Reduced motion for revision-2 movements -------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .board-stat:hover,
+  .board-stat--active,
+  .workflow-card:hover,
+  .floor-card:hover,
+  .room-op-card:hover,
+  .guest-card:hover,
+  .guest-card:hover .avatar,
+  .board-stat:hover .board-stat__icon,
+  .workflow-card:hover .stat-card__icon {
+    transform: none;
+  }
+}

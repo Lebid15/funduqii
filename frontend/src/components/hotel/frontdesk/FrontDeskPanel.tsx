@@ -324,16 +324,16 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
             <div className="stay-card__actions">
               <Button variant="secondary" size="sm" anim="open" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
               {can("stays.extend") ? (
-                <Button variant="warning" size="sm" anim="extend" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
+                <Button variant="indigo" size="sm" anim="extend" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
               ) : null}
               {can("stays.shorten") ? (
                 <Button variant="warning" size="sm" anim="shorten" icon={CalendarMinus} onClick={() => setShortenTarget(stay)}>{t.frontDesk.current.shorten}</Button>
               ) : null}
               {can("stays.move_room") ? (
-                <Button variant="warning" size="sm" anim="move" icon={ArrowLeftRight} onClick={() => setMoveTarget(stay)}>{t.frontDesk.current.move}</Button>
+                <Button variant="indigo" size="sm" anim="move" icon={ArrowLeftRight} onClick={() => setMoveTarget(stay)}>{t.frontDesk.current.move}</Button>
               ) : null}
               {can("stays.check_out") ? (
-                <Button variant="success" size="sm" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+                <Button variant="info" size="sm" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
               ) : null}
             </div>
           </article>
@@ -411,7 +411,7 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
             action={
               can("stays.check_out") ? (
-                <Button variant="success" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+                <Button variant="info" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
               ) : undefined
             }
           />
@@ -681,7 +681,7 @@ function CheckOutModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkout-form" type="submit" variant="success" anim="checkout" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
+          <Button form="checkout-form" type="submit" variant="info" anim="checkout" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
         </>
       }
     >
@@ -792,7 +792,7 @@ function ExtendStayModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="extend-form" type="submit" variant="warning" anim="extend" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
+          <Button form="extend-form" type="submit" variant="indigo" anim="extend" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
         </>
       }
     >
@@ -962,7 +962,7 @@ function MoveRoomModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="move-form" type="submit" variant="warning" anim="move" loading={busy}>{t.frontDesk.moveModal.submit}</Button>
+          <Button form="move-form" type="submit" variant="indigo" anim="move" loading={busy}>{t.frontDesk.moveModal.submit}</Button>
         </>
       }
     >
