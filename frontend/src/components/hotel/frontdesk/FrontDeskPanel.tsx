@@ -677,6 +677,7 @@ function CheckOutModal({
       onClose={onClose}
       title={`${t.frontDesk.checkOutModal.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
+      tone="success"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
@@ -787,6 +788,7 @@ function ExtendStayModal({
       onClose={onClose}
       title={`${t.frontDesk.extendModal.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
+      tone="warning"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
@@ -864,6 +866,7 @@ function ShortenStayModal({
       onClose={onClose}
       title={`${t.frontDesk.shortenModal.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
+      tone="warning"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
@@ -955,6 +958,7 @@ function MoveRoomModal({
       onClose={onClose}
       title={`${t.frontDesk.moveModal.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
+      tone="warning"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>

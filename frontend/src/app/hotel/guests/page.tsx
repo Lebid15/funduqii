@@ -1,5 +1,7 @@
 "use client";
 
+import { Users } from "lucide-react";
+
 import { PageContainer } from "@/components/layout/PageContainer";
 import { PageHeader } from "@/components/ui";
 import { GuestsPanel } from "@/components/hotel/guests/GuestsPanel";
@@ -10,7 +12,12 @@ export default function GuestsPage() {
   const { t } = useI18n();
   return (
     <PageContainer>
-      <PageHeader title={t.guests.title} subtitle={t.guests.subtitle} />
+      <PageHeader
+        title={t.guests.title}
+        subtitle={t.guests.subtitle}
+        icon={Users}
+        tone="violet"
+      />
       <GuestsPanel />
     </PageContainer>
   );

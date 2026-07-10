@@ -1,5 +1,7 @@
 "use client";
 
+import { DoorOpen } from "lucide-react";
+
 import { PageContainer } from "@/components/layout/PageContainer";
 import { PageHeader } from "@/components/ui";
 import { FrontDeskPanel } from "@/components/hotel/frontdesk/FrontDeskPanel";
@@ -13,7 +15,12 @@ export default function FrontDeskPage() {
   const { t } = useI18n();
   return (
     <PageContainer>
-      <PageHeader title={t.frontDesk.title} subtitle={t.frontDesk.subtitle} />
+      <PageHeader
+        title={t.frontDesk.title}
+        subtitle={t.frontDesk.subtitle}
+        icon={DoorOpen}
+        tone="teal"
+      />
       <FrontDeskPanel />
     </PageContainer>
   );

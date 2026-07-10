@@ -35,6 +35,7 @@ export function ConfirmDialog({
       onClose={onClose}
       title={title}
       closeLabel={closeLabel}
+      tone={tone === "danger" ? "danger" : "default"}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>

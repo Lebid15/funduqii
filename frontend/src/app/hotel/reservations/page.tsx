@@ -97,6 +97,8 @@ export default function ReservationsPage() {
       <PageHeader
         title={t.reservations.title}
         subtitle={v.subtitle}
+        icon={CalendarRange}
+        tone="indigo"
         actions={
           canCreate ? (
             <Button icon={Plus} anim="add" onClick={newReservation}>

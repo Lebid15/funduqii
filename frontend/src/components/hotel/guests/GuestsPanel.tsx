@@ -56,6 +56,17 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 
 const PAGE_SIZE = 25;
 
+/** First letters of the first two name words — for the guest avatar. */
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0] ?? "")
+    .join("")
+    .toUpperCase();
+}
+
 /** Cosmetic permission gate — every API re-checks server-side regardless. */
 function useCan() {
   const access = useHotelAccess();
@@ -115,11 +126,14 @@ export function GuestsPanel() {
       key: "full_name",
       header: t.guests.list.name,
       render: (r) => (
-        <span className="cluster" style={{ gap: "0.35rem" }}>
-          {r.full_name}
-          {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-          {r.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
-          {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
+        <span className="cluster" style={{ gap: "0.5rem", flexWrap: "nowrap" }}>
+          <span className="avatar" aria-hidden="true">{initials(r.full_name)}</span>
+          <span className="cluster" style={{ gap: "0.35rem" }}>
+            {r.full_name}
+            {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+            {r.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
+            {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
+          </span>
         </span>
       ),
     },
@@ -329,7 +343,8 @@ function GuestProfileModal({
         {!p && !error ? <LoadingState label={t.common.loading} /> : null}
         {p ? (
           <div className="stack">
-            <div className="cluster">
+            <div className="cluster" style={{ alignItems: "center" }}>
+              <span className="avatar avatar--lg" aria-hidden="true">{initials(p.full_name)}</span>
               {p.is_resident ? (
                 <Badge tone="inhouse">{t.guests.directory.resident}{p.current_room_number ? ` · ${p.current_room_number}` : ""}</Badge>
               ) : (
@@ -545,6 +560,7 @@ function BlockGuestModal({
       onClose={onClose}
       title={t.guests.block.title}
       closeLabel={t.common.close}
+      tone="danger"
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>{t.common.cancel}</Button>

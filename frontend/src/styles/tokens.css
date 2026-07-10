@@ -20,18 +20,25 @@
   --color-accent: #0e7c8b;
   --color-accent-soft: #e2f4f6;
 
-  /* --- Canvas & surfaces (warm neutral) ----------------------------- */
-  --color-bg: #f4f5f3;
-  --color-bg-subtle: #eceeea;
+  /* --- Secondary (calm indigo — UI polish revision) ------------------- */
+  --color-secondary: #4f46bd;
+  --color-secondary-active: #3f38a0;
+  --color-secondary-soft: #edecfb;
+  --color-secondary-contrast: #ffffff;
+
+  /* --- Canvas & surfaces (cool slate canvas, white cards float on it) - */
+  --color-bg: #e9edee;
+  --color-bg-subtle: #dfe5e6;
+  --color-canvas: #f0f3f4; /* the content sheet behind cards */
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-muted: #f8f9f7;
-  --color-surface-sunken: #f2f4f1;
+  --color-surface-muted: #f6f8f8;
+  --color-surface-sunken: #eef1f2;
 
   /* --- Borders (soft) ----------------------------------------------- */
-  --color-border: #e6e8e2;
-  --color-border-subtle: #eef0ea;
-  --color-border-strong: #d6dad1;
+  --color-border: #dfe4e4;
+  --color-border-subtle: #e9eded;
+  --color-border-strong: #ccd4d3;
 
   /* --- Text --------------------------------------------------------- */
   --color-fg: #15211d;
@@ -39,20 +46,29 @@
   --color-fg-subtle: #909a90;
   --color-fg-inverse: #ffffff;
 
-  /* --- Feedback (calm, not neon) ------------------------------------ */
-  --color-success: #0f9d6e;
-  --color-success-soft: #e5f6ef;
+  /* --- Feedback (clear, professional) -------------------------------- */
+  --color-success: #0c9f6c;
+  --color-success-strong: #0a8259;
+  --color-success-soft: #e0f5ec;
   --color-warning: #b5771c;
   --color-warning-soft: #faf1e0;
-  --color-danger: #d24a44;
-  --color-danger-hover: #bd3d38;
-  --color-danger-soft: #fcecea;
+  /* Solid amber for warning BUTTONS (extend/shorten/move) — dark text. */
+  --color-amber: #f2a114;
+  --color-amber-strong: #dd8f07;
+  --color-on-amber: #3c2503;
+  --color-danger: #dc3d55; /* professional rose */
+  --color-danger-hover: #c72f47;
+  --color-danger-soft: #fdecef;
   --color-info: #2f6feb;
   --color-info-soft: #eaf1fe;
-  --color-neutral-soft: #eef0ea;
+  --color-neutral-soft: #eef1f1;
 
   /* --- Gradients (soft, premium) ------------------------------------ */
-  --gradient-brand: linear-gradient(135deg, #0e7c72 0%, #0a544e 100%);
+  --gradient-brand: linear-gradient(135deg, #11957e 0%, #0a5c50 100%);
+  --gradient-success: linear-gradient(135deg, #12b177 0%, #0a8259 100%);
+  --gradient-header:
+    linear-gradient(120deg, var(--header-tint, rgba(13, 110, 100, 0.09)) 0%, transparent 65%),
+    linear-gradient(180deg, #ffffff 0%, #fbfdfc 100%);
   --gradient-hero:
     radial-gradient(80% 120% at 15% 0%, rgba(23, 140, 128, 0.55), transparent 55%),
     radial-gradient(70% 120% at 100% 100%, rgba(14, 124, 139, 0.5), transparent 55%),
@@ -76,12 +92,12 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* --- Radius -------------------------------------------------------- */
-  --radius-sm: 0.375rem;
-  --radius-md: 0.625rem;
-  --radius-lg: 0.875rem;
-  --radius-xl: 1.25rem;
-  --radius-2xl: 1.75rem;
+  /* --- Radius (bumped in the UI polish revision — modern, generous) --- */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.4rem;
+  --radius-2xl: 1.9rem;
   --radius-full: 999px;
 
   /* --- Typography ---------------------------------------------------- */
@@ -112,14 +128,14 @@
   --topbar-height: 4rem;
   --page-pad: var(--space-8);
 
-  /* --- Elevation (subtle, layered) ---------------------------------- */
-  --shadow-xs: 0 1px 2px rgba(20, 33, 29, 0.05);
-  --shadow-sm: 0 1px 3px rgba(20, 33, 29, 0.07), 0 1px 2px rgba(20, 33, 29, 0.04);
-  --shadow-md: 0 8px 20px -8px rgba(20, 33, 29, 0.12),
-    0 2px 6px -2px rgba(20, 33, 29, 0.06);
-  --shadow-lg: 0 20px 48px -16px rgba(20, 33, 29, 0.22),
-    0 8px 18px -8px rgba(20, 33, 29, 0.12);
-  --shadow-brand: 0 10px 26px -8px rgba(13, 110, 100, 0.45);
+  /* --- Elevation (visible, layered — cards float on the canvas) ------ */
+  --shadow-xs: 0 1px 2px rgba(15, 30, 26, 0.06);
+  --shadow-sm: 0 2px 6px -1px rgba(15, 30, 26, 0.09), 0 1px 2px rgba(15, 30, 26, 0.05);
+  --shadow-md: 0 10px 26px -8px rgba(15, 30, 26, 0.16),
+    0 3px 8px -3px rgba(15, 30, 26, 0.08);
+  --shadow-lg: 0 24px 56px -18px rgba(15, 30, 26, 0.26),
+    0 10px 20px -10px rgba(15, 30, 26, 0.14);
+  --shadow-brand: 0 10px 26px -8px rgba(13, 110, 100, 0.5);
 
   /* --- Motion -------------------------------------------------------- */
   --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
@@ -182,6 +198,21 @@
 
   --color-accent: #3aa7b5;
   --color-accent-soft: #12333a;
+
+  --color-secondary: #8b83e8;
+  --color-secondary-active: #a29bef;
+  --color-secondary-soft: #221e45;
+  --color-secondary-contrast: #12102b;
+
+  --color-canvas: #121a18;
+  --color-amber: #e29a1f;
+  --color-amber-strong: #f0ab33;
+  --color-on-amber: #2b1b02;
+  --color-success-strong: #2aa87c;
+  --gradient-success: linear-gradient(135deg, #159a6c 0%, #0d6b4e 100%);
+  --gradient-header:
+    linear-gradient(120deg, var(--header-tint, rgba(46, 167, 149, 0.12)) 0%, transparent 65%),
+    linear-gradient(180deg, #1a2421 0%, #161f1c 100%);
 
   --color-bg: #0e1513;
   --color-bg-subtle: #131b19;

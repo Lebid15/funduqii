@@ -27,7 +27,7 @@ export function WorkflowCard({
   action,
 }: WorkflowCardProps) {
   return (
-    <div className="workflow-card">
+    <div className={cx("workflow-card", `workflow-card--${tone}`)}>
       <div className="workflow-card__top">
         <span className={cx("stat-card__icon", `stat-card__icon--${tone}`)}>
           <Icon icon={icon} size="lg" />

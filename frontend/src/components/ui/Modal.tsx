@@ -6,6 +6,9 @@ import { X } from "lucide-react";
 
 import { IconButton } from "./IconButton";
 
+/** Dialog intent: tints the header strip + title icon area. */
+type ModalTone = "default" | "danger" | "warning" | "success";
+
 interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -13,6 +16,7 @@ interface ModalProps {
   closeLabel: string;
   children: ReactNode;
   footer?: ReactNode;
+  tone?: ModalTone;
 }
 
 /** Central modal dialog. Closes on Escape and overlay click; locks scroll. */
@@ -23,6 +27,7 @@ export function Modal({
   closeLabel,
   children,
   footer,
+  tone = "default",
 }: ModalProps) {
   useEffect(() => {
     if (!open) return;
@@ -50,7 +55,12 @@ export function Modal({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className={`modal${tone !== "default" ? ` modal--${tone}` : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="modal__header">
           <h2 className="modal__title">{title}</h2>
           <IconButton label={closeLabel} icon={X} onClick={onClose} />

@@ -4055,3 +4055,377 @@ a {
     animation: none;
   }
 }
+
+
+/* ==========================================================================
+   UI POLISH — REVISION (owner review): a VISIBLE redesign, not micro-polish.
+   Slate canvas with floating white cards, gradient page headers with tinted
+   icon chips and per-section accents, purpose-colored buttons, structured
+   cards with accent strips, pill tabs, tinted table headers with zebra rows,
+   toned dialogs, avatars. All token-driven; overrides the base rules above.
+   ========================================================================== */
+
+/* --- The canvas: cards float on a soft slate sheet ------------------------- */
+.content-container {
+  background: var(--color-canvas);
+}
+.page-container {
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-6);
+}
+
+/* --- Page header: gradient wash + icon chip + section identity ------------ */
+.page-header {
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  background: var(--gradient-header);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+.page-header::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: 0;
+  width: 5px;
+  background: var(--header-accent, var(--color-primary));
+}
+.page-header__lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.page-header__icon {
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  flex: none;
+  border-radius: var(--radius-lg);
+  background: var(--header-chip-bg, var(--color-primary-soft));
+  color: var(--header-accent, var(--color-primary));
+  box-shadow: var(--shadow-xs);
+}
+.page-header__title {
+  font-size: var(--font-size-2xl);
+}
+.page-header__subtitle {
+  font-size: var(--font-size-sm);
+}
+.page-header--teal,
+.page-header--emerald {
+  --header-accent: var(--color-primary);
+  --header-chip-bg: var(--color-primary-soft);
+  --header-tint: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+.page-header--indigo {
+  --header-accent: var(--color-secondary);
+  --header-chip-bg: var(--color-secondary-soft);
+  --header-tint: color-mix(in srgb, var(--color-secondary) 10%, transparent);
+}
+.page-header--violet {
+  --header-accent: var(--status-reserved);
+  --header-chip-bg: var(--status-reserved-soft);
+  --header-tint: color-mix(in srgb, var(--status-reserved) 10%, transparent);
+}
+
+/* --- Buttons: taller, purpose-colored, unmistakably new -------------------- */
+.btn {
+  padding: 0.68rem 1.2rem;
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-snug);
+}
+.btn--sm {
+  padding: 0.45rem 0.8rem;
+  border-radius: var(--radius-sm);
+}
+.btn--primary {
+  box-shadow: var(--shadow-brand), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn--success {
+  background: var(--gradient-success);
+  color: #fff;
+  box-shadow: 0 8px 20px -8px rgba(12, 159, 108, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn--success:not(:disabled):hover {
+  background: var(--gradient-success);
+  filter: brightness(1.07);
+}
+/* Warning buttons go SOLID amber with dark text (extend / shorten / move). */
+.btn--warning {
+  background: linear-gradient(135deg, var(--color-amber) 0%, var(--color-amber-strong) 100%);
+  color: var(--color-on-amber);
+  border-color: transparent;
+  box-shadow: 0 8px 20px -8px rgba(221, 143, 7, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.btn--warning .icon {
+  color: var(--color-on-amber);
+}
+.btn--warning:not(:disabled):hover {
+  background: linear-gradient(135deg, var(--color-amber) 0%, var(--color-amber-strong) 100%);
+  filter: brightness(1.05);
+  box-shadow: 0 10px 24px -8px rgba(221, 143, 7, 0.6);
+}
+.btn--danger {
+  box-shadow: 0 8px 20px -8px rgba(220, 61, 85, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.btn--secondary {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-xs);
+}
+/* Icon buttons get a real container. */
+.icon-btn {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-xs);
+  border-radius: var(--radius-md);
+}
+.icon-btn:hover {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border-strong);
+}
+
+/* --- Tabs: contained pills, unmistakable active state ---------------------- */
+.tabs {
+  background: color-mix(in srgb, var(--color-fg) 5%, var(--color-canvas));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0.3rem;
+  gap: 0.3rem;
+  box-shadow: inset 0 1px 2px rgba(15, 30, 26, 0.05);
+}
+.tabs__tab {
+  border-radius: calc(var(--radius-lg) - 0.3rem);
+  padding: 0.55rem 1rem;
+  font-weight: var(--font-weight-semibold);
+}
+.tabs__tab[aria-selected="true"],
+.tabs__tab--active {
+  background: var(--color-surface);
+  color: var(--color-primary-active);
+  box-shadow: var(--shadow-sm);
+}
+.tabs__tab[aria-selected="true"] .icon,
+.tabs__tab--active .icon {
+  color: var(--color-primary);
+}
+
+/* --- Filter bar: a real toolbar, not floating fields ----------------------- */
+.filter-bar {
+  gap: var(--space-3);
+}
+
+/* --- Cards: structure, air and depth --------------------------------------- */
+.card,
+.section-card,
+.skeleton-card {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+.workflow-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+}
+.workflow-card::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  height: 4px;
+  background: var(--wf-accent, var(--color-border-strong));
+}
+.workflow-card--primary { --wf-accent: var(--color-primary); }
+.workflow-card--success { --wf-accent: var(--color-success); }
+.workflow-card--warning { --wf-accent: var(--color-amber); }
+.workflow-card--danger  { --wf-accent: var(--color-danger); }
+.workflow-card--info    { --wf-accent: var(--color-info); }
+.workflow-card--neutral { --wf-accent: var(--color-border-strong); }
+.workflow-card__value {
+  font-size: var(--font-size-4xl);
+  color: var(--color-fg);
+}
+.workflow-card__title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+.stat-card__icon {
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: var(--radius-md);
+}
+
+/* --- Stay card: the room number is the hero -------------------------------- */
+.stay-card {
+  padding: var(--space-5);
+  border-radius: var(--radius-xl);
+  border-inline-start-width: 5px;
+  box-shadow: var(--shadow-sm);
+  gap: var(--space-4);
+}
+.stay-card__room {
+  display: inline-grid;
+  place-items: center;
+  min-width: 4.2rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: var(--status-inhouse-soft);
+  color: var(--status-inhouse);
+  font-size: var(--font-size-2xl);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--status-inhouse) 25%, transparent);
+}
+.stay-card__actions {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-3);
+}
+
+/* --- Action cards (arrivals / departures rows) ----------------------------- */
+.action-card {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.action-card__icon {
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+/* --- Choice cards: premium hero pickers ------------------------------------ */
+.choice-card {
+  padding: var(--space-6);
+  border-radius: var(--radius-xl);
+  border-width: 1px;
+  box-shadow: var(--shadow-sm);
+}
+.choice-card--instant {
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--status-inhouse) 9%, transparent) 0%, transparent 55%),
+    var(--color-surface);
+}
+.choice-card--future {
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--status-reserved) 9%, transparent) 0%, transparent 55%),
+    var(--color-surface);
+}
+.choice-card__icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+.choice-card > strong {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-extrabold);
+}
+
+/* --- Tables: tinted head, zebra body, contained actions -------------------- */
+.table thead th {
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface-muted));
+  color: var(--color-fg-muted);
+}
+.table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--color-fg) 2%, transparent);
+}
+.table tbody tr:hover {
+  background: color-mix(in srgb, var(--color-primary-soft) 70%, transparent);
+}
+
+/* --- Modals: toned headers, contrasted footer ------------------------------ */
+.modal__header {
+  background: var(--modal-header-bg, var(--color-surface-muted));
+  border-start-start-radius: var(--radius-2xl);
+  border-start-end-radius: var(--radius-2xl);
+}
+.modal__title {
+  font-size: var(--font-size-xl);
+}
+.modal__footer {
+  background: var(--color-surface-sunken);
+}
+.modal--danger {
+  --modal-header-bg: linear-gradient(180deg, var(--color-danger-soft), var(--color-surface));
+}
+.modal--danger .modal__title {
+  color: var(--color-danger);
+}
+.modal--warning {
+  --modal-header-bg: linear-gradient(180deg, var(--color-warning-soft), var(--color-surface));
+}
+.modal--warning .modal__title {
+  color: var(--color-warning);
+}
+.modal--success {
+  --modal-header-bg: linear-gradient(180deg, var(--color-success-soft), var(--color-surface));
+}
+.modal--success .modal__title {
+  color: var(--color-success-strong);
+}
+
+/* --- Avatars (guest initials) ----------------------------------------------- */
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-secondary-soft);
+  color: var(--color-secondary-active);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-sm);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-secondary) 25%, transparent);
+}
+.avatar--lg {
+  width: 3.25rem;
+  height: 3.25rem;
+  font-size: var(--font-size-lg);
+}
+
+/* --- Empty states ------------------------------------------------------------ */
+.empty-state {
+  background:
+    radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--color-primary) 5%, transparent), transparent 70%),
+    var(--color-surface);
+  border-radius: var(--radius-xl);
+}
+.empty-state .state__icon {
+  width: 4rem;
+  height: 4rem;
+}
+
+/* --- Pagination bar ----------------------------------------------------------- */
+.pagination {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-4);
+  box-shadow: var(--shadow-xs);
+}
+
+/* Five KPI tiles fit one row on desktop (they wrapped after the padding bump). */
+.workflow-grid {
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+}
+
+/* --- Dark-mode fixes for the revision ---------------------------------------- */
+[data-theme="dark"] .btn--warning {
+  box-shadow: 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+}
+[data-theme="dark"] .page-header,
+[data-theme="dark"] .empty-state {
+  box-shadow: var(--shadow-sm);
+}
