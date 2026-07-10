@@ -644,6 +644,34 @@
       "card": "بطاقة",
       "bank_transfer": "تحويل بنكي",
       "other": "أخرى"
+    },
+    "views": {
+      "subtitle": "إدارة الحجوزات اليدوية وحجوزات الموقع والحجوزات القادمة.",
+      "newReservation": "حجز جديد",
+      "tabs": {
+        "all": "كل الحجوزات",
+        "today": "حجوزات اليوم",
+        "website": "حجوزات الموقع",
+        "future": "حجوزات مستقبلية",
+        "pending": "بانتظار التأكيد",
+        "confirmed": "مؤكدة",
+        "closed": "ملغاة / مرفوضة"
+      },
+      "sourceLabel": "مصدر الحجز",
+      "createdAt": "تاريخ إنشاء الحجز",
+      "createdFrom": "أُنشئ من",
+      "createdTo": "أُنشئ إلى",
+      "guestsCount": "عدد النزلاء",
+      "copied": "نُسخ رقم الحجز.",
+      "noReservations": "لا توجد حجوزات",
+      "frontDeskLink": "الدخول والمغادرة",
+      "searchPlaceholder": "رقم الحجز، اسم الضيف، الهاتف، رقم الغرفة…",
+      "chooseType": "اختر نوع الحجز",
+      "instantTitle": "حجز فوري",
+      "instantDesc": "إنشاء حجز يبدأ من اليوم أو الآن.",
+      "futureTitle": "حجز مستقبلي",
+      "futureDesc": "إنشاء حجز بتاريخ وصول قادم.",
+      "emptyFiltered": "لا توجد حجوزات مطابقة للفلاتر الحالية."
     }
   },
   "guests": {

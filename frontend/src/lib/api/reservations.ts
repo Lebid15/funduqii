@@ -31,11 +31,22 @@ function toQuery(params?: object): string {
 
 export interface ReservationListParams {
   status?: string;
+  /** Comma-separated multi-status (e.g. "cancelled,expired"). */
+  statuses?: string;
+  source?: string;
   room_type?: number;
+  room?: number;
   date_from?: string;
   date_to?: string;
+  created_from?: string;
+  created_to?: string;
+  /** Business-date aware (hotel timezone) — created on the hotel's today. */
+  created_today?: "true";
+  /** Arrival strictly after the hotel business date. */
+  upcoming?: "true";
   search?: string;
   page?: number;
+  page_size?: number;
 }
 
 export function listReservations(

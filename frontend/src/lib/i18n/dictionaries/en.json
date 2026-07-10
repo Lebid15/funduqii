@@ -644,6 +644,34 @@
       "card": "Card",
       "bank_transfer": "Bank transfer",
       "other": "Other"
+    },
+    "views": {
+      "subtitle": "Manage manual bookings, website reservations and upcoming stays-to-be.",
+      "newReservation": "New Reservation",
+      "tabs": {
+        "all": "All Reservations",
+        "today": "Today's Reservations",
+        "website": "Website Reservations",
+        "future": "Future Reservations",
+        "pending": "Pending Confirmation",
+        "confirmed": "Confirmed",
+        "closed": "Cancelled / Rejected"
+      },
+      "sourceLabel": "Reservation Source",
+      "createdAt": "Created Date",
+      "createdFrom": "Created From",
+      "createdTo": "Created To",
+      "guestsCount": "Guests",
+      "copied": "Reservation number copied.",
+      "noReservations": "No Reservations",
+      "frontDeskLink": "Front Desk",
+      "searchPlaceholder": "Reservation no, guest name, phone, room number…",
+      "chooseType": "Choose Reservation Type",
+      "instantTitle": "Immediate Reservation",
+      "instantDesc": "Create a reservation starting today or now.",
+      "futureTitle": "Future Reservation",
+      "futureDesc": "Create a reservation for a future arrival date.",
+      "emptyFiltered": "No reservations match the current filters."
     }
   },
   "guests": {

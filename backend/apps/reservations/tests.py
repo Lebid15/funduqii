@@ -906,3 +906,88 @@ class RoomAssignmentTests(APITestCase):
         # Phase 6 behaviour is unchanged when no room is assigned.
         res = self._create(lines=[{"room_type": self.rtype.id, "quantity": 2}])
         self.assertEqual(res.status_code, 201)
+
+
+# --- List view filters (reservations section reorg) ---------------------------
+
+
+class ListViewFilterTests(APITestCase):
+    """READ-ONLY list filters: source, statuses CSV, created_today,
+    upcoming (business-date aware), room, and room-number search."""
+
+    def setUp(self):
+        from apps.shifts.services import get_business_date
+
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+        self.today = get_business_date(self.hotel)
+
+        def res(number, *, status, source="direct", check_in=None, room=None):
+            r = Reservation.objects.create(
+                hotel=self.hotel,
+                reservation_number=number,
+                status=status,
+                source=source,
+                check_in_date=check_in or D1,
+                check_out_date=(check_in or D1) + timedelta(days=2),
+                primary_guest_name=f"Guest {number}",
+            )
+            ReservationRoomLine.objects.create(
+                hotel=self.hotel,
+                reservation=r,
+                room_type=self.rtype,
+                room=room,
+                quantity=1,
+            )
+            return r
+
+        self.r_site = res("R-SITE", status="held", source="public_website")
+        self.r_confirmed = res(
+            "R-CONF", status="confirmed", room=self.rooms[0]
+        )
+        self.r_cancelled = res("R-CAN", status="cancelled")
+        self.r_expired = res("R-EXP", status="expired")
+        # Arrival ON the business date — NOT "upcoming" (strictly after).
+        self.r_today_arrival = res(
+            "R-TODAY", status="confirmed", check_in=self.today
+        )
+
+    def _numbers(self, query=""):
+        self.client.force_authenticate(self.manager)
+        resp = self.client.get(
+            reverse("reservations:reservation-list") + query, **HDR(self.hotel)
+        )
+        self.assertEqual(resp.status_code, 200)
+        return {row["reservation_number"] for row in resp.data["results"]}
+
+    def test_source_filter(self):
+        self.assertEqual(self._numbers("?source=public_website"), {"R-SITE"})
+
+    def test_statuses_csv_filter(self):
+        self.assertEqual(
+            self._numbers("?statuses=cancelled,expired"), {"R-CAN", "R-EXP"}
+        )
+
+    def test_statuses_ignores_invalid_values(self):
+        # Bogus entries are dropped; valid ones still apply.
+        self.assertEqual(
+            self._numbers("?statuses=bogus,cancelled"), {"R-CAN"}
+        )
+
+    def test_created_today_matches_fresh_rows(self):
+        # Everything above was created "now" — all rows are in today's window.
+        self.assertEqual(len(self._numbers("?created_today=true")), 5)
+
+    def test_upcoming_is_strictly_after_business_date(self):
+        numbers = self._numbers("?upcoming=true")
+        self.assertIn("R-SITE", numbers)  # far-future D1
+        self.assertNotIn("R-TODAY", numbers)  # arrives ON the business date
+
+    def test_room_filter_and_room_number_search(self):
+        room_id = self.rooms[0].id
+        self.assertEqual(self._numbers(f"?room={room_id}"), {"R-CONF"})
+        self.assertEqual(
+            self._numbers(f"?search={self.rooms[0].number}"), {"R-CONF"}
+        )

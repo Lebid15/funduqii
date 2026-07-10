@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import Link from "next/link";
 
 import { useQuickAction } from "@/lib/useQuickAction";
 import {
@@ -8,10 +16,13 @@ import {
   CalendarCheck,
   CalendarClock,
   ClipboardCheck,
+  Copy,
+  DoorOpen,
   MessageSquareText,
   Plus,
   Trash2,
   UserRound,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -30,7 +41,6 @@ import {
   Modal,
   Pagination,
   SectionCard,
-  SectionHeader,
   Select,
   StepSummaryCard,
   Textarea,
@@ -59,37 +69,92 @@ import type {
 } from "@/lib/api/types";
 import { formatDate, reservationStatusLabel, reservationStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import {
+  STATUS_BOUND_VIEWS,
+  VIEW_PARAMS,
+  type ReservationView,
+} from "./reservationViews";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["held", "confirmed", "cancelled", "expired"] as const;
+const SOURCES = ["direct", "phone", "walk_in", "public_website", "other"] as const;
 
-export function ReservationsTab() {
+/** The reservations LIST (owner reorg): one component serves all seven
+ * views — bookings only, never stays/check-ins. Props come from the page:
+ * the active view, a create signal from the page's "New Reservation"
+ * button, and a change callback so the summary counters stay honest. */
+export function ReservationsTab({
+  view = "all",
+  createSignal = 0,
+  onChanged,
+}: {
+  view?: ReservationView;
+  createSignal?: number;
+  onChanged?: () => void;
+}) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const access = useHotelAccess();
+  const can = (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
 
   const [types, setTypes] = useState<RoomType[]>([]);
   const [rows, setRows] = useState<Reservation[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
+  const [source, setSource] = useState("");
   const [type, setType] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [initialKind, setInitialKind] = useState<"instant" | "future" | null>(null);
+  // The page's "New Reservation" button pulses this prop — it opens the
+  // TYPE CHOOSER (instant vs future), never a hidden dropdown. Consume real
+  // increments only (the initial value must not auto-open on mount).
+  const lastSignal = useRef(createSignal);
+  useEffect(() => {
+    if (createSignal !== lastSignal.current) {
+      lastSignal.current = createSignal;
+      setChooserOpen(true);
+    }
+  }, [createSignal]);
+
+  function chooseKind(kind: "instant" | "future") {
+    setChooserOpen(false);
+    setInitialKind(kind);
+    setCreating(true);
+  }
+  // Switching views resets pagination and any conflicting bound filters.
+  useEffect(() => {
+    setPage(1);
+    if (STATUS_BOUND_VIEWS.includes(view)) setStatus("");
+    if (view === "website") setSource("");
+  }, [view]);
   const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
-  // Quick actions: ?action=new opens the EXISTING create modal once (with an
-  // optional preselected room from the operational board); ?action=find&q=
-  // focuses the list on a reservation number.
+  // Quick actions: with a preselected room (rooms board) the form opens
+  // DIRECTLY; without one, the type chooser opens first (owner UX).
+  // ?action=find&q= focuses the list on a reservation number.
   useQuickAction("new", (params) => {
     const room = params.get("room");
     const roomType = params.get("room_type");
-    setQuickLine(room && roomType ? { room, room_type: roomType } : null);
-    setCreating(true);
+    if (room && roomType) {
+      setQuickLine({ room, room_type: roomType });
+      setCreating(true);
+    } else {
+      setQuickLine(null);
+      setChooserOpen(true);
+    }
   });
   useQuickAction("find", (params) => {
     const q = params.get("q") ?? "";
@@ -112,11 +177,16 @@ export function ReservationsTab() {
     setError(null);
     try {
       const data = await listReservations({
+        // The view's own slice first — user filters narrow WITHIN it.
+        ...VIEW_PARAMS[view],
         page,
-        status: status || undefined,
+        status: status || VIEW_PARAMS[view].status,
+        source: source || VIEW_PARAMS[view].source,
         room_type: type ? Number(type) : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        created_from: createdFrom || undefined,
+        created_to: createdTo || undefined,
         search: query || undefined,
       });
       setRows(data.results);
@@ -126,13 +196,22 @@ export function ReservationsTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, type, dateFrom, dateTo, query, t]);
+  }, [view, page, status, source, type, dateFrom, dateTo, createdFrom, createdTo, query, t]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
+  const hasFilters =
+    status !== "" ||
+    source !== "" ||
+    type !== "" ||
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    createdFrom !== "" ||
+    createdTo !== "" ||
+    query !== "";
 
   function applySearch(event: FormEvent) {
     event.preventDefault();
@@ -140,13 +219,36 @@ export function ReservationsTab() {
     setQuery(search);
   }
 
+  function clearFilters() {
+    setStatus("");
+    setSource("");
+    setType("");
+    setDateFrom("");
+    setDateTo("");
+    setCreatedFrom("");
+    setCreatedTo("");
+    setSearch("");
+    setQuery("");
+    setPage(1);
+  }
+
   async function confirm(r: Reservation) {
     try {
       await confirmReservation(r.id);
       notify(t.reservations.saved);
       load();
+      onChanged?.();
     } catch (err) {
       notify(messageForError(err, t), "error");
+    }
+  }
+
+  async function copyNumber(r: Reservation) {
+    try {
+      await navigator.clipboard.writeText(r.reservation_number);
+      notify(t.reservations.views.copied);
+    } catch {
+      notify(r.reservation_number);
     }
   }
 
@@ -154,10 +256,30 @@ export function ReservationsTab() {
     value: s,
     label: reservationStatusLabel(s, t),
   }));
+  const sourceOptions = SOURCES.map((s) => ({
+    value: s,
+    label: t.reservations.source[s],
+  }));
   const typeOptions = types.map((ty) => ({ value: String(ty.id), label: ty.name }));
 
   const columns: Column<Reservation>[] = [
-    { key: "reservation_number", header: t.reservations.list.number },
+    {
+      key: "reservation_number",
+      header: t.reservations.list.number,
+      render: (r) => (
+        <span className="cluster">
+          <strong>{r.reservation_number}</strong>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={Copy}
+            onClick={() => copyNumber(r)}
+          >
+            {""}
+          </Button>
+        </span>
+      ),
+    },
     {
       key: "guest",
       header: t.reservations.list.guest,
@@ -169,15 +291,34 @@ export function ReservationsTab() {
       ),
     },
     {
+      key: "source",
+      header: t.reservations.views.sourceLabel,
+      render: (r) => (
+        <Badge tone={r.source === "public_website" ? "info" : "neutral"}>
+          {t.reservations.source[r.source] ?? r.source}
+        </Badge>
+      ),
+    },
+    {
       key: "dates",
       header: t.reservations.list.dates,
       render: (r) => `${formatDate(r.check_in_date, locale)} → ${formatDate(r.check_out_date, locale)}`,
     },
     { key: "nights", header: t.reservations.list.nights, render: (r) => r.nights },
     {
+      key: "guests_count",
+      header: t.reservations.views.guestsCount,
+      render: (r) => r.total_guests,
+    },
+    {
       key: "rooms",
       header: t.reservations.list.rooms,
       render: (r) => r.lines.reduce((sum, l) => sum + l.quantity, 0),
+    },
+    {
+      key: "created",
+      header: t.reservations.views.createdAt,
+      render: (r) => formatDate(r.created_at, locale),
     },
     {
       key: "status",
@@ -197,12 +338,19 @@ export function ReservationsTab() {
           <Button variant="secondary" size="sm" onClick={() => setDetails(r)}>
             {t.reservations.list.view}
           </Button>
-          {r.status === "held" ? (
+          {r.status === "held" && can("reservations.confirm") ? (
             <Button variant="ghost" size="sm" onClick={() => confirm(r)}>
               {t.reservations.list.confirm}
             </Button>
           ) : null}
-          {r.status === "held" || r.status === "confirmed" ? (
+          {(r.status === "held" || r.status === "confirmed") &&
+          can("reservations.update") ? (
+            <Button variant="ghost" size="sm" onClick={() => setEditing(r)}>
+              {t.common.edit}
+            </Button>
+          ) : null}
+          {(r.status === "held" || r.status === "confirmed") &&
+          can("reservations.cancel") ? (
             <Button variant="danger" size="sm" onClick={() => setCancelTarget(r)}>
               {t.reservations.list.cancel}
             </Button>
@@ -214,21 +362,22 @@ export function ReservationsTab() {
 
   return (
     <>
-      <SectionHeader
-        title={t.reservations.list.title}
-        icon={CalendarCheck}
-        actions={<Button icon={Plus} onClick={() => setCreating(true)}>{t.reservations.list.add}</Button>}
-      />
-
       <Card>
         <form onSubmit={applySearch}>
           <FilterBar>
             <FormField label={t.common.search} htmlFor="res-search">
-              <Input id="res-search" value={search} placeholder={t.reservations.list.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
+              <Input id="res-search" value={search} placeholder={t.reservations.views.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
             </FormField>
-            <FormField label={t.reservations.list.filterStatus} htmlFor="res-status">
-              <Select id="res-status" value={status} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatus(e.target.value); }} />
-            </FormField>
+            {!STATUS_BOUND_VIEWS.includes(view) ? (
+              <FormField label={t.reservations.list.filterStatus} htmlFor="res-status">
+                <Select id="res-status" value={status} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatus(e.target.value); }} />
+              </FormField>
+            ) : null}
+            {view !== "website" ? (
+              <FormField label={t.reservations.views.sourceLabel} htmlFor="res-source">
+                <Select id="res-source" value={source} placeholder={t.common.all} options={sourceOptions} onChange={(e) => { setPage(1); setSource(e.target.value); }} />
+              </FormField>
+            ) : null}
             <FormField label={t.reservations.list.filterType} htmlFor="res-type">
               <Select id="res-type" value={type} placeholder={t.common.all} options={typeOptions} onChange={(e) => { setPage(1); setType(e.target.value); }} />
             </FormField>
@@ -238,6 +387,19 @@ export function ReservationsTab() {
             <FormField label={t.reservations.list.dateTo} htmlFor="res-to">
               <Input id="res-to" type="date" value={dateTo} onChange={(e) => { setPage(1); setDateTo(e.target.value); }} />
             </FormField>
+            <FormField label={t.reservations.views.createdFrom} htmlFor="res-created-from">
+              <Input id="res-created-from" type="date" value={createdFrom} onChange={(e) => { setPage(1); setCreatedFrom(e.target.value); }} />
+            </FormField>
+            <FormField label={t.reservations.views.createdTo} htmlFor="res-created-to">
+              <Input id="res-created-to" type="date" value={createdTo} onChange={(e) => { setPage(1); setCreatedTo(e.target.value); }} />
+            </FormField>
+            {hasFilters ? (
+              <div className="filter-bar__actions cluster">
+                <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>
+                  {t.rooms.board.clearFilters}
+                </Button>
+              </div>
+            ) : null}
           </FilterBar>
         </form>
       </Card>
@@ -249,10 +411,9 @@ export function ReservationsTab() {
       {!loading && !error ? (
         rows.length === 0 ? (
           <EmptyState
-            title={t.reservations.list.empty}
-            hint={t.reservations.list.emptyHint}
+            title={t.reservations.views.noReservations}
+            hint={t.reservations.views.emptyFiltered}
             icon={CalendarCheck}
-            action={<Button icon={Plus} onClick={() => setCreating(true)}>{t.reservations.list.add}</Button>}
           />
         ) : (
           <>
@@ -271,19 +432,47 @@ export function ReservationsTab() {
         )
       ) : null}
 
+      {/* Owner UX: choosing the reservation TYPE is an explicit modal with
+          two big cards — never a dropdown. Instant stays a RESERVATION
+          (check-in remains front-desk business). */}
+      <Modal
+        open={chooserOpen}
+        onClose={() => setChooserOpen(false)}
+        title={t.reservations.views.chooseType}
+        closeLabel={t.common.close}
+      >
+        <div className="choice-cards">
+          <button type="button" className="choice-card" onClick={() => chooseKind("instant")}>
+            <span className="choice-card__icon">
+              <Zap size={22} />
+            </span>
+            <strong>{t.reservations.views.instantTitle}</strong>
+            <span className="muted">{t.reservations.views.instantDesc}</span>
+          </button>
+          <button type="button" className="choice-card" onClick={() => chooseKind("future")}>
+            <span className="choice-card__icon">
+              <CalendarClock size={22} />
+            </span>
+            <strong>{t.reservations.views.futureTitle}</strong>
+            <span className="muted">{t.reservations.views.futureDesc}</span>
+          </button>
+        </div>
+      </Modal>
+
       <ReservationModal
         open={creating}
         types={types}
         initialLine={quickLine}
-        onClose={() => { setCreating(false); setQuickLine(null); }}
-        onSaved={() => { setCreating(false); setQuickLine(null); notify(t.reservations.saved); setPage(1); load(); }}
+        initialKind={initialKind}
+        onClose={() => { setCreating(false); setQuickLine(null); setInitialKind(null); }}
+        onSaved={() => { setCreating(false); setQuickLine(null); setInitialKind(null); notify(t.reservations.saved); setPage(1); load(); onChanged?.(); }}
       />
       <ReservationModal
         open={editing !== null}
         reservation={editing ?? undefined}
         types={types}
         onClose={() => setEditing(null)}
-        onSaved={() => { setEditing(null); notify(t.reservations.saved); load(); }}
+        onSaved={() => { setEditing(null); notify(t.reservations.saved); load(); onChanged?.(); }}
       />
       <DetailsModal
         open={details !== null}
@@ -297,7 +486,7 @@ export function ReservationsTab() {
         open={cancelTarget !== null}
         reservation={cancelTarget ?? undefined}
         onClose={() => setCancelTarget(null)}
-        onDone={() => { setCancelTarget(null); notify(t.reservations.saved); load(); }}
+        onDone={() => { setCancelTarget(null); notify(t.reservations.saved); load(); onChanged?.(); }}
       />
     </>
   );
@@ -324,6 +513,7 @@ function ReservationModal({
   reservation,
   types,
   initialLine,
+  initialKind,
   onClose,
   onSaved,
 }: {
@@ -332,6 +522,10 @@ function ReservationModal({
   types: RoomType[];
   /** Optional preselected room line (operational board deep-link). */
   initialLine?: { room_type: string; room: string } | null;
+  /** Optional booking kind from the type-chooser cards (owner UX): instant
+   * starts today (hotel business rules re-validate server-side), future
+   * leaves the arrival date for the user to pick. */
+  initialKind?: "instant" | "future" | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -364,8 +558,11 @@ function ReservationModal({
 
   useEffect(() => {
     if (!open) return;
-    setBookingKind(reservation?.booking_kind ?? "instant");
-    setCheckIn(reservation?.check_in_date ?? todayISO());
+    const kind = reservation?.booking_kind ?? initialKind ?? "instant";
+    setBookingKind(kind);
+    // Future bookings leave the arrival date to the user; instant starts
+    // today (still a RESERVATION — check-in stays front-desk business).
+    setCheckIn(reservation?.check_in_date ?? (kind === "future" ? "" : todayISO()));
     setCheckOut(reservation?.check_out_date ?? "");
     setArrivalTime(reservation?.expected_arrival_time ?? "");
     setName(reservation?.primary_guest_name ?? "");
@@ -404,7 +601,7 @@ function ReservationModal({
     listRooms({ page_size: 200 })
       .then((r) => setRooms(r.results))
       .catch(() => setRooms([]));
-  }, [open, reservation, initialLine]);
+  }, [open, reservation, initialLine, initialKind]);
 
   // Instant bookings start today; switching kinds keeps the dates honest.
   function changeKind(kind: "instant" | "future") {
@@ -788,6 +985,14 @@ function DetailsModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>{t.common.close}</Button>
+          {/* A LIGHT operational link only (owner rule): check-in/out stay
+              front-desk business — never actions inside reservations. */}
+          {r.status === "confirmed" ? (
+            <Link href="/hotel/front-desk?tab=arrivals" className="btn btn--ghost btn--sm">
+              <DoorOpen size={16} />
+              {t.reservations.views.frontDeskLink}
+            </Link>
+          ) : null}
           {editable ? <Button variant="ghost" onClick={() => onEdit(r)}>{t.reservations.details.edit}</Button> : null}
           {r.status === "held" ? <Button onClick={() => onConfirm(r)}>{t.reservations.details.confirm}</Button> : null}
           {editable ? <Button variant="danger" onClick={() => onCancel(r)}>{t.reservations.details.cancel}</Button> : null}
