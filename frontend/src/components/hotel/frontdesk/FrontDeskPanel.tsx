@@ -241,7 +241,7 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
             description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
             action={
               can("stays.check_in") ? (
-                <Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>
+                <Button variant="success" anim="checkin" icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>
               ) : undefined
             }
           />
@@ -311,7 +311,7 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
               <span className="stay-card__room">{stay.room_number}</span>
               <span className="cluster" style={{ gap: "0.35rem" }}>
                 {stay.primary_guest_is_vip ? (
-                  <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
+                  <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
                 ) : null}
                 <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
               </span>
@@ -322,18 +322,18 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
               <span>{t.frontDesk.current.checkOutDate}: {formatDate(stay.planned_check_out_date, locale)} · {stay.nights} {t.frontDesk.current.nights}</span>
             </div>
             <div className="stay-card__actions">
-              <Button variant="secondary" size="sm" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
+              <Button variant="secondary" size="sm" anim="open" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
               {can("stays.extend") ? (
-                <Button variant="ghost" size="sm" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
+                <Button variant="warning" size="sm" anim="extend" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
               ) : null}
               {can("stays.shorten") ? (
-                <Button variant="ghost" size="sm" icon={CalendarMinus} onClick={() => setShortenTarget(stay)}>{t.frontDesk.current.shorten}</Button>
+                <Button variant="warning" size="sm" anim="shorten" icon={CalendarMinus} onClick={() => setShortenTarget(stay)}>{t.frontDesk.current.shorten}</Button>
               ) : null}
               {can("stays.move_room") ? (
-                <Button variant="ghost" size="sm" icon={ArrowLeftRight} onClick={() => setMoveTarget(stay)}>{t.frontDesk.current.move}</Button>
+                <Button variant="warning" size="sm" anim="move" icon={ArrowLeftRight} onClick={() => setMoveTarget(stay)}>{t.frontDesk.current.move}</Button>
               ) : null}
               {can("stays.check_out") ? (
-                <Button variant="ghost" size="sm" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+                <Button variant="success" size="sm" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
               ) : null}
             </div>
           </article>
@@ -411,7 +411,7 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
             action={
               can("stays.check_out") ? (
-                <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+                <Button variant="success" anim="checkout" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
               ) : undefined
             }
           />
@@ -546,7 +546,7 @@ function CheckInModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkin-form" type="submit" loading={busy}>{t.frontDesk.checkInModal.submit}</Button>
+          <Button form="checkin-form" type="submit" variant="success" anim="checkin" loading={busy}>{t.frontDesk.checkInModal.submit}</Button>
         </>
       }
     >
@@ -680,7 +680,7 @@ function CheckOutModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkout-form" type="submit" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
+          <Button form="checkout-form" type="submit" variant="success" anim="checkout" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
         </>
       }
     >
@@ -790,7 +790,7 @@ function ExtendStayModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="extend-form" type="submit" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
+          <Button form="extend-form" type="submit" variant="warning" anim="extend" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
         </>
       }
     >
@@ -867,7 +867,7 @@ function ShortenStayModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="shorten-form" type="submit" loading={busy}>{t.frontDesk.shortenModal.submit}</Button>
+          <Button form="shorten-form" type="submit" variant="warning" anim="shorten" loading={busy}>{t.frontDesk.shortenModal.submit}</Button>
         </>
       }
     >
@@ -958,7 +958,7 @@ function MoveRoomModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="move-form" type="submit" loading={busy}>{t.frontDesk.moveModal.submit}</Button>
+          <Button form="move-form" type="submit" variant="warning" anim="move" loading={busy}>{t.frontDesk.moveModal.submit}</Button>
         </>
       }
     >

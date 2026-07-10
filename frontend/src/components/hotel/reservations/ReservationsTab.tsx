@@ -341,24 +341,24 @@ export function ReservationsTab({
       align: "end",
       render: (r) => (
         <div className="table__actions">
-          <Button variant="secondary" size="sm" onClick={() => setDetails(r)}>
+          <Button variant="secondary" size="sm" anim="open" onClick={() => setDetails(r)}>
             {t.reservations.list.view}
           </Button>
           {r.status === "held" && can("reservations.confirm") ? (
-            <Button variant="ghost" size="sm" onClick={() => confirm(r)}>
+            <Button variant="ghost" size="sm" anim="save" onClick={() => confirm(r)}>
               {t.reservations.list.confirm}
             </Button>
           ) : null}
           {(r.status === "held" || r.status === "confirmed") &&
           can("reservations.update") ? (
-            <Button variant="ghost" size="sm" onClick={() => setEditing(r)}>
+            <Button variant="ghost" size="sm" anim="edit" onClick={() => setEditing(r)}>
               {t.common.edit}
             </Button>
           ) : null}
           {(r.status === "held" || r.status === "confirmed") &&
           !r.has_in_house_stay &&
           can("reservations.cancel") ? (
-            <Button variant="danger" size="sm" onClick={() => setCancelTarget(r)}>
+            <Button variant="danger" size="sm" anim="delete" onClick={() => setCancelTarget(r)}>
               {t.reservations.list.cancel}
             </Button>
           ) : null}
@@ -456,20 +456,24 @@ export function ReservationsTab({
               front-desk service, so it needs the real check-in permission. */}
           <button
             type="button"
-            className="choice-card"
+            className="choice-card choice-card--instant"
             disabled={!can("stays.check_in")}
             title={!can("stays.check_in") ? t.reservations.views.needCheckInPerm : undefined}
             onClick={() => chooseKind("instant")}
           >
             <span className="choice-card__icon">
-              <Zap size={22} />
+              <Zap size={24} />
             </span>
             <strong>{t.reservations.views.instantTitle}</strong>
             <span className="muted">{t.reservations.views.instantDesc}</span>
           </button>
-          <button type="button" className="choice-card" onClick={() => chooseKind("future")}>
+          <button
+            type="button"
+            className="choice-card choice-card--future"
+            onClick={() => chooseKind("future")}
+          >
             <span className="choice-card__icon">
-              <CalendarClock size={22} />
+              <CalendarClock size={24} />
             </span>
             <strong>{t.reservations.views.futureTitle}</strong>
             <span className="muted">{t.reservations.views.futureDesc}</span>
@@ -928,14 +932,22 @@ function ReservationModal({
           <>
             <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
             {step > 0 ? (
-              <Button variant="ghost" onClick={() => { setError(null); setStep((s) => s - 1); }} disabled={busy}>
+              <Button variant="ghost" anim="back" onClick={() => { setError(null); setStep((s) => s - 1); }} disabled={busy}>
                 {t.pagination.previous}
               </Button>
             ) : null}
             {step < 3 ? (
               <Button onClick={goNext} disabled={busy}>{t.pagination.next}</Button>
             ) : (
-              <Button form="res-form" type="submit" loading={busy}>{finalLabel}</Button>
+              <Button
+                form="res-form"
+                type="submit"
+                variant={!editing && isInstant ? "success" : "primary"}
+                anim={!editing && isInstant ? "checkin" : "save"}
+                loading={busy}
+              >
+                {finalLabel}
+              </Button>
             )}
           </>
         )

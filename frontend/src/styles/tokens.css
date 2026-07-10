@@ -137,4 +137,108 @@
   --z-overlay: 50;
   --z-modal: 60;
   --z-toast: 70;
+
+  /* --- Hotel status palette (UI polish round) ------------------------
+   * Domain states get ONE calm color each — used only in badges, icon
+   * containers, accent bars and light tints, never full-card fills. */
+  --status-reserved: #7355c7; /* booked / held — violet */
+  --status-reserved-soft: #f0ecfa;
+  --status-inhouse: #0d8f7c; /* resident — emerald teal */
+  --status-inhouse-soft: #e2f5f0;
+  --status-checkedout: #64748b; /* history — slate */
+  --status-checkedout-soft: #eef1f5;
+  --status-departing: #c96f10; /* leaving today / dirty — amber-orange */
+  --status-departing-soft: #fcf1e1;
+  --status-dirty: #c96f10;
+  --status-dirty-soft: #fcf1e1;
+  --status-maintenance: #c2413b; /* hard-blocked room — calm red */
+  --status-maintenance-soft: #fbeceb;
+  --color-vip: #9a7514; /* refined gold, readable on soft */
+  --color-vip-soft: #faf3dd;
+  --color-blocked: #c2413b; /* guest block — unmistakable, not neon */
+  --color-blocked-soft: #fbeceb;
+
+  /* --- Interaction constants (UI polish round) ----------------------- */
+  --disabled-opacity: 0.55;
+  --lift-1: -1px; /* buttons */
+  --lift-3: -3px; /* cards */
+  --shadow-lift: 0 10px 24px -10px rgba(20, 33, 29, 0.18),
+    0 3px 8px -3px rgba(20, 33, 29, 0.08);
+}
+
+/* --- Dark theme (PROTOTYPE — opt-in only) ------------------------------
+ * The project ships light-only today. These overrides make every token
+ * dark-ready so the system can be reviewed by setting data-theme="dark"
+ * on <html>; NOTHING sets it automatically. No pure black anywhere —
+ * deep, calm greens/neutrals that keep the brand identity. */
+[data-theme="dark"] {
+  --color-primary: #2ea795;
+  --color-primary-hover: #3cbaa7;
+  --color-primary-active: #4ecdb9;
+  --color-primary-strong: #7adfd0;
+  --color-primary-soft: #123b36;
+  --color-primary-soft-hover: #17493f;
+  --color-primary-contrast: #06211d;
+
+  --color-accent: #3aa7b5;
+  --color-accent-soft: #12333a;
+
+  --color-bg: #0e1513;
+  --color-bg-subtle: #131b19;
+  --color-surface: #161f1c;
+  --color-surface-raised: #1a2421;
+  --color-surface-muted: #141d1a;
+  --color-surface-sunken: #101816;
+
+  --color-border: #24302c;
+  --color-border-subtle: #1d2825;
+  --color-border-strong: #32403b;
+
+  --color-fg: #e7edea;
+  --color-fg-muted: #a7b3ac;
+  --color-fg-subtle: #6f7d76;
+  --color-fg-inverse: #10201c;
+
+  --color-success: #34b98a;
+  --color-success-soft: #11362a;
+  --color-warning: #d99a3d;
+  --color-warning-soft: #3a2c12;
+  --color-danger: #e2685f;
+  --color-danger-hover: #e97f76;
+  --color-danger-soft: #40201d;
+  --color-info: #6b9df2;
+  --color-info-soft: #182a48;
+  --color-neutral-soft: #1d2825;
+
+  --gradient-brand: linear-gradient(135deg, #14806f 0%, #0c5c52 100%);
+  --gradient-surface: linear-gradient(180deg, #182220 0%, #141d1a 100%);
+
+  --ring-color: rgba(62, 189, 169, 0.4);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 20px -8px rgba(0, 0, 0, 0.55),
+    0 2px 6px -2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 20px 48px -16px rgba(0, 0, 0, 0.7),
+    0 8px 18px -8px rgba(0, 0, 0, 0.5);
+  --shadow-brand: 0 10px 26px -8px rgba(20, 128, 111, 0.5);
+  --shadow-lift: 0 10px 24px -10px rgba(0, 0, 0, 0.6),
+    0 3px 8px -3px rgba(0, 0, 0, 0.4);
+
+  --status-reserved: #9d85e0;
+  --status-reserved-soft: #241d3d;
+  --status-inhouse: #2fb99f;
+  --status-inhouse-soft: #0f3a32;
+  --status-checkedout: #93a3b8;
+  --status-checkedout-soft: #1e2733;
+  --status-departing: #dd9440;
+  --status-departing-soft: #3a2a12;
+  --status-dirty: #dd9440;
+  --status-dirty-soft: #3a2a12;
+  --status-maintenance: #e2685f;
+  --status-maintenance-soft: #40201d;
+  --color-vip: #d9b44a;
+  --color-vip-soft: #37300f;
+  --color-blocked: #e2685f;
+  --color-blocked-soft: #40201d;
 }

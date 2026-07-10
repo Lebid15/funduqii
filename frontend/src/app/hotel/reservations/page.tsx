@@ -99,7 +99,7 @@ export default function ReservationsPage() {
         subtitle={v.subtitle}
         actions={
           canCreate ? (
-            <Button icon={Plus} onClick={newReservation}>
+            <Button icon={Plus} anim="add" onClick={newReservation}>
               {v.newReservation}
             </Button>
           ) : undefined

@@ -3684,3 +3684,374 @@ a {
     position: static;
   }
 }
+
+
+/* ==========================================================================
+   UI POLISH ROUND (design-system prototype) — buttons, cards, badges,
+   dialogs, tables, empty states and purpose-matched icon micro-interactions.
+   Everything is token-driven, transform/opacity-only, and fully disabled
+   under prefers-reduced-motion. Scope: shared primitives + the three pilot
+   sections (reservations / front desk / guests).
+   ========================================================================== */
+
+/* --- Buttons: lift on hover, real press, visible focus -------------------- */
+.btn:not(:disabled):not([data-loading="true"]):hover {
+  transform: translateY(var(--lift-1));
+}
+.btn:not(:disabled):active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-xs);
+}
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.choice-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.btn:disabled {
+  opacity: var(--disabled-opacity);
+}
+.btn--primary:not(:disabled):hover {
+  box-shadow: var(--shadow-brand), var(--shadow-lift);
+}
+.btn--secondary:not(:disabled):hover {
+  box-shadow: var(--shadow-sm);
+}
+
+/* Success — check-in / check-out / approve / complete. */
+.btn--success {
+  background: var(--color-success);
+  color: #fff;
+  box-shadow: var(--shadow-xs);
+}
+.btn--success:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-success) 88%, #000 12%);
+  box-shadow: var(--shadow-lift);
+}
+[data-theme="dark"] .btn--success {
+  color: var(--color-fg-inverse);
+}
+
+/* Warning — extend / shorten / room move: attention without alarm (soft). */
+.btn--warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+}
+.btn--warning .icon {
+  color: var(--color-warning);
+}
+.btn--warning:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-warning) 16%, var(--color-warning-soft));
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.btn--danger:not(:disabled):hover {
+  box-shadow: var(--shadow-lift);
+}
+.icon-btn:hover {
+  transform: translateY(var(--lift-1));
+}
+
+/* --- Purpose-matched icon micro-interactions (hover only, one beat) ------- */
+.btn .icon,
+.icon-btn .icon {
+  transition: transform var(--transition-fast);
+}
+.btn[data-anim="add"]:not(:disabled):hover .icon {
+  transform: rotate(10deg) scale(1.06);
+}
+.btn[data-anim="open"]:not(:disabled):hover .icon {
+  transform: translateY(-2px);
+}
+.btn[data-anim="back"]:not(:disabled):hover .icon {
+  transform: translateX(-3px);
+}
+[dir="rtl"] .btn[data-anim="back"]:not(:disabled):hover .icon {
+  transform: translateX(3px);
+}
+.btn[data-anim="edit"]:not(:disabled):hover .icon {
+  transform: rotate(-8deg);
+}
+.btn[data-anim="save"]:not(:disabled):hover .icon {
+  transform: scale(1.12);
+}
+.btn[data-anim="checkin"]:not(:disabled):hover .icon {
+  transform: translateX(3px);
+}
+[dir="rtl"] .btn[data-anim="checkin"]:not(:disabled):hover .icon {
+  transform: translateX(-3px);
+}
+.btn[data-anim="checkout"]:not(:disabled):hover .icon,
+.btn[data-anim="move"]:not(:disabled):hover .icon {
+  transform: translateX(3px);
+}
+[dir="rtl"] .btn[data-anim="checkout"]:not(:disabled):hover .icon,
+[dir="rtl"] .btn[data-anim="move"]:not(:disabled):hover .icon {
+  transform: translateX(-3px);
+}
+.btn[data-anim="extend"]:not(:disabled):hover .icon {
+  transform: scaleX(1.18);
+}
+.btn[data-anim="shorten"]:not(:disabled):hover .icon {
+  transform: scaleX(0.82);
+}
+.btn[data-anim="delete"]:not(:disabled):hover .icon {
+  animation: icon-shake 280ms var(--ease-out) 1;
+}
+.btn[data-anim="block"]:not(:disabled):hover .icon {
+  transform: scale(1.14);
+}
+.btn[data-anim="vip"]:not(:disabled):hover .icon {
+  animation: icon-pop 240ms var(--ease-out) 1 forwards;
+}
+@keyframes icon-shake {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-1.5px) rotate(-2deg); }
+  65% { transform: translateX(1.5px) rotate(2deg); }
+}
+@keyframes icon-pop {
+  0% { transform: scale(1); }
+  55% { transform: scale(1.22); }
+  100% { transform: scale(1.1); }
+}
+
+/* --- Badges: domain tones + one-beat entrance ----------------------------- */
+.badge {
+  animation: badge-in 160ms var(--ease-out);
+}
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+.badge--vip {
+  background: var(--color-vip-soft);
+  color: var(--color-vip);
+  border-color: color-mix(in srgb, var(--color-vip) 32%, transparent);
+}
+.badge--reserved {
+  background: var(--status-reserved-soft);
+  color: var(--status-reserved);
+  border-color: color-mix(in srgb, var(--status-reserved) 25%, transparent);
+}
+.badge--inhouse {
+  background: var(--status-inhouse-soft);
+  color: var(--status-inhouse);
+  border-color: color-mix(in srgb, var(--status-inhouse) 25%, transparent);
+}
+.badge--blocked {
+  background: var(--color-blocked-soft);
+  color: var(--color-blocked);
+  border-color: color-mix(in srgb, var(--color-blocked) 30%, transparent);
+}
+
+/* --- Cards: calm lift + status accents ------------------------------------ */
+.stay-card {
+  border-inline-start-color: var(--status-inhouse);
+  transition: box-shadow var(--transition-base), transform var(--transition-base),
+    border-color var(--transition-base);
+}
+.stay-card:hover {
+  transform: translateY(var(--lift-3));
+  box-shadow: var(--shadow-lift);
+}
+.stay-card__room {
+  font-variant-numeric: tabular-nums;
+}
+.stay-card--departing {
+  border-inline-start-color: var(--status-departing);
+}
+.stay-card:hover .stay-card__actions .btn {
+  opacity: 1;
+}
+
+.action-card {
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.action-card:hover {
+  transform: translateY(var(--lift-1));
+  box-shadow: var(--shadow-sm);
+}
+.action-card:hover .action-card__icon {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.action-card__icon {
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.workflow-card:hover {
+  transform: translateY(var(--lift-1));
+}
+.workflow-card {
+  transition: box-shadow var(--transition-base), border-color var(--transition-base),
+    transform var(--transition-base);
+}
+.workflow-card__value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Reservation-kind chooser: the two hero choice cards ------------------ */
+.choice-card {
+  position: relative;
+  padding-block: var(--space-6);
+  gap: var(--space-3);
+}
+.choice-card:hover {
+  transform: translateY(var(--lift-3));
+  box-shadow: var(--shadow-lift);
+}
+.choice-card:hover .choice-card__icon {
+  transform: translateY(-2px) scale(1.05);
+}
+.choice-card__icon {
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-lg);
+  transition: transform var(--transition-fast);
+}
+.choice-card::after {
+  content: "→";
+  position: absolute;
+  inset-inline-end: var(--space-4);
+  inset-block-start: var(--space-4);
+  font-size: var(--font-size-lg);
+  color: var(--color-fg-subtle);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+[dir="rtl"] .choice-card::after {
+  content: "←";
+  transform: translateX(4px);
+}
+.choice-card:hover::after,
+.choice-card:focus-visible::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+.choice-card--instant {
+  border-inline-start: 4px solid var(--status-inhouse);
+}
+.choice-card--instant .choice-card__icon {
+  background: var(--status-inhouse-soft);
+  color: var(--status-inhouse);
+}
+.choice-card--future {
+  border-inline-start: 4px solid var(--status-reserved);
+}
+.choice-card--future .choice-card__icon {
+  background: var(--status-reserved-soft);
+  color: var(--status-reserved);
+}
+.choice-card--instant:hover {
+  border-color: var(--status-inhouse);
+}
+.choice-card--future:hover {
+  border-color: var(--status-reserved);
+}
+
+/* --- Tables: quieter chrome, gentle hover, actions that step forward ------ */
+.table tbody tr:hover {
+  background: color-mix(in srgb, var(--color-primary-soft) 55%, transparent);
+}
+.table__actions .btn {
+  opacity: 0.85;
+  transition: opacity var(--transition-fast), transform var(--transition-fast),
+    box-shadow var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast), color var(--transition-fast);
+}
+.table tbody tr:hover .table__actions .btn,
+.table__actions .btn:focus-visible {
+  opacity: 1;
+}
+.table td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Empty states: a friendlier landing ----------------------------------- */
+.empty-state .state__icon {
+  animation: state-pop 260ms var(--ease-out);
+}
+@keyframes state-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(4px);
+  }
+}
+
+/* --- Toasts: slide in from the inline end ---------------------------------- */
+.toast {
+  animation: toast-slide var(--transition-base);
+}
+@keyframes toast-slide {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+[dir="rtl"] .toast {
+  animation-name: toast-slide-rtl;
+}
+@keyframes toast-slide-rtl {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* --- Dialogs: calmer entrance, honest danger/warning headers -------------- */
+.modal {
+  animation: modal-in 200ms var(--ease-out);
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(6px);
+  }
+}
+
+/* --- Guest directory niceties ---------------------------------------------- */
+.inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-primary-active);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+.inline-link:hover {
+  text-decoration: underline;
+}
+
+/* --- Reduced motion: color changes only, zero movement -------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .btn:not(:disabled):hover,
+  .btn:not(:disabled):active,
+  .icon-btn:hover,
+  .stay-card:hover,
+  .action-card:hover,
+  .workflow-card:hover,
+  .choice-card:hover,
+  .btn[data-anim]:not(:disabled):hover .icon,
+  .choice-card:hover .choice-card__icon {
+    transform: none;
+    animation: none;
+  }
+  .badge,
+  .modal,
+  .toast,
+  .empty-state .state__icon {
+    animation: none;
+  }
+}

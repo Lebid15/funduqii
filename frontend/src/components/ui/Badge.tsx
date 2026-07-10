@@ -8,7 +8,11 @@ export type BadgeTone =
   | "success"
   | "warning"
   | "danger"
-  | "info";
+  | "info"
+  | "vip"
+  | "reserved"
+  | "inhouse"
+  | "blocked";
 
 interface BadgeProps {
   tone?: BadgeTone;

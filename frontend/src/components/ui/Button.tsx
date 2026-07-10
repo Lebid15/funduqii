@@ -5,7 +5,31 @@ import { cx } from "@/lib/utils";
 
 import { Icon } from "./Icon";
 
-type Variant = "primary" | "secondary" | "danger" | "dangerSoft" | "ghost";
+type Variant =
+  | "primary"
+  | "secondary"
+  | "success"
+  | "warning"
+  | "danger"
+  | "dangerSoft"
+  | "ghost";
+
+/** Purpose-driven icon micro-interaction, played on hover only (UI polish
+ * round). Purely cosmetic — respects prefers-reduced-motion. */
+export type ButtonAnim =
+  | "add"
+  | "open"
+  | "back"
+  | "edit"
+  | "save"
+  | "checkin"
+  | "checkout"
+  | "move"
+  | "extend"
+  | "shorten"
+  | "delete"
+  | "block"
+  | "vip";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
@@ -17,6 +41,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   iconEnd?: LucideIcon;
   /** Shows a spinner and disables the button. */
   loading?: boolean;
+  /** Optional purpose-matched icon hover animation. */
+  anim?: ButtonAnim;
   children: ReactNode;
 }
 
@@ -28,6 +54,7 @@ export function Button({
   icon,
   iconEnd,
   loading = false,
+  anim,
   className,
   type = "button",
   disabled,
@@ -47,6 +74,7 @@ export function Button({
       )}
       disabled={disabled || loading}
       data-loading={loading || undefined}
+      data-anim={anim}
       {...rest}
     >
       {loading ? (

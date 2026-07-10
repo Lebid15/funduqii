@@ -117,8 +117,8 @@ export function GuestsPanel() {
       render: (r) => (
         <span className="cluster" style={{ gap: "0.35rem" }}>
           {r.full_name}
-          {r.is_vip ? <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-          {r.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
+          {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+          {r.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
           {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
         </span>
       ),
@@ -130,7 +130,7 @@ export function GuestsPanel() {
       header: t.guests.directory.residency,
       render: (r) =>
         r.is_resident ? (
-          <Badge tone="success">
+          <Badge tone="inhouse">
             {t.guests.directory.resident}{r.current_room_number ? ` · ${r.current_room_number}` : ""}
           </Badge>
         ) : (
@@ -159,7 +159,7 @@ export function GuestsPanel() {
       header: t.common.actions,
       align: "end",
       render: (r) => (
-        <Button variant="secondary" size="sm" icon={User} onClick={() => setProfileId(r.id)}>
+        <Button variant="secondary" size="sm" anim="open" icon={User} onClick={() => setProfileId(r.id)}>
           {t.guests.directory.openProfile}
         </Button>
       ),
@@ -177,7 +177,7 @@ export function GuestsPanel() {
             <div className="filter-bar__actions cluster">
               <Switch id="guest-inactive" label={t.guests.list.showInactive} checked={showInactive} onChange={(v) => { setPage(1); setShowInactive(v); }} />
               {can("guests.create") ? (
-                <Button icon={Plus} onClick={() => setCreating(true)}>{t.guests.list.add}</Button>
+                <Button icon={Plus} anim="add" onClick={() => setCreating(true)}>{t.guests.list.add}</Button>
               ) : null}
             </div>
           </FilterBar>
@@ -331,15 +331,15 @@ function GuestProfileModal({
           <div className="stack">
             <div className="cluster">
               {p.is_resident ? (
-                <Badge tone="success">{t.guests.directory.resident}{p.current_room_number ? ` · ${p.current_room_number}` : ""}</Badge>
+                <Badge tone="inhouse">{t.guests.directory.resident}{p.current_room_number ? ` · ${p.current_room_number}` : ""}</Badge>
               ) : (
                 <Badge tone="neutral">{t.guests.directory.notResident}</Badge>
               )}
               <Badge tone={p.is_repeat ? "info" : "neutral"}>
                 {p.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
               </Badge>
-              {p.is_vip ? <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-              {p.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
+              {p.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+              {p.is_blocked ? <Badge tone="blocked">{t.guests.block.badge}</Badge> : null}
               {!p.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
             </div>
 
@@ -353,12 +353,12 @@ function GuestProfileModal({
 
             <div className="cluster">
               {can("guests.update") ? (
-                <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(true)} disabled={busy}>
+                <Button variant="secondary" size="sm" anim="edit" icon={Pencil} onClick={() => setEditing(true)} disabled={busy}>
                   {t.common.edit}
                 </Button>
               ) : null}
               {can("guests.mark_vip") ? (
-                <Button variant="ghost" size="sm" icon={Star} onClick={toggleVip} disabled={busy}>
+                <Button variant="ghost" size="sm" anim="vip" icon={Star} onClick={toggleVip} disabled={busy}>
                   {p.is_vip ? t.guests.vip.unmark : t.guests.vip.mark}
                 </Button>
               ) : null}
@@ -368,13 +368,13 @@ function GuestProfileModal({
                     {t.guests.block.unblock}
                   </Button>
                 ) : (
-                  <Button variant="ghost" size="sm" icon={Ban} onClick={() => setBlocking(true)} disabled={busy}>
+                  <Button variant="dangerSoft" size="sm" anim="block" icon={Ban} onClick={() => setBlocking(true)} disabled={busy}>
                     {t.guests.block.block}
                   </Button>
                 )
               ) : null}
               {can("guests.delete") ? (
-                <Button variant="danger" size="sm" icon={Trash2} onClick={() => setDeleting(true)} disabled={busy}>
+                <Button variant="danger" size="sm" anim="delete" icon={Trash2} onClick={() => setDeleting(true)} disabled={busy}>
                   {t.common.delete}
                 </Button>
               ) : null}
@@ -548,7 +548,7 @@ function BlockGuestModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>{t.common.cancel}</Button>
-          <Button form="block-form" type="submit" variant="danger">{t.guests.block.block}</Button>
+          <Button form="block-form" type="submit" variant="danger" anim="block" icon={Ban}>{t.guests.block.block}</Button>
         </>
       }
     >
@@ -651,7 +651,7 @@ function GuestModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="guest-form" type="submit" loading={busy}>{t.common.save}</Button>
+          <Button form="guest-form" type="submit" anim="save" loading={busy}>{t.common.save}</Button>
         </>
       }
     >
