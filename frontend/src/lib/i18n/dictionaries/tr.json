@@ -689,7 +689,11 @@
       "companionsHint": "Refakatçi adları girişte, ön büroda eklenir.",
       "documentsHint": "İsteğe bağlı adım — rezervasyon bilgileriyle saklanır.",
       "roomRequiredInstant": "Anlık rezervasyon için belirli bir oda seçin.",
-      "viewStay": "Konaklamayı Gör"
+      "viewStay": "Konaklamayı Gör",
+      "publicCancelBadge": "Web sitesinden iptal talebi",
+      "publicCancelFilter": "Bekleyen iptal talepleri",
+      "inHouseFrozen": "Girişi yapılmış bir rezervasyonun tarihleri ve odaları değiştirilemez. Değişikliği ön bürodan yapın.",
+      "inHouseNoCancel": "Konaklaması devam eden bir rezervasyon iptal edilemez."
     }
   },
   "guests": {

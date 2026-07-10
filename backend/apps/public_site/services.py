@@ -342,4 +342,25 @@ def request_public_cancellation(
                 "updated_at",
             ]
         )
+        # Final closure: the front desk must SEE the request — record it on
+        # the existing internal activity/notification path (no external
+        # messaging, no new system; the visitor is not an actor).
+        from apps.notifications.services import record_activity
+
+        record_activity(
+            reservation.hotel,
+            event_type="reservation.public_cancel_requested",
+            category="reservation",
+            severity="warning",
+            title=(
+                f"Public cancel request for {reservation.reservation_number}"
+            ),
+            message=(
+                f"{reservation.primary_guest_name} · public website"
+                + (f" · {reservation.public_cancel_reason}"
+                   if reservation.public_cancel_reason else "")
+            ),
+            related_object=reservation,
+            related_url="/hotel/reservations",
+        )
     return reservation

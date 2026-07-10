@@ -324,6 +324,19 @@ class CancellationReasonRequired(FunduqiiAPIException):
     default_code = "cancellation_reason_required"
 
 
+class ReservationHasActiveStay(FunduqiiAPIException):
+    """Post-check-in guard (reservations final closure): once a guest is
+    in-house, the STAY is the source of truth — the reservation's dates,
+    rooms and existence must not be changed from the reservations section."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This reservation has an in-house stay. Operate on the stay from the"
+        " front desk instead."
+    )
+    default_code = "reservation_has_active_stay"
+
+
 # --- Room assignment (Phase 6.1) -------------------------------------------
 
 

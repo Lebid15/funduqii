@@ -1007,3 +1007,190 @@ class OverviewBusinessDateTests(APITestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["business_date"], str(get_business_date(hotel)))
+
+
+# --- Final closure round -------------------------------------------------- #
+
+
+class PostCheckInGuardTests(APITestCase):
+    """With an in-house stay the STAY is the source of truth: reservation
+    dates/rooms are frozen and cancel is refused (clear domain error)."""
+
+    def setUp(self):
+        from django.utils import timezone as dj_tz
+
+        from apps.guests.models import Guest
+        from apps.stays.models import Stay
+
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-INH",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="In House",
+        )
+        self.line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        guest = Guest.objects.create(hotel=self.hotel, full_name="In House")
+        self.stay = Stay.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            reservation_line=self.line,
+            room=self.rooms[0],
+            primary_guest=guest,
+            planned_check_in_date=D1,
+            planned_check_out_date=D2,
+            actual_check_in_at=dj_tz.now(),
+        )
+        self.client.force_authenticate(self.manager)
+
+    def _patch(self, body):
+        return self.client.patch(
+            reverse("reservations:reservation-detail", args=[self.res.id]),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_date_edit_refused_with_clear_code(self):
+        resp = self._patch({"check_out_date": D3.isoformat()})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_room_line_edit_refused(self):
+        resp = self._patch(
+            {"lines": [{"room_type": self.rtype.id, "room": self.rooms[1].id, "quantity": 1}]}
+        )
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_cancel_refused(self):
+        resp = self.client.post(
+            reverse("reservations:reservation-cancel", args=[self.res.id]),
+            {"reason": "should not work"},
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.status, ReservationStatus.CONFIRMED)
+
+    def test_safe_fields_still_editable(self):
+        resp = self._patch({"notes": "late arrival", "special_requests": "quiet room"})
+        self.assertEqual(resp.status_code, 200)
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.notes, "late arrival")
+
+    def test_stay_untouched_by_guard(self):
+        self._patch({"check_out_date": D3.isoformat()})
+        self.stay.refresh_from_db()
+        self.assertEqual(self.stay.planned_check_out_date, D2)
+        self.assertEqual(self.stay.room_id, self.rooms[0].id)
+
+    def test_edit_still_free_before_check_in(self):
+        other = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-FREE",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D2,
+            check_out_date=D3,
+            primary_guest_name="Free",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=other,
+            room_type=self.rtype,
+            quantity=1,
+        )
+        resp = self.client.patch(
+            reverse("reservations:reservation-detail", args=[other.id]),
+            {"check_out_date": (D3 + timedelta(days=1)).isoformat()},
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_serializer_exposes_in_house_flag(self):
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[self.res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertTrue(resp.data["has_in_house_stay"])
+
+
+class PublicCancelVisibilityTests(APITestCase):
+    """A public cancel request records an internal activity and is
+    filterable in the reservations list while still pending."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        make_rooms(self.hotel, self.rtype, 1)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-PUB",
+            status=ReservationStatus.HELD,
+            booking_kind="future",
+            source="public_website",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Site Guest",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=self.res, room_type=self.rtype, quantity=1
+        )
+
+    def test_request_records_internal_activity_only(self):
+        from apps.notifications.models import ActivityEvent
+        from apps.public_site.services import request_public_cancellation
+
+        request_public_cancellation(self.res, reason="plans changed")
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="reservation.public_cancel_requested"
+        ).first()
+        self.assertIsNotNone(event)
+        self.assertIn("R-PUB", event.title)
+        self.assertIn("Site Guest", event.message)
+        # Idempotent: a second request does not duplicate the activity.
+        request_public_cancellation(self.res, reason="again")
+        self.assertEqual(
+            ActivityEvent.objects.filter(
+                hotel=self.hotel,
+                event_type="reservation.public_cancel_requested",
+            ).count(),
+            1,
+        )
+
+    def test_pending_filter_and_clearing_after_processing(self):
+        from apps.public_site.services import request_public_cancellation
+        from apps.reservations.services import cancel_reservation
+
+        request_public_cancellation(self.res, reason="plans changed")
+        self.client.force_authenticate(self.manager)
+        url = reverse("reservations:reservation-list") + "?cancel_requested=true"
+        numbers = {
+            r["reservation_number"]
+            for r in self.client.get(url, **HDR(self.hotel)).data["results"]
+        }
+        self.assertEqual(numbers, {"R-PUB"})
+        # Accepting the request (cancelling) clears it from the pending view.
+        cancel_reservation(self.res, reason="guest asked via website", user=self.manager)
+        numbers = {
+            r["reservation_number"]
+            for r in self.client.get(url, **HDR(self.hotel)).data["results"]
+        }
+        self.assertEqual(numbers, set())

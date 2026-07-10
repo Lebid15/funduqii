@@ -43,6 +43,7 @@ import {
   SectionCard,
   Select,
   StepSummaryCard,
+  Switch,
   Textarea,
   useToast,
   type Column,
@@ -58,6 +59,7 @@ import {
   updateReservation,
   type ReservationCreateBody,
   type ReservationLineBody,
+  type ReservationUpdateBody,
 } from "@/lib/api/reservations";
 import { createGuest, listGuests } from "@/lib/api/guests";
 import { checkIn as frontDeskCheckIn } from "@/lib/api/stays";
@@ -113,6 +115,7 @@ export function ReservationsTab({
   const [type, setType] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -183,6 +186,7 @@ export function ReservationsTab({
         room_type: type ? Number(type) : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        cancel_requested: cancelRequested ? "true" : undefined,
         search: query || undefined,
       });
       setRows(data.results);
@@ -192,7 +196,7 @@ export function ReservationsTab({
     } finally {
       setLoading(false);
     }
-  }, [view, page, status, source, type, dateFrom, dateTo, query, t]);
+  }, [view, page, status, source, type, dateFrom, dateTo, cancelRequested, query, t]);
 
   useEffect(() => {
     load();
@@ -205,6 +209,7 @@ export function ReservationsTab({
     type !== "" ||
     dateFrom !== "" ||
     dateTo !== "" ||
+    cancelRequested ||
     query !== "";
 
   function applySearch(event: FormEvent) {
@@ -219,6 +224,7 @@ export function ReservationsTab({
     setType("");
     setDateFrom("");
     setDateTo("");
+    setCancelRequested(false);
     setSearch("");
     setQuery("");
     setPage(1);
@@ -316,9 +322,17 @@ export function ReservationsTab({
       key: "status",
       header: t.common.status,
       render: (r) => (
-        <Badge tone={reservationStatusTone(r.status)}>
-          {reservationStatusLabel(r.status, t)}
-        </Badge>
+        <span className="stack-tight">
+          <Badge tone={reservationStatusTone(r.status)}>
+            {reservationStatusLabel(r.status, t)}
+          </Badge>
+          {/* Pending public cancel request — only while still blocking (a
+              cancelled reservation means the request was accepted). */}
+          {r.public_cancel_requested_at &&
+          (r.status === "held" || r.status === "confirmed") ? (
+            <Badge tone="warning">{t.reservations.views.publicCancelBadge}</Badge>
+          ) : null}
+        </span>
       ),
     },
     {
@@ -342,6 +356,7 @@ export function ReservationsTab({
             </Button>
           ) : null}
           {(r.status === "held" || r.status === "confirmed") &&
+          !r.has_in_house_stay &&
           can("reservations.cancel") ? (
             <Button variant="danger" size="sm" onClick={() => setCancelTarget(r)}>
               {t.reservations.list.cancel}
@@ -379,13 +394,22 @@ export function ReservationsTab({
             <FormField label={t.reservations.list.dateTo} htmlFor="res-to">
               <Input id="res-to" type="date" value={dateTo} onChange={(e) => { setPage(1); setDateTo(e.target.value); }} />
             </FormField>
-            {hasFilters ? (
-              <div className="filter-bar__actions cluster">
+            <div className="filter-bar__actions cluster">
+              <Switch
+                id="res-cancel-req"
+                label={t.reservations.views.publicCancelFilter}
+                checked={cancelRequested}
+                onChange={(v) => {
+                  setPage(1);
+                  setCancelRequested(v);
+                }}
+              />
+              {hasFilters ? (
                 <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>
                   {t.rooms.board.clearFilters}
                 </Button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </FilterBar>
         </form>
       </Card>
@@ -712,6 +736,10 @@ function ReservationModal({
   }
 
   const isInstant = !editing && bookingKind === "instant";
+  // Post-check-in guard (final closure): the guest is in-house — dates and
+  // rooms are frozen here (the backend refuses them too); only safe fields
+  // travel in the PATCH.
+  const frozen = Boolean(reservation?.has_in_house_stay);
 
   /** Per-step gate (owner spec: no advancing with missing basics). */
   function validateStep(current: number): string | null {
@@ -772,7 +800,18 @@ function ReservationModal({
         lines: cleanLines,
       };
       if (editing && reservation) {
-        await updateReservation(reservation.id, common);
+        if (frozen) {
+          // Dates and room lines never travel for an in-house reservation —
+          // the stay is the source of truth (backend enforces the same).
+          const safe: ReservationUpdateBody = { ...common };
+          delete safe.check_in_date;
+          delete safe.check_out_date;
+          delete safe.booking_kind;
+          delete safe.lines;
+          await updateReservation(reservation.id, safe);
+        } else {
+          await updateReservation(reservation.id, common);
+        }
         onSaved();
         return;
       }
@@ -1034,12 +1073,20 @@ function ReservationModal({
 
         {step === 3 ? (
           <>
+        {frozen ? (
+          <Alert tone="warning">
+            {v.inHouseFrozen}{" "}
+            <Link href="/hotel/front-desk?tab=current" className="btn btn--ghost btn--sm">
+              {v.goToFrontDesk}
+            </Link>
+          </Alert>
+        ) : null}
         {/* Booking kind & dates */}
         <SectionCard title={t.reservations.form.sectionKindDates} icon={CalendarClock}>
           <div className="form-grid">
             {editing ? (
               <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind" hint={bookingKind === "instant" ? t.reservations.form.instantHint : t.reservations.form.futureHint}>
-                <Select id="res-kind" value={bookingKind} options={kindOptions} onChange={(e) => changeKind(e.target.value as "instant" | "future")} />
+                <Select id="res-kind" value={bookingKind} options={kindOptions} disabled={frozen} onChange={(e) => changeKind(e.target.value as "instant" | "future")} />
               </FormField>
             ) : (
               <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind-fixed">
@@ -1051,10 +1098,10 @@ function ReservationModal({
               htmlFor="res-in"
               hint={isInstant && businessDate ? t.reservations.form.instantHint : undefined}
             >
-              <Input id="res-in" type="date" value={checkIn} required disabled={bookingKind === "instant"} onChange={(e) => setCheckIn(e.target.value)} />
+              <Input id="res-in" type="date" value={checkIn} required disabled={bookingKind === "instant" || frozen} onChange={(e) => setCheckIn(e.target.value)} />
             </FormField>
             <FormField label={t.reservations.form.checkOut} htmlFor="res-out">
-              <Input id="res-out" type="date" value={checkOut} required onChange={(e) => setCheckOut(e.target.value)} />
+              <Input id="res-out" type="date" value={checkOut} required disabled={frozen} onChange={(e) => setCheckOut(e.target.value)} />
             </FormField>
             <FormField label={t.reservations.form.nights} htmlFor="res-nights">
               <Input id="res-nights" value={String(nights)} disabled readOnly />
@@ -1068,6 +1115,7 @@ function ReservationModal({
         {/* Rooms & availability */}
         <SectionCard title={t.reservations.form.sectionRooms} icon={BedDouble}>
           {isInstant ? <p className="muted small">{v.roomRequiredInstant}</p> : null}
+          {frozen ? <p className="muted small">{v.inHouseFrozen}</p> : null}
           <div className="stack-tight">
             {lines.map((line, i) => {
               const avail = availabilityFor(line.room_type);
@@ -1082,6 +1130,7 @@ function ReservationModal({
                         value={line.room_type}
                         placeholder={t.reservations.form.selectType}
                         options={typeOptions}
+                        disabled={frozen}
                         onChange={(e) => updateLine(i, { room_type: e.target.value })}
                       />
                     </FormField>
@@ -1091,14 +1140,14 @@ function ReservationModal({
                         value={line.room}
                         placeholder={t.reservations.form.roomAny}
                         options={roomOptionsFor(line.room_type)}
-                        disabled={!line.room_type}
+                        disabled={!line.room_type || frozen}
                         onChange={(e) => updateLine(i, { room: e.target.value })}
                       />
                     </FormField>
                     <FormField label={t.reservations.form.quantity} htmlFor={`line-qty-${i}`}>
-                      <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} disabled={Boolean(line.room)} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
+                      <Input id={`line-qty-${i}`} type="number" min="1" value={line.quantity} disabled={Boolean(line.room) || frozen} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
                     </FormField>
-                    <Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => removeLine(i)} disabled={lines.length === 1}>
+                    <Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => removeLine(i)} disabled={lines.length === 1 || frozen}>
                       {t.reservations.form.removeLine}
                     </Button>
                   </div>
@@ -1116,7 +1165,7 @@ function ReservationModal({
                 </div>
               );
             })}
-            {!isInstant ? (
+            {!isInstant && !frozen ? (
               <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={addLine}>
                 {t.reservations.form.addLine}
               </Button>
@@ -1238,6 +1287,9 @@ function DetailsModal({
   if (!reservation) return null;
   const r = reservation;
   const editable = r.status === "held" || r.status === "confirmed";
+  // Post-check-in guard: cancel is impossible while the guest is in-house
+  // (dates/rooms are frozen in the edit wizard for the same reason).
+  const inHouse = r.has_in_house_stay;
 
   return (
     <Modal
@@ -1258,7 +1310,7 @@ function DetailsModal({
           ) : null}
           {editable ? <Button variant="ghost" onClick={() => onEdit(r)}>{t.reservations.details.edit}</Button> : null}
           {r.status === "held" ? <Button onClick={() => onConfirm(r)}>{t.reservations.details.confirm}</Button> : null}
-          {editable ? <Button variant="danger" onClick={() => onCancel(r)}>{t.reservations.details.cancel}</Button> : null}
+          {editable && !inHouse ? <Button variant="danger" onClick={() => onCancel(r)}>{t.reservations.details.cancel}</Button> : null}
         </>
       }
     >
@@ -1270,6 +1322,7 @@ function DetailsModal({
           </Badge>
           <span className="muted">{t.reservations.source[r.source]}</span>
         </div>
+        {inHouse ? <Alert tone="info">{t.reservations.views.inHouseNoCancel}</Alert> : null}
         {r.public_cancel_requested_at ? (
           <Alert tone="warning">
             {t.reservations.details.publicCancelRequested}{" "}
@@ -1300,7 +1353,6 @@ function DetailsModal({
             </div>
           ) : null}
           {r.hold_expires_at ? <div><dt>{t.reservations.details.holdExpires}</dt><dd>{formatDate(r.hold_expires_at, locale)}</dd></div> : null}
-          {r.no_show_reason ? <div><dt>{t.reservations.details.noShowReason}</dt><dd>{r.no_show_reason}</dd></div> : null}
           {r.cancellation_reason ? <div><dt>{t.reservations.details.cancellationReason}</dt><dd>{r.cancellation_reason}</dd></div> : null}
           {r.created_by ? <div><dt>{t.reservations.details.createdBy}</dt><dd>{r.created_by}</dd></div> : null}
         </dl>

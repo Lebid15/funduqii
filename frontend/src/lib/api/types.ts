@@ -549,12 +549,14 @@ export interface Reservation {
   special_requests: string;
   booking_channel_name: string;
   expected_payment_method: ExpectedPaymentMethod;
-  no_show_reason: string;
   cancellation_reason: string;
   cancelled_at: string | null;
   hold_expires_at: string | null;
   public_cancel_requested_at: string | null;
   public_cancel_reason: string;
+  /** Post-check-in guard: the guest is in-house — dates/rooms frozen and
+   * cancel refused (the stay is the source of truth). */
+  has_in_house_stay: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;

@@ -44,6 +44,8 @@ export interface ReservationListParams {
   created_today?: "true";
   /** Arrival strictly after the hotel business date. */
   upcoming?: "true";
+  /** Pending public-website cancel requests (still held/confirmed). */
+  cancel_requested?: "true";
   search?: string;
   page?: number;
   page_size?: number;
