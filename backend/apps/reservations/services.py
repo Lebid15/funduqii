@@ -17,6 +17,7 @@ from django.utils import timezone
 from apps.common.exceptions import (
     CancellationReasonRequired,
     InvalidReservationTransition,
+    ReservationHasActiveStay,
 )
 
 from .availability import AvailabilityService
@@ -147,6 +148,20 @@ def update_reservation(reservation, *, lines=None, status=None, user=None, **fie
             {"detail": "A cancelled or expired reservation cannot be re-booked."}
         )
 
+    # Post-check-in guard (final closure): with an in-house stay the STAY is
+    # the source of truth — dates and room lines are frozen here; only safe,
+    # non-operational fields (notes, requests, contact snapshot) may change.
+    # Operational changes travel through the front desk.
+    if (lines is not None or _touches_dates(fields)) and has_in_house_stay(
+        reservation
+    ):
+        raise ReservationHasActiveStay(
+            {
+                "reservation": reservation.id,
+                "reason": "dates_and_rooms_frozen_after_check_in",
+            }
+        )
+
     check_in = fields.get("check_in_date", reservation.check_in_date)
     check_out = fields.get("check_out_date", reservation.check_out_date)
 
@@ -270,6 +285,12 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
         raise InvalidReservationTransition(
             {"detail": "An expired reservation cannot be cancelled."}
         )
+    # Post-check-in guard (final closure): a reservation whose guest is
+    # in-house cannot be cancelled — check the guest out from the front desk.
+    if has_in_house_stay(reservation):
+        raise ReservationHasActiveStay(
+            {"reservation": reservation.id, "reason": "guest_in_house"}
+        )
     previous = reservation.status
     reservation.status = ReservationStatus.CANCELLED
     reservation.cancellation_reason = reason.strip()
@@ -332,3 +353,16 @@ def _db_lines(reservation) -> list[dict]:
 
 def _touches_dates(fields) -> bool:
     return "check_in_date" in fields or "check_out_date" in fields
+
+
+def has_in_house_stay(reservation) -> bool:
+    """True when a stay created from this reservation is currently in-house.
+
+    Post-check-in the STAY is the source of truth (documented decision) —
+    operational changes travel through the front desk, never the booking.
+    """
+    from apps.stays.models import Stay, StayStatus
+
+    return Stay.objects.filter(
+        reservation=reservation, status=StayStatus.IN_HOUSE
+    ).exists()

@@ -143,6 +143,18 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         if created_to:
             qs = qs.filter(created_at__date__lte=created_to)
 
+        # Pending public cancel requests (final closure): a request only
+        # matters while the reservation still blocks (held/confirmed) — a
+        # cancelled one was already accepted.
+        if params.get("cancel_requested") == "true":
+            qs = qs.filter(
+                public_cancel_requested_at__isnull=False,
+                status__in=[
+                    ReservationStatus.HELD,
+                    ReservationStatus.CONFIRMED,
+                ],
+            )
+
         # Future view: arrival strictly after the hotel business date.
         if params.get("upcoming") == "true":
             from apps.shifts.services import get_business_date

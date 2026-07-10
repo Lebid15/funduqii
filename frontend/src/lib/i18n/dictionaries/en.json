@@ -689,7 +689,11 @@
       "companionsHint": "Companion names are attached at check-in, in the front desk.",
       "documentsHint": "Optional step — stored with the reservation details.",
       "roomRequiredInstant": "Pick a specific room for the immediate reservation.",
-      "viewStay": "View Stay"
+      "viewStay": "View Stay",
+      "publicCancelBadge": "Cancel request from website",
+      "publicCancelFilter": "Pending cancel requests",
+      "inHouseFrozen": "Dates and rooms of a checked-in reservation cannot be changed. Make the change from the front desk.",
+      "inHouseNoCancel": "A reservation with an in-house stay cannot be cancelled."
     }
   },
   "guests": {

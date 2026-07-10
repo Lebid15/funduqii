@@ -72,6 +72,9 @@ class ReservationSerializer(serializers.ModelSerializer):
     nights = serializers.IntegerField(read_only=True)
     total_guests = serializers.IntegerField(read_only=True)
     created_by = serializers.SerializerMethodField()
+    # Post-check-in guard (final closure): the UI freezes dates/rooms and
+    # hides cancel when the guest is in-house — the backend enforces it too.
+    has_in_house_stay = serializers.SerializerMethodField()
 
     class Meta:
         model = Reservation
@@ -106,6 +109,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             # manage-token HASH is deliberately never serialized.
             "public_cancel_requested_at",
             "public_cancel_reason",
+            "has_in_house_stay",
             "created_by",
             "created_at",
             "updated_at",
@@ -115,6 +119,11 @@ class ReservationSerializer(serializers.ModelSerializer):
 
     def get_created_by(self, obj):
         return obj.created_by.email if obj.created_by_id else None
+
+    def get_has_in_house_stay(self, obj) -> bool:
+        from .services import has_in_house_stay
+
+        return has_in_house_stay(obj)
 
 
 class ReservationLineWriteSerializer(serializers.Serializer):
