@@ -46,6 +46,18 @@ export function FloorSummaryCards({
               {b.availabilityRate.replace("{rate}", String(floor.availability_rate))}
             </span>
           </span>
+          <span
+            className="floor-card__bar"
+            role="progressbar"
+            aria-valuenow={floor.availability_rate}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <span
+              className="floor-card__bar-fill"
+              style={{ width: `${floor.availability_rate}%` }}
+            />
+          </span>
           <span className="floor-card__counts">
             <span className="floor-chip">{b.totalShort}: {floor.total}</span>
             <span className="floor-chip floor-chip--success">{b.status.available}: {floor.available}</span>

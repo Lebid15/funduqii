@@ -1,257 +1,175 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Building2, Pencil, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Building2 } from "lucide-react";
 
 import {
   Alert,
-  Badge,
   Button,
-  ConfirmDialog,
-  DataTable,
-  EmptyState,
+  Card,
   ErrorState,
   FormField,
   Input,
   LoadingState,
-  Modal,
   SectionHeader,
-  Switch,
   useToast,
-  type Column,
 } from "@/components/ui";
-import {
-  createFloor,
-  deleteFloor,
-  listFloors,
-  updateFloor,
-  type FloorWriteBody,
-} from "@/lib/api/rooms";
+import { createFloor, deleteFloor, listFloors } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type { Floor } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
+/**
+ * Floors tab (owner UX round): ONE simple setting — the hotel's floor
+ * count. Raising it auto-creates the missing floors with clear localized
+ * names (the backend's name/number/sort fields are filled automatically
+ * and hidden from the user); lowering it deletes only EMPTY trailing
+ * floors and is blocked below the highest floor that has rooms. The
+ * detailed add-floor form is gone — nobody needs it day to day.
+ */
 export function FloorsTab() {
   const { t } = useI18n();
+  const b = t.rooms.board;
   const { notify } = useToast();
-  const [rows, setRows] = useState<Floor[]>([]);
+  const access = useHotelAccess();
+  const canManage =
+    access === null ||
+    (!access.loading && access.can("rooms.create", "rooms.update", "rooms.delete"));
+
+  const [floors, setFloors] = useState<Floor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [count, setCount] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Floor | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Floor | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
-      setRows((await listFloors()).results);
+      const data = (await listFloors()).results;
+      setFloors(data);
+      setCount(String(data.length));
     } catch (err) {
-      setError(messageForError(err, t));
+      setLoadError(messageForError(err, t));
     } finally {
       setLoading(false);
     }
-  }, [t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable per locale
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function confirmDelete() {
-    if (!deleteTarget) return;
-    setDeleteBusy(true);
-    try {
-      await deleteFloor(deleteTarget.id);
-      notify(t.rooms.saved);
-      setDeleteTarget(null);
-      load();
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-      setDeleteTarget(null);
-    } finally {
-      setDeleteBusy(false);
-    }
-  }
-
-  const columns: Column<Floor>[] = [
-    { key: "name", header: t.rooms.floors.name },
-    { key: "number", header: t.rooms.floors.number },
-    { key: "room_count", header: t.rooms.floors.roomCount },
-    {
-      key: "is_active",
-      header: t.common.status,
-      render: (row) => (
-        <Badge tone={row.is_active ? "success" : "neutral"}>
-          {row.is_active ? t.plans.active : t.plans.inactive}
-        </Badge>
-      ),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (row) => (
-        <div className="table__actions">
-          <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(row)}>
-            {t.common.edit}
-          </Button>
-          <Button variant="danger" size="sm" icon={Trash2} onClick={() => setDeleteTarget(row)}>
-            {t.common.delete}
-          </Button>
-        </div>
-      ),
-    },
-  ];
-
-  return (
-    <>
-      <SectionHeader
-        title={t.rooms.tabs.floors}
-        icon={Building2}
-        actions={
-          <Button icon={Plus} onClick={() => setCreating(true)}>
-            {t.rooms.floors.add}
-          </Button>
-        }
-      />
-
-      {loading ? <LoadingState label={t.common.loading} /> : null}
-      {!loading && error ? (
-        <ErrorState title={t.states.errorTitle} message={error} retryLabel={t.common.retry} onRetry={load} />
-      ) : null}
-      {!loading && !error ? (
-        rows.length === 0 ? (
-          <EmptyState
-            title={t.rooms.floors.empty}
-            hint={t.rooms.floors.emptyHint}
-            icon={Building2}
-            action={<Button icon={Plus} onClick={() => setCreating(true)}>{t.rooms.floors.add}</Button>}
-          />
-        ) : (
-          <DataTable caption={t.rooms.tabs.floors} columns={columns} rows={rows} rowKey={(r) => r.id} />
-        )
-      ) : null}
-
-      <FloorModal
-        open={creating}
-        onClose={() => setCreating(false)}
-        onSaved={() => {
-          setCreating(false);
-          notify(t.rooms.saved);
-          load();
-        }}
-      />
-      <FloorModal
-        open={editing !== null}
-        floor={editing ?? undefined}
-        onClose={() => setEditing(null)}
-        onSaved={() => {
-          setEditing(null);
-          notify(t.rooms.saved);
-          load();
-        }}
-      />
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        title={t.rooms.floors.deleteTitle}
-        body={t.rooms.floors.deleteBody}
-        confirmLabel={t.common.delete}
-        cancelLabel={t.common.cancel}
-        closeLabel={t.common.close}
-        tone="danger"
-        busy={deleteBusy}
-        onConfirm={confirmDelete}
-        onClose={() => setDeleteTarget(null)}
-      />
-    </>
+  const ordered = useMemo(
+    () => [...floors].sort((a, x) => a.sort_order - x.sort_order || a.id - x.id),
+    [floors],
   );
-}
+  // 1-based position of the highest floor that still holds rooms.
+  const highestUsed = useMemo(() => {
+    let highest = 0;
+    ordered.forEach((floor, index) => {
+      if (floor.room_count > 0) highest = index + 1;
+    });
+    return highest;
+  }, [ordered]);
 
-function FloorModal({
-  open,
-  floor,
-  onClose,
-  onSaved,
-}: {
-  open: boolean;
-  floor?: Floor;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { t } = useI18n();
-  const [name, setName] = useState("");
-  const [number, setNumber] = useState("");
-  const [description, setDescription] = useState("");
-  const [sortOrder, setSortOrder] = useState("0");
-  const [isActive, setIsActive] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setName(floor?.name ?? "");
-    setNumber(floor?.number ?? "");
-    setDescription(floor?.description ?? "");
-    setSortOrder(String(floor?.sort_order ?? 0));
-    setIsActive(floor?.is_active ?? true);
+  async function save() {
     setError(null);
-  }, [open, floor]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    if (!name.trim()) return setError(t.rooms.floors.nameRequired);
-    const body: FloorWriteBody = {
-      name: name.trim(),
-      number: number.trim(),
-      description: description.trim(),
-      sort_order: Number(sortOrder) || 0,
-      is_active: isActive,
-    };
+    const target = Number(count);
+    if (!Number.isInteger(target) || target < 0 || target > 50) {
+      setError(t.errors.validation);
+      return;
+    }
+    if (target < highestUsed) {
+      setError(b.floorsReduceBlocked);
+      return;
+    }
     setBusy(true);
     try {
-      if (floor) await updateFloor(floor.id, body);
-      else await createFloor(body);
-      onSaved();
+      if (target > ordered.length) {
+        for (let n = ordered.length + 1; n <= target; n += 1) {
+          setProgress(`${b.floorAutoName.replace("{n}", String(n))}…`);
+          await createFloor({
+            name: b.floorAutoName.replace("{n}", String(n)),
+            number: String(n),
+            sort_order: n,
+          });
+        }
+      } else if (target < ordered.length) {
+        // Trailing floors are empty here (guarded above) — delete them; the
+        // backend still refuses any floor that has rooms (defense in depth).
+        for (let i = ordered.length - 1; i >= target; i -= 1) {
+          setProgress(`${ordered[i].name}…`);
+          await deleteFloor(ordered[i].id);
+        }
+      }
+      notify(t.rooms.saved);
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
       setBusy(false);
+      setProgress("");
+      load();
     }
   }
 
+  if (loading) return <LoadingState label={t.common.loading} />;
+  if (loadError) {
+    return (
+      <ErrorState
+        title={t.states.errorTitle}
+        message={loadError}
+        retryLabel={t.common.retry}
+        onRetry={load}
+      />
+    );
+  }
+
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={floor ? t.rooms.floors.editTitle : t.rooms.floors.createTitle}
-      closeLabel={t.common.close}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="floor-form" type="submit" loading={busy}>{t.common.save}</Button>
-        </>
-      }
-    >
-      <form id="floor-form" className="stack" onSubmit={submit} noValidate>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <div className="form-grid">
-          <FormField label={t.rooms.floors.name} htmlFor="floor-name">
-            <Input id="floor-name" value={name} required onChange={(e) => setName(e.target.value)} />
+    <div className="stack">
+      <SectionHeader title={t.rooms.tabs.floors} icon={Building2} />
+      <Card>
+        <div className="stack">
+          {error ? <Alert tone="error">{error}</Alert> : null}
+          <FormField
+            label={b.floorCount}
+            htmlFor="floors-count"
+            hint={b.floorsReduceBlocked}
+          >
+            <Input
+              id="floors-count"
+              value={count}
+              inputMode="numeric"
+              disabled={!canManage}
+              onChange={(e) => setCount(e.target.value)}
+            />
           </FormField>
-          <FormField label={t.rooms.floors.number} htmlFor="floor-number">
-            <Input id="floor-number" value={number} onChange={(e) => setNumber(e.target.value)} />
-          </FormField>
-          <FormField label={t.rooms.floors.sortOrder} htmlFor="floor-order">
-            <Input id="floor-order" type="number" min="0" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} />
-          </FormField>
+          {canManage ? (
+            <div className="cluster">
+              <Button onClick={save} loading={busy}>
+                {b.saveFloorCount}
+              </Button>
+              {progress ? <span className="muted">{progress}</span> : null}
+            </div>
+          ) : null}
+          <div className="stack">
+            <span className="muted">{b.currentFloors}</span>
+            <div className="cluster">
+              {ordered.map((floor) => (
+                <span key={floor.id} className="chip">
+                  {floor.name}
+                  {floor.room_count > 0 ? ` (${floor.room_count})` : ""}
+                </span>
+              ))}
+              {ordered.length === 0 ? <span className="muted">—</span> : null}
+            </div>
+          </div>
         </div>
-        <FormField label={t.rooms.floors.description} htmlFor="floor-desc">
-          <Input id="floor-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
-        </FormField>
-        <Switch id="floor-active" label={t.rooms.floors.active} checked={isActive} onChange={setIsActive} />
-      </form>
-    </Modal>
+      </Card>
+    </div>
   );
 }

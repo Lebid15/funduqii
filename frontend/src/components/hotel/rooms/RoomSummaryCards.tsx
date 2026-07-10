@@ -5,7 +5,6 @@ import {
   BedDouble,
   Brush,
   CalendarClock,
-  CircleSlash,
   DoorOpen,
   Sparkles,
   Users,
@@ -18,7 +17,8 @@ import type { RoomBoardCounts } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { cx } from "@/lib/utils";
 
-/** The clickable status filters — `attention` is the composite bucket. */
+/** Clickable status filters — `attention` and `maintenance_oos` are
+ * composite buckets (display-only, computed client-side). */
 export type BoardStatusFilter =
   | "available"
   | "occupied"
@@ -27,25 +27,35 @@ export type BoardStatusFilter =
   | "cleaning"
   | "maintenance"
   | "out_of_service"
+  | "maintenance_oos"
   | "attention";
 
 const CARDS: Array<{
   key: BoardStatusFilter;
+  labelKey: "availableForBooking" | "occupiedNow" | "reserved" | "dirty" | "cleaning" | "maintOos" | "attention";
+  captionKey: string;
   icon: LucideIcon;
   tone: string;
 }> = [
-  { key: "available", icon: DoorOpen, tone: "success" },
-  { key: "occupied", icon: Users, tone: "info" },
-  { key: "reserved", icon: CalendarClock, tone: "warning" },
-  { key: "dirty", icon: Sparkles, tone: "warning" },
-  { key: "cleaning", icon: Brush, tone: "info" },
-  { key: "maintenance", icon: Wrench, tone: "danger" },
-  { key: "out_of_service", icon: CircleSlash, tone: "neutral" },
-  { key: "attention", icon: AlertTriangle, tone: "danger" },
+  { key: "available", labelKey: "availableForBooking", captionKey: "captionAvailable", icon: DoorOpen, tone: "success" },
+  { key: "occupied", labelKey: "occupiedNow", captionKey: "captionOccupied", icon: Users, tone: "info" },
+  { key: "reserved", labelKey: "reserved", captionKey: "captionReserved", icon: CalendarClock, tone: "warning" },
+  { key: "dirty", labelKey: "dirty", captionKey: "captionDirty", icon: Sparkles, tone: "warning" },
+  { key: "cleaning", labelKey: "cleaning", captionKey: "captionCleaning", icon: Brush, tone: "info" },
+  { key: "maintenance_oos", labelKey: "maintOos", captionKey: "captionMaintOos", icon: Wrench, tone: "neutral" },
+  { key: "attention", labelKey: "attention", captionKey: "captionAttention", icon: AlertTriangle, tone: "danger" },
 ];
 
-/** Top summary row (owner spec): total + one CLICKABLE card per display
- * status — clicking filters the grid, clicking again clears the filter. */
+function cardValue(summary: RoomBoardCounts, key: BoardStatusFilter): number {
+  if (key === "maintenance_oos") {
+    return summary.maintenance + summary.out_of_service;
+  }
+  return summary[key as keyof RoomBoardCounts];
+}
+
+/** Top summary row (owner spec): total + one CLICKABLE card per bucket —
+ * big number, clear label, small caption; clicking filters the grid,
+ * clicking again clears. Calm palette, active card clearly selected. */
 export function RoomSummaryCards({
   summary,
   active,
@@ -57,6 +67,16 @@ export function RoomSummaryCards({
 }) {
   const { t } = useI18n();
   const b = t.rooms.board;
+  const labels: Record<string, string> = {
+    availableForBooking: b.availableForBooking,
+    occupiedNow: b.occupiedNow,
+    reserved: b.status.reserved,
+    dirty: b.status.dirty,
+    cleaning: b.status.cleaning,
+    maintOos: b.maintOos,
+    attention: b.status.attention,
+  };
+  const captions = b.captions as Record<string, string>;
 
   return (
     <div className="board-stats" role="group" aria-label={b.tabTitle}>
@@ -70,6 +90,7 @@ export function RoomSummaryCards({
         </span>
         <span className="board-stat__value">{summary.total}</span>
         <span className="board-stat__label">{b.totalRooms}</span>
+        <span className="board-stat__caption">{captions.captionTotal}</span>
       </button>
       {CARDS.map((card) => (
         <button
@@ -85,8 +106,9 @@ export function RoomSummaryCards({
           <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
             <Icon icon={card.icon} size="md" />
           </span>
-          <span className="board-stat__value">{summary[card.key]}</span>
-          <span className="board-stat__label">{b.status[card.key]}</span>
+          <span className="board-stat__value">{cardValue(summary, card.key)}</span>
+          <span className="board-stat__label">{labels[card.labelKey]}</span>
+          <span className="board-stat__caption">{captions[card.captionKey]}</span>
         </button>
       ))}
     </div>

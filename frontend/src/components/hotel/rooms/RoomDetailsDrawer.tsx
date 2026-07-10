@@ -39,8 +39,7 @@ export function RoomDetailsDrawer({
     [b.capacity, `${room.base_capacity}–${room.max_capacity}`],
     [b.operationalStatus, roomStatusLabel(room.operational_status, t)],
   ];
-  if (room.base_rate) rows.push([b.baseRate, room.base_rate]);
-  if (room.display_name) rows.push([b.detailDisplayName, room.display_name]);
+  if (room.base_rate) rows.push([b.pricePerNight, room.base_rate]);
   if (room.status_note) rows.push([b.statusNote, room.status_note]);
   if (room.status_changed_at) {
     rows.push([b.lastStatusChange, formatDate(room.status_changed_at, locale)]);

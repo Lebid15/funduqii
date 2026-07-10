@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { BedDouble, Building2, LayoutDashboard, Package } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
@@ -11,16 +11,23 @@ import {
   RoomTypesTab,
   RoomsTab,
 } from "@/components/hotel/rooms";
+import { useGlobalRefresh } from "@/lib/globalRefresh";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 /**
- * Rooms console: the OPERATIONAL board first (owner task — live statuses,
- * clickable summaries, rooms grouped by floor), then the management tabs
- * (floors, room types, detailed rooms list) exactly as before.
+ * Rooms console (owner UX round): the OPERATIONAL board tab is pure
+ * view/filter — no admin buttons above it. Management actions live in
+ * their own tabs (types / floors / rooms). The topbar's global refresh
+ * remounts the active tab so everything refetches.
  */
 export default function RoomsPage() {
   const { t } = useI18n();
   const [tab, setTab] = useState("overview");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useGlobalRefresh(
+    useCallback(() => setRefreshKey((k) => k + 1), []),
+  );
 
   const tabs: TabItem[] = [
     { key: "overview", label: t.rooms.board.tabTitle, icon: LayoutDashboard },
@@ -33,10 +40,10 @@ export default function RoomsPage() {
     <PageContainer>
       <PageHeader title={t.rooms.title} subtitle={t.rooms.subtitle} />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "overview" ? <RoomOperationalBoard /> : null}
-      {tab === "floors" ? <FloorsTab /> : null}
-      {tab === "types" ? <RoomTypesTab /> : null}
-      {tab === "rooms" ? <RoomsTab /> : null}
+      {tab === "overview" ? <RoomOperationalBoard key={refreshKey} /> : null}
+      {tab === "floors" ? <FloorsTab key={refreshKey} /> : null}
+      {tab === "types" ? <RoomTypesTab key={refreshKey} /> : null}
+      {tab === "rooms" ? <RoomsTab key={refreshKey} /> : null}
     </PageContainer>
   );
 }

@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { BedDouble, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { BedDouble, Pencil, Plus, RefreshCw, Rows3, Trash2 } from "lucide-react";
 
 import {
-  Alert,
   Badge,
   Button,
   Card,
@@ -15,7 +14,6 @@ import {
   FormField,
   Input,
   LoadingState,
-  Modal,
   Pagination,
   SectionHeader,
   Select,
@@ -23,20 +21,14 @@ import {
   useToast,
 } from "@/components/ui";
 import { cx } from "@/lib/utils";
-import {
-  createRoom,
-  deleteRoom,
-  listFloors,
-  listRoomTypes,
-  listRooms,
-  updateRoom,
-  type RoomWriteBody,
-} from "@/lib/api/rooms";
+import { deleteRoom, listFloors, listRoomTypes, listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type { Floor, Room, RoomStatus, RoomType } from "@/lib/api/types";
 import { roomStatusLabel, roomStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
+import { BulkRoomCreateModal } from "./BulkRoomCreateModal";
+import { RoomFormModal } from "./RoomFormModal";
 import { RoomStatusModal } from "./RoomStatusModal";
 
 const PAGE_SIZE = 25;
@@ -68,6 +60,7 @@ export function RoomsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<Room | null>(null);
   const [statusTarget, setStatusTarget] = useState<Room | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Room | null>(null);
@@ -143,7 +136,16 @@ export function RoomsTab() {
       <SectionHeader
         title={t.rooms.tabs.rooms}
         icon={BedDouble}
-        actions={<Button icon={Plus} onClick={() => setCreating(true)}>{t.rooms.list.add}</Button>}
+        actions={
+          <span className="cluster">
+            <Button icon={Plus} onClick={() => setCreating(true)}>
+              {t.rooms.board.addRoom}
+            </Button>
+            <Button variant="secondary" icon={Rows3} onClick={() => setBulkOpen(true)}>
+              {t.rooms.board.addRoomRange}
+            </Button>
+          </span>
+        }
       />
 
       <Card>
@@ -217,14 +219,21 @@ export function RoomsTab() {
         )
       ) : null}
 
-      <RoomModal
+      <RoomFormModal
         open={creating}
         floors={floors}
         types={types}
         onClose={() => setCreating(false)}
         onSaved={() => { setCreating(false); notify(t.rooms.saved); setPage(1); load(); }}
       />
-      <RoomModal
+      <BulkRoomCreateModal
+        open={bulkOpen}
+        floors={floors}
+        types={types}
+        onClose={() => setBulkOpen(false)}
+        onCreated={() => { setPage(1); load(); }}
+      />
+      <RoomFormModal
         open={editing !== null}
         room={editing ?? undefined}
         floors={floors}
@@ -254,98 +263,4 @@ export function RoomsTab() {
   );
 }
 
-function RoomModal({
-  open,
-  room,
-  floors,
-  types,
-  onClose,
-  onSaved,
-}: {
-  open: boolean;
-  room?: Room;
-  floors: Floor[];
-  types: RoomType[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { t } = useI18n();
-  const [number, setNumber] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [floor, setFloor] = useState("");
-  const [type, setType] = useState("");
-  const [isActive, setIsActive] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setNumber(room?.number ?? "");
-    setDisplayName(room?.display_name ?? "");
-    setFloor(room ? String(room.floor) : "");
-    setType(room ? String(room.room_type) : "");
-    setIsActive(room?.is_active ?? true);
-    setError(null);
-  }, [open, room]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    if (!number.trim() || !floor || !type) {
-      setError(t.errors.validation);
-      return;
-    }
-    const body: RoomWriteBody = {
-      number: number.trim(),
-      display_name: displayName.trim(),
-      floor: Number(floor),
-      room_type: Number(type),
-      is_active: isActive,
-    };
-    setBusy(true);
-    try {
-      if (room) await updateRoom(room.id, body);
-      else await createRoom(body);
-      onSaved();
-    } catch (err) {
-      setError(messageForError(err, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={room ? t.rooms.list.editTitle : t.rooms.list.createTitle}
-      closeLabel={t.common.close}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="room-form" type="submit" loading={busy}>{t.common.save}</Button>
-        </>
-      }
-    >
-      <form id="room-form" className="stack" onSubmit={submit} noValidate>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <div className="form-grid">
-          <FormField label={t.rooms.list.number} htmlFor="room-number">
-            <Input id="room-number" value={number} required onChange={(e) => setNumber(e.target.value)} />
-          </FormField>
-          <FormField label={t.rooms.list.displayName} htmlFor="room-display">
-            <Input id="room-display" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </FormField>
-          <FormField label={t.rooms.list.floor} htmlFor="room-floor-sel">
-            <Select id="room-floor-sel" value={floor} placeholder={t.rooms.list.selectFloor} options={floors.map((f) => ({ value: String(f.id), label: f.name }))} onChange={(e) => setFloor(e.target.value)} />
-          </FormField>
-          <FormField label={t.rooms.list.roomType} htmlFor="room-type-sel">
-            <Select id="room-type-sel" value={type} placeholder={t.rooms.list.selectType} options={types.map((ty) => ({ value: String(ty.id), label: ty.name }))} onChange={(e) => setType(e.target.value)} />
-          </FormField>
-        </div>
-        <Switch id="room-active" label={t.rooms.floors.active} checked={isActive} onChange={setIsActive} />
-      </form>
-    </Modal>
-  );
-}
 

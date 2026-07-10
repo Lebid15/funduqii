@@ -11,12 +11,26 @@ import {
   Select,
   Switch,
 } from "@/components/ui";
-import { createRoom } from "@/lib/api/rooms";
+import {
+  changeRoomStatus,
+  createRoom,
+  getOperationalBoard,
+} from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
-import type { Floor, RoomType } from "@/lib/api/types";
+import type { Floor, RoomStatus, RoomType } from "@/lib/api/types";
+import { roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 const MAX_RANGE = 100;
+const SETTABLE_STATUSES: RoomStatus[] = [
+  "available",
+  "dirty",
+  "cleaning",
+  "maintenance",
+  "out_of_service",
+];
+const NOTE_REQUIRED: RoomStatus[] = ["maintenance", "out_of_service"];
 
 interface BulkResult {
   created: string[];
@@ -24,35 +38,40 @@ interface BulkResult {
 }
 
 /**
- * Bulk room creation (owner spec): floor + type + a numeric range (with an
- * optional prefix and display-name base) → an explicit PREVIEW with
- * duplicates called out, then sequential `createRoom` calls (no new backend)
- * with live progress and an honest created/failed summary.
+ * Bulk room creation (owner spec): floor + type + a numeric range (optional
+ * prefix / display-name base) with capacity & price shown from the type,
+ * an optional initial status (controlled endpoint, note when required), an
+ * explicit PREVIEW with duplicates called out and auto-skipped, a 100-room
+ * cap, then sequential `createRoom` calls (no new backend) with live
+ * progress and an honest created/failed summary.
  */
 export function BulkRoomCreateModal({
   open,
   floors,
   types,
-  existingNumbers,
   onClose,
   onCreated,
 }: {
   open: boolean;
   floors: Floor[];
   types: RoomType[];
-  existingNumbers: Set<string>;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const { t } = useI18n();
   const b = t.rooms.board;
+  const access = useHotelAccess();
+  const canStatus =
+    access === null || (!access.loading && access.can("rooms.status_update"));
 
+  const [existing, setExisting] = useState<Set<string>>(new Set());
   const [floor, setFloor] = useState("");
   const [type, setType] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [prefix, setPrefix] = useState("");
-  const [nameBase, setNameBase] = useState("");
+  const [status, setStatus] = useState<RoomStatus>("available");
+  const [statusNote, setStatusNote] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,41 +85,51 @@ export function BulkRoomCreateModal({
     setFrom("");
     setTo("");
     setPrefix("");
-    setNameBase("");
+    setStatus("available");
+    setStatusNote("");
     setIsActive(true);
     setError(null);
     setProgress("");
     setResult(null);
+    // Existing numbers (incl. archived) for the duplicate preview — one
+    // read-only call.
+    getOperationalBoard()
+      .then((board) => setExisting(new Set(board.rooms.map((r) => r.number))))
+      .catch(() => setExisting(new Set()));
   }, [open]);
 
-  const numbers = useMemo(() => {
-    const start = Number(from);
-    const end = Number(to);
-    if (
-      !Number.isInteger(start) ||
-      !Number.isInteger(end) ||
-      from.trim() === "" ||
-      to.trim() === "" ||
-      start > end ||
-      end - start + 1 > MAX_RANGE
-    ) {
-      return [];
-    }
-    const list: string[] = [];
-    for (let n = start; n <= end; n += 1) list.push(`${prefix.trim()}${n}`);
-    return list;
-  }, [from, to, prefix]);
+  const rangeEntered = from.trim() !== "" && to.trim() !== "";
+  const rangeValid =
+    rangeEntered &&
+    Number.isInteger(Number(from)) &&
+    Number.isInteger(Number(to)) &&
+    Number(from) <= Number(to);
+  const rangeTooBig = rangeValid && Number(to) - Number(from) + 1 > MAX_RANGE;
 
-  const duplicates = numbers.filter((n) => existingNumbers.has(n));
-  const fresh = numbers.filter((n) => !existingNumbers.has(n));
-  const rangeTooBig =
-    from.trim() !== "" &&
-    to.trim() !== "" &&
-    Number(to) - Number(from) + 1 > MAX_RANGE;
+  const numbers = useMemo(() => {
+    if (!rangeValid || rangeTooBig) return [];
+    const list: string[] = [];
+    for (let n = Number(from); n <= Number(to); n += 1) {
+      list.push(`${prefix.trim()}${n}`);
+    }
+    return list;
+  }, [rangeValid, rangeTooBig, from, to, prefix]);
+
+  const duplicates = numbers.filter((n) => existing.has(n));
+  const fresh = numbers.filter((n) => !existing.has(n));
+  const noteMissing =
+    canStatus &&
+    status !== "available" &&
+    NOTE_REQUIRED.includes(status) &&
+    !statusNote.trim();
 
   async function run() {
     if (!floor || !type || fresh.length === 0) {
       setError(t.errors.validation);
+      return;
+    }
+    if (noteMissing) {
+      setError(t.rooms.list.statusNoteHint);
       return;
     }
     setError(null);
@@ -115,13 +144,16 @@ export function BulkRoomCreateModal({
           .replace("{total}", String(fresh.length)),
       );
       try {
-        await createRoom({
+        const room = await createRoom({
           number,
-          display_name: nameBase.trim() ? `${nameBase.trim()} ${number}` : "",
           floor: Number(floor),
           room_type: Number(type),
           is_active: isActive,
         });
+        // Optional initial status through the CONTROLLED endpoint.
+        if (canStatus && status !== "available") {
+          await changeRoomStatus(room.id, status, statusNote);
+        }
         created.push(number);
       } catch (err) {
         failed.push({ number, reason: messageForError(err, t) });
@@ -134,7 +166,14 @@ export function BulkRoomCreateModal({
   }
 
   const floorOptions = floors.map((f) => ({ value: String(f.id), label: f.name }));
-  const typeOptions = types.map((ty) => ({ value: String(ty.id), label: ty.name }));
+  // Only ACTIVE types are offered for new rooms (owner rule).
+  const typeOptions = types
+    .filter((ty) => ty.is_active)
+    .map((ty) => ({ value: String(ty.id), label: ty.name }));
+  const statusOptions = SETTABLE_STATUSES.map((s) => ({
+    value: s,
+    label: roomStatusLabel(s, t),
+  }));
 
   return (
     <Modal
@@ -209,6 +248,7 @@ export function BulkRoomCreateModal({
               <Input
                 id="bulk-from"
                 value={from}
+                placeholder={b.fromPlaceholder}
                 inputMode="numeric"
                 onChange={(e) => setFrom(e.target.value)}
               />
@@ -217,6 +257,7 @@ export function BulkRoomCreateModal({
               <Input
                 id="bulk-to"
                 value={to}
+                placeholder={b.toPlaceholder}
                 inputMode="numeric"
                 onChange={(e) => setTo(e.target.value)}
               />
@@ -228,13 +269,29 @@ export function BulkRoomCreateModal({
                 onChange={(e) => setPrefix(e.target.value)}
               />
             </FormField>
-            <FormField label={b.nameBase} htmlFor="bulk-name">
-              <Input
-                id="bulk-name"
-                value={nameBase}
-                onChange={(e) => setNameBase(e.target.value)}
-              />
-            </FormField>
+            {canStatus ? (
+              <FormField label={b.roomStatus} htmlFor="bulk-status">
+                <Select
+                  id="bulk-status"
+                  value={status}
+                  options={statusOptions}
+                  onChange={(e) => setStatus(e.target.value as RoomStatus)}
+                />
+              </FormField>
+            ) : null}
+            {canStatus && NOTE_REQUIRED.includes(status) ? (
+              <FormField
+                label={t.rooms.list.statusNote}
+                htmlFor="bulk-status-note"
+                hint={t.rooms.list.statusNoteHint}
+              >
+                <Input
+                  id="bulk-status-note"
+                  value={statusNote}
+                  onChange={(e) => setStatusNote(e.target.value)}
+                />
+              </FormField>
+            ) : null}
           </div>
           <Switch
             id="bulk-active"
@@ -242,6 +299,9 @@ export function BulkRoomCreateModal({
             checked={isActive}
             onChange={setIsActive}
           />
+          {rangeEntered && !rangeValid ? (
+            <Alert tone="warning">{b.invalidRange}</Alert>
+          ) : null}
           {rangeTooBig ? (
             <Alert tone="warning">
               {b.bulkTooBig.replace("{max}", String(MAX_RANGE))}
