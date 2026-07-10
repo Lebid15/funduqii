@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { BedDouble, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { BedDouble, Pencil, Plus, RefreshCw, Rows3, Trash2 } from "lucide-react";
 
 import {
   Badge,
@@ -27,6 +27,7 @@ import type { Floor, Room, RoomStatus, RoomType } from "@/lib/api/types";
 import { roomStatusLabel, roomStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
+import { BulkRoomCreateModal } from "./BulkRoomCreateModal";
 import { RoomFormModal } from "./RoomFormModal";
 import { RoomStatusModal } from "./RoomStatusModal";
 
@@ -59,6 +60,7 @@ export function RoomsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<Room | null>(null);
   const [statusTarget, setStatusTarget] = useState<Room | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Room | null>(null);
@@ -134,7 +136,16 @@ export function RoomsTab() {
       <SectionHeader
         title={t.rooms.tabs.rooms}
         icon={BedDouble}
-        actions={<Button icon={Plus} onClick={() => setCreating(true)}>{t.rooms.list.add}</Button>}
+        actions={
+          <span className="cluster">
+            <Button icon={Plus} onClick={() => setCreating(true)}>
+              {t.rooms.board.addRoom}
+            </Button>
+            <Button variant="secondary" icon={Rows3} onClick={() => setBulkOpen(true)}>
+              {t.rooms.board.addRoomRange}
+            </Button>
+          </span>
+        }
       />
 
       <Card>
@@ -214,6 +225,13 @@ export function RoomsTab() {
         types={types}
         onClose={() => setCreating(false)}
         onSaved={() => { setCreating(false); notify(t.rooms.saved); setPage(1); load(); }}
+      />
+      <BulkRoomCreateModal
+        open={bulkOpen}
+        floors={floors}
+        types={types}
+        onClose={() => setBulkOpen(false)}
+        onCreated={() => { setPage(1); load(); }}
       />
       <RoomFormModal
         open={editing !== null}

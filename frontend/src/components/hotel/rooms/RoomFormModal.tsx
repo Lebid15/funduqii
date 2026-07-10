@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   Alert,
@@ -30,12 +30,13 @@ const SETTABLE_STATUSES: RoomStatus[] = [
 const NOTE_REQUIRED: RoomStatus[] = ["maintenance", "out_of_service"];
 
 /**
- * Central add/edit room modal (owner UX round): number/floor/type/display
- * name/active are the STORED room fields; capacity and price are shown
- * read-only from the selected room type (no per-room backend fields exist —
- * deliberately not invented); the initial/edited status goes through the
- * CONTROLLED status endpoint (rooms.status_update) after saving, with the
- * note the backend requires for maintenance / out-of-service.
+ * Central add/edit room modal (owner UX round): the ROOM is deliberately
+ * simple — number, floor, type, status, active. Capacity / price /
+ * amenities / public visibility all come from the room TYPE, so they are
+ * not on this form. The status travels the CONTROLLED endpoint
+ * (rooms.status_update) with the note the backend requires for
+ * maintenance / out-of-service. Only ACTIVE types are offered for new
+ * rooms; an existing room keeps showing its current type even if disabled.
  */
 export function RoomFormModal({
   open,
@@ -59,7 +60,6 @@ export function RoomFormModal({
     access === null || (!access.loading && access.can("rooms.status_update"));
 
   const [number, setNumber] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [floor, setFloor] = useState("");
   const [type, setType] = useState("");
   const [status, setStatus] = useState<RoomStatus>("available");
@@ -71,7 +71,6 @@ export function RoomFormModal({
   useEffect(() => {
     if (!open) return;
     setNumber(room?.number ?? "");
-    setDisplayName(room?.display_name ?? "");
     setFloor(room ? String(room.floor) : "");
     setType(room ? String(room.room_type) : "");
     setStatus(room && room.status !== "archived" ? room.status : "available");
@@ -80,10 +79,6 @@ export function RoomFormModal({
     setError(null);
   }, [open, room]);
 
-  const selectedType = useMemo(
-    () => types.find((ty) => String(ty.id) === type) ?? null,
-    [types, type],
-  );
   const statusChanged = status !== (room?.status ?? "available");
   const noteMissing =
     canStatus &&
@@ -104,7 +99,6 @@ export function RoomFormModal({
     }
     const body: RoomWriteBody = {
       number: number.trim(),
-      display_name: displayName.trim(),
       floor: Number(floor),
       room_type: Number(type),
       is_active: isActive,
@@ -124,6 +118,12 @@ export function RoomFormModal({
     }
   }
 
+  // Only ACTIVE types are offered (owner rule) — plus the room's current
+  // type when editing, so the select never shows an empty value.
+  const typeOptions = types
+    .filter((ty) => ty.is_active || (room && ty.id === room.room_type))
+    .map((ty) => ({ value: String(ty.id), label: ty.name }));
+
   const statusOptions = SETTABLE_STATUSES.map((s) => ({
     value: s,
     label: roomStatusLabel(s, t),
@@ -133,7 +133,7 @@ export function RoomFormModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={room ? t.rooms.list.editTitle : b.addRoomTitle}
+      title={room ? b.editRoom : b.addRoomTitle}
       closeLabel={t.common.close}
       footer={
         <>
@@ -158,13 +158,6 @@ export function RoomFormModal({
               onChange={(e) => setNumber(e.target.value)}
             />
           </FormField>
-          <FormField label={t.rooms.list.displayName} htmlFor="room-display">
-            <Input
-              id="room-display"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </FormField>
           <FormField label={t.rooms.list.floor} htmlFor="room-floor-sel">
             <Select
               id="room-floor-sel"
@@ -174,17 +167,17 @@ export function RoomFormModal({
               onChange={(e) => setFloor(e.target.value)}
             />
           </FormField>
-          <FormField label={b.unitType} htmlFor="room-type-sel">
+          <FormField label={t.rooms.list.roomType} htmlFor="room-type-sel">
             <Select
               id="room-type-sel"
               value={type}
               placeholder={t.rooms.list.selectType}
-              options={types.map((ty) => ({ value: String(ty.id), label: ty.name }))}
+              options={typeOptions}
               onChange={(e) => setType(e.target.value)}
             />
           </FormField>
           {canStatus ? (
-            <FormField label={b.unitStatus} htmlFor="room-status-sel">
+            <FormField label={b.roomStatus} htmlFor="room-status-sel">
               <Select
                 id="room-status-sel"
                 value={status}
@@ -207,15 +200,6 @@ export function RoomFormModal({
             </FormField>
           ) : null}
         </div>
-        {selectedType ? (
-          <p className="muted">
-            {b.capacity}: {selectedType.base_capacity}–{selectedType.max_capacity}
-            {selectedType.base_rate
-              ? ` · ${b.pricePerNight}: ${selectedType.base_rate}`
-              : ""}{" "}
-            — {b.fromTypeHint}
-          </p>
-        ) : null}
         <Switch
           id="room-active"
           label={t.rooms.floors.active}

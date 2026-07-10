@@ -70,7 +70,6 @@ export function BulkRoomCreateModal({
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [prefix, setPrefix] = useState("");
-  const [nameBase, setNameBase] = useState("");
   const [status, setStatus] = useState<RoomStatus>("available");
   const [statusNote, setStatusNote] = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -86,7 +85,6 @@ export function BulkRoomCreateModal({
     setFrom("");
     setTo("");
     setPrefix("");
-    setNameBase("");
     setStatus("available");
     setStatusNote("");
     setIsActive(true);
@@ -119,7 +117,6 @@ export function BulkRoomCreateModal({
 
   const duplicates = numbers.filter((n) => existing.has(n));
   const fresh = numbers.filter((n) => !existing.has(n));
-  const selectedType = types.find((ty) => String(ty.id) === type) ?? null;
   const noteMissing =
     canStatus &&
     status !== "available" &&
@@ -149,7 +146,6 @@ export function BulkRoomCreateModal({
       try {
         const room = await createRoom({
           number,
-          display_name: nameBase.trim() ? `${nameBase.trim()} ${number}` : "",
           floor: Number(floor),
           room_type: Number(type),
           is_active: isActive,
@@ -170,7 +166,10 @@ export function BulkRoomCreateModal({
   }
 
   const floorOptions = floors.map((f) => ({ value: String(f.id), label: f.name }));
-  const typeOptions = types.map((ty) => ({ value: String(ty.id), label: ty.name }));
+  // Only ACTIVE types are offered for new rooms (owner rule).
+  const typeOptions = types
+    .filter((ty) => ty.is_active)
+    .map((ty) => ({ value: String(ty.id), label: ty.name }));
   const statusOptions = SETTABLE_STATUSES.map((s) => ({
     value: s,
     label: roomStatusLabel(s, t),
@@ -236,7 +235,7 @@ export function BulkRoomCreateModal({
                 onChange={(e) => setFloor(e.target.value)}
               />
             </FormField>
-            <FormField label={b.unitType} htmlFor="bulk-type">
+            <FormField label={t.rooms.list.roomType} htmlFor="bulk-type">
               <Select
                 id="bulk-type"
                 value={type}
@@ -270,15 +269,8 @@ export function BulkRoomCreateModal({
                 onChange={(e) => setPrefix(e.target.value)}
               />
             </FormField>
-            <FormField label={b.nameBase} htmlFor="bulk-name">
-              <Input
-                id="bulk-name"
-                value={nameBase}
-                onChange={(e) => setNameBase(e.target.value)}
-              />
-            </FormField>
             {canStatus ? (
-              <FormField label={b.unitStatus} htmlFor="bulk-status">
+              <FormField label={b.roomStatus} htmlFor="bulk-status">
                 <Select
                   id="bulk-status"
                   value={status}
@@ -301,15 +293,6 @@ export function BulkRoomCreateModal({
               </FormField>
             ) : null}
           </div>
-          {selectedType ? (
-            <p className="muted">
-              {b.capacity}: {selectedType.base_capacity}–{selectedType.max_capacity}
-              {selectedType.base_rate
-                ? ` · ${b.pricePerNight}: ${selectedType.base_rate}`
-                : ""}{" "}
-              — {b.fromTypeHint}
-            </p>
-          ) : null}
           <Switch
             id="bulk-active"
             label={t.rooms.floors.active}

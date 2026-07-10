@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Hotel, Menu } from "lucide-react";
+import { Hotel, Menu, RefreshCw } from "lucide-react";
 
 import { Badge, Icon, IconButton, type BadgeTone } from "@/components/ui";
+import { triggerGlobalRefresh } from "@/lib/globalRefresh";
 import type { CurrentUser, HotelSubscriptionState } from "@/lib/api/types";
 import { initials } from "@/lib/format";
 import { useHotelProfile } from "@/lib/session/HotelProfileContext";
@@ -77,6 +78,13 @@ export function Topbar({
         )}
       </div>
       <div className="app-topbar__end">
+        {/* Global refresh (owner spec): one small button for the whole app —
+            pages that support it listen to the central event and refetch. */}
+        <IconButton
+          label={t.common.refresh}
+          icon={RefreshCw}
+          onClick={triggerGlobalRefresh}
+        />
         {variant === "hotel" ? <NotificationBell /> : null}
         <LanguageSwitcher />
         {/* Name only — no email. The avatar span is the future

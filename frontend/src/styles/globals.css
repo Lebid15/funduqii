@@ -1416,14 +1416,6 @@ a {
 /* --- Rooms operational board (owner task) ----------------------------------
  * Clickable summary/floor cards + rooms grouped by floor. Calm status
  * palette; the active filter card reads as selected. */
-/* Page-level operations toolbar (owner UX round): sits under the page
- * header, visible on every tab, wraps cleanly on mobile. */
-.page-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 .board-stats {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr));
@@ -1621,6 +1613,24 @@ a {
   border-radius: var(--radius-full);
   background: var(--color-primary-soft);
   color: var(--color-primary-active);
+}
+/* Removable chip (amenity multi-select): the × button lives inside. */
+.chip--removable {
+  padding-inline-end: var(--space-1);
+}
+.chip__remove {
+  display: grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.chip__remove:hover {
+  background: color-mix(in srgb, currentColor 15%, transparent);
 }
 
 .floor-section {

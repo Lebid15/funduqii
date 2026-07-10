@@ -51,7 +51,6 @@ export function RoomOperationalCard({
           {room.floor_name} · {b.capacity}: {room.base_capacity}–{room.max_capacity}
           {room.base_rate ? ` · ${b.pricePerNight}: ${room.base_rate}` : ""}
         </span>
-        {room.display_name ? <span>{room.display_name}</span> : null}
       </div>
 
       <OperationalLine room={room} locale={locale} />
