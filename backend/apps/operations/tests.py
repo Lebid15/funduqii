@@ -797,7 +797,9 @@ class RoomStatusIntegrationTests(APITestCase, OperationsMixin):
 
     def test_checkout_marks_room_dirty_and_creates_task(self):
         stay = make_stay(self.hotel, self.room)
-        CheckOutService.execute(stay, user=self.manager)
+        # The stay ends in two days, so today's check-out is an early
+        # departure — the closure round made its reason mandatory.
+        CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
         self.room.refresh_from_db()
         self.assertEqual(self.room.status, RoomStatus.DIRTY)
         tasks = HousekeepingTask.objects.filter(
@@ -808,7 +810,7 @@ class RoomStatusIntegrationTests(APITestCase, OperationsMixin):
 
     def test_checkout_task_is_idempotent(self):
         stay = make_stay(self.hotel, self.room)
-        CheckOutService.execute(stay, user=self.manager)
+        CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
         self.assertIsNone(create_checkout_cleaning_task(stay, user=self.manager))
         self.assertEqual(
             HousekeepingTask.objects.filter(

@@ -379,6 +379,55 @@ class AlreadyCheckedIn(FunduqiiAPIException):
     default_code = "already_checked_in"
 
 
+# --- Front desk / stays (final closure round) -------------------------------
+
+
+class ReservationLineFull(FunduqiiAPIException):
+    """Quantity cap: a reservation line may never admit more stays than its
+    booked quantity (cancelled stays don't count)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "Every booked room of this reservation has already been checked in."
+    )
+    default_code = "reservation_line_full"
+
+
+class ArrivalDateInFuture(FunduqiiAPIException):
+    """Check-in may not happen before the reservation's arrival date, measured
+    by the HOTEL's business date (never the server clock)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This reservation's arrival date has not been reached yet."
+    )
+    default_code = "arrival_date_in_future"
+
+
+class InvalidStayChange(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This stay change is not allowed."
+    default_code = "invalid_stay_change"
+
+
+class FolioBalanceOutstanding(FunduqiiAPIException):
+    """Check-out is blocked while the stay's open folio holds a non-zero
+    balance — settlement happens in Finance, never at the front desk."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay's folio has an unsettled balance. Settle it in Finance "
+        "before check-out."
+    )
+    default_code = "folio_balance_outstanding"
+
+
+class EarlyDepartureReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required for an early departure."
+    default_code = "early_departure_reason_required"
+
+
 # --- Finance (Phase 8) ------------------------------------------------------
 
 

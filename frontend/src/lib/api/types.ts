@@ -663,6 +663,30 @@ export interface Stay {
   updated_at: string;
 }
 
+/** GET /stays/<id>/folio-summary — check-out dialog context. */
+export interface StayFolioSummary {
+  business_date: string;
+  is_early_departure: boolean;
+  has_folio: boolean;
+  open_folios: {
+    id: number;
+    folio_number: string;
+    status: string;
+    currency: string;
+    balance: string;
+  }[];
+  /** Total balance across the stay's OPEN folios ("0" when settled/none). */
+  balance: string;
+}
+
+/** GET /stays/check-in-rooms and /stays/<id>/move-candidates. */
+export interface AdmissibleRoom {
+  id: number;
+  number: string;
+  room_type_name?: string;
+  max_capacity?: number;
+}
+
 export interface StayStatusLogEntry {
   previous_status: string;
   new_status: string;

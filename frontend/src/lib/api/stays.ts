@@ -5,9 +5,11 @@
  */
 import { hotelJson } from "./hotelFetch";
 import type {
+  AdmissibleRoom,
   PaginatedResponse,
   Reservation,
   Stay,
+  StayFolioSummary,
   StayStatusLogEntry,
 } from "./types";
 
@@ -83,4 +85,55 @@ export function checkOut(id: number, body: CheckOutBody = {}): Promise<Stay> {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** Rooms actually admissible for a reservation line (check-in dialog). */
+export function listCheckInRooms(
+  reservation: number,
+  line: number,
+): Promise<AdmissibleRoom[]> {
+  return hotelJson<AdmissibleRoom[]>(
+    `/stays/check-in-rooms${toQuery({ reservation, line })}`,
+  );
+}
+
+export interface StayDateChangeBody {
+  new_check_out_date: string;
+  reason?: string;
+}
+
+export function extendStay(id: number, body: StayDateChangeBody): Promise<Stay> {
+  return hotelJson<Stay>(`/stays/${id}/extend`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function shortenStay(id: number, body: StayDateChangeBody): Promise<Stay> {
+  return hotelJson<Stay>(`/stays/${id}/shorten`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface MoveRoomBody {
+  room: number;
+  reason: string;
+}
+
+export function moveStayRoom(id: number, body: MoveRoomBody): Promise<Stay> {
+  return hotelJson<Stay>(`/stays/${id}/move-room`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Rooms a stay can move into right now (room-move dialog). */
+export function listMoveCandidates(id: number): Promise<AdmissibleRoom[]> {
+  return hotelJson<AdmissibleRoom[]>(`/stays/${id}/move-candidates`);
+}
+
+/** Open-folio balance + business-date context for the check-out dialog. */
+export function getStayFolioSummary(id: number): Promise<StayFolioSummary> {
+  return hotelJson<StayFolioSummary>(`/stays/${id}/folio-summary`);
 }

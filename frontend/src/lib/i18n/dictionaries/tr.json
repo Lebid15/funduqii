@@ -780,7 +780,10 @@
       "checkOutDate": "Çıkış",
       "nights": "Gece",
       "details": "Detaylar",
-      "checkOut": "Çıkış yap"
+      "checkOut": "Çıkış yap",
+      "extend": "Konaklamayı uzat",
+      "shorten": "Konaklamayı kısalt",
+      "move": "Oda değiştir"
     },
     "departures": {
       "empty": "Bugün çıkış yok",
@@ -807,12 +810,19 @@
       "body": "Misafirin ayrıldığını onaylayın. Bu odayı boşaltır (temizlik için kirli olur).",
       "notes": "Notlar",
       "reason": "Neden",
-      "financeNote": "Faturalama veya ödeme sonraki bir aşamada ele alınır.",
+      "financeNote": "Ücretler ve ödemeler Finans bölümünde kapatılır — çıkış için folyo bakiyesi sıfır olmalıdır.",
       "submit": "Çıkış yap",
       "guest": "Konuk",
       "room": "Oda",
       "checkInDate": "Giriş tarihi",
-      "expectedCheckOut": "Beklenen çıkış"
+      "expectedCheckOut": "Beklenen çıkış",
+      "folio": "Folyo",
+      "folioBalance": "Folyo bakiyesi",
+      "folioNone": "Bu konaklamanın açık folyosu yok.",
+      "folioOpenBtn": "Folyoyu aç",
+      "folioBlocked": "Folyoda kapatılmamış bakiye varken çıkış yapılamaz. Önce Finans bölümünden bakiyeyi kapatın.",
+      "earlyDeparture": "Erken ayrılış — beklenen çıkış tarihi henüz gelmedi. Sebep zorunludur.",
+      "reasonRequired": "Erken ayrılış sebebi zorunludur."
     },
     "details": {
       "title": "Konaklama",
@@ -836,7 +846,12 @@
       "invalidCheckOut": "Bu konaklama için çıkış yapılamaz.",
       "roomOccupied": "Bu oda zaten dolu.",
       "roomNotReady": "Bu oda girişe hazır değil.",
-      "alreadyCheckedIn": "Bu rezervasyon odasına zaten giriş yapıldı."
+      "alreadyCheckedIn": "Bu rezervasyon odasına zaten giriş yapıldı.",
+      "lineFull": "Bu rezervasyonun tüm odaları zaten giriş yaptı — rezerve edilen adet aşılamaz.",
+      "arrivalFuture": "Bu rezervasyonun varış tarihi henüz gelmedi (otel iş günü).",
+      "invalidStayChange": "Konaklamada bu değişikliğe izin verilmiyor.",
+      "folioOutstanding": "Folyoda kapatılmamış bakiye var — çıkıştan önce Finans bölümünden kapatın.",
+      "earlyReasonRequired": "Erken ayrılış sebebi zorunludur."
     },
     "workflow": {
       "arrivalsTitle": "Bugünkü girişler",
@@ -852,6 +867,32 @@
       "checkOutDesc": "Ayrılan konuğun çıkışını yapın ve odayı boşaltın.",
       "checkOutAction": "Çıkışı başlat",
       "view": "Görüntüle"
+    },
+    "extendModal": {
+      "title": "Konaklamayı uzat",
+      "currentCheckOut": "Mevcut çıkış",
+      "newCheckOut": "Yeni çıkış tarihi",
+      "reason": "Sebep (isteğe bağlı)",
+      "submit": "Uzat"
+    },
+    "shortenModal": {
+      "title": "Konaklamayı kısalt",
+      "currentCheckOut": "Mevcut çıkış",
+      "newCheckOut": "Yeni çıkış tarihi",
+      "reason": "Sebep (isteğe bağlı)",
+      "submit": "Kısalt",
+      "chargesWarning": "Konaklamayı kısaltmak ücretleri otomatik silmez — mali düzeltmeler Finans bölümünden yapılır."
+    },
+    "moveModal": {
+      "title": "Oda değiştir",
+      "currentRoom": "Mevcut oda",
+      "newRoom": "Yeni oda",
+      "selectRoom": "Yeni odayı seçin",
+      "noRooms": "Şu anda taşınmaya hazır ve müsait oda yok.",
+      "reason": "Taşıma sebebi (zorunlu)",
+      "reasonRequired": "Taşıma sebebi zorunludur.",
+      "roomRequired": "Önce yeni odayı seçin.",
+      "submit": "Odayı taşı"
     }
   },
   "finance": {

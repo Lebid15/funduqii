@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
+  ArrowLeftRight,
+  CalendarMinus,
+  CalendarPlus,
   DoorOpen,
   LogOut,
   PlaneLanding,
   PlaneTakeoff,
   Plus,
   Users,
+  Wallet,
 } from "lucide-react";
 
 import {
@@ -33,25 +38,47 @@ import {
 import {
   checkIn,
   checkOut,
+  extendStay,
+  getStayFolioSummary,
   getStayLogs,
   listArrivalsToday,
+  listCheckInRooms,
   listCurrentResidents,
   listDeparturesToday,
+  listMoveCandidates,
+  moveStayRoom,
+  shortenStay,
 } from "@/lib/api/stays";
 import { createGuest, listGuests } from "@/lib/api/guests";
-import { listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type {
+  AdmissibleRoom,
   Guest,
   Reservation,
-  Room,
   Stay,
+  StayFolioSummary,
   StayStatusLogEntry,
 } from "@/lib/api/types";
 import { formatDate, stayStatusLabel, stayStatusTone } from "@/lib/format";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 const TAB_KEYS = ["arrivals", "current", "departures"];
+
+/** yyyy-mm-dd + n days (local, date-only). */
+function addDays(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Cosmetic permission gate — every API re-checks server-side regardless. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
 
 export function FrontDeskPanel() {
   const { t } = useI18n();
@@ -173,6 +200,7 @@ export function FrontDeskPanel() {
 function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const can = useCan();
   const [rows, setRows] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -210,7 +238,11 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
             icon={PlaneLanding}
             title={`${res.reservation_number} · ${res.primary_guest_name}`}
             description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
-            action={<Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>}
+            action={
+              can("stays.check_in") ? (
+                <Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>
+              ) : undefined
+            }
           />
         ))}
       </div>
@@ -230,11 +262,15 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
 function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const can = useCan();
   const [rows, setRows] = useState<Stay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState<Stay | null>(null);
   const [checkoutTarget, setCheckoutTarget] = useState<Stay | null>(null);
+  const [extendTarget, setExtendTarget] = useState<Stay | null>(null);
+  const [shortenTarget, setShortenTarget] = useState<Stay | null>(null);
+  const [moveTarget, setMoveTarget] = useState<Stay | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -258,6 +294,12 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
     return <EmptyState title={t.frontDesk.current.empty} hint={t.frontDesk.current.emptyHint} icon={DoorOpen} />;
   }
 
+  const done = (setter: (s: Stay | null) => void) => () => {
+    setter(null);
+    notify(t.frontDesk.saved);
+    onChange();
+  };
+
   return (
     <>
       <SectionHeader title={t.frontDesk.tabs.current} icon={DoorOpen} />
@@ -275,7 +317,18 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
             </div>
             <div className="stay-card__actions">
               <Button variant="secondary" size="sm" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
-              <Button variant="ghost" size="sm" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+              {can("stays.extend") ? (
+                <Button variant="ghost" size="sm" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
+              ) : null}
+              {can("stays.shorten") ? (
+                <Button variant="ghost" size="sm" icon={CalendarMinus} onClick={() => setShortenTarget(stay)}>{t.frontDesk.current.shorten}</Button>
+              ) : null}
+              {can("stays.move_room") ? (
+                <Button variant="ghost" size="sm" icon={ArrowLeftRight} onClick={() => setMoveTarget(stay)}>{t.frontDesk.current.move}</Button>
+              ) : null}
+              {can("stays.check_out") ? (
+                <Button variant="ghost" size="sm" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+              ) : null}
             </div>
           </article>
         ))}
@@ -284,7 +337,22 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
       <CheckOutModal
         stay={checkoutTarget}
         onClose={() => setCheckoutTarget(null)}
-        onDone={() => { setCheckoutTarget(null); notify(t.frontDesk.saved); onChange(); }}
+        onDone={done(setCheckoutTarget)}
+      />
+      <ExtendStayModal
+        stay={extendTarget}
+        onClose={() => setExtendTarget(null)}
+        onDone={done(setExtendTarget)}
+      />
+      <ShortenStayModal
+        stay={shortenTarget}
+        onClose={() => setShortenTarget(null)}
+        onDone={done(setShortenTarget)}
+      />
+      <MoveRoomModal
+        stay={moveTarget}
+        onClose={() => setMoveTarget(null)}
+        onDone={done(setMoveTarget)}
       />
     </>
   );
@@ -297,6 +365,7 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
 function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const can = useCan();
   const [rows, setRows] = useState<Stay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -334,7 +403,11 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
             icon={PlaneTakeoff}
             title={`${stay.room_number} · ${stay.primary_guest_name}`}
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
-            action={<Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>}
+            action={
+              can("stays.check_out") ? (
+                <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+              ) : undefined
+            }
           />
         ))}
       </div>
@@ -368,7 +441,7 @@ function CheckInModal({
   const [companionPick, setCompanionPick] = useState("");
   const [notes, setNotes] = useState("");
   const [guests, setGuests] = useState<Guest[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [rooms, setRooms] = useState<AdmissibleRoom[]>([]);
   const [quickName, setQuickName] = useState("");
   const [quickPhone, setQuickPhone] = useState("");
   const [showQuick, setShowQuick] = useState(false);
@@ -394,17 +467,18 @@ function CheckInModal({
     listGuests({ page_size: 200, is_active: "true" }).then((r) => setGuests(r.results)).catch(() => setGuests([]));
   }, [open, reservation]);
 
-  // Load available rooms of the selected line's room type (unless pinned).
+  // Load the rooms ACTUALLY admissible for the selected line (unless pinned):
+  // derived occupancy and conflicting reservations are already excluded.
   useEffect(() => {
-    if (!open || !line) return;
+    if (!open || !line || !reservation) return;
     if (line.room) {
       setRoomId(String(line.room));
       setRooms([]);
       return;
     }
     setRoomId("");
-    listRooms({ room_type: line.room_type, status: "available", page_size: 200 })
-      .then((r) => setRooms(r.results))
+    listCheckInRooms(reservation.id, line.id)
+      .then(setRooms)
       .catch(() => setRooms([]));
   }, [open, lineId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -555,21 +629,31 @@ function CheckOutModal({
   const { t, locale } = useI18n();
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
+  const [summary, setSummary] = useState<StayFolioSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const open = stay !== null;
 
   useEffect(() => {
-    if (open) {
-      setNotes("");
-      setReason("");
-      setError(null);
-    }
-  }, [open]);
+    if (!open || !stay) return;
+    setNotes("");
+    setReason("");
+    setError(null);
+    setSummary(null);
+    getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null));
+  }, [open, stay]);
+
+  const balance = summary ? Number(summary.balance) : 0;
+  const blocked = summary !== null && balance !== 0;
+  const early = summary?.is_early_departure ?? false;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!stay) return;
+    if (early && !reason.trim()) {
+      setError(t.frontDesk.checkOutModal.reasonRequired);
+      return;
+    }
     setBusy(true);
     try {
       await checkOut(stay.id, { check_out_notes: notes.trim(), checkout_reason: reason.trim() });
@@ -590,7 +674,7 @@ function CheckOutModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkout-form" type="submit" loading={busy}>{t.frontDesk.checkOutModal.submit}</Button>
+          <Button form="checkout-form" type="submit" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
         </>
       }
     >
@@ -605,13 +689,293 @@ function CheckOutModal({
             <div><dt>{t.frontDesk.checkOutModal.expectedCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
           </dl>
         ) : null}
+        {summary ? (
+          <div className="stack" style={{ gap: "0.5rem" }}>
+            {summary.has_folio && summary.open_folios.length > 0 ? (
+              <dl className="detail-grid">
+                <div>
+                  <dt>{t.frontDesk.checkOutModal.folio}</dt>
+                  <dd>{summary.open_folios.map((f) => f.folio_number).join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>{t.frontDesk.checkOutModal.folioBalance}</dt>
+                  <dd>{summary.balance} {summary.open_folios[0]?.currency ?? ""}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="muted">{t.frontDesk.checkOutModal.folioNone}</p>
+            )}
+            {blocked ? (
+              <Alert tone="error">
+                {t.frontDesk.checkOutModal.folioBlocked}{" "}
+                <Link href="/hotel/finance?tab=folios" className="inline-link">
+                  <Wallet size={14} aria-hidden /> {t.frontDesk.checkOutModal.folioOpenBtn}
+                </Link>
+              </Alert>
+            ) : null}
+            {early ? (
+              <Alert tone="warning">{t.frontDesk.checkOutModal.earlyDeparture}</Alert>
+            ) : null}
+          </div>
+        ) : null}
         <FormField label={t.frontDesk.checkOutModal.notes} htmlFor="co-notes">
           <Input id="co-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </FormField>
-        <FormField label={t.frontDesk.checkOutModal.reason} htmlFor="co-reason">
-          <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </FormField>
+        {early || summary === null ? (
+          <FormField label={t.frontDesk.checkOutModal.reason} htmlFor="co-reason">
+            <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} required={early} />
+          </FormField>
+        ) : null}
         <Alert tone="warning">{t.frontDesk.checkOutModal.financeNote}</Alert>
+      </form>
+    </Modal>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Extend / shorten stay modals                                                //
+// --------------------------------------------------------------------------- //
+
+function ExtendStayModal({
+  stay,
+  onClose,
+  onDone,
+}: {
+  stay: Stay | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const [newDate, setNewDate] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const open = stay !== null;
+
+  useEffect(() => {
+    if (open && stay) {
+      setNewDate(addDays(stay.planned_check_out_date, 1));
+      setReason("");
+      setError(null);
+    }
+  }, [open, stay]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!stay || !newDate) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await extendStay(stay.id, { new_check_out_date: newDate, reason: reason.trim() });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`${t.frontDesk.extendModal.title} · ${stay?.room_number ?? ""}`}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="extend-form" type="submit" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
+        </>
+      }
+    >
+      <form id="extend-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        {stay ? (
+          <dl className="detail-grid">
+            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+            <div><dt>{t.frontDesk.extendModal.currentCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+          </dl>
+        ) : null}
+        <FormField label={t.frontDesk.extendModal.newCheckOut} htmlFor="ext-date">
+          <Input
+            id="ext-date"
+            type="date"
+            value={newDate}
+            min={stay ? addDays(stay.planned_check_out_date, 1) : undefined}
+            onChange={(e) => setNewDate(e.target.value)}
+          />
+        </FormField>
+        <FormField label={t.frontDesk.extendModal.reason} htmlFor="ext-reason">
+          <Input id="ext-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function ShortenStayModal({
+  stay,
+  onClose,
+  onDone,
+}: {
+  stay: Stay | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const [newDate, setNewDate] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const open = stay !== null;
+
+  useEffect(() => {
+    if (open && stay) {
+      setNewDate(addDays(stay.planned_check_out_date, -1));
+      setReason("");
+      setError(null);
+    }
+  }, [open, stay]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!stay || !newDate) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await shortenStay(stay.id, { new_check_out_date: newDate, reason: reason.trim() });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`${t.frontDesk.shortenModal.title} · ${stay?.room_number ?? ""}`}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="shorten-form" type="submit" loading={busy}>{t.frontDesk.shortenModal.submit}</Button>
+        </>
+      }
+    >
+      <form id="shorten-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        {stay ? (
+          <dl className="detail-grid">
+            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+            <div><dt>{t.frontDesk.shortenModal.currentCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+          </dl>
+        ) : null}
+        <Alert tone="warning">{t.frontDesk.shortenModal.chargesWarning}</Alert>
+        <FormField label={t.frontDesk.shortenModal.newCheckOut} htmlFor="sho-date">
+          <Input
+            id="sho-date"
+            type="date"
+            value={newDate}
+            max={stay ? addDays(stay.planned_check_out_date, -1) : undefined}
+            onChange={(e) => setNewDate(e.target.value)}
+          />
+        </FormField>
+        <FormField label={t.frontDesk.shortenModal.reason} htmlFor="sho-reason">
+          <Input id="sho-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Room move modal                                                             //
+// --------------------------------------------------------------------------- //
+
+function MoveRoomModal({
+  stay,
+  onClose,
+  onDone,
+}: {
+  stay: Stay | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const [rooms, setRooms] = useState<AdmissibleRoom[]>([]);
+  const [roomId, setRoomId] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const open = stay !== null;
+
+  useEffect(() => {
+    if (!open || !stay) return;
+    setRoomId("");
+    setReason("");
+    setError(null);
+    setRooms([]);
+    listMoveCandidates(stay.id).then(setRooms).catch(() => setRooms([]));
+  }, [open, stay]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!stay) return;
+    if (!roomId) return setError(t.frontDesk.moveModal.roomRequired);
+    if (!reason.trim()) return setError(t.frontDesk.moveModal.reasonRequired);
+    setBusy(true);
+    setError(null);
+    try {
+      await moveStayRoom(stay.id, { room: Number(roomId), reason: reason.trim() });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const options = rooms.map((r) => ({
+    value: String(r.id),
+    label: r.room_type_name ? `${r.number} · ${r.room_type_name}` : r.number,
+  }));
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`${t.frontDesk.moveModal.title} · ${stay?.room_number ?? ""}`}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="move-form" type="submit" loading={busy}>{t.frontDesk.moveModal.submit}</Button>
+        </>
+      }
+    >
+      <form id="move-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        {stay ? (
+          <dl className="detail-grid">
+            <div><dt>{t.frontDesk.moveModal.currentRoom}</dt><dd>{stay.room_number}</dd></div>
+            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+          </dl>
+        ) : null}
+        <FormField label={t.frontDesk.moveModal.newRoom} htmlFor="mv-room">
+          <Select
+            id="mv-room"
+            value={roomId}
+            placeholder={options.length ? t.frontDesk.moveModal.selectRoom : t.frontDesk.moveModal.noRooms}
+            options={options}
+            onChange={(e) => setRoomId(e.target.value)}
+          />
+        </FormField>
+        <FormField label={t.frontDesk.moveModal.reason} htmlFor="mv-reason">
+          <Input id="mv-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+        </FormField>
       </form>
     </Modal>
   );

@@ -1,31 +1,56 @@
-"""Front-desk services (Phase 7): the ONE controlled path for check-in and
-check-out. Views never mutate stays directly — they call these services.
+"""Front-desk services (Phase 7 + final closure): the ONE controlled path for
+check-in, check-out and in-house stay changes. Views never mutate stays
+directly — they call these services.
 
 Rules enforced here (backend is the source of truth):
-- Check-in only from a **confirmed** reservation, into an **available** physical
-  room that is not occupied and not held by another reservation.
+- Check-in only from a **confirmed** reservation whose arrival date has been
+  reached (hotel business date), into an **available** physical room that is
+  not occupied and not held by another reservation, and never beyond the
+  reservation line's booked quantity.
 - Occupancy is derived from an active stay — no manual `room.status = occupied`.
-- Check-out is operational only (no money). The room becomes **dirty** on
-  check-out (documented decision), via the Phase 5 controlled status service.
+- After check-in the STAY is the operational source of truth: extending,
+  shortening and room moves happen HERE (the reservations section freezes
+  dates/rooms once a stay is in-house). Every change re-checks availability
+  through the central engine and keeps the reservation in sync so inventory
+  stays unified.
+- Check-out settles operationally only: an OPEN folio with a non-zero balance
+  blocks it (settlement lives in Finance); zero-balance folios are closed via
+  the central finance service. The room becomes **dirty** on check-out
+  (documented decision), via the Phase 5 controlled status service.
 """
 from __future__ import annotations
+
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
 
 from apps.common.exceptions import (
     AlreadyCheckedIn,
+    ArrivalDateInFuture,
     CrossTenantReference,
+    EarlyDepartureReasonRequired,
+    FolioBalanceOutstanding,
     InvalidCheckIn,
     InvalidCheckOut,
+    InvalidStayChange,
+    ReservationLineFull,
     RoomAssignmentConflict,
     RoomNotReady,
     RoomOccupied,
 )
-from apps.reservations.availability import AvailabilityService
-from apps.reservations.models import ReservationStatus
+from apps.reservations.availability import (
+    NON_BOOKABLE_ROOM_STATUSES,
+    AvailabilityService,
+)
+from apps.reservations.models import (
+    Reservation,
+    ReservationRoomLine,
+    ReservationStatus,
+)
 from apps.rooms.models import Room, RoomStatus
 from apps.rooms.services import change_room_status
+from apps.shifts.services import get_business_date
 
 from .models import Stay, StayGuest, StayGuestRole, StayStatus, StayStatusLog
 
@@ -46,6 +71,74 @@ def _log(stay, previous, new, *, note="", user=None):
         note=note or "",
         changed_by=actor,
     )
+
+
+def _record(stay, *, event_type, severity, title, message, user=None):
+    # Phase 14 activity system (lazy import to keep app loading order simple).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        stay.hotel,
+        event_type=event_type,
+        category="stay",
+        severity=severity,
+        title=title,
+        message=message,
+        actor=user,
+        related_object=stay,
+        related_url="/hotel/front-desk",
+    )
+
+
+def _require_in_house(stay) -> Stay:
+    """Re-read the stay under a row lock and require it to be in-house."""
+    stay = Stay.objects.select_for_update().select_related(
+        "room", "room__room_type", "primary_guest", "reservation", "hotel"
+    ).get(pk=stay.pk)
+    if stay.status != StayStatus.IN_HOUSE:
+        raise InvalidStayChange(
+            {"reason": "stay_not_in_house", "status": stay.status}
+        )
+    return stay
+
+
+def _shrink_reservation_end(reservation, *, business_date):
+    """Release inventory a stay no longer needs, keeping the reservation and
+    its stays unified WITHOUT harming siblings.
+
+    The reservation's end shrinks to the latest end still needed: the planned
+    check-out of every stay that is still in-house, floored at the business
+    date and at a one-night minimum. If any booked room of the reservation has
+    NOT been admitted yet (a pending arrival), nothing shrinks — that booking
+    still needs its original window.
+    """
+    if reservation is None:
+        return
+    reservation = Reservation.objects.select_for_update().get(pk=reservation.pk)
+    total_quantity = sum(
+        line.quantity for line in reservation.lines.all()
+    )
+    admitted = reservation.stays.exclude(status=StayStatus.CANCELLED).count()
+    if admitted < total_quantity:
+        return
+    candidates = [business_date] + [
+        s.planned_check_out_date
+        for s in reservation.stays.filter(status=StayStatus.IN_HOUSE)
+    ]
+    new_end = max(candidates + [reservation.check_in_date + timedelta(days=1)])
+    if new_end < reservation.check_out_date:
+        reservation.check_out_date = new_end
+        reservation.save(update_fields=["check_out_date", "updated_at"])
+
+
+def _grow_reservation_end(reservation, *, new_end):
+    """Extend the reservation's end so it keeps covering an extended stay."""
+    if reservation is None:
+        return
+    reservation = Reservation.objects.select_for_update().get(pk=reservation.pk)
+    if new_end > reservation.check_out_date:
+        reservation.check_out_date = new_end
+        reservation.save(update_fields=["check_out_date", "updated_at"])
 
 
 class CheckInService:
@@ -70,15 +163,64 @@ class CheckInService:
             raise InvalidCheckIn(
                 {"reason": "reservation_not_confirmed", "status": reservation.status}
             )
+        # Arrival-date guard (final closure): check-in may not happen before
+        # the reservation's arrival date, measured by the HOTEL's business
+        # date — never the server clock. Late arrivals stay admissible for as
+        # long as the reservation is valid.
+        business_date = get_business_date(hotel)
+        if reservation.check_in_date > business_date:
+            raise ArrivalDateInFuture(
+                {
+                    "check_in_date": str(reservation.check_in_date),
+                    "business_date": str(business_date),
+                }
+            )
 
         if reservation_line is not None:
             if reservation_line.reservation_id != reservation.id:
                 raise InvalidCheckIn({"reason": "line_not_in_reservation"})
+            # Quantity cap (final closure): lock the line row so concurrent
+            # admissions serialize, then refuse once the line's booked
+            # quantity is reached (cancelled stays don't count).
+            reservation_line = ReservationRoomLine.objects.select_for_update().get(
+                pk=reservation_line.pk
+            )
+            admitted = (
+                Stay.objects.filter(hotel=hotel, reservation_line=reservation_line)
+                .exclude(status=StayStatus.CANCELLED)
+                .count()
+            )
+            if admitted >= reservation_line.quantity:
+                raise ReservationLineFull(
+                    {
+                        "reservation_line": reservation_line.id,
+                        "quantity": reservation_line.quantity,
+                        "admitted": admitted,
+                    }
+                )
             # A line's pinned room wins; a passed room must match it.
             if reservation_line.room_id:
                 if room is not None and room.id != reservation_line.room_id:
                     raise InvalidCheckIn({"reason": "room_does_not_match_line"})
                 room = reservation_line.room
+        else:
+            # No line passed: the same cap, against the whole reservation
+            # (lock the reservation row to serialize concurrent admissions).
+            locked = Reservation.objects.select_for_update().get(pk=reservation.pk)
+            total_quantity = sum(line.quantity for line in locked.lines.all())
+            admitted = (
+                Stay.objects.filter(hotel=hotel, reservation=reservation)
+                .exclude(status=StayStatus.CANCELLED)
+                .count()
+            )
+            if total_quantity and admitted >= total_quantity:
+                raise ReservationLineFull(
+                    {
+                        "reservation": reservation.id,
+                        "quantity": total_quantity,
+                        "admitted": admitted,
+                    }
+                )
 
         if room is None:
             raise InvalidCheckIn({"reason": "room_required"})
@@ -143,31 +285,68 @@ class CheckInService:
                 hotel=hotel, stay=stay, guest=companion, role=StayGuestRole.COMPANION
             )
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
-        # Phase 14: activity + notifications (lazy import).
-        from apps.notifications.services import record_activity
-
-        record_activity(
-            hotel,
+        _record(
+            stay,
             event_type="stay.checked_in",
-            category="stay",
             severity="success",
             title=f"Check-in: room {room.number}",
             message=f"{primary_guest.full_name} · {reservation.reservation_number}",
-            actor=user,
-            related_object=stay,
-            related_url="/hotel/front-desk",
+            user=user,
         )
         return stay
 
 
 class CheckOutService:
-    """Close an in-house stay. Operational only — no money, no folio."""
+    """Close an in-house stay.
+
+    Operational settlement only: an OPEN folio with a non-zero balance blocks
+    the check-out (no override here — settlement happens in Finance); folios
+    that balance to zero are closed through the central finance service. A
+    check-out before the planned date is an EARLY departure: it requires a
+    reason and shrinks the reservation's end so the freed nights go back to
+    inventory. Charges are never touched.
+    """
 
     @staticmethod
     @transaction.atomic
     def execute(stay, *, check_out_notes="", checkout_reason="", user=None) -> Stay:
+        # Row lock: concurrent check-outs of the same stay serialize; the
+        # loser then fails the in-house test instead of double-logging.
+        stay = Stay.objects.select_for_update().select_related(
+            "room", "primary_guest", "reservation", "hotel"
+        ).get(pk=stay.pk)
         if stay.status != StayStatus.IN_HOUSE:
             raise InvalidCheckOut({"status": stay.status})
+
+        business_date = get_business_date(stay.hotel)
+        early = business_date < stay.planned_check_out_date
+        if early and not (checkout_reason or "").strip():
+            raise EarlyDepartureReasonRequired(
+                {
+                    "planned_check_out_date": str(stay.planned_check_out_date),
+                    "business_date": str(business_date),
+                }
+            )
+
+        # Folio gate (final closure). Lazy import: finance is a later phase.
+        from apps.finance.models import Folio, FolioStatus
+        from apps.finance.services import close_folio, folio_balance
+
+        open_folios = list(
+            Folio.objects.select_for_update().filter(
+                hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
+            )
+        )
+        for folio in open_folios:
+            balance = folio_balance(folio)["balance"]
+            if balance != 0:
+                raise FolioBalanceOutstanding(
+                    {
+                        "folio": folio.id,
+                        "folio_number": folio.folio_number,
+                        "balance": str(balance),
+                    }
+                )
 
         actor = user if getattr(user, "is_authenticated", False) else None
         previous = stay.status
@@ -186,6 +365,9 @@ class CheckOutService:
                 "updated_at",
             ]
         )
+        # Balance is zero on every open folio — close them centrally.
+        for folio in open_folios:
+            close_folio(folio, user=user)
         # Documented decision: a vacated room becomes `dirty` for housekeeping.
         if stay.room.status == RoomStatus.AVAILABLE:
             change_room_status(stay.room, RoomStatus.DIRTY, note="", user=user)
@@ -195,18 +377,240 @@ class CheckOutService:
         from apps.operations.services import create_checkout_cleaning_task
 
         create_checkout_cleaning_task(stay, user=user)
-        _log(stay, previous, StayStatus.CHECKED_OUT, note="checked out", user=user)
-        from apps.notifications.services import record_activity
-
-        record_activity(
-            stay.hotel,
+        # Early departure releases the nights the guest no longer uses.
+        if early:
+            _shrink_reservation_end(stay.reservation, business_date=business_date)
+        note = "checked out (early departure)" if early else "checked out"
+        _log(stay, previous, StayStatus.CHECKED_OUT, note=note, user=user)
+        _record(
+            stay,
             event_type="stay.checked_out",
-            category="stay",
             severity="info",
             title=f"Check-out: room {stay.room.number}",
-            message=stay.primary_guest.full_name,
-            actor=user,
-            related_object=stay,
-            related_url="/hotel/front-desk",
+            message=(
+                f"{stay.primary_guest.full_name} · early departure"
+                if early
+                else stay.primary_guest.full_name
+            ),
+            user=user,
+        )
+        return stay
+
+
+class ExtendStayService:
+    """Extend an in-house stay — from the STAY, the operational truth.
+
+    Availability for the ADDED window is re-checked through the central
+    engine (excluding the stay's own reservation so it never conflicts with
+    itself); the reservation's end grows with the stay so inventory stays
+    unified. The arrival date never changes and no charges are created.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def execute(stay, *, new_check_out_date, reason="", user=None) -> Stay:
+        stay = _require_in_house(stay)
+        old_end = stay.planned_check_out_date
+        if new_check_out_date <= old_end:
+            raise InvalidStayChange(
+                {
+                    "reason": "new_date_not_after_current",
+                    "current_check_out": str(old_end),
+                }
+            )
+        room = Room.objects.select_for_update().get(pk=stay.room_id)
+        if not room.is_active or room.status in NON_BOOKABLE_ROOM_STATUSES:
+            raise RoomNotReady({"room": room.id, "status": room.status})
+        # Central engine: next reservations on this room, other stays, type
+        # capacity, maintenance/out-of-service/archived — all in one check.
+        AvailabilityService.ensure_can_book(
+            stay.hotel,
+            [
+                {
+                    "room_type_id": room.room_type_id,
+                    "quantity": 1,
+                    "room_id": room.id,
+                }
+            ],
+            old_end,
+            new_check_out_date,
+            exclude_reservation_id=stay.reservation_id,
+        )
+        stay.planned_check_out_date = new_check_out_date
+        stay.save(update_fields=["planned_check_out_date", "updated_at"])
+        _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
+        note = f"extended {old_end} -> {new_check_out_date}"
+        if (reason or "").strip():
+            note = f"{note} · {reason.strip()}"
+        _log(stay, StayStatus.IN_HOUSE, StayStatus.IN_HOUSE, note=note, user=user)
+        _record(
+            stay,
+            event_type="stay.extended",
+            severity="info",
+            title=f"Stay extended: room {room.number}",
+            message=f"{stay.primary_guest.full_name} · {old_end} → {new_check_out_date}",
+            user=user,
+        )
+        return stay
+
+
+class ShortenStayService:
+    """Shorten an in-house stay — from the STAY, the operational truth.
+
+    The freed nights go back to inventory (the reservation's end shrinks with
+    the stay). Charges are NEVER touched — any financial correction is a
+    finance-side operation. Shortening never checks the guest out by itself.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def execute(stay, *, new_check_out_date, reason="", user=None) -> Stay:
+        stay = _require_in_house(stay)
+        old_end = stay.planned_check_out_date
+        business_date = get_business_date(stay.hotel)
+        if new_check_out_date >= old_end:
+            raise InvalidStayChange(
+                {
+                    "reason": "new_date_not_before_current",
+                    "current_check_out": str(old_end),
+                }
+            )
+        # >= business date also guarantees >= the actual arrival date, since
+        # the arrival-date guard makes future check-ins impossible.
+        if new_check_out_date < business_date:
+            raise InvalidStayChange(
+                {
+                    "reason": "before_business_date",
+                    "business_date": str(business_date),
+                }
+            )
+        if new_check_out_date <= stay.planned_check_in_date:
+            raise InvalidStayChange(
+                {
+                    "reason": "before_check_in",
+                    "check_in_date": str(stay.planned_check_in_date),
+                }
+            )
+        stay.planned_check_out_date = new_check_out_date
+        stay.save(update_fields=["planned_check_out_date", "updated_at"])
+        _shrink_reservation_end(stay.reservation, business_date=business_date)
+        note = f"shortened {old_end} -> {new_check_out_date}"
+        if (reason or "").strip():
+            note = f"{note} · {reason.strip()}"
+        _log(stay, StayStatus.IN_HOUSE, StayStatus.IN_HOUSE, note=note, user=user)
+        _record(
+            stay,
+            event_type="stay.shortened",
+            severity="info",
+            title=f"Stay shortened: room {stay.room.number}",
+            message=f"{stay.primary_guest.full_name} · {old_end} → {new_check_out_date}",
+            user=user,
+        )
+        return stay
+
+
+class RoomMoveService:
+    """Move an in-house stay to another room — with a mandatory reason.
+
+    The new room must be ready exactly like a check-in room (available, not
+    occupied, not held by another reservation for the remaining window, with
+    enough capacity). The vacated room goes to housekeeping like a check-out
+    (dirty + one cleaning task). History is preserved: the stay's status log
+    records old room, new room, actor, time and reason.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def execute(stay, *, new_room, reason, user=None) -> Stay:
+        if not (reason or "").strip():
+            raise InvalidStayChange({"reason": "move_reason_required"})
+        stay = _require_in_house(stay)
+        if new_room.pk == stay.room_id:
+            raise InvalidStayChange({"reason": "same_room"})
+        # Lock both rooms in a stable id order to avoid deadlocks.
+        locked = {
+            r.pk: r
+            for r in Room.objects.select_for_update()
+            .filter(pk__in=sorted([stay.room_id, new_room.pk]))
+            .order_by("pk")
+            .select_related("room_type")
+        }
+        old_room = locked[stay.room_id]
+        new_room = locked[new_room.pk]
+        if new_room.hotel_id != stay.hotel_id:
+            raise CrossTenantReference({"field": "room"})
+        if not new_room.is_active or new_room.status != CHECK_IN_READY_STATUS:
+            raise RoomNotReady({"room": new_room.id, "status": new_room.status})
+        if Stay.objects.filter(
+            hotel=stay.hotel, room=new_room, status=StayStatus.IN_HOUSE
+        ).exists():
+            raise RoomOccupied({"room": new_room.id})
+        guest_count = stay.guests.count() or 1
+        if guest_count > new_room.room_type.max_capacity:
+            raise InvalidStayChange(
+                {
+                    "reason": "capacity_exceeded",
+                    "guests": guest_count,
+                    "max_capacity": new_room.room_type.max_capacity,
+                }
+            )
+        business_date = get_business_date(stay.hotel)
+        window_end = max(
+            stay.planned_check_out_date, business_date + timedelta(days=1)
+        )
+        # Central engine: the new room must be free (no pinned reservation, no
+        # maintenance/out-of-service, type capacity) until the stay's end.
+        AvailabilityService.ensure_can_book(
+            stay.hotel,
+            [
+                {
+                    "room_type_id": new_room.room_type_id,
+                    "quantity": 1,
+                    "room_id": new_room.id,
+                }
+            ],
+            business_date,
+            window_end,
+            exclude_reservation_id=stay.reservation_id,
+        )
+        stay.room = new_room
+        stay.save(update_fields=["room", "updated_at"])
+        # Keep availability unified: the reservation line follows the guest
+        # (a pinned line is repinned; a 1-room unpinned line gets pinned so
+        # the new room is protected for the remaining window).
+        line = stay.reservation_line
+        if line is not None:
+            line = ReservationRoomLine.objects.select_for_update().get(pk=line.pk)
+            if line.room_id == old_room.id or (
+                line.room_id is None and line.quantity == 1
+            ):
+                line.room = new_room
+                line.save(update_fields=["room", "updated_at"])
+        # The vacated room goes to housekeeping exactly like a check-out.
+        if old_room.status == RoomStatus.AVAILABLE:
+            change_room_status(old_room, RoomStatus.DIRTY, note="", user=user)
+        from apps.operations.models import HousekeepingTaskType, OperationPriority
+        from apps.operations.services import create_housekeeping_task
+
+        # stay=None so the real check-out's idempotent task (keyed by stay)
+        # is not suppressed later.
+        create_housekeeping_task(
+            stay.hotel,
+            user=user,
+            room=old_room,
+            stay=None,
+            task_type=HousekeepingTaskType.CHECKOUT_CLEANING,
+            priority=OperationPriority.NORMAL,
+            notes=f"Room move: guest moved to room {new_room.number}",
+        )
+        note = f"room moved {old_room.number} -> {new_room.number} · {reason.strip()}"
+        _log(stay, StayStatus.IN_HOUSE, StayStatus.IN_HOUSE, note=note, user=user)
+        _record(
+            stay,
+            event_type="stay.room_moved",
+            severity="warning",
+            title=f"Room move: {old_room.number} → {new_room.number}",
+            message=f"{stay.primary_guest.full_name} · {reason.strip()}",
+            user=user,
         )
         return stay

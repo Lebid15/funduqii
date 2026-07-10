@@ -23,8 +23,18 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     "guests": ["view", "create", "update", "delete"],
     # Front-desk operations (Phase 7). The reservations.check_in/check_out codes
     # above are vestigial blueprint entries and are NOT used; front-desk uses
-    # these explicit stays.* codes instead.
-    "stays": ["view", "check_in", "check_out", "update"],
+    # these explicit stays.* codes instead. extend/shorten/move_room arrived
+    # with the front-desk final closure round — deliberately separate codes,
+    # NOT bundled under stays.update.
+    "stays": [
+        "view",
+        "check_in",
+        "check_out",
+        "update",
+        "extend",
+        "shorten",
+        "move_room",
+    ],
     # Internal finance (Phase 8). Folios/charges/payments/invoices live under
     # one clear `finance` section; expenses have their own.
     "finance": [
