@@ -991,3 +991,19 @@ class ListViewFilterTests(APITestCase):
         self.assertEqual(
             self._numbers(f"?search={self.rooms[0].number}"), {"R-CONF"}
         )
+
+
+class OverviewBusinessDateTests(APITestCase):
+    """The overview exposes the hotel business date (immediate-wizard input)."""
+
+    def test_overview_returns_business_date(self):
+        from apps.shifts.services import get_business_date
+
+        hotel = make_hotel()
+        manager = add_member(hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(manager)
+        resp = self.client.get(
+            reverse("reservations:reservation-overview"), **HDR(hotel)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["business_date"], str(get_business_date(hotel)))

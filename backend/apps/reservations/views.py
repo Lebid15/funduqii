@@ -278,6 +278,8 @@ class ReservationOverviewView(APIView):
         return [CanView()]
 
     def get(self, request: Request) -> Response:
+        from apps.shifts.services import get_business_date
+
         hotel = request.hotel
         base = Reservation.objects.filter(hotel=hotel)
         today = timezone.localdate()
@@ -301,6 +303,10 @@ class ReservationOverviewView(APIView):
                 "confirmed": counts.get(ReservationStatus.CONFIRMED, 0),
                 "cancelled": counts.get(ReservationStatus.CANCELLED, 0),
                 "expired": counts.get(ReservationStatus.EXPIRED, 0),
+                # The hotel's operational "today" — the immediate-reservation
+                # wizard prefixes its arrival date with this (the client
+                # clock can differ from the hotel timezone).
+                "business_date": str(get_business_date(hotel)),
                 "arrivals": ReservationSerializer(arrivals, many=True).data,
                 "departures": ReservationSerializer(departures, many=True).data,
             }

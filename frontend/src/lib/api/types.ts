@@ -581,6 +581,9 @@ export interface ReservationOverview {
   confirmed: number;
   cancelled: number;
   expired: number;
+  /** The hotel's operational "today" — the immediate-reservation wizard
+   * uses this as the arrival date (client clocks can differ). */
+  business_date: string;
   arrivals: Reservation[];
   departures: Reservation[];
 }

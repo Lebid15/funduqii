@@ -53,14 +53,18 @@ import {
   confirmReservation,
   createReservation,
   getReservationLogs,
+  getReservationOverview,
   listReservations,
   updateReservation,
   type ReservationCreateBody,
   type ReservationLineBody,
 } from "@/lib/api/reservations";
+import { createGuest, listGuests } from "@/lib/api/guests";
+import { checkIn as frontDeskCheckIn } from "@/lib/api/stays";
 import { listRoomTypes, listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type {
+  Guest,
   Reservation,
   ReservationStatusLogEntry,
   Room,
@@ -109,8 +113,6 @@ export function ReservationsTab({
   const [type, setType] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [createdFrom, setCreatedFrom] = useState("");
-  const [createdTo, setCreatedTo] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -142,19 +144,15 @@ export function ReservationsTab({
     if (view === "website") setSource("");
   }, [view]);
   const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
-  // Quick actions: with a preselected room (rooms board) the form opens
-  // DIRECTLY; without one, the type chooser opens first (owner UX).
-  // ?action=find&q= focuses the list on a reservation number.
+  // Quick actions: ?action=new ALWAYS opens the type chooser (owner UX) —
+  // a preselected room from the rooms board is carried through so either
+  // card opens the wizard with that room pinned. ?action=find&q= focuses
+  // the list on a reservation number.
   useQuickAction("new", (params) => {
     const room = params.get("room");
     const roomType = params.get("room_type");
-    if (room && roomType) {
-      setQuickLine({ room, room_type: roomType });
-      setCreating(true);
-    } else {
-      setQuickLine(null);
-      setChooserOpen(true);
-    }
+    setQuickLine(room && roomType ? { room, room_type: roomType } : null);
+    setChooserOpen(true);
   });
   useQuickAction("find", (params) => {
     const q = params.get("q") ?? "";
@@ -185,8 +183,6 @@ export function ReservationsTab({
         room_type: type ? Number(type) : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        created_from: createdFrom || undefined,
-        created_to: createdTo || undefined,
         search: query || undefined,
       });
       setRows(data.results);
@@ -196,7 +192,7 @@ export function ReservationsTab({
     } finally {
       setLoading(false);
     }
-  }, [view, page, status, source, type, dateFrom, dateTo, createdFrom, createdTo, query, t]);
+  }, [view, page, status, source, type, dateFrom, dateTo, query, t]);
 
   useEffect(() => {
     load();
@@ -209,8 +205,6 @@ export function ReservationsTab({
     type !== "" ||
     dateFrom !== "" ||
     dateTo !== "" ||
-    createdFrom !== "" ||
-    createdTo !== "" ||
     query !== "";
 
   function applySearch(event: FormEvent) {
@@ -225,8 +219,6 @@ export function ReservationsTab({
     setType("");
     setDateFrom("");
     setDateTo("");
-    setCreatedFrom("");
-    setCreatedTo("");
     setSearch("");
     setQuery("");
     setPage(1);
@@ -387,12 +379,6 @@ export function ReservationsTab({
             <FormField label={t.reservations.list.dateTo} htmlFor="res-to">
               <Input id="res-to" type="date" value={dateTo} onChange={(e) => { setPage(1); setDateTo(e.target.value); }} />
             </FormField>
-            <FormField label={t.reservations.views.createdFrom} htmlFor="res-created-from">
-              <Input id="res-created-from" type="date" value={createdFrom} onChange={(e) => { setPage(1); setCreatedFrom(e.target.value); }} />
-            </FormField>
-            <FormField label={t.reservations.views.createdTo} htmlFor="res-created-to">
-              <Input id="res-created-to" type="date" value={createdTo} onChange={(e) => { setPage(1); setCreatedTo(e.target.value); }} />
-            </FormField>
             {hasFilters ? (
               <div className="filter-bar__actions cluster">
                 <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>
@@ -442,7 +428,15 @@ export function ReservationsTab({
         closeLabel={t.common.close}
       >
         <div className="choice-cards">
-          <button type="button" className="choice-card" onClick={() => chooseKind("instant")}>
+          {/* Immediate = create + check the guest in via the EXISTING
+              front-desk service, so it needs the real check-in permission. */}
+          <button
+            type="button"
+            className="choice-card"
+            disabled={!can("stays.check_in")}
+            title={!can("stays.check_in") ? t.reservations.views.needCheckInPerm : undefined}
+            onClick={() => chooseKind("instant")}
+          >
             <span className="choice-card__icon">
               <Zap size={22} />
             </span>
@@ -466,6 +460,8 @@ export function ReservationsTab({
         initialKind={initialKind}
         onClose={() => { setCreating(false); setQuickLine(null); setInitialKind(null); }}
         onSaved={() => { setCreating(false); setQuickLine(null); setInitialKind(null); notify(t.reservations.saved); setPage(1); load(); onChanged?.(); }}
+        onView={(r) => { setCreating(false); setQuickLine(null); setInitialKind(null); setPage(1); load(); onChanged?.(); setDetails(r); }}
+        onRefresh={() => { load(); onChanged?.(); }}
       />
       <ReservationModal
         open={editing !== null}
@@ -508,6 +504,11 @@ function todayISO(): string {
   return new Date(now.getTime() - off * 60_000).toISOString().slice(0, 10);
 }
 
+type WizardResult =
+  | { type: "created"; reservation: Reservation }
+  | { type: "checkedIn"; reservation: Reservation; roomNumber: string }
+  | { type: "checkinFailed"; reservation: Reservation; reason: string };
+
 function ReservationModal({
   open,
   reservation,
@@ -516,18 +517,25 @@ function ReservationModal({
   initialKind,
   onClose,
   onSaved,
+  onView,
+  onRefresh,
 }: {
   open: boolean;
   reservation?: Reservation;
   types: RoomType[];
   /** Optional preselected room line (operational board deep-link). */
   initialLine?: { room_type: string; room: string } | null;
-  /** Optional booking kind from the type-chooser cards (owner UX): instant
-   * starts today (hotel business rules re-validate server-side), future
-   * leaves the arrival date for the user to pick. */
+  /** Booking kind from the type-chooser cards (owner UX): IMMEDIATE creates
+   * the reservation then checks the guest in via the EXISTING front-desk
+   * check-in service; FUTURE stays a plain booking with the arrival date
+   * left to the user. */
   initialKind?: "instant" | "future" | null;
   onClose: () => void;
   onSaved: () => void;
+  /** Open the created reservation's details (success screens). */
+  onView?: (r: Reservation) => void;
+  /** Refresh the list/counters WITHOUT closing (success screens stay up). */
+  onRefresh?: () => void;
 }) {
   const { t, locale } = useI18n();
   const editing = Boolean(reservation);
@@ -555,14 +563,41 @@ function ReservationModal({
   const [availability, setAvailability] = useState<TypeAvailability[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Wizard state (owner UX): four ordered steps, optional existing-guest
+  // pick (required data for the IMMEDIATE check-in), the hotel business
+  // date (the immediate arrival date — the client clock can differ), and
+  // the final success / partial-failure screen.
+  const [step, setStep] = useState(0);
+  const [guests, setGuests] = useState<Guest[]>([]);
+  const [guestId, setGuestId] = useState("");
+  const [businessDate, setBusinessDate] = useState("");
+  const [result, setResult] = useState<WizardResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const kind = reservation?.booking_kind ?? initialKind ?? "instant";
     setBookingKind(kind);
+    setStep(0);
+    setGuestId("");
+    setResult(null);
+    setBusinessDate("");
     // Future bookings leave the arrival date to the user; instant starts
-    // today (still a RESERVATION — check-in stays front-desk business).
+    // on the HOTEL business date (still a RESERVATION until check-in).
     setCheckIn(reservation?.check_in_date ?? (kind === "future" ? "" : todayISO()));
+    if (!reservation && kind === "instant") {
+      getReservationOverview()
+        .then((o) => {
+          setBusinessDate(o.business_date);
+          setCheckIn(o.business_date);
+        })
+        .catch(() => {
+          // The client date stays as a fallback; the backend re-validates.
+        });
+    }
+    // Existing guests for the optional pick / the immediate check-in.
+    listGuests({ page_size: 200, is_active: "true" })
+      .then((r) => setGuests(r.results))
+      .catch(() => setGuests([]));
     setCheckOut(reservation?.check_out_date ?? "");
     setArrivalTime(reservation?.expected_arrival_time ?? "");
     setName(reservation?.primary_guest_name ?? "");
@@ -663,11 +698,43 @@ function ReservationModal({
     return availability.find((a) => String(a.room_type) === typeId);
   }
 
+  /** Pick an existing guest → autofill the snapshot fields. */
+  function selectGuest(id: string) {
+    setGuestId(id);
+    const guest = guests.find((g) => String(g.id) === id);
+    if (!guest) return;
+    setName(guest.full_name);
+    setPhone(guest.phone ?? "");
+    setEmail(guest.email ?? "");
+    setNationality(guest.nationality ?? "");
+    if (guest.document_type) setDocType(guest.document_type);
+    if (guest.document_number) setDocNumber(guest.document_number);
+  }
+
+  const isInstant = !editing && bookingKind === "instant";
+
+  /** Per-step gate (owner spec: no advancing with missing basics). */
+  function validateStep(current: number): string | null {
+    if (current === 0 && !name.trim()) return t.reservations.form.nameRequired;
+    return null;
+  }
+
+  function goNext() {
+    const problem = validateStep(step);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setError(null);
+    setStep((s) => Math.min(3, s + 1));
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     if (!name.trim()) return setError(t.reservations.form.nameRequired);
     if (!checkIn || !checkOut) return setError(t.errors.validation);
+    if (checkOut <= checkIn) return setError(t.errors.validation);
     const cleanLines: ReservationLineBody[] = lines
       .filter((l) => l.room_type)
       .map((l) => ({
@@ -676,6 +743,11 @@ function ReservationModal({
         quantity: l.room ? 1 : Number(l.quantity) || 1,
       }));
     if (cleanLines.length === 0) return setError(t.reservations.form.linesRequired);
+    // The IMMEDIATE flow admits the guest right away — the existing
+    // check-in service requires one specific room.
+    if (isInstant && !cleanLines[0]?.room) {
+      return setError(t.reservations.views.roomRequiredInstant);
+    }
 
     setBusy(true);
     try {
@@ -701,14 +773,67 @@ function ReservationModal({
       };
       if (editing && reservation) {
         await updateReservation(reservation.id, common);
-      } else {
-        const body: ReservationCreateBody = { status: initialStatus, ...common };
-        if (initialStatus === "held") {
-          body.hold_expires_at = holdExpires ? new Date(holdExpires).toISOString() : null;
-        }
-        await createReservation(body);
+        onSaved();
+        return;
       }
-      onSaved();
+      // The check-in service needs a GUEST PROFILE — resolve it FIRST so a
+      // guest failure leaves nothing half-done (same flow as front-desk).
+      let checkinGuestId: number | null = null;
+      if (isInstant) {
+        if (guestId) {
+          checkinGuestId = Number(guestId);
+        } else {
+          const guest = await createGuest({
+            full_name: name.trim(),
+            phone: phone.trim(),
+            email: email.trim(),
+            nationality: nationality.trim(),
+            document_number: docNumber.trim(),
+            ...(docType
+              ? { document_type: docType as Guest["document_type"] }
+              : {}),
+          });
+          checkinGuestId = guest.id;
+        }
+      }
+      const body: ReservationCreateBody = {
+        // Immediate check-in requires a CONFIRMED reservation (existing rule).
+        status: isInstant ? "confirmed" : initialStatus,
+        ...common,
+      };
+      if (!isInstant && initialStatus === "held") {
+        body.hold_expires_at = holdExpires ? new Date(holdExpires).toISOString() : null;
+      }
+      const created = await createReservation(body);
+      if (!isInstant) {
+        setResult({ type: "created", reservation: created });
+        onRefresh?.();
+        return;
+      }
+      // IMMEDIATE: admit the guest through the EXISTING front-desk check-in
+      // service — no new logic, all its validations apply. A failure here
+      // must never hide: the reservation exists, say so plainly.
+      try {
+        await frontDeskCheckIn({
+          reservation: created.id,
+          reservation_line: created.lines[0]?.id ?? null,
+          room: Number(cleanLines[0].room),
+          primary_guest: checkinGuestId as number,
+        });
+        setResult({
+          type: "checkedIn",
+          reservation: created,
+          roomNumber:
+            rooms.find((r) => String(r.id) === lines[0]?.room)?.number ?? "",
+        });
+      } catch (err) {
+        setResult({
+          type: "checkinFailed",
+          reservation: created,
+          reason: messageForError(err, t),
+        });
+      }
+      onRefresh?.();
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -739,29 +864,193 @@ function ReservationModal({
   const summaryType = types.find((ty) => String(ty.id) === lines[0]?.room_type);
   const summaryRoom = rooms.find((r) => String(r.id) === lines[0]?.room);
 
+  const v = t.reservations.views;
+  const stepTitles = [v.stepGuest, v.stepCompanions, v.stepDocuments, v.stepBooking];
+  const finalLabel = editing
+    ? t.reservations.form.save
+    : isInstant
+      ? v.saveAndCheckIn
+      : v.saveReservation;
+
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={result ? onSaved : onClose}
       title={editing ? t.reservations.form.editTitle : t.reservations.form.createTitle}
       closeLabel={t.common.close}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="res-form" type="submit" loading={busy}>{t.reservations.form.save}</Button>
-        </>
+        result ? (
+          <Button variant="secondary" onClick={onSaved}>{t.common.close}</Button>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+            {step > 0 ? (
+              <Button variant="ghost" onClick={() => { setError(null); setStep((s) => s - 1); }} disabled={busy}>
+                {t.pagination.previous}
+              </Button>
+            ) : null}
+            {step < 3 ? (
+              <Button onClick={goNext} disabled={busy}>{t.pagination.next}</Button>
+            ) : (
+              <Button form="res-form" type="submit" loading={busy}>{finalLabel}</Button>
+            )}
+          </>
+        )
       }
     >
+      {result ? (
+        <div className="stack">
+          {result.type === "checkinFailed" ? (
+            <Alert tone="warning">
+              {v.checkinFailed} — {result.reason}
+            </Alert>
+          ) : (
+            <Alert tone="success">
+              {result.type === "checkedIn" ? v.successCheckedIn : v.successCreated}
+            </Alert>
+          )}
+          <dl className="room-op-details">
+            <div className="room-op-details__row">
+              <dt>{t.reservations.list.number}</dt>
+              <dd>{result.reservation.reservation_number}</dd>
+            </div>
+            <div className="room-op-details__row">
+              <dt>{t.reservations.form.name}</dt>
+              <dd>{result.reservation.primary_guest_name}</dd>
+            </div>
+            {result.type === "checkedIn" && result.roomNumber ? (
+              <div className="room-op-details__row">
+                <dt>{t.reservations.form.room}</dt>
+                <dd>{result.roomNumber}</dd>
+              </div>
+            ) : null}
+            <div className="room-op-details__row">
+              <dt>{t.reservations.form.stayDates}</dt>
+              <dd>
+                {formatDate(result.reservation.check_in_date, locale)} →{" "}
+                {formatDate(result.reservation.check_out_date, locale)}
+              </dd>
+            </div>
+          </dl>
+          <div className="cluster">
+            <Button variant="secondary" size="sm" onClick={() => onView?.(result.reservation)}>
+              {v.openReservation}
+            </Button>
+            {result.type === "checkedIn" ? (
+              <>
+                <Link href="/hotel/front-desk?tab=current" className="btn btn--secondary btn--sm">
+                  {v.viewStay}
+                </Link>
+                <Link href="/hotel/finance?tab=folios" className="btn btn--ghost btn--sm">
+                  {t.quickActions.guestFolio}
+                </Link>
+              </>
+            ) : null}
+            {result.type === "checkinFailed" ? (
+              <Link href="/hotel/front-desk?tab=arrivals" className="btn btn--secondary btn--sm">
+                {v.goToFrontDesk}
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      ) : (
       <form id="res-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
 
-        {/* Section 1 — booking kind & dates */}
+        {/* Wizard step indicator (owner UX): four clear ordered steps. */}
+        <div className="cluster" aria-label={stepTitles[step]}>
+          {stepTitles.map((title, i) => (
+            <span key={title} className={i === step ? "chip" : "floor-chip"}>
+              {i + 1}. {title}
+            </span>
+          ))}
+        </div>
+
+        {/* STEP 1 — guest information (existing-guest pick autofills; the
+            IMMEDIATE flow uses the picked/created GUEST PROFILE at check-in). */}
+        {step === 0 ? (
+          <SectionCard title={v.stepGuest} icon={UserRound}>
+            <FormField
+              label={v.existingGuestLabel}
+              htmlFor="res-guest-pick"
+              hint={isInstant ? v.existingGuestHintInstant : undefined}
+            >
+              <Select
+                id="res-guest-pick"
+                value={guestId}
+                placeholder={t.frontDesk.checkInModal.selectGuest}
+                options={guests.map((g) => ({ value: String(g.id), label: g.full_name }))}
+                onChange={(e) => selectGuest(e.target.value)}
+              />
+            </FormField>
+            <div className="form-grid">
+              <FormField label={t.reservations.form.name} htmlFor="res-name">
+                <Input id="res-name" value={name} required onChange={(e) => setName(e.target.value)} />
+              </FormField>
+              <FormField label={t.reservations.form.phone} htmlFor="res-phone">
+                <Input id="res-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              </FormField>
+              <FormField label={t.reservations.form.email} htmlFor="res-email">
+                <Input id="res-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </FormField>
+              <FormField label={t.reservations.form.nationality} htmlFor="res-nat">
+                <Input id="res-nat" value={nationality} onChange={(e) => setNationality(e.target.value)} />
+              </FormField>
+            </div>
+          </SectionCard>
+        ) : null}
+
+        {/* STEP 2 — companions: the reservation model carries COUNTS; named
+            companions are attached at check-in (front desk), by design. */}
+        {step === 1 ? (
+          <SectionCard title={v.stepCompanions} icon={UserRound}>
+            <div className="form-grid">
+              <FormField label={t.reservations.form.adults} htmlFor="res-adults">
+                <Input id="res-adults" type="number" min="1" value={adults} onChange={(e) => setAdults(e.target.value)} />
+              </FormField>
+              <FormField label={t.reservations.form.children} htmlFor="res-children">
+                <Input id="res-children" type="number" min="0" value={children} onChange={(e) => setChildren(e.target.value)} />
+              </FormField>
+            </div>
+            <p className="muted small">{v.companionsHint}</p>
+          </SectionCard>
+        ) : null}
+
+        {/* STEP 3 — documents (the reservation's existing snapshot fields —
+            there is no reservation-document upload in the current system). */}
+        {step === 2 ? (
+          <SectionCard title={v.stepDocuments} icon={ClipboardCheck}>
+            <div className="form-grid">
+              <FormField label={t.reservations.form.documentType} htmlFor="res-doc-type">
+                <Select id="res-doc-type" value={docType} placeholder={t.guests.documentTypes.none} options={docTypeOptions} onChange={(e) => setDocType(e.target.value)} />
+              </FormField>
+              <FormField label={t.reservations.form.documentNumber} htmlFor="res-doc-num">
+                <Input id="res-doc-num" value={docNumber} onChange={(e) => setDocNumber(e.target.value)} />
+              </FormField>
+            </div>
+            <p className="muted small">{v.documentsHint}</p>
+          </SectionCard>
+        ) : null}
+
+        {step === 3 ? (
+          <>
+        {/* Booking kind & dates */}
         <SectionCard title={t.reservations.form.sectionKindDates} icon={CalendarClock}>
           <div className="form-grid">
-            <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind" hint={bookingKind === "instant" ? t.reservations.form.instantHint : t.reservations.form.futureHint}>
-              <Select id="res-kind" value={bookingKind} options={kindOptions} onChange={(e) => changeKind(e.target.value as "instant" | "future")} />
-            </FormField>
-            <FormField label={t.reservations.form.checkIn} htmlFor="res-in">
+            {editing ? (
+              <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind" hint={bookingKind === "instant" ? t.reservations.form.instantHint : t.reservations.form.futureHint}>
+                <Select id="res-kind" value={bookingKind} options={kindOptions} onChange={(e) => changeKind(e.target.value as "instant" | "future")} />
+              </FormField>
+            ) : (
+              <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind-fixed">
+                <Input id="res-kind-fixed" value={t.reservations.kind[bookingKind]} disabled readOnly />
+              </FormField>
+            )}
+            <FormField
+              label={t.reservations.form.checkIn}
+              htmlFor="res-in"
+              hint={isInstant && businessDate ? t.reservations.form.instantHint : undefined}
+            >
               <Input id="res-in" type="date" value={checkIn} required disabled={bookingKind === "instant"} onChange={(e) => setCheckIn(e.target.value)} />
             </FormField>
             <FormField label={t.reservations.form.checkOut} htmlFor="res-out">
@@ -776,40 +1065,9 @@ function ReservationModal({
           </div>
         </SectionCard>
 
-        {/* Section 2 — primary guest basics */}
-        <SectionCard title={t.reservations.form.guestInfo} icon={UserRound}>
-          <div className="form-grid">
-            <FormField label={t.reservations.form.name} htmlFor="res-name">
-              <Input id="res-name" value={name} required onChange={(e) => setName(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.phone} htmlFor="res-phone">
-              <Input id="res-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.email} htmlFor="res-email">
-              <Input id="res-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.nationality} htmlFor="res-nat">
-              <Input id="res-nat" value={nationality} onChange={(e) => setNationality(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.documentType} htmlFor="res-doc-type">
-              <Select id="res-doc-type" value={docType} placeholder={t.guests.documentTypes.none} options={docTypeOptions} onChange={(e) => setDocType(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.documentNumber} htmlFor="res-doc-num">
-              <Input id="res-doc-num" value={docNumber} onChange={(e) => setDocNumber(e.target.value)} />
-            </FormField>
-          </div>
-        </SectionCard>
-
-        {/* Section 3 — rooms & availability */}
+        {/* Rooms & availability */}
         <SectionCard title={t.reservations.form.sectionRooms} icon={BedDouble}>
-          <div className="form-grid">
-            <FormField label={t.reservations.form.adults} htmlFor="res-adults">
-              <Input id="res-adults" type="number" min="1" value={adults} onChange={(e) => setAdults(e.target.value)} />
-            </FormField>
-            <FormField label={t.reservations.form.children} htmlFor="res-children">
-              <Input id="res-children" type="number" min="0" value={children} onChange={(e) => setChildren(e.target.value)} />
-            </FormField>
-          </div>
+          {isInstant ? <p className="muted small">{v.roomRequiredInstant}</p> : null}
           <div className="stack-tight">
             {lines.map((line, i) => {
               const avail = availabilityFor(line.room_type);
@@ -858,9 +1116,11 @@ function ReservationModal({
                 </div>
               );
             })}
-            <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={addLine}>
-              {t.reservations.form.addLine}
-            </Button>
+            {!isInstant ? (
+              <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={addLine}>
+                {t.reservations.form.addLine}
+              </Button>
+            ) : null}
           </div>
           <p className="muted small">{t.reservations.form.availabilityHint}</p>
         </SectionCard>
@@ -877,7 +1137,7 @@ function ReservationModal({
             <FormField label={t.reservations.form.expectedPayment} htmlFor="res-pay" hint={t.reservations.form.expectedPaymentHint}>
               <Select id="res-pay" value={expectedPay} placeholder={t.common.all} options={payOptions} onChange={(e) => setExpectedPay(e.target.value)} />
             </FormField>
-            {!editing ? (
+            {!editing && !isInstant ? (
               <FormField label={t.reservations.form.initialStatus} htmlFor="res-init">
                 <Select
                   id="res-init"
@@ -890,7 +1150,7 @@ function ReservationModal({
                 />
               </FormField>
             ) : null}
-            {!editing && initialStatus === "held" ? (
+            {!editing && !isInstant && initialStatus === "held" ? (
               <FormField label={t.reservations.form.holdExpiry} htmlFor="res-hold" hint={t.reservations.form.holdExpiryHint}>
                 <Input id="res-hold" type="datetime-local" value={holdExpires} onChange={(e) => setHoldExpires(e.target.value)} />
               </FormField>
@@ -904,7 +1164,7 @@ function ReservationModal({
           </FormField>
         </SectionCard>
 
-        {/* Section 5 — review & save */}
+        {/* Review & save */}
         <StepSummaryCard
           title={t.reservations.form.sectionReview}
           icon={ClipboardCheck}
@@ -932,13 +1192,16 @@ function ReservationModal({
               label: t.common.status,
               value: editing && reservation
                 ? reservationStatusLabel(reservation.status, t)
-                : initialStatus === "held"
-                  ? t.reservations.form.createHeld
-                  : t.reservations.form.createConfirmed,
+                : isInstant || initialStatus === "confirmed"
+                  ? t.reservations.form.createConfirmed
+                  : t.reservations.form.createHeld,
             },
           ]}
         />
+          </>
+        ) : null}
       </form>
+      )}
     </Modal>
   );
 }
