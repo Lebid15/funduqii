@@ -89,8 +89,8 @@ export function buildRoomLinks(
     case "occupied":
       if (can("stays.view")) {
         links.push({
-          key: "viewStay",
-          label: b.viewStay,
+          key: "occupancyDetails",
+          label: b.occupancyDetails,
           icon: DoorOpen,
           href: "/hotel/front-desk?tab=current",
         });

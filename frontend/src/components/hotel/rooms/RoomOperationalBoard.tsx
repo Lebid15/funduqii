@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { BedDouble, LayoutGrid, Plus, X } from "lucide-react";
+import { BedDouble, X } from "lucide-react";
 
 import {
   Alert,
@@ -27,16 +27,16 @@ import type {
   RoomType,
 } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
-import { BulkRoomCreateModal } from "./BulkRoomCreateModal";
 import { FloorSummaryCards } from "./FloorSummaryCards";
 import { RoomDetailsDrawer } from "./RoomDetailsDrawer";
 import { RoomFloorGrid } from "./RoomFloorGrid";
+import { RoomFormModal } from "./RoomFormModal";
 import { RoomStatusModal } from "./RoomStatusModal";
 import { RoomSummaryCards, type BoardStatusFilter } from "./RoomSummaryCards";
 
 const ATTENTION = new Set(["dirty", "cleaning", "maintenance", "out_of_service"]);
+const MAINT_OOS = new Set(["maintenance", "out_of_service"]);
 
 /**
  * The rooms OPERATIONAL board (owner task): one read-only call feeds the
@@ -48,7 +48,6 @@ const ATTENTION = new Set(["dirty", "cleaning", "maintenance", "out_of_service"]
 export function RoomOperationalBoard() {
   const { t } = useI18n();
   const { notify } = useToast();
-  const access = useHotelAccess();
   const b = t.rooms.board;
 
   const [board, setBoard] = useState<BoardData | null>(null);
@@ -66,10 +65,7 @@ export function RoomOperationalBoard() {
 
   const [details, setDetails] = useState<RoomBoardRoom | null>(null);
   const [statusTarget, setStatusTarget] = useState<RoomBoardRoom | null>(null);
-  const [bulkOpen, setBulkOpen] = useState(false);
-
-  const canCreate =
-    access === null || (!access.loading && access.can("rooms.create"));
+  const [editTarget, setEditTarget] = useState<RoomBoardRoom | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,6 +119,8 @@ export function RoomOperationalBoard() {
       if (typeFilter && String(room.room_type) !== typeFilter) return false;
       if (statusFilter === "attention") {
         if (!ATTENTION.has(room.display_status)) return false;
+      } else if (statusFilter === "maintenance_oos") {
+        if (!MAINT_OOS.has(room.display_status)) return false;
       } else if (statusFilter && room.display_status !== statusFilter) {
         return false;
       }
@@ -165,18 +163,6 @@ export function RoomOperationalBoard() {
 
   return (
     <div className="stack">
-      <SectionHeader
-        title={b.tabTitle}
-        icon={LayoutGrid}
-        actions={
-          canCreate ? (
-            <Button icon={Plus} onClick={() => setBulkOpen(true)}>
-              {b.addRoomRange}
-            </Button>
-          ) : undefined
-        }
-      />
-
       {noInventory ? <Alert tone="warning">{b.setupHint}</Alert> : null}
 
       <RoomSummaryCards
@@ -185,11 +171,14 @@ export function RoomOperationalBoard() {
         onToggle={setStatusFilter}
       />
 
-      <FloorSummaryCards
-        floors={board.floors}
-        active={floorFilter}
-        onToggle={setFloorFilter}
-      />
+      <section className="stack" aria-label={b.floorsOverview}>
+        <SectionHeader title={b.floorsOverview} />
+        <FloorSummaryCards
+          floors={board.floors}
+          active={floorFilter}
+          onToggle={setFloorFilter}
+        />
+      </section>
 
       <Card>
         <form onSubmit={applySearch}>
@@ -228,18 +217,21 @@ export function RoomOperationalBoard() {
                 id="board-status"
                 value={statusFilter ?? ""}
                 placeholder={t.common.all}
-                options={(
-                  [
-                    "available",
-                    "occupied",
-                    "reserved",
-                    "dirty",
-                    "cleaning",
-                    "maintenance",
-                    "out_of_service",
-                    "attention",
-                  ] as BoardStatusFilter[]
-                ).map((s) => ({ value: s, label: b.status[s] }))}
+                options={[
+                  ...(
+                    [
+                      "available",
+                      "occupied",
+                      "reserved",
+                      "dirty",
+                      "cleaning",
+                      "maintenance",
+                      "out_of_service",
+                      "attention",
+                    ] as const
+                  ).map((s) => ({ value: s, label: b.status[s] })),
+                  { value: "maintenance_oos", label: b.maintOos },
+                ]}
                 onChange={(e) =>
                   setStatusFilter((e.target.value || null) as BoardStatusFilter | null)
                 }
@@ -268,7 +260,11 @@ export function RoomOperationalBoard() {
               </span>
             ) : null}
             {statusFilter ? (
-              <span className="chip">{b.status[statusFilter]}</span>
+              <span className="chip">
+                {statusFilter === "maintenance_oos"
+                  ? b.maintOos
+                  : b.status[statusFilter]}
+              </span>
             ) : null}
           </div>
         ) : null}
@@ -294,7 +290,7 @@ export function RoomOperationalBoard() {
           )}
           rooms={filteredRooms}
           onDetails={setDetails}
-          onChangeStatus={(room) => setStatusTarget(room)}
+          onEdit={(room) => setEditTarget(room)}
         />
       )}
 
@@ -324,13 +320,39 @@ export function RoomOperationalBoard() {
           load();
         }}
       />
-      <BulkRoomCreateModal
-        open={bulkOpen}
+      <RoomFormModal
+        open={editTarget !== null}
+        room={
+          editTarget
+            ? {
+                id: editTarget.id,
+                number: editTarget.number,
+                display_name: editTarget.display_name,
+                floor: editTarget.floor,
+                floor_name: editTarget.floor_name,
+                room_type: editTarget.room_type,
+                room_type_name: editTarget.room_type_name,
+                room_type_code: editTarget.room_type_code,
+                base_capacity: editTarget.base_capacity,
+                max_capacity: editTarget.max_capacity,
+                status: editTarget.operational_status,
+                status_note: editTarget.status_note,
+                status_changed_at: editTarget.status_changed_at,
+                status_changed_by: null,
+                is_active: editTarget.is_active,
+                created_at: "",
+                updated_at: "",
+              }
+            : undefined
+        }
         floors={floors}
         types={types}
-        existingNumbers={new Set(board.rooms.map((r) => r.number))}
-        onClose={() => setBulkOpen(false)}
-        onCreated={load}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => {
+          setEditTarget(null);
+          notify(t.rooms.saved);
+          load();
+        }}
       />
     </div>
   );

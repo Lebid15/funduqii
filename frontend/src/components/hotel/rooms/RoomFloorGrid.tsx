@@ -15,12 +15,12 @@ export function RoomFloorGrid({
   floors,
   rooms,
   onDetails,
-  onChangeStatus,
+  onEdit,
 }: {
   floors: RoomBoardFloor[];
   rooms: RoomBoardRoom[];
   onDetails: (room: RoomBoardRoom) => void;
-  onChangeStatus: (room: RoomBoardRoom) => void;
+  onEdit: (room: RoomBoardRoom) => void;
 }) {
   const { t } = useI18n();
   const b = t.rooms.board;
@@ -53,7 +53,7 @@ export function RoomFloorGrid({
                   key={room.id}
                   room={room}
                   onDetails={onDetails}
-                  onChangeStatus={onChangeStatus}
+                  onEdit={onEdit}
                 />
               ))}
             </div>
