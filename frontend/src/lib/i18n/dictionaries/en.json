@@ -780,7 +780,10 @@
       "checkOutDate": "Departure",
       "nights": "Nights",
       "details": "Details",
-      "checkOut": "Check out"
+      "checkOut": "Check out",
+      "extend": "Extend stay",
+      "shorten": "Shorten stay",
+      "move": "Move room"
     },
     "departures": {
       "empty": "No departures today",
@@ -807,12 +810,19 @@
       "body": "Confirm the guest is leaving. This frees the room (it becomes dirty for housekeeping).",
       "notes": "Notes",
       "reason": "Reason",
-      "financeNote": "Any billing or payment is handled in a later phase.",
+      "financeNote": "Charges and payments are settled in Finance — check-out requires a zero folio balance.",
       "submit": "Check out",
       "guest": "Guest",
       "room": "Room",
       "checkInDate": "Checked in",
-      "expectedCheckOut": "Expected departure"
+      "expectedCheckOut": "Expected departure",
+      "folio": "Folio",
+      "folioBalance": "Folio balance",
+      "folioNone": "This stay has no open folio.",
+      "folioOpenBtn": "Open folio",
+      "folioBlocked": "Check-out is blocked while the folio has an unsettled balance. Settle it in Finance first.",
+      "earlyDeparture": "Early departure — the expected check-out date has not arrived. A reason is required.",
+      "reasonRequired": "An early-departure reason is required."
     },
     "details": {
       "title": "Stay",
@@ -836,7 +846,12 @@
       "invalidCheckOut": "This stay cannot be checked out.",
       "roomOccupied": "This room is already occupied.",
       "roomNotReady": "This room is not ready for check-in.",
-      "alreadyCheckedIn": "This reservation room is already checked in."
+      "alreadyCheckedIn": "This reservation room is already checked in.",
+      "lineFull": "Every booked room of this reservation is already checked in — the booked quantity cannot be exceeded.",
+      "arrivalFuture": "This reservation's arrival date has not been reached yet (hotel business date).",
+      "invalidStayChange": "This stay change is not allowed.",
+      "folioOutstanding": "The folio has an unsettled balance — settle it in Finance before check-out.",
+      "earlyReasonRequired": "An early-departure reason is required."
     },
     "workflow": {
       "arrivalsTitle": "Arrivals today",
@@ -852,6 +867,32 @@
       "checkOutDesc": "Check out a departing guest and free the room.",
       "checkOutAction": "Start check-out",
       "view": "View"
+    },
+    "extendModal": {
+      "title": "Extend stay",
+      "currentCheckOut": "Current check-out",
+      "newCheckOut": "New check-out date",
+      "reason": "Reason (optional)",
+      "submit": "Extend"
+    },
+    "shortenModal": {
+      "title": "Shorten stay",
+      "currentCheckOut": "Current check-out",
+      "newCheckOut": "New check-out date",
+      "reason": "Reason (optional)",
+      "submit": "Shorten",
+      "chargesWarning": "Shortening the stay never deletes charges automatically — any financial correction happens in Finance."
+    },
+    "moveModal": {
+      "title": "Move room",
+      "currentRoom": "Current room",
+      "newRoom": "New room",
+      "selectRoom": "Select the new room",
+      "noRooms": "No ready, available rooms to move into right now.",
+      "reason": "Move reason (required)",
+      "reasonRequired": "A move reason is required.",
+      "roomRequired": "Select the new room first.",
+      "submit": "Move room"
     }
   },
   "finance": {

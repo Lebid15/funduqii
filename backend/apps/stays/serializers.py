@@ -97,6 +97,22 @@ class StayNotesSerializer(serializers.ModelSerializer):
         fields = ["check_in_notes", "check_out_notes"]
 
 
+class StayDateChangeSerializer(serializers.Serializer):
+    """Extend / shorten an in-house stay (the services enforce direction)."""
+
+    new_check_out_date = serializers.DateField()
+    reason = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+
+class StayMoveRoomSerializer(serializers.Serializer):
+    """Room move — the reason is mandatory."""
+
+    room = serializers.IntegerField()
+    reason = serializers.CharField(max_length=255, allow_blank=False)
+
+
 class StayStatusLogSerializer(serializers.Serializer):
     previous_status = serializers.CharField()
     new_status = serializers.CharField()

@@ -73,6 +73,16 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.roomNotReady;
     case "already_checked_in":
       return t.frontDesk.errors.alreadyCheckedIn;
+    case "reservation_line_full":
+      return t.frontDesk.errors.lineFull;
+    case "arrival_date_in_future":
+      return t.frontDesk.errors.arrivalFuture;
+    case "invalid_stay_change":
+      return t.frontDesk.errors.invalidStayChange;
+    case "folio_balance_outstanding":
+      return t.frontDesk.errors.folioOutstanding;
+    case "early_departure_reason_required":
+      return t.frontDesk.errors.earlyReasonRequired;
     case "folio_closed":
       return t.finance.errors.folioClosed;
     case "folio_not_balanced":
