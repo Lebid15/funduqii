@@ -665,7 +665,13 @@
       "copied": "Reservation number copied.",
       "noReservations": "No Reservations",
       "frontDeskLink": "Front Desk",
-      "searchPlaceholder": "Reservation no, guest name, phone, room number…"
+      "searchPlaceholder": "Reservation no, guest name, phone, room number…",
+      "chooseType": "Choose Reservation Type",
+      "instantTitle": "Immediate Reservation",
+      "instantDesc": "Create a reservation starting today or now.",
+      "futureTitle": "Future Reservation",
+      "futureDesc": "Create a reservation for a future arrival date.",
+      "emptyFiltered": "No reservations match the current filters."
     }
   },
   "guests": {

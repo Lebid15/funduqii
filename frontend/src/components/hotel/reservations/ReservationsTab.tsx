@@ -117,15 +117,24 @@ export function ReservationsTab({
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
-  // The page's "New Reservation" button pulses this prop — consume real
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [initialKind, setInitialKind] = useState<"instant" | "future" | null>(null);
+  // The page's "New Reservation" button pulses this prop — it opens the
+  // TYPE CHOOSER (instant vs future), never a hidden dropdown. Consume real
   // increments only (the initial value must not auto-open on mount).
   const lastSignal = useRef(createSignal);
   useEffect(() => {
     if (createSignal !== lastSignal.current) {
       lastSignal.current = createSignal;
-      setCreating(true);
+      setChooserOpen(true);
     }
   }, [createSignal]);
+
+  function chooseKind(kind: "instant" | "future") {
+    setChooserOpen(false);
+    setInitialKind(kind);
+    setCreating(true);
+  }
   // Switching views resets pagination and any conflicting bound filters.
   useEffect(() => {
     setPage(1);
@@ -133,14 +142,19 @@ export function ReservationsTab({
     if (view === "website") setSource("");
   }, [view]);
   const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
-  // Quick actions: ?action=new opens the EXISTING create modal once (with an
-  // optional preselected room from the operational board); ?action=find&q=
-  // focuses the list on a reservation number.
+  // Quick actions: with a preselected room (rooms board) the form opens
+  // DIRECTLY; without one, the type chooser opens first (owner UX).
+  // ?action=find&q= focuses the list on a reservation number.
   useQuickAction("new", (params) => {
     const room = params.get("room");
     const roomType = params.get("room_type");
-    setQuickLine(room && roomType ? { room, room_type: roomType } : null);
-    setCreating(true);
+    if (room && roomType) {
+      setQuickLine({ room, room_type: roomType });
+      setCreating(true);
+    } else {
+      setQuickLine(null);
+      setChooserOpen(true);
+    }
   });
   useQuickAction("find", (params) => {
     const q = params.get("q") ?? "";
@@ -398,15 +412,8 @@ export function ReservationsTab({
         rows.length === 0 ? (
           <EmptyState
             title={t.reservations.views.noReservations}
-            hint={t.reservations.list.emptyHint}
+            hint={t.reservations.views.emptyFiltered}
             icon={CalendarCheck}
-            action={
-              can("reservations.create") ? (
-                <Button icon={Plus} onClick={() => setCreating(true)}>
-                  {t.reservations.views.newReservation}
-                </Button>
-              ) : undefined
-            }
           />
         ) : (
           <>
@@ -425,12 +432,40 @@ export function ReservationsTab({
         )
       ) : null}
 
+      {/* Owner UX: choosing the reservation TYPE is an explicit modal with
+          two big cards — never a dropdown. Instant stays a RESERVATION
+          (check-in remains front-desk business). */}
+      <Modal
+        open={chooserOpen}
+        onClose={() => setChooserOpen(false)}
+        title={t.reservations.views.chooseType}
+        closeLabel={t.common.close}
+      >
+        <div className="choice-cards">
+          <button type="button" className="choice-card" onClick={() => chooseKind("instant")}>
+            <span className="choice-card__icon">
+              <Zap size={22} />
+            </span>
+            <strong>{t.reservations.views.instantTitle}</strong>
+            <span className="muted">{t.reservations.views.instantDesc}</span>
+          </button>
+          <button type="button" className="choice-card" onClick={() => chooseKind("future")}>
+            <span className="choice-card__icon">
+              <CalendarClock size={22} />
+            </span>
+            <strong>{t.reservations.views.futureTitle}</strong>
+            <span className="muted">{t.reservations.views.futureDesc}</span>
+          </button>
+        </div>
+      </Modal>
+
       <ReservationModal
         open={creating}
         types={types}
         initialLine={quickLine}
-        onClose={() => { setCreating(false); setQuickLine(null); }}
-        onSaved={() => { setCreating(false); setQuickLine(null); notify(t.reservations.saved); setPage(1); load(); onChanged?.(); }}
+        initialKind={initialKind}
+        onClose={() => { setCreating(false); setQuickLine(null); setInitialKind(null); }}
+        onSaved={() => { setCreating(false); setQuickLine(null); setInitialKind(null); notify(t.reservations.saved); setPage(1); load(); onChanged?.(); }}
       />
       <ReservationModal
         open={editing !== null}
@@ -478,6 +513,7 @@ function ReservationModal({
   reservation,
   types,
   initialLine,
+  initialKind,
   onClose,
   onSaved,
 }: {
@@ -486,6 +522,10 @@ function ReservationModal({
   types: RoomType[];
   /** Optional preselected room line (operational board deep-link). */
   initialLine?: { room_type: string; room: string } | null;
+  /** Optional booking kind from the type-chooser cards (owner UX): instant
+   * starts today (hotel business rules re-validate server-side), future
+   * leaves the arrival date for the user to pick. */
+  initialKind?: "instant" | "future" | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -518,8 +558,11 @@ function ReservationModal({
 
   useEffect(() => {
     if (!open) return;
-    setBookingKind(reservation?.booking_kind ?? "instant");
-    setCheckIn(reservation?.check_in_date ?? todayISO());
+    const kind = reservation?.booking_kind ?? initialKind ?? "instant";
+    setBookingKind(kind);
+    // Future bookings leave the arrival date to the user; instant starts
+    // today (still a RESERVATION — check-in stays front-desk business).
+    setCheckIn(reservation?.check_in_date ?? (kind === "future" ? "" : todayISO()));
     setCheckOut(reservation?.check_out_date ?? "");
     setArrivalTime(reservation?.expected_arrival_time ?? "");
     setName(reservation?.primary_guest_name ?? "");
@@ -558,7 +601,7 @@ function ReservationModal({
     listRooms({ page_size: 200 })
       .then((r) => setRooms(r.results))
       .catch(() => setRooms([]));
-  }, [open, reservation, initialLine]);
+  }, [open, reservation, initialLine, initialKind]);
 
   // Instant bookings start today; switching kinds keeps the dates honest.
   function changeKind(kind: "instant" | "future") {

@@ -665,7 +665,13 @@
       "copied": "Rezervasyon numarası kopyalandı.",
       "noReservations": "Rezervasyon Yok",
       "frontDeskLink": "Giriş ve Çıkış",
-      "searchPlaceholder": "Rezervasyon no, misafir adı, telefon, oda numarası…"
+      "searchPlaceholder": "Rezervasyon no, misafir adı, telefon, oda numarası…",
+      "chooseType": "Rezervasyon Türünü Seç",
+      "instantTitle": "Anlık Rezervasyon",
+      "instantDesc": "Bugün veya şimdi başlayan bir rezervasyon oluştur.",
+      "futureTitle": "Gelecek Rezervasyon",
+      "futureDesc": "Gelecek varış tarihi için rezervasyon oluştur.",
+      "emptyFiltered": "Mevcut filtrelerle eşleşen rezervasyon yok."
     }
   },
   "guests": {
