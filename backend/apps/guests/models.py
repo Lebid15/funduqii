@@ -47,6 +47,32 @@ class Guest(models.Model):
     notes = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
 
+    # --- VIP (final closure) — a simple flag, no tiers/loyalty/money. ------
+    is_vip = models.BooleanField(default=False)
+    vip_marked_at = models.DateTimeField(null=True, blank=True)
+    vip_marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="guests_vip_marked",
+    )
+
+    # --- Hotel-scoped block (final closure). The CURRENT block lives here;
+    # the full history (old reasons survive an unblock) lives in
+    # GuestBlockLog. Guest rows are per-hotel, so this can never leak into
+    # or block another hotel.
+    is_blocked = models.BooleanField(default=False)
+    block_reason = models.CharField(max_length=255, blank=True, default="")
+    blocked_at = models.DateTimeField(null=True, blank=True)
+    blocked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="guests_blocked",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -79,3 +105,41 @@ class Guest(models.Model):
 
     def __str__(self) -> str:
         return f"{self.full_name} (hotel={self.hotel_id})"
+
+
+class GuestBlockAction(models.TextChoices):
+    BLOCKED = "blocked", "Blocked"
+    UNBLOCKED = "unblocked", "Unblocked"
+
+
+class GuestBlockLog(models.Model):
+    """Immutable history of block/unblock actions on a guest.
+
+    Unblocking clears the CURRENT block fields on ``Guest`` but never touches
+    these rows — the old reason, actor and time survive forever.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel", on_delete=models.CASCADE, related_name="guest_block_logs"
+    )
+    guest = models.ForeignKey(
+        Guest, on_delete=models.CASCADE, related_name="block_logs"
+    )
+    action = models.CharField(max_length=16, choices=GuestBlockAction.choices)
+    # Mandatory for `blocked`; an optional note for `unblocked`.
+    reason = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="guest_block_log_entries",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "guest_block_logs"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"guest={self.guest_id} {self.action}"

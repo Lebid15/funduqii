@@ -83,6 +83,10 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.folioOutstanding;
     case "early_departure_reason_required":
       return t.frontDesk.errors.earlyReasonRequired;
+    case "guest_blocked":
+      return t.guests.errors.blocked;
+    case "block_reason_required":
+      return t.guests.errors.blockReasonRequired;
     case "folio_closed":
       return t.finance.errors.folioClosed;
     case "folio_not_balanced":

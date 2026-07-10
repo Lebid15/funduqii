@@ -76,6 +76,22 @@ def create_reservation(hotel, *, lines, status, user, **fields) -> Reservation:
     check_in = fields["check_in_date"]
     check_out = fields["check_out_date"]
 
+    # Guests final closure: a guest blocked in THIS hotel gets no new
+    # bookings. Reservations hold snapshots (no guest FK), so the guard
+    # matches by exact document/phone — a fresh Guest row for the same
+    # person cannot sidestep the block. Applies to every flow that creates
+    # a reservation (console, wizard, instant, public site).
+    from apps.common.exceptions import GuestBlocked
+    from apps.guests.services import find_blocked_guest_matching
+
+    blocked = find_blocked_guest_matching(
+        hotel,
+        phone=fields.get("primary_guest_phone", ""),
+        document_number=fields.get("primary_guest_document_number", ""),
+    )
+    if blocked is not None:
+        raise GuestBlocked({"guest": blocked.id})
+
     if status in (ReservationStatus.HELD, ReservationStatus.CONFIRMED):
         AvailabilityService.ensure_can_book(
             hotel, _book_payload(lines), check_in, check_out

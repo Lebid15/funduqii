@@ -746,7 +746,55 @@
     "deleteTitle": "حذف النزيل",
     "deleteBody": "النزيل المرتبط بإقامة يُعطَّل بدل الحذف.",
     "active": "نشط",
-    "inactive": "غير نشط"
+    "inactive": "غير نشط",
+    "directory": {
+      "residency": "الإقامة",
+      "resident": "مقيم الآن",
+      "notResident": "غير مقيم",
+      "stays": "الإقامات",
+      "lastStay": "آخر إقامة",
+      "repeat": "متكرر",
+      "firstTime": "جديد",
+      "openProfile": "فتح الملف",
+      "empty": "لا نزلاء بعد",
+      "emptyHint": "يظهر هنا كل نزيل له إقامة واحدة على الأقل — حالية أو سابقة."
+    },
+    "profile": {
+      "title": "ملف النزيل",
+      "nights": "الليالي",
+      "firstStay": "أول إقامة",
+      "currentStay": "الإقامة الحالية",
+      "openFrontDesk": "فتح الاستقبال",
+      "openFolio": "فتح الفوليو",
+      "stayHistory": "سجل الإقامات",
+      "noStays": "لا إقامات مسجلة.",
+      "currentBadge": "حالية"
+    },
+    "vip": {
+      "badge": "VIP",
+      "mark": "تمييز VIP",
+      "unmark": "إلغاء VIP"
+    },
+    "block": {
+      "badge": "محظور",
+      "block": "حظر النزيل",
+      "unblock": "فك الحظر",
+      "title": "حظر النزيل",
+      "reason": "سبب الحظر (إلزامي)",
+      "reasonRequired": "سبب الحظر إلزامي.",
+      "scopeNote": "الحظر داخل هذا الفندق فقط، ويمنع الحجز وتسجيل الدخول حتى فكّه.",
+      "activeNotice": "هذا النزيل محظور في هذا الفندق",
+      "blockedToast": "تم حظر النزيل.",
+      "unblocked": "تم فك الحظر."
+    },
+    "deleteResult": {
+      "deleted": "حُذف الملف نهائيًا (لا سجل تاريخي له).",
+      "deactivated": "عُطّل الملف فقط — السجل التاريخي محفوظ."
+    },
+    "errors": {
+      "blocked": "هذا النزيل محظور في هذا الفندق — لا يمكن إتمام العملية.",
+      "blockReasonRequired": "سبب الحظر إلزامي."
+    }
   },
   "frontDesk": {
     "nav": "الاستقبال",

@@ -428,6 +428,25 @@ class EarlyDepartureReasonRequired(FunduqiiAPIException):
     default_code = "early_departure_reason_required"
 
 
+# --- Guests (final closure round) --------------------------------------------
+
+
+class GuestBlocked(FunduqiiAPIException):
+    """A guest blocked in THIS hotel cannot receive new reservations or
+    check-ins. The block reason is never included here — it is only visible
+    to holders of the block permission on the guest profile."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This guest is blocked in this hotel."
+    default_code = "guest_blocked"
+
+
+class BlockReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to block a guest."
+    default_code = "block_reason_required"
+
+
 # --- Finance (Phase 8) ------------------------------------------------------
 
 

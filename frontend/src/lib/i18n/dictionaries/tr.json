@@ -746,7 +746,55 @@
     "deleteTitle": "Misafiri sil",
     "deleteBody": "Bir konaklamaya bağlı misafir silinmez, pasifleştirilir.",
     "active": "Aktif",
-    "inactive": "Pasif"
+    "inactive": "Pasif",
+    "directory": {
+      "residency": "Konaklama",
+      "resident": "Şu an konaklıyor",
+      "notResident": "Konaklamıyor",
+      "stays": "Konaklamalar",
+      "lastStay": "Son konaklama",
+      "repeat": "Tekrarlayan",
+      "firstTime": "Yeni",
+      "openProfile": "Profili aç",
+      "empty": "Henüz misafir yok",
+      "emptyHint": "En az bir konaklaması olan her misafir — mevcut veya geçmiş — burada görünür."
+    },
+    "profile": {
+      "title": "Misafir profili",
+      "nights": "Geceler",
+      "firstStay": "İlk konaklama",
+      "currentStay": "Mevcut konaklama",
+      "openFrontDesk": "Ön büroyu aç",
+      "openFolio": "Folyoyu aç",
+      "stayHistory": "Konaklama geçmişi",
+      "noStays": "Kayıtlı konaklama yok.",
+      "currentBadge": "Mevcut"
+    },
+    "vip": {
+      "badge": "VIP",
+      "mark": "VIP yap",
+      "unmark": "VIP kaldır"
+    },
+    "block": {
+      "badge": "Engelli",
+      "block": "Misafiri engelle",
+      "unblock": "Engeli kaldır",
+      "title": "Misafiri engelle",
+      "reason": "Engelleme sebebi (zorunlu)",
+      "reasonRequired": "Engelleme sebebi zorunludur.",
+      "scopeNote": "Engel yalnızca BU otel içinde geçerlidir; kaldırılana kadar rezervasyonu ve girişi önler.",
+      "activeNotice": "Bu misafir bu otelde engelli",
+      "blockedToast": "Misafir engellendi.",
+      "unblocked": "Engel kaldırıldı."
+    },
+    "deleteResult": {
+      "deleted": "Profil kalıcı olarak silindi (geçmişi yok).",
+      "deactivated": "Profil yalnızca devre dışı bırakıldı — geçmiş korunur."
+    },
+    "errors": {
+      "blocked": "Bu misafir bu otelde engelli — işlem yapılamaz.",
+      "blockReasonRequired": "Engelleme sebebi zorunludur."
+    }
   },
   "frontDesk": {
     "nav": "Ön büro",

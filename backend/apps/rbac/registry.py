@@ -20,7 +20,17 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     ],
     "availability": ["view"],
     "rooms": ["view", "create", "update", "delete", "status_update"],
-    "guests": ["view", "create", "update", "delete"],
+    # Guests final closure: VIP/block/sensitive-data are deliberately separate
+    # codes — never bundled under guests.update.
+    "guests": [
+        "view",
+        "create",
+        "update",
+        "delete",
+        "mark_vip",
+        "block",
+        "view_sensitive_data",
+    ],
     # Front-desk operations (Phase 7). The reservations.check_in/check_out codes
     # above are vestigial blueprint entries and are NOT used; front-desk uses
     # these explicit stays.* codes instead. extend/shorten/move_room arrived

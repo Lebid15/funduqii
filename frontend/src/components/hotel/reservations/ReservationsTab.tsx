@@ -732,7 +732,11 @@ function ReservationModal({
     setEmail(guest.email ?? "");
     setNationality(guest.nationality ?? "");
     if (guest.document_type) setDocType(guest.document_type);
-    if (guest.document_number) setDocNumber(guest.document_number);
+    // A MASKED document number (no sensitive-data permission) must never be
+    // copied into the reservation snapshot — leave it for manual entry.
+    if (guest.document_number && !guest.document_number.includes("•")) {
+      setDocNumber(guest.document_number);
+    }
   }
 
   const isInstant = !editing && bookingKind === "instant";
