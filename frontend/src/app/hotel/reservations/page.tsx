@@ -1,54 +1,131 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CalendarCheck, CalendarSearch, LayoutDashboard } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarPlus,
+  CalendarRange,
+  CalendarSearch,
+  CalendarX2,
+  CheckCircle2,
+  Clock3,
+  Globe,
+  Plus,
+} from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
-import { PageHeader, Tabs, type TabItem } from "@/components/ui";
+import { Button, PageHeader, Tabs, type TabItem } from "@/components/ui";
 import {
   AvailabilityTab,
-  OverviewTab,
+  ReservationSummaryCards,
   ReservationsTab,
 } from "@/components/hotel/reservations";
+import {
+  RESERVATION_VIEWS,
+  type ReservationView,
+} from "@/components/hotel/reservations/reservationViews";
+import { useGlobalRefresh } from "@/lib/globalRefresh";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+type PageTab = ReservationView | "availability";
+
+const PAGE_TABS: PageTab[] = [...RESERVATION_VIEWS, "availability"];
+
+/** Legacy deep-link tabs (sidebar/quick actions used ?tab=reservations and
+ * the old overview) — they land on "all" so nothing breaks. */
+function normalizeTab(requested: string | null): PageTab | null {
+  if (!requested) return null;
+  if (requested === "reservations" || requested === "overview") return "all";
+  return PAGE_TABS.includes(requested as PageTab)
+    ? (requested as PageTab)
+    : null;
+}
 
 /**
- * Reservations console (Phase 6): the hotel's internal booking system and
- * availability engine. Bookings only — no check-in/out, no guest profiles, no
- * money. Availability and overbooking are decided on the backend.
+ * Reservations console (owner reorg): reservations are BOOKINGS only —
+ * creating, tracking, confirming, cancelling — never stays or check-in/out
+ * (those live in the front desk). Seven filtered views + the availability
+ * engine, clickable summary counters, and one clear "New Reservation"
+ * button at the top.
  */
-const TAB_KEYS = ["overview", "availability", "reservations"];
-
 export default function ReservationsPage() {
   const { t } = useI18n();
-  // Deep-linkable tab (?tab=reservations — the topbar quick actions): initial
-  // read + follow URL changes so a quick action fired while ALREADY on this
-  // page still lands on its tab. Manual tab clicks stay local as before.
+  const access = useHotelAccess();
+  const v = t.reservations.views;
+
   const searchParams = useSearchParams();
   const requested = searchParams.get("tab");
   const search = searchParams.toString();
-  const [tab, setTab] = useState(
-    requested && TAB_KEYS.includes(requested) ? requested : "overview",
-  );
+  const [tab, setTab] = useState<PageTab>(normalizeTab(requested) ?? "all");
+  const [createSignal, setCreateSignal] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [countsReload, setCountsReload] = useState(0);
+
+  // Follow tab deep-links even while mounted (quick actions from the topbar
+  // or the rooms board while already on this page).
   useEffect(() => {
-    if (requested && TAB_KEYS.includes(requested)) setTab(requested);
+    const next = normalizeTab(requested);
+    if (next) setTab(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is the trigger
   }, [search]);
 
+  useGlobalRefresh(useCallback(() => setRefreshKey((k) => k + 1), []));
+
+  const canCreate =
+    access === null || (!access.loading && access.can("reservations.create"));
+
+  function newReservation() {
+    if (tab === "availability") setTab("all");
+    setCreateSignal((s) => s + 1);
+  }
+
   const tabs: TabItem[] = [
-    { key: "overview", label: t.reservations.tabs.overview, icon: LayoutDashboard },
+    { key: "all", label: v.tabs.all, icon: CalendarCheck },
+    { key: "today", label: v.tabs.today, icon: CalendarPlus },
+    { key: "website", label: v.tabs.website, icon: Globe },
+    { key: "future", label: v.tabs.future, icon: CalendarRange },
+    { key: "pending", label: v.tabs.pending, icon: Clock3 },
+    { key: "confirmed", label: v.tabs.confirmed, icon: CheckCircle2 },
+    { key: "closed", label: v.tabs.closed, icon: CalendarX2 },
     { key: "availability", label: t.reservations.tabs.availability, icon: CalendarSearch },
-    { key: "reservations", label: t.reservations.tabs.reservations, icon: CalendarCheck },
   ];
 
   return (
     <PageContainer>
-      <PageHeader title={t.reservations.title} subtitle={t.reservations.subtitle} />
-      <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "overview" ? <OverviewTab /> : null}
-      {tab === "availability" ? <AvailabilityTab /> : null}
-      {tab === "reservations" ? <ReservationsTab /> : null}
+      <PageHeader
+        title={t.reservations.title}
+        subtitle={v.subtitle}
+        actions={
+          canCreate ? (
+            <Button icon={Plus} onClick={newReservation}>
+              {v.newReservation}
+            </Button>
+          ) : undefined
+        }
+      />
+
+      <ReservationSummaryCards
+        active={tab === "availability" ? "all" : tab}
+        onSelect={(view) => setTab(view)}
+        reloadKey={refreshKey + countsReload}
+      />
+
+      <Tabs tabs={tabs} active={tab} onChange={(key) => setTab(key as PageTab)} />
+
+      {/* The list stays MOUNTED across tab switches (hidden under the
+          availability tab) so its filters, modal state and the create
+          signal survive; only the global refresh remounts it. */}
+      <div style={{ display: tab === "availability" ? "none" : undefined }}>
+        <ReservationsTab
+          key={refreshKey}
+          view={tab === "availability" ? "all" : tab}
+          createSignal={createSignal}
+          onChanged={() => setCountsReload((c) => c + 1)}
+        />
+      </div>
+      {tab === "availability" ? <AvailabilityTab key={refreshKey} /> : null}
     </PageContainer>
   );
 }

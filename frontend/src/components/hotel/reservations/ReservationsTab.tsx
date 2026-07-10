@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import Link from "next/link";
 
 import { useQuickAction } from "@/lib/useQuickAction";
 import {
@@ -8,10 +16,13 @@ import {
   CalendarCheck,
   CalendarClock,
   ClipboardCheck,
+  Copy,
+  DoorOpen,
   MessageSquareText,
   Plus,
   Trash2,
   UserRound,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -30,7 +41,6 @@ import {
   Modal,
   Pagination,
   SectionCard,
-  SectionHeader,
   Select,
   StepSummaryCard,
   Textarea,
@@ -59,28 +69,69 @@ import type {
 } from "@/lib/api/types";
 import { formatDate, reservationStatusLabel, reservationStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import {
+  STATUS_BOUND_VIEWS,
+  VIEW_PARAMS,
+  type ReservationView,
+} from "./reservationViews";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["held", "confirmed", "cancelled", "expired"] as const;
+const SOURCES = ["direct", "phone", "walk_in", "public_website", "other"] as const;
 
-export function ReservationsTab() {
+/** The reservations LIST (owner reorg): one component serves all seven
+ * views — bookings only, never stays/check-ins. Props come from the page:
+ * the active view, a create signal from the page's "New Reservation"
+ * button, and a change callback so the summary counters stay honest. */
+export function ReservationsTab({
+  view = "all",
+  createSignal = 0,
+  onChanged,
+}: {
+  view?: ReservationView;
+  createSignal?: number;
+  onChanged?: () => void;
+}) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const access = useHotelAccess();
+  const can = (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
 
   const [types, setTypes] = useState<RoomType[]>([]);
   const [rows, setRows] = useState<Reservation[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
+  const [source, setSource] = useState("");
   const [type, setType] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  // The page's "New Reservation" button pulses this prop — consume real
+  // increments only (the initial value must not auto-open on mount).
+  const lastSignal = useRef(createSignal);
+  useEffect(() => {
+    if (createSignal !== lastSignal.current) {
+      lastSignal.current = createSignal;
+      setCreating(true);
+    }
+  }, [createSignal]);
+  // Switching views resets pagination and any conflicting bound filters.
+  useEffect(() => {
+    setPage(1);
+    if (STATUS_BOUND_VIEWS.includes(view)) setStatus("");
+    if (view === "website") setSource("");
+  }, [view]);
   const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
   // Quick actions: ?action=new opens the EXISTING create modal once (with an
   // optional preselected room from the operational board); ?action=find&q=
@@ -112,11 +163,16 @@ export function ReservationsTab() {
     setError(null);
     try {
       const data = await listReservations({
+        // The view's own slice first — user filters narrow WITHIN it.
+        ...VIEW_PARAMS[view],
         page,
-        status: status || undefined,
+        status: status || VIEW_PARAMS[view].status,
+        source: source || VIEW_PARAMS[view].source,
         room_type: type ? Number(type) : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        created_from: createdFrom || undefined,
+        created_to: createdTo || undefined,
         search: query || undefined,
       });
       setRows(data.results);
@@ -126,13 +182,22 @@ export function ReservationsTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, type, dateFrom, dateTo, query, t]);
+  }, [view, page, status, source, type, dateFrom, dateTo, createdFrom, createdTo, query, t]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
+  const hasFilters =
+    status !== "" ||
+    source !== "" ||
+    type !== "" ||
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    createdFrom !== "" ||
+    createdTo !== "" ||
+    query !== "";
 
   function applySearch(event: FormEvent) {
     event.preventDefault();
@@ -140,13 +205,36 @@ export function ReservationsTab() {
     setQuery(search);
   }
 
+  function clearFilters() {
+    setStatus("");
+    setSource("");
+    setType("");
+    setDateFrom("");
+    setDateTo("");
+    setCreatedFrom("");
+    setCreatedTo("");
+    setSearch("");
+    setQuery("");
+    setPage(1);
+  }
+
   async function confirm(r: Reservation) {
     try {
       await confirmReservation(r.id);
       notify(t.reservations.saved);
       load();
+      onChanged?.();
     } catch (err) {
       notify(messageForError(err, t), "error");
+    }
+  }
+
+  async function copyNumber(r: Reservation) {
+    try {
+      await navigator.clipboard.writeText(r.reservation_number);
+      notify(t.reservations.views.copied);
+    } catch {
+      notify(r.reservation_number);
     }
   }
 
@@ -154,10 +242,30 @@ export function ReservationsTab() {
     value: s,
     label: reservationStatusLabel(s, t),
   }));
+  const sourceOptions = SOURCES.map((s) => ({
+    value: s,
+    label: t.reservations.source[s],
+  }));
   const typeOptions = types.map((ty) => ({ value: String(ty.id), label: ty.name }));
 
   const columns: Column<Reservation>[] = [
-    { key: "reservation_number", header: t.reservations.list.number },
+    {
+      key: "reservation_number",
+      header: t.reservations.list.number,
+      render: (r) => (
+        <span className="cluster">
+          <strong>{r.reservation_number}</strong>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={Copy}
+            onClick={() => copyNumber(r)}
+          >
+            {""}
+          </Button>
+        </span>
+      ),
+    },
     {
       key: "guest",
       header: t.reservations.list.guest,
@@ -169,15 +277,34 @@ export function ReservationsTab() {
       ),
     },
     {
+      key: "source",
+      header: t.reservations.views.sourceLabel,
+      render: (r) => (
+        <Badge tone={r.source === "public_website" ? "info" : "neutral"}>
+          {t.reservations.source[r.source] ?? r.source}
+        </Badge>
+      ),
+    },
+    {
       key: "dates",
       header: t.reservations.list.dates,
       render: (r) => `${formatDate(r.check_in_date, locale)} → ${formatDate(r.check_out_date, locale)}`,
     },
     { key: "nights", header: t.reservations.list.nights, render: (r) => r.nights },
     {
+      key: "guests_count",
+      header: t.reservations.views.guestsCount,
+      render: (r) => r.total_guests,
+    },
+    {
       key: "rooms",
       header: t.reservations.list.rooms,
       render: (r) => r.lines.reduce((sum, l) => sum + l.quantity, 0),
+    },
+    {
+      key: "created",
+      header: t.reservations.views.createdAt,
+      render: (r) => formatDate(r.created_at, locale),
     },
     {
       key: "status",
@@ -197,12 +324,19 @@ export function ReservationsTab() {
           <Button variant="secondary" size="sm" onClick={() => setDetails(r)}>
             {t.reservations.list.view}
           </Button>
-          {r.status === "held" ? (
+          {r.status === "held" && can("reservations.confirm") ? (
             <Button variant="ghost" size="sm" onClick={() => confirm(r)}>
               {t.reservations.list.confirm}
             </Button>
           ) : null}
-          {r.status === "held" || r.status === "confirmed" ? (
+          {(r.status === "held" || r.status === "confirmed") &&
+          can("reservations.update") ? (
+            <Button variant="ghost" size="sm" onClick={() => setEditing(r)}>
+              {t.common.edit}
+            </Button>
+          ) : null}
+          {(r.status === "held" || r.status === "confirmed") &&
+          can("reservations.cancel") ? (
             <Button variant="danger" size="sm" onClick={() => setCancelTarget(r)}>
               {t.reservations.list.cancel}
             </Button>
@@ -214,21 +348,22 @@ export function ReservationsTab() {
 
   return (
     <>
-      <SectionHeader
-        title={t.reservations.list.title}
-        icon={CalendarCheck}
-        actions={<Button icon={Plus} onClick={() => setCreating(true)}>{t.reservations.list.add}</Button>}
-      />
-
       <Card>
         <form onSubmit={applySearch}>
           <FilterBar>
             <FormField label={t.common.search} htmlFor="res-search">
-              <Input id="res-search" value={search} placeholder={t.reservations.list.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
+              <Input id="res-search" value={search} placeholder={t.reservations.views.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
             </FormField>
-            <FormField label={t.reservations.list.filterStatus} htmlFor="res-status">
-              <Select id="res-status" value={status} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatus(e.target.value); }} />
-            </FormField>
+            {!STATUS_BOUND_VIEWS.includes(view) ? (
+              <FormField label={t.reservations.list.filterStatus} htmlFor="res-status">
+                <Select id="res-status" value={status} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatus(e.target.value); }} />
+              </FormField>
+            ) : null}
+            {view !== "website" ? (
+              <FormField label={t.reservations.views.sourceLabel} htmlFor="res-source">
+                <Select id="res-source" value={source} placeholder={t.common.all} options={sourceOptions} onChange={(e) => { setPage(1); setSource(e.target.value); }} />
+              </FormField>
+            ) : null}
             <FormField label={t.reservations.list.filterType} htmlFor="res-type">
               <Select id="res-type" value={type} placeholder={t.common.all} options={typeOptions} onChange={(e) => { setPage(1); setType(e.target.value); }} />
             </FormField>
@@ -238,6 +373,19 @@ export function ReservationsTab() {
             <FormField label={t.reservations.list.dateTo} htmlFor="res-to">
               <Input id="res-to" type="date" value={dateTo} onChange={(e) => { setPage(1); setDateTo(e.target.value); }} />
             </FormField>
+            <FormField label={t.reservations.views.createdFrom} htmlFor="res-created-from">
+              <Input id="res-created-from" type="date" value={createdFrom} onChange={(e) => { setPage(1); setCreatedFrom(e.target.value); }} />
+            </FormField>
+            <FormField label={t.reservations.views.createdTo} htmlFor="res-created-to">
+              <Input id="res-created-to" type="date" value={createdTo} onChange={(e) => { setPage(1); setCreatedTo(e.target.value); }} />
+            </FormField>
+            {hasFilters ? (
+              <div className="filter-bar__actions cluster">
+                <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>
+                  {t.rooms.board.clearFilters}
+                </Button>
+              </div>
+            ) : null}
           </FilterBar>
         </form>
       </Card>
@@ -249,10 +397,16 @@ export function ReservationsTab() {
       {!loading && !error ? (
         rows.length === 0 ? (
           <EmptyState
-            title={t.reservations.list.empty}
+            title={t.reservations.views.noReservations}
             hint={t.reservations.list.emptyHint}
             icon={CalendarCheck}
-            action={<Button icon={Plus} onClick={() => setCreating(true)}>{t.reservations.list.add}</Button>}
+            action={
+              can("reservations.create") ? (
+                <Button icon={Plus} onClick={() => setCreating(true)}>
+                  {t.reservations.views.newReservation}
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <>
@@ -276,14 +430,14 @@ export function ReservationsTab() {
         types={types}
         initialLine={quickLine}
         onClose={() => { setCreating(false); setQuickLine(null); }}
-        onSaved={() => { setCreating(false); setQuickLine(null); notify(t.reservations.saved); setPage(1); load(); }}
+        onSaved={() => { setCreating(false); setQuickLine(null); notify(t.reservations.saved); setPage(1); load(); onChanged?.(); }}
       />
       <ReservationModal
         open={editing !== null}
         reservation={editing ?? undefined}
         types={types}
         onClose={() => setEditing(null)}
-        onSaved={() => { setEditing(null); notify(t.reservations.saved); load(); }}
+        onSaved={() => { setEditing(null); notify(t.reservations.saved); load(); onChanged?.(); }}
       />
       <DetailsModal
         open={details !== null}
@@ -297,7 +451,7 @@ export function ReservationsTab() {
         open={cancelTarget !== null}
         reservation={cancelTarget ?? undefined}
         onClose={() => setCancelTarget(null)}
-        onDone={() => { setCancelTarget(null); notify(t.reservations.saved); load(); }}
+        onDone={() => { setCancelTarget(null); notify(t.reservations.saved); load(); onChanged?.(); }}
       />
     </>
   );
@@ -788,6 +942,14 @@ function DetailsModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>{t.common.close}</Button>
+          {/* A LIGHT operational link only (owner rule): check-in/out stay
+              front-desk business — never actions inside reservations. */}
+          {r.status === "confirmed" ? (
+            <Link href="/hotel/front-desk?tab=arrivals" className="btn btn--ghost btn--sm">
+              <DoorOpen size={16} />
+              {t.reservations.views.frontDeskLink}
+            </Link>
+          ) : null}
           {editable ? <Button variant="ghost" onClick={() => onEdit(r)}>{t.reservations.details.edit}</Button> : null}
           {r.status === "held" ? <Button onClick={() => onConfirm(r)}>{t.reservations.details.confirm}</Button> : null}
           {editable ? <Button variant="danger" onClick={() => onCancel(r)}>{t.reservations.details.cancel}</Button> : null}

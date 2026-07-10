@@ -8,6 +8,9 @@ money.
 """
 from __future__ import annotations
 
+import datetime
+from zoneinfo import ZoneInfo
+
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.request import Request
@@ -21,7 +24,7 @@ from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
 from .availability import AvailabilityService, blocking_q
-from .models import Reservation, ReservationStatus
+from .models import Reservation, ReservationSource, ReservationStatus
 from .serializers import (
     AvailabilityQuerySerializer,
     CancelReservationSerializer,
@@ -59,6 +62,25 @@ def _get_reservation(request: Request, pk: int) -> Reservation:
     return generics.get_object_or_404(Reservation, pk=pk, hotel=request.hotel)
 
 
+def _business_day_range(hotel) -> tuple[datetime.datetime, datetime.datetime]:
+    """The [start, end) datetimes of the hotel's CURRENT business date, in the
+    hotel's timezone — "created today" must follow the hotel clock, never the
+    client's (reservations section reorg)."""
+    from apps.shifts.services import get_business_date
+
+    day = get_business_date(hotel)
+    tz_name = ""
+    hotel_settings = getattr(hotel, "settings", None)
+    if hotel_settings is not None:
+        tz_name = (hotel_settings.timezone or "").strip()
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.get_current_timezone()
+    except (ValueError, KeyError):
+        tz = timezone.get_current_timezone()
+    start = datetime.datetime.combine(day, datetime.time.min, tzinfo=tz)
+    return start, start + datetime.timedelta(days=1)
+
+
 # --- Reservations -----------------------------------------------------------
 
 
@@ -82,9 +104,25 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         if status_filter in valid:
             qs = qs.filter(status=status_filter)
 
+        # Comma-separated multi-status (e.g. cancelled,expired) — validated
+        # against the real choices (reservations section reorg, read-only).
+        statuses = params.get("statuses")
+        if statuses:
+            wanted = [s for s in statuses.split(",") if s in valid]
+            if wanted:
+                qs = qs.filter(status__in=wanted)
+
+        source = params.get("source")
+        if source in {c for c, _ in ReservationSource.choices}:
+            qs = qs.filter(source=source)
+
         room_type = params.get("room_type")
         if room_type and str(room_type).isdigit():
             qs = qs.filter(lines__room_type_id=int(room_type)).distinct()
+
+        room = params.get("room")
+        if room and str(room).isdigit():
+            qs = qs.filter(lines__room_id=int(room)).distinct()
 
         date_from = params.get("date_from")
         date_to = params.get("date_to")
@@ -93,12 +131,32 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         if date_to:
             qs = qs.filter(check_in_date__lt=date_to)
 
+        # Creation-date filters (owner reorg: "today's reservations" =
+        # CREATED today, per the hotel business date — not arrivals).
+        if params.get("created_today") == "true":
+            start, end = _business_day_range(self.request.hotel)
+            qs = qs.filter(created_at__gte=start, created_at__lt=end)
+        created_from = params.get("created_from")
+        if created_from:
+            qs = qs.filter(created_at__date__gte=created_from)
+        created_to = params.get("created_to")
+        if created_to:
+            qs = qs.filter(created_at__date__lte=created_to)
+
+        # Future view: arrival strictly after the hotel business date.
+        if params.get("upcoming") == "true":
+            from apps.shifts.services import get_business_date
+
+            qs = qs.filter(check_in_date__gt=get_business_date(self.request.hotel))
+
         search = params.get("search")
         if search:
             qs = (
                 qs.filter(reservation_number__icontains=search)
                 | qs.filter(primary_guest_name__icontains=search)
                 | qs.filter(primary_guest_phone__icontains=search)
+                # Room-number search reaches assigned room lines.
+                | qs.filter(lines__room__number__icontains=search)
             )
         return qs.distinct()
 

@@ -644,6 +644,28 @@
       "card": "Kart",
       "bank_transfer": "Havale",
       "other": "Diğer"
+    },
+    "views": {
+      "subtitle": "Manuel rezervasyonları, web sitesi rezervasyonlarını ve gelecek rezervasyonları yönetin.",
+      "newReservation": "Yeni Rezervasyon",
+      "tabs": {
+        "all": "Tüm Rezervasyonlar",
+        "today": "Bugünkü Rezervasyonlar",
+        "website": "Web Sitesi Rezervasyonları",
+        "future": "Gelecek Rezervasyonlar",
+        "pending": "Onay Bekliyor",
+        "confirmed": "Onaylandı",
+        "closed": "İptal / Reddedildi"
+      },
+      "sourceLabel": "Rezervasyon Kaynağı",
+      "createdAt": "Oluşturma Tarihi",
+      "createdFrom": "Oluşturma (Başlangıç)",
+      "createdTo": "Oluşturma (Bitiş)",
+      "guestsCount": "Misafir Sayısı",
+      "copied": "Rezervasyon numarası kopyalandı.",
+      "noReservations": "Rezervasyon Yok",
+      "frontDeskLink": "Giriş ve Çıkış",
+      "searchPlaceholder": "Rezervasyon no, misafir adı, telefon, oda numarası…"
     }
   },
   "guests": {
