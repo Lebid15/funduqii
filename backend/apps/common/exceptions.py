@@ -561,6 +561,79 @@ class ActiveInvoiceExists(FunduqiiAPIException):
     default_code = "active_invoice_exists"
 
 
+# --- Restaurant & café (final closure round) ----------------------------------
+
+
+class StayNotInHouse(FunduqiiAPIException):
+    """New operational-financial relations (orders, folio posting, new stay
+    folios) require the stay to still be IN-HOUSE. Reading, printing, and
+    corrections on EXISTING records are never gated by this."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The stay is not in-house."
+    default_code = "stay_not_in_house"
+
+
+class OutletDisabled(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This outlet is disabled in the hotel settings."
+    default_code = "outlet_disabled"
+
+
+class OutletMismatch(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The item does not belong to the order's outlet."
+    default_code = "outlet_mismatch"
+
+
+class TableOccupied(FunduqiiAPIException):
+    """One OPEN (unsettled, non-cancelled) order per table."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This table already has an open order."
+    default_code = "table_occupied"
+
+
+class TableOutOfService(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This table is out of service."
+    default_code = "table_out_of_service"
+
+
+class TableHasOpenOrder(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "A table with an open order cannot leave service."
+    default_code = "table_has_open_order"
+
+
+class OrderAlreadySettled(FunduqiiAPIException):
+    """XOR: an order is settled exactly once — direct payment or folio
+    posting, never both, never twice, never re-settled."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This order is already settled."
+    default_code = "order_already_settled"
+
+
+class InvalidOrderComposition(FunduqiiAPIException):
+    """The order's shape is wrong for its type: a ROOM order needs an
+    in-house stay and no table; a TABLE order needs a matching, available
+    table of the same outlet."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The order composition is not valid for its type."
+    default_code = "invalid_order_composition"
+
+
+class LastActiveItemNotCancellable(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "The last active item cannot be cancelled; cancel the whole order "
+        "instead."
+    )
+    default_code = "last_active_item_not_cancellable"
+
+
 # --- Platform owner panel / subscription enforcement (Phase 16) -------------
 
 

@@ -189,7 +189,11 @@
       "publicTerms": "Genel rezervasyon koşulları",
       "publicTermsHint": "Ziyaretçilere rezervasyondan önce gösterilir.",
       "hkInspectionRequired": "Temizlik sonrası oda denetimi",
-      "hkInspectionRequiredHint": "Etkinleştirildiğinde: görevlinin tamamlaması görevi denetim bekleniyor durumuna alır ve oda ancak süpervizör onayından sonra hazır olur."
+      "hkInspectionRequiredHint": "Etkinleştirildiğinde: görevlinin tamamlaması görevi denetim bekleniyor durumuna alır ve oda ancak süpervizör onayından sonra hazır olur.",
+      "restaurantEnabled": "Restoran etkin",
+      "restaurantEnabledHint": "Kapalıyken: restoran için yeni sipariş, masa, kategori veya ürün oluşturulamaz — mevcut veriler görünür kalır.",
+      "cafeEnabled": "Kafe etkin",
+      "cafeEnabledHint": "Kapalıyken: kafe için yeni sipariş, masa, kategori veya ürün oluşturulamaz — mevcut veriler görünür kalır."
     }
   },
   "rooms": {
@@ -1184,6 +1188,7 @@
     "tabs": {
       "overview": "Genel bakış",
       "catalog": "Katalog",
+      "tables": "Masalar",
       "orders": "Siparişler",
       "board": "Hazırlık panosu"
     },
@@ -1198,22 +1203,30 @@
       "deliveredHint": "Bugün teslim edilen siparişler.",
       "notPosted": "Teslim edildi, işlenmedi",
       "notPostedHint": "Folioya henüz işlenmemiş teslim edilmiş siparişler.",
+      "notSettled": "Teslim edildi, kapatılmadı",
+      "notSettledHint": "Folio işlemesi veya doğrudan ödeme bekleyen teslim edilmiş siparişler.",
       "postedToday": "Bugün işlenen",
       "postedTodayHint": "Bugün foliolara işlenen toplam.",
+      "paidDirectToday": "Bugün doğrudan ödenen",
+      "paidDirectTodayHint": "Bugün doğrudan ödeme olarak tahsil edilen toplam.",
       "activeItems": "Aktif ürünler",
       "activeItemsHint": "Sipariş edilebilir ürünler."
     },
-    "itemTypes": {
+    "outlet": "Birim",
+    "outlets": {
       "restaurant": "Restoran",
-      "cafe": "Kafe",
-      "room_service": "Oda servisi",
-      "other": "Diğer"
+      "cafe": "Kafe"
     },
-    "sources": {
-      "room_service": "Oda servisi",
-      "restaurant": "Restoran",
-      "cafe": "Kafe",
-      "other": "Diğer"
+    "orderType": "Sipariş türü",
+    "orderTypes": {
+      "room": "Oda",
+      "table": "Masa"
+    },
+    "settlementLabel": "Kapanış",
+    "settlement": {
+      "unsettled": "Kapatılmadı",
+      "direct": "Doğrudan ödeme",
+      "folio": "Folioya işlendi"
     },
     "status": {
       "draft": "Taslak",
@@ -1240,7 +1253,7 @@
       "itemCode": "Kod",
       "itemDescription": "Açıklama",
       "itemCategory": "Kategori",
-      "itemTypeLabel": "Tür",
+      "outletLocked": "Birim oluşturulduktan sonra değiştirilemez.",
       "price": "Fiyat",
       "taxRate": "Vergi %",
       "available": "Mevcut",
@@ -1257,8 +1270,10 @@
     },
     "orders": {
       "number": "Sipariş no",
-      "source": "Kaynak",
       "room": "Oda",
+      "table": "Masa",
+      "customerName": "Müşteri adı",
+      "businessDate": "İş günü",
       "guest": "Misafir",
       "stay": "Konaklama",
       "total": "Toplam",
@@ -1299,17 +1314,54 @@
       "postToFolio": "Folioya işle",
       "postConfirmTitle": "Folioya işle",
       "postConfirmBody": "Sipariş toplamı misafir foliosuna tek ücret olarak eklenecek. Bu yalnızca bir kez yapılabilir.",
-      "postHint": "Bu sipariş teslim edildi ve henüz işlenmedi — buradan misafir foliosuna işleyin."
+      "postHint": "Bu sipariş teslim edildi ve henüz işlenmedi — buradan misafir foliosuna işleyin.",
+      "settlementReceipt": "Makbuz",
+      "cancelItem": "Ürünü iptal et",
+      "cancelItemTitle": "Sipariş kalemini iptal et",
+      "itemCancelled": "İptal edildi",
+      "directPayment": "Doğrudan ödeme",
+      "paymentMethod": "Ödeme yöntemi",
+      "directPaymentConfirm": "Sipariş doğrudan ödeme ile mali olarak kapatılacak. Başarıdan sonra kapanış yöntemi değiştirilemez — sonraki düzeltmeler Finans bölümünden yapılır.",
+      "directPaymentConfirmAction": "Ödemeyi onayla",
+      "printReceipt": "Makbuzu yazdır",
+      "noTablesAvailable": "Bu birim için boş masa yok."
     },
     "board": {
       "empty": "Aktif sipariş yok",
       "hint": "Yeni siparişler gönderildikçe burada görünür.",
       "columnEmpty": "Boş",
-      "awaitingPost": "Folio işlemesi bekleniyor"
+      "awaitingPost": "Kapanış bekleniyor"
+    },
+    "tables": {
+      "number": "Masa no",
+      "name": "Ad",
+      "capacity": "Kapasite",
+      "statuses": {
+        "available": "Müsait",
+        "out_of_service": "Hizmet dışı"
+      },
+      "occupied": "Dolu",
+      "free": "Boş",
+      "openOrder": "Açık sipariş",
+      "addTable": "Masa ekle",
+      "editTable": "Masayı düzenle",
+      "deleteTable": "Masayı sil",
+      "deleteConfirm": "Bu masa silinsin mi? Siparişlerde kullanılan masalar silinemez — bunun yerine hizmet dışına alın.",
+      "deleteInUse": "Bu masa siparişlerde kullanıldı ve silinemez — bunun yerine hizmet dışına alın.",
+      "takeOutOfService": "Hizmet dışına al",
+      "backToService": "Hizmete geri al",
+      "outOfServiceTitle": "Masayı hizmet dışına al",
+      "outOfServiceReason": "Neden",
+      "newOrder": "Yeni sipariş",
+      "empty": "Henüz masa yok",
+      "emptyHint": "Masa siparişleri almak için restoran ve kafe masalarınızı ekleyin."
     },
     "ticket": {
       "title": "Hizmet fişi",
+      "guestCheckTitle": "Misafir adisyonu",
       "roomLabel": "Oda",
+      "tableLabel": "Masa",
+      "customerLabel": "Müşteri",
       "guestLabel": "Misafir",
       "timeLabel": "Saat",
       "qty": "Adet",
@@ -1322,7 +1374,16 @@
       "notEditable": "Bu sipariş artık değiştirilemez.",
       "itemsRequired": "Siparişe en az bir ürün ekleyin.",
       "invalidTransition": "Bu durum değişikliğine izin verilmiyor.",
-      "itemUnavailable": "Seçilen ürünlerden biri pasif veya mevcut değil."
+      "itemUnavailable": "Seçilen ürünlerden biri pasif veya mevcut değil.",
+      "stayNotInHouse": "Seçilen konaklama şu anda otelde değil — oda siparişleri giriş yapmış misafir gerektirir.",
+      "outletDisabled": "Bu birim otel ayarlarında devre dışı.",
+      "outletMismatch": "Siparişteki tüm ürünler siparişin birimine ait olmalıdır.",
+      "tableOccupied": "Bu masada zaten açık bir sipariş var.",
+      "tableOutOfService": "Bu masa hizmet dışı.",
+      "tableHasOpenOrder": "Masada açık bir sipariş var — önce kapatın veya iptal edin.",
+      "alreadySettled": "Bu sipariş zaten kapatıldı ve artık değiştirilemez.",
+      "lastItemNotCancellable": "Son aktif ürün iptal edilemez — bunun yerine tüm siparişi iptal edin.",
+      "invalidComposition": "Sipariş bileşimi geçersiz — sipariş türünü, konaklamayı ve masayı kontrol edin."
     }
   },
   "operations": {

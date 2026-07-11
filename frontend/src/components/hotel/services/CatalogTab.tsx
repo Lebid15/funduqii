@@ -37,23 +37,25 @@ import {
   type ServiceItemBody,
 } from "@/lib/api/services";
 import { messageForError } from "@/lib/api/errors";
-import type { ServiceCategory, ServiceItem } from "@/lib/api/types";
+import type { ServiceCategory, ServiceItem, ServiceOutlet } from "@/lib/api/types";
 import { formatMoney } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useEnabledOutlets } from "./useOutlets";
 
 const PAGE_SIZE = 25;
-const ITEM_TYPES = ["restaurant", "cafe", "room_service", "other"] as const;
+const OUTLETS = ["restaurant", "cafe"] as const;
 
 export function CatalogTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const enabledOutlets = useEnabledOutlets();
 
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [items, setItems] = useState<ServiceItem[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [category, setCategory] = useState("");
-  const [itemType, setItemType] = useState("");
+  const [outlet, setOutlet] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -74,7 +76,7 @@ export function CatalogTab() {
           page,
           search: query || undefined,
           category: category ? Number(category) : undefined,
-          item_type: itemType || undefined,
+          outlet: outlet || undefined,
         }),
       ]);
       setCategories(cats.results);
@@ -85,7 +87,7 @@ export function CatalogTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, query, category, itemType, t]);
+  }, [page, query, category, outlet, t]);
 
   useEffect(() => {
     load();
@@ -93,10 +95,15 @@ export function CatalogTab() {
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const categoryOptions = categories.map((c) => ({ value: String(c.id), label: c.name }));
-  const typeOptions = ITEM_TYPES.map((v) => ({ value: v, label: t.services.itemTypes[v] }));
+  const outletOptions = OUTLETS.map((o) => ({ value: o, label: t.services.outlets[o] }));
 
   const catColumns: Column<ServiceCategory>[] = [
     { key: "name", header: t.services.catalog.categoryName },
+    {
+      key: "outlet",
+      header: t.services.outlet,
+      render: (r) => <Badge tone="neutral">{t.services.outlets[r.outlet]}</Badge>,
+    },
     { key: "code", header: t.services.catalog.categoryCode, render: (r) => r.code || "—" },
     { key: "item_count", header: t.services.catalog.itemCount },
     {
@@ -128,7 +135,11 @@ export function CatalogTab() {
   const itemColumns: Column<ServiceItem>[] = [
     { key: "name", header: t.services.catalog.itemName },
     { key: "category_name", header: t.services.catalog.itemCategory },
-    { key: "item_type", header: t.services.catalog.itemTypeLabel, render: (r) => t.services.itemTypes[r.item_type] },
+    {
+      key: "outlet",
+      header: t.services.outlet,
+      render: (r) => <Badge tone="neutral">{t.services.outlets[r.outlet]}</Badge>,
+    },
     { key: "unit_price", header: t.services.catalog.price, render: (r) => formatMoney(r.unit_price, r.currency, locale) },
     { key: "tax_rate", header: t.services.catalog.taxRate, render: (r) => `${r.tax_rate}%` },
     {
@@ -163,9 +174,11 @@ export function CatalogTab() {
         <SectionHeader
           title={t.services.catalog.categories}
           actions={
-            <Button icon={Plus} onClick={() => setCategoryModal({ open: true, edit: null })}>
-              {t.services.catalog.addCategory}
-            </Button>
+            enabledOutlets.length > 0 ? (
+              <Button icon={Plus} onClick={() => setCategoryModal({ open: true, edit: null })}>
+                {t.services.catalog.addCategory}
+              </Button>
+            ) : undefined
           }
         />
         {loading ? <LoadingState label={t.common.loading} /> : null}
@@ -186,9 +199,11 @@ export function CatalogTab() {
         <SectionHeader
           title={t.services.catalog.items}
           actions={
-            <Button icon={Plus} onClick={() => setItemModal({ open: true, edit: null })}>
-              {t.services.catalog.addItem}
-            </Button>
+            enabledOutlets.length > 0 ? (
+              <Button icon={Plus} onClick={() => setItemModal({ open: true, edit: null })}>
+                {t.services.catalog.addItem}
+              </Button>
+            ) : undefined
           }
         />
         <form
@@ -205,8 +220,8 @@ export function CatalogTab() {
             <FormField label={t.services.catalog.itemCategory} htmlFor="svc-cat">
               <Select id="svc-cat" value={category} placeholder={t.common.all} options={categoryOptions} onChange={(e) => { setPage(1); setCategory(e.target.value); }} />
             </FormField>
-            <FormField label={t.services.catalog.itemTypeLabel} htmlFor="svc-type">
-              <Select id="svc-type" value={itemType} placeholder={t.common.all} options={typeOptions} onChange={(e) => { setPage(1); setItemType(e.target.value); }} />
+            <FormField label={t.services.outlet} htmlFor="svc-outlet">
+              <Select id="svc-outlet" value={outlet} placeholder={t.common.all} options={outletOptions} onChange={(e) => { setPage(1); setOutlet(e.target.value); }} />
             </FormField>
           </FilterBar>
         </form>
@@ -221,9 +236,11 @@ export function CatalogTab() {
               hint={t.services.catalog.emptyItemsHint}
               icon={UtensilsCrossed}
               action={
-                <Button icon={Plus} onClick={() => setItemModal({ open: true, edit: null })}>
-                  {t.services.catalog.addItem}
-                </Button>
+                enabledOutlets.length > 0 ? (
+                  <Button icon={Plus} onClick={() => setItemModal({ open: true, edit: null })}>
+                    {t.services.catalog.addItem}
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -247,6 +264,7 @@ export function CatalogTab() {
       <CategoryModal
         open={categoryModal.open}
         edit={categoryModal.edit}
+        enabledOutlets={enabledOutlets}
         onClose={() => setCategoryModal({ open: false, edit: null })}
         onSaved={() => {
           setCategoryModal({ open: false, edit: null });
@@ -258,6 +276,7 @@ export function CatalogTab() {
         open={itemModal.open}
         edit={itemModal.edit}
         categories={categories}
+        enabledOutlets={enabledOutlets}
         onClose={() => setItemModal({ open: false, edit: null })}
         onSaved={() => {
           setItemModal({ open: false, edit: null });
@@ -316,11 +335,13 @@ export function CatalogTab() {
 function CategoryModal({
   open,
   edit,
+  enabledOutlets,
   onClose,
   onSaved,
 }: {
   open: boolean;
   edit: ServiceCategory | null;
+  enabledOutlets: ServiceOutlet[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -334,10 +355,17 @@ function CategoryModal({
       setForm(
         edit
           ? { name: edit.name, code: edit.code, description: edit.description, is_active: edit.is_active }
-          : { name: "", code: "", description: "", is_active: true },
+          : {
+              outlet: enabledOutlets[0] ?? "restaurant",
+              name: "",
+              code: "",
+              description: "",
+              is_active: true,
+            },
       );
       setError(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when (re)opened
   }, [open, edit]);
 
   async function submit(event: FormEvent) {
@@ -372,6 +400,23 @@ function CategoryModal({
       <form id="svc-cat-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
         <div className="form-grid">
+          {edit ? (
+            <FormField label={t.services.outlet} htmlFor="c-outlet-fixed">
+              <div className="cluster" id="c-outlet-fixed">
+                <Badge tone="neutral">{t.services.outlets[edit.outlet]}</Badge>
+                <span className="muted small">{t.services.catalog.outletLocked}</span>
+              </div>
+            </FormField>
+          ) : (
+            <FormField label={t.services.outlet} htmlFor="c-outlet">
+              <Select
+                id="c-outlet"
+                value={form.outlet ?? "restaurant"}
+                options={enabledOutlets.map((o) => ({ value: o, label: t.services.outlets[o] }))}
+                onChange={(e) => setForm((p) => ({ ...p, outlet: e.target.value as ServiceOutlet }))}
+              />
+            </FormField>
+          )}
           <FormField label={t.services.catalog.categoryName} htmlFor="c-name">
             <Input id="c-name" value={form.name ?? ""} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
           </FormField>
@@ -397,12 +442,14 @@ function ItemModal({
   open,
   edit,
   categories,
+  enabledOutlets,
   onClose,
   onSaved,
 }: {
   open: boolean;
   edit: ServiceItem | null;
   categories: ServiceCategory[];
+  enabledOutlets: ServiceOutlet[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -410,6 +457,12 @@ function ItemModal({
   const [form, setForm] = useState<ServiceItemBody>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // New items can only go into a category of an ENABLED outlet; editing keeps
+  // the full list so existing data stays reachable.
+  const selectableCategories = edit
+    ? categories
+    : categories.filter((c) => enabledOutlets.includes(c.outlet));
 
   useEffect(() => {
     if (open) {
@@ -420,18 +473,16 @@ function ItemModal({
               name: edit.name,
               code: edit.code,
               description: edit.description,
-              item_type: edit.item_type,
               unit_price: edit.unit_price,
               tax_rate: edit.tax_rate,
               is_available: edit.is_available,
               is_active: edit.is_active,
             }
           : {
-              category: categories[0]?.id,
+              category: categories.filter((c) => enabledOutlets.includes(c.outlet))[0]?.id,
               name: "",
               code: "",
               description: "",
-              item_type: "restaurant",
               unit_price: "",
               tax_rate: "0",
               is_available: true,
@@ -440,6 +491,7 @@ function ItemModal({
       );
       setError(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when (re)opened
   }, [open, edit, categories]);
 
   function set<K extends keyof ServiceItemBody>(k: K, v: ServiceItemBody[K]) {
@@ -464,8 +516,10 @@ function ItemModal({
     }
   }
 
-  const categoryOptions = categories.map((c) => ({ value: String(c.id), label: c.name }));
-  const typeOptions = ITEM_TYPES.map((v) => ({ value: v, label: t.services.itemTypes[v] }));
+  const categoryOptions = selectableCategories.map((c) => ({
+    value: String(c.id),
+    label: `${c.name} (${t.services.outlets[c.outlet]})`,
+  }));
 
   return (
     <Modal
@@ -493,9 +547,6 @@ function ItemModal({
               options={categoryOptions}
               onChange={(e) => set("category", Number(e.target.value))}
             />
-          </FormField>
-          <FormField label={t.services.catalog.itemTypeLabel} htmlFor="i-type">
-            <Select id="i-type" value={form.item_type ?? "restaurant"} options={typeOptions} onChange={(e) => set("item_type", e.target.value as ServiceItem["item_type"])} />
           </FormField>
           <FormField label={t.services.catalog.price} htmlFor="i-price">
             <Input id="i-price" type="number" step="0.01" min="0" value={form.unit_price ?? ""} onChange={(e) => set("unit_price", e.target.value)} />

@@ -550,6 +550,30 @@ export default function HotelSettingsPage() {
                     {t.hotel.settings.hkInspectionRequiredHint}
                   </p>
                 </div>
+                <div>
+                  <Switch
+                    id="restaurant_enabled"
+                    label={t.hotel.settings.restaurantEnabled}
+                    checked={s.restaurant_enabled}
+                    disabled={suspended}
+                    onChange={(v) => patch("restaurant_enabled", v)}
+                  />
+                  <p className="field__hint">
+                    {t.hotel.settings.restaurantEnabledHint}
+                  </p>
+                </div>
+                <div>
+                  <Switch
+                    id="cafe_enabled"
+                    label={t.hotel.settings.cafeEnabled}
+                    checked={s.cafe_enabled}
+                    disabled={suspended}
+                    onChange={(v) => patch("cafe_enabled", v)}
+                  />
+                  <p className="field__hint">
+                    {t.hotel.settings.cafeEnabledHint}
+                  </p>
+                </div>
               </div>
             </Card>
 

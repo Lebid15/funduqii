@@ -69,11 +69,15 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     # Service catalog + internal service orders (Phase 9): restaurant / café /
     # room service. The blueprint's `restaurant.*` codes below are vestigial and
     # NOT used; Phase 9 uses these explicit sections instead.
-    "services": ["view", "create", "update", "delete"],
+    # Restaurant/café closure: `tables_manage` covers the simple outlet
+    # tables (create/edit/status); `settle_direct` is the direct-payment
+    # settlement — deliberately separate from post_to_folio.
+    "services": ["view", "create", "update", "delete", "tables_manage"],
     "service_orders": [
         "view",
         "create",
         "update",
+        "settle_direct",
         "cancel",
         "status_update",
         "post_to_folio",

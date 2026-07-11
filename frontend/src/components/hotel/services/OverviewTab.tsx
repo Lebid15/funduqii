@@ -7,7 +7,9 @@ import {
   ChefHat,
   CircleDollarSign,
   ClipboardList,
+  HandCoins,
   PackageCheck,
+  ReceiptText,
   UtensilsCrossed,
 } from "lucide-react";
 
@@ -88,11 +90,25 @@ export function OverviewTab() {
         description={t.services.overview.notPostedHint}
       />
       <WorkflowCard
+        icon={ReceiptText}
+        tone={data.delivered_not_settled > 0 ? "warning" : "neutral"}
+        title={t.services.overview.notSettled}
+        value={data.delivered_not_settled}
+        description={t.services.overview.notSettledHint}
+      />
+      <WorkflowCard
         icon={CircleDollarSign}
         tone="success"
         title={t.services.overview.postedToday}
         value={data.posted_today_total}
         description={t.services.overview.postedTodayHint}
+      />
+      <WorkflowCard
+        icon={HandCoins}
+        tone="success"
+        title={t.services.overview.paidDirectToday}
+        value={data.paid_direct_today_total}
+        description={t.services.overview.paidDirectTodayHint}
       />
       <WorkflowCard
         icon={UtensilsCrossed}

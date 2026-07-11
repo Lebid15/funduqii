@@ -326,6 +326,8 @@ export interface HotelSettings {
   require_guest_phone: boolean;
   require_guest_document: boolean;
   housekeeping_inspection_required: boolean;
+  restaurant_enabled: boolean;
+  cafe_enabled: boolean;
   public_is_listed: boolean;
   public_slug: string | null;
   public_booking_requires_confirmation: boolean;
@@ -997,12 +999,10 @@ export interface FolioStatement {
  * Phase 9 — Service catalog & orders DTOs (mirror /api/v1/hotel/services/).
  * ======================================================================== */
 
-export type ServiceItemType = "restaurant" | "cafe" | "room_service" | "other";
-export type ServiceOrderSource =
-  | "room_service"
-  | "restaurant"
-  | "cafe"
-  | "other";
+export type ServiceOutlet = "restaurant" | "cafe";
+export type ServiceOrderType = "room" | "table";
+export type ServiceOrderSettlement = "unsettled" | "direct" | "folio";
+export type RestaurantTableStatus = "available" | "out_of_service";
 export type ServiceOrderStatus =
   | "draft"
   | "submitted"
@@ -1013,6 +1013,7 @@ export type ServiceOrderStatus =
 
 export interface ServiceCategory {
   id: number;
+  outlet: ServiceOutlet;
   name: string;
   code: string;
   description: string;
@@ -1027,16 +1028,40 @@ export interface ServiceItem {
   id: number;
   category: number;
   category_name: string;
+  /** Read-only, derived from the item's category. */
+  outlet: ServiceOutlet;
   name: string;
   code: string;
   description: string;
-  item_type: ServiceItemType;
   unit_price: string;
   currency: string;
   tax_rate: string;
   is_available: boolean;
   is_active: boolean;
   sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RestaurantTableOpenOrder {
+  id: number;
+  order_number: string;
+  status: ServiceOrderStatus;
+  customer_name: string;
+  guest_name: string;
+}
+
+export interface RestaurantTable {
+  id: number;
+  outlet: ServiceOutlet;
+  number: string;
+  name: string;
+  capacity: number;
+  status: RestaurantTableStatus;
+  status_note: string;
+  /** Derived: the table has one open (unsettled, not cancelled) order. */
+  is_occupied: boolean;
+  open_order: RestaurantTableOpenOrder | null;
   created_at: string;
   updated_at: string;
 }
@@ -1052,6 +1077,10 @@ export interface ServiceOrderItem {
   tax_amount: string;
   total_amount: string;
   notes: string;
+  is_cancelled: boolean;
+  cancelled_at: string | null;
+  cancelled_by_name: string;
+  cancel_reason: string;
 }
 
 export interface ServiceOrderStatusLogEntry {
@@ -1066,16 +1095,23 @@ export interface ServiceOrderStatusLogEntry {
 export interface ServiceOrderListItem {
   id: number;
   order_number: string;
-  source: ServiceOrderSource;
+  order_type: ServiceOrderType;
+  outlet: ServiceOutlet;
   status: ServiceOrderStatus;
+  settlement: ServiceOrderSettlement;
   stay: number | null;
   room: number | null;
   room_number: string;
+  table: number | null;
+  table_number: string;
+  customer_name: string;
+  business_date: string | null;
   ordered_at: string;
   requested_delivery_time: string | null;
   delivered_at: string | null;
   is_posted: boolean;
   posted_at: string | null;
+  settled_at: string | null;
   total: string | null;
 }
 
@@ -1088,11 +1124,17 @@ export interface ServiceOrderTotals {
 export interface ServiceOrder {
   id: number;
   order_number: string;
-  source: ServiceOrderSource;
+  order_type: ServiceOrderType;
+  outlet: ServiceOutlet;
   status: ServiceOrderStatus;
+  settlement: ServiceOrderSettlement;
   stay: number | null;
   room: number | null;
   room_number: string;
+  table: number | null;
+  table_number: string;
+  customer_name: string;
+  business_date: string | null;
   guest_name: string;
   folio: number | null;
   folio_number: string;
@@ -1107,6 +1149,9 @@ export interface ServiceOrder {
   posted_at: string | null;
   posted_charge: number | null;
   posted_charge_number: string;
+  settled_at: string | null;
+  settlement_payment: number | null;
+  settlement_receipt: string;
   items: ServiceOrderItem[];
   totals: ServiceOrderTotals;
   status_logs: ServiceOrderStatusLogEntry[];
@@ -1121,18 +1166,26 @@ export interface ServicesOverview {
   ready: number;
   delivered: number;
   delivered_not_posted: number;
+  delivered_not_settled: number;
   posted_today_total: string;
+  paid_direct_today_total: string;
   active_items: number;
 }
 
+/** KOT (`variant=kot`, default — no prices) or guest check
+ * (`variant=guest_check` — prices + totals). Cancelled lines never appear. */
 export interface ServiceTicket {
-  document: "service_ticket";
+  document: "service_ticket" | "guest_check";
   hotel: HotelHeader;
   order: {
     order_number: string;
-    source: ServiceOrderSource;
+    order_type: ServiceOrderType;
+    outlet: ServiceOutlet;
     status: ServiceOrderStatus;
+    settlement: ServiceOrderSettlement;
     room_number: string;
+    table_number: string;
+    customer_name: string;
     guest_name: string;
     ordered_at: string;
     requested_delivery_time: string | null;
@@ -1141,11 +1194,14 @@ export interface ServiceTicket {
   items: Array<{
     item_name: string;
     quantity: string;
-    unit_price: string;
-    total_amount: string;
     notes: string;
+    /** Present only on the guest check variant. */
+    unit_price?: string;
+    tax_amount?: string;
+    total_amount?: string;
   }>;
-  totals: ServiceOrderTotals;
+  /** Present only on the guest check variant. */
+  totals?: ServiceOrderTotals;
 }
 
 /* ==========================================================================

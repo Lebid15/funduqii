@@ -123,6 +123,24 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.services.errors.invalidTransition;
     case "service_item_unavailable":
       return t.services.errors.itemUnavailable;
+    case "stay_not_in_house":
+      return t.services.errors.stayNotInHouse;
+    case "outlet_disabled":
+      return t.services.errors.outletDisabled;
+    case "outlet_mismatch":
+      return t.services.errors.outletMismatch;
+    case "table_occupied":
+      return t.services.errors.tableOccupied;
+    case "table_out_of_service":
+      return t.services.errors.tableOutOfService;
+    case "table_has_open_order":
+      return t.services.errors.tableHasOpenOrder;
+    case "order_already_settled":
+      return t.services.errors.alreadySettled;
+    case "last_active_item_not_cancellable":
+      return t.services.errors.lastItemNotCancellable;
+    case "invalid_order_composition":
+      return t.services.errors.invalidComposition;
     case "invalid_operation_status_transition":
       return t.operations.errors.invalidTransition;
     case "operation_not_editable":

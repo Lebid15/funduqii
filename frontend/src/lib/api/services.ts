@@ -7,10 +7,14 @@
 import { hotelJson } from "./hotelFetch";
 import type {
   PaginatedResponse,
+  PaymentMethod,
+  RestaurantTable,
+  RestaurantTableStatus,
   ServiceCategory,
   ServiceItem,
   ServiceOrder,
   ServiceOrderListItem,
+  ServiceOutlet,
   ServiceTicket,
   ServicesOverview,
 } from "./types";
@@ -37,6 +41,7 @@ export function getServicesOverview(): Promise<ServicesOverview> {
 
 export function listServiceCategories(params?: {
   search?: string;
+  outlet?: string;
   is_active?: string;
   page?: number;
 }): Promise<PaginatedResponse<ServiceCategory>> {
@@ -46,7 +51,10 @@ export function listServiceCategories(params?: {
 }
 
 export type ServiceCategoryBody = Partial<
-  Pick<ServiceCategory, "name" | "code" | "description" | "sort_order" | "is_active">
+  Pick<
+    ServiceCategory,
+    "outlet" | "name" | "code" | "description" | "sort_order" | "is_active"
+  >
 >;
 
 export function createServiceCategory(body: ServiceCategoryBody): Promise<ServiceCategory> {
@@ -75,7 +83,7 @@ export function deleteServiceCategory(id: number): Promise<void> {
 export interface ServiceItemListParams {
   search?: string;
   category?: number;
-  item_type?: string;
+  outlet?: string;
   is_available?: string;
   is_active?: string;
   ordering?: string;
@@ -95,7 +103,6 @@ export type ServiceItemBody = Partial<
     | "name"
     | "code"
     | "description"
-    | "item_type"
     | "unit_price"
     | "currency"
     | "tax_rate"
@@ -123,14 +130,68 @@ export function deleteServiceItem(id: number): Promise<void> {
   return hotelJson<void>(`${B}/items/${id}`, { method: "DELETE" });
 }
 
+// --- Tables ----------------------------------------------------------------------
+
+export function listTables(params?: {
+  outlet?: string;
+  status?: string;
+  page?: number;
+}): Promise<PaginatedResponse<RestaurantTable>> {
+  return hotelJson<PaginatedResponse<RestaurantTable>>(
+    `${B}/tables${toQuery(params)}`,
+  );
+}
+
+export interface RestaurantTableCreateBody {
+  outlet: ServiceOutlet;
+  number: string;
+  name?: string;
+  capacity?: number;
+}
+
+export function createTable(body: RestaurantTableCreateBody): Promise<RestaurantTable> {
+  return hotelJson<RestaurantTable>(`${B}/tables`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateTable(
+  id: number,
+  body: { number?: string; name?: string; capacity?: number },
+): Promise<RestaurantTable> {
+  return hotelJson<RestaurantTable>(`${B}/tables/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function setTableStatus(
+  id: number,
+  status: RestaurantTableStatus,
+  note = "",
+): Promise<RestaurantTable> {
+  return hotelJson<RestaurantTable>(`${B}/tables/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status, note }),
+  });
+}
+
+export function deleteTable(id: number): Promise<void> {
+  return hotelJson<void>(`${B}/tables/${id}`, { method: "DELETE" });
+}
+
 // --- Orders ----------------------------------------------------------------------
 
 export interface ServiceOrderListParams {
   search?: string;
   status?: string;
-  source?: string;
+  order_type?: string;
+  outlet?: string;
+  settlement?: string;
   stay?: number;
   room?: number;
+  table?: number;
   date?: string;
   posted?: string;
   ordering?: string;
@@ -156,9 +217,11 @@ export interface ServiceOrderLineInput {
 }
 
 export interface ServiceOrderCreateBody {
-  source?: string;
+  order_type: "room" | "table";
+  outlet: ServiceOutlet;
   stay?: number | null;
-  room?: number | null;
+  table?: number | null;
+  customer_name?: string;
   status?: "draft" | "submitted";
   requested_delivery_time?: string | null;
   notes?: string;
@@ -173,9 +236,18 @@ export function createServiceOrder(body: ServiceOrderCreateBody): Promise<Servic
   });
 }
 
+/** After creation only meta + draft items may change — never the shape
+ * (order_type/outlet/table/stay/customer_name are immutable). */
+export interface ServiceOrderUpdateBody {
+  requested_delivery_time?: string | null;
+  notes?: string;
+  internal_notes?: string;
+  items?: ServiceOrderLineInput[];
+}
+
 export function updateServiceOrder(
   id: number,
-  body: Partial<ServiceOrderCreateBody>,
+  body: ServiceOrderUpdateBody,
 ): Promise<ServiceOrder> {
   return hotelJson<ServiceOrder>(`${B}/orders/${id}`, {
     method: "PATCH",
@@ -208,6 +280,32 @@ export function postServiceOrderToFolio(id: number): Promise<ServiceOrder> {
   });
 }
 
-export function getServiceOrderTicket(id: number): Promise<ServiceTicket> {
-  return hotelJson<ServiceTicket>(`${B}/orders/${id}/ticket`);
+/** Cancel ONE line before settlement (reason mandatory); returns the order. */
+export function cancelServiceOrderItem(
+  orderId: number,
+  itemId: number,
+  reason: string,
+): Promise<ServiceOrder> {
+  return hotelJson<ServiceOrder>(`${B}/orders/${orderId}/items/${itemId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Direct payment (cash register cycle) — financially closes the order. */
+export function settleServiceOrderDirect(
+  id: number,
+  method: PaymentMethod,
+): Promise<ServiceOrder> {
+  return hotelJson<ServiceOrder>(`${B}/orders/${id}/settle-direct`, {
+    method: "POST",
+    body: JSON.stringify({ method }),
+  });
+}
+
+export function getServiceOrderTicket(
+  id: number,
+  variant: "kot" | "guest_check" = "kot",
+): Promise<ServiceTicket> {
+  return hotelJson<ServiceTicket>(`${B}/orders/${id}/ticket?variant=${variant}`);
 }
