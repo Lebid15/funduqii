@@ -117,6 +117,11 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "deactivate",
         "permissions_view",
         "permissions_update",
+        # Staff closure: sensitive lifecycle actions, each on its own grant
+        # (never folded into `update`).
+        "delete",
+        "change_email",
+        "manage_managers",
         "manage",
     ],
     # Reports & analytics (Phase 13). Read-only; finance/operations/shifts

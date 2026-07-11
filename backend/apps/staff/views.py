@@ -23,7 +23,9 @@ from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
 from .serializers import (
+    ChangeEmailSerializer,
     DeactivateSerializer,
+    DeleteStaffSerializer,
     LinkExistingUserSerializer,
     PermissionsPutSerializer,
     ResetPasswordSerializer,
@@ -41,6 +43,10 @@ StaffUpdate = HasHotelPermission("staff.update")
 StaffDeactivate = HasHotelPermission("staff.deactivate")
 PermissionsView = HasHotelPermission("staff.permissions_view")
 PermissionsUpdate = HasHotelPermission("staff.permissions_update")
+# Staff closure: sensitive lifecycle actions on their own grants.
+StaffDelete = HasHotelPermission("staff.delete")
+StaffChangeEmail = HasHotelPermission("staff.change_email")
+StaffManageManagers = HasHotelPermission("staff.manage_managers")
 
 
 def _guard_write(request: Request) -> None:
@@ -181,6 +187,59 @@ class StaffReactivateView(APIView):
         _guard_write(request)
         membership = _get_membership(request, pk)
         membership = services.reactivate_staff_member(membership, actor=request.user)
+        return Response(StaffDetailSerializer(membership).data)
+
+
+class StaffDeleteView(APIView):
+    """Guarded delete: the membership only, or the fully-clean orphan user
+    too. Refused when any operational/financial/security trace exists."""
+
+    permission_classes = [StaffDelete]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        membership = _get_membership(request, pk)
+        serializer = DeleteStaffSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = services.delete_staff_membership(
+            membership,
+            actor=request.user,
+            delete_user=serializer.validated_data.get("delete_user", False),
+        )
+        return Response(result)
+
+
+class StaffPromoteView(APIView):
+    permission_classes = [StaffManageManagers]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        membership = _get_membership(request, pk)
+        membership = services.promote_to_manager(membership, actor=request.user)
+        return Response(StaffDetailSerializer(membership).data)
+
+
+class StaffDemoteView(APIView):
+    permission_classes = [StaffManageManagers]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        membership = _get_membership(request, pk)
+        membership = services.demote_to_staff(membership, actor=request.user)
+        return Response(StaffDetailSerializer(membership).data)
+
+
+class StaffChangeEmailView(APIView):
+    permission_classes = [StaffChangeEmail]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        membership = _get_membership(request, pk)
+        serializer = ChangeEmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        membership = services.change_staff_email(
+            membership, actor=request.user, new_email=serializer.validated_data["email"]
+        )
         return Response(StaffDetailSerializer(membership).data)
 
 

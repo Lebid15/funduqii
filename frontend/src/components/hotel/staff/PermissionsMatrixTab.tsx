@@ -178,7 +178,7 @@ export function PermissionsMatrixTab({ initialTarget }: { initialTarget: number 
         <Alert tone="info">{m.managerAll}</Alert>
       ) : (
         <>
-          {payload.is_self ? <Alert tone="warning">{m.selfWarning}</Alert> : null}
+          {payload.is_self ? <p className="muted">{m.selfCannotEdit}</p> : null}
           {!payload.is_active ? <Alert tone="warning">{m.inactiveNote}</Alert> : null}
           <div className="workflow-grid">
             {payload.registry.map((section) => {
@@ -197,6 +197,7 @@ export function PermissionsMatrixTab({ initialTarget }: { initialTarget: number 
                     <Button
                       size="sm"
                       variant="secondary"
+                      disabled={payload.is_self}
                       onClick={() => setSection(section.codes, true)}
                     >
                       {m.selectSection}
@@ -204,6 +205,7 @@ export function PermissionsMatrixTab({ initialTarget }: { initialTarget: number 
                     <Button
                       size="sm"
                       variant="secondary"
+                      disabled={payload.is_self}
                       onClick={() => setSection(section.codes, false)}
                     >
                       {m.clearSection}
@@ -217,6 +219,7 @@ export function PermissionsMatrixTab({ initialTarget }: { initialTarget: number 
                           key={code}
                           id={`perm-${code}`}
                           checked={selected.has(code)}
+                          disabled={payload.is_self}
                           onChange={(on) => toggle(code, on)}
                           label={opLabel(t, op)}
                         />
@@ -228,12 +231,12 @@ export function PermissionsMatrixTab({ initialTarget }: { initialTarget: number 
             })}
           </div>
           <div className="cluster">
-            <Button onClick={save} loading={busy} disabled={!dirty}>
+            <Button onClick={save} loading={busy} disabled={!dirty || payload.is_self}>
               {m.save}
             </Button>
             <Button
               variant="secondary"
-              disabled={!dirty || busy}
+              disabled={!dirty || busy || payload.is_self}
               onClick={() => setSelected(new Set(payload.granted))}
             >
               {m.reset}

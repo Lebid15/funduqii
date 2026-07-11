@@ -9,6 +9,7 @@ import type {
   MyHotelPermissions,
   PaginatedResponse,
   PermissionRegistrySection,
+  StaffDeleteResult,
   StaffMember,
   StaffMemberListItem,
   StaffOverview,
@@ -128,6 +129,45 @@ export function reactivateStaffMember(id: number): Promise<StaffMember> {
   return hotelJson<StaffMember>(`${B}/${id}/reactivate`, {
     method: "POST",
     body: "{}",
+  });
+}
+
+/** Promote a staff member to manager (needs staff.manage_managers). */
+export function promoteStaffMember(id: number): Promise<StaffMember> {
+  return hotelJson<StaffMember>(`${B}/${id}/promote`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+/** Demote a manager back to staff (needs staff.manage_managers). */
+export function demoteStaffMember(id: number): Promise<StaffMember> {
+  return hotelJson<StaffMember>(`${B}/${id}/demote`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+/** Change the member's sign-in email (needs staff.change_email). */
+export function changeStaffEmail(
+  id: number,
+  email: string,
+): Promise<StaffMember> {
+  return hotelJson<StaffMember>(`${B}/${id}/change-email`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Hard-delete a membership when it has zero operational history (needs
+ * staff.delete). `deleteUser` also removes a fully-clean shared user account. */
+export function deleteStaffMember(
+  id: number,
+  deleteUser: boolean,
+): Promise<StaffDeleteResult> {
+  return hotelJson<StaffDeleteResult>(`${B}/${id}/delete`, {
+    method: "POST",
+    body: JSON.stringify({ delete_user: deleteUser }),
   });
 }
 

@@ -1713,7 +1713,26 @@
       "resetDoneMsg": "Parola sıfırlandı.",
       "empty": "Henüz personel yok",
       "emptyHint": "Başlamak için ilk personeli ekleyin.",
-      "searchPlaceholder": "Ad, e-posta, telefon, unvan veya koda göre ara…"
+      "searchPlaceholder": "Ad, e-posta, telefon, unvan veya koda göre ara…",
+      "promote": "Yöneticiliğe yükselt",
+      "demote": "Personelliğe indir",
+      "changeEmail": "E-postayı değiştir",
+      "delete": "Sil",
+      "promoteTitle": "Yöneticiliğe yükselt",
+      "promoteConfirm": "{name} yöneticiliğe yükseltilsin mi? Yöneticiler bu oteldeki tüm yetkilere sahiptir.",
+      "promotedMsg": "Üye yöneticiliğe yükseltildi.",
+      "demoteTitle": "Personelliğe indir",
+      "demoteConfirm": "{name} personelliğe indirilsin mi? Yalnızca verdiğiniz yetkileri koruyacaktır.",
+      "demotedMsg": "Üye personelliğe indirildi.",
+      "changeEmailTitle": "Giriş e-postasını değiştir",
+      "changeEmailLabel": "Yeni e-posta",
+      "emailChangedMsg": "E-posta güncellendi.",
+      "deleteTitle": "Personeli sil",
+      "deleteWarning": "Bu, üyeliği kalıcı olarak kaldırır. Yalnızca üyenin hiç işlem geçmişi yoksa çalışır — aksi halde onu devre dışı bırakın.",
+      "deleteUserLabel": "Tamamen temizse kullanıcı hesabını da sil",
+      "deleteConfirm": "Sil",
+      "deletedMsg": "Üyelik silindi.",
+      "deletedWithUserMsg": "Üyelik ve kullanıcı hesabı silindi."
     },
     "form": {
       "createTitle": "Yeni personel",
@@ -1747,7 +1766,8 @@
       "reset": "Sıfırla",
       "savedMsg": "Yetkiler güncellendi.",
       "grantedCount": "{count} verildi",
-      "inactiveNote": "Bu üye devre dışı; yetkiler saklanır ama yeniden etkinleşene kadar etkisizdir."
+      "inactiveNote": "Bu üye devre dışı; yetkiler saklanır ama yeniden etkinleşene kadar etkisizdir.",
+      "selfCannotEdit": "Kendi yetkilerinizi düzenleyemezsiniz."
     },
     "registry": {
       "title": "Yetki referansı",
@@ -1811,7 +1831,15 @@
       "platformOwner": "Platform sahibi hesabı otel personeli olarak yönetilemez.",
       "escalationBlocked": "Kendinizde olmayan bir yetkiyi veremezsiniz.",
       "managerNotEditable": "Yönetici zaten tüm yetkilere sahip; atamalar düzenlenemez.",
-      "unknownPermission": "Yetkilerden biri tanınmıyor."
+      "unknownPermission": "Yetkilerden biri tanınmıyor.",
+      "cannotEditOwnPermissions": "Kendi yetkilerinizi düzenleyemezsiniz.",
+      "selfActionBlocked": "Bu işlemi kendi hesabınızda gerçekleştiremezsiniz.",
+      "notAManager": "Yönetim rollerini yalnızca gerçek bir yönetici değiştirebilir.",
+      "invalidMembershipType": "Bu üyelik türü bu işlemi desteklemiyor.",
+      "primaryManagerProtected": "Birincil yönetici indirilemez veya silinemez.",
+      "staffHasOpenShift": "Önce çalışanın açık vardiyasını kapatın.",
+      "staffHasTrace": "Bu üyenin işlem geçmişi var ve silinemez — bunun yerine devre dışı bırakın.",
+      "crossTenantIdentity": "Bu hesap oteller arasında paylaşılıyor ve e-postası buradan değiştirilemez."
     }
   },
   "shifts": {

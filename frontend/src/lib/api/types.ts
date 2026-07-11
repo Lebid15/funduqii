@@ -1406,6 +1406,7 @@ export interface StaffMemberListItem {
   membership_type: HotelMembershipType;
   is_manager: boolean;
   is_active: boolean;
+  is_primary_manager: boolean;
   job_title: string;
   staff_code: string;
   permission_count: number;
@@ -1413,7 +1414,6 @@ export interface StaffMemberListItem {
 }
 
 export interface StaffMember extends Omit<StaffMemberListItem, "permission_count"> {
-  is_primary_manager: boolean;
   notes: string;
   deactivated_at: string | null;
   deactivation_reason: string;
@@ -1421,6 +1421,13 @@ export interface StaffMember extends Omit<StaffMemberListItem, "permission_count
   created_by_name: string;
   updated_by_name: string;
   updated_at: string;
+}
+
+/** POST /staff/<id>/delete — the hardened delete reports what it removed.
+ * `user_deleted` is null when the shared user account was kept. */
+export interface StaffDeleteResult {
+  membership_deleted: number;
+  user_deleted: number | null;
 }
 
 export interface PermissionRegistrySection {

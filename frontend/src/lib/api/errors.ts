@@ -171,6 +171,22 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.staff.errors.managerNotEditable;
     case "unknown_permission":
       return t.staff.errors.unknownPermission;
+    case "cannot_edit_own_permissions":
+      return t.staff.errors.cannotEditOwnPermissions;
+    case "self_action_blocked":
+      return t.staff.errors.selfActionBlocked;
+    case "not_a_manager":
+      return t.staff.errors.notAManager;
+    case "invalid_membership_type":
+      return t.staff.errors.invalidMembershipType;
+    case "primary_manager_protected":
+      return t.staff.errors.primaryManagerProtected;
+    case "staff_has_open_shift":
+      return t.staff.errors.staffHasOpenShift;
+    case "staff_has_trace":
+      return t.staff.errors.staffHasTrace;
+    case "cross_tenant_identity":
+      return t.staff.errors.crossTenantIdentity;
     case "shift_already_open":
       return t.shifts.errors.alreadyOpen;
     case "shift_not_open":
