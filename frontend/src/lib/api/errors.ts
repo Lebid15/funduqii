@@ -107,6 +107,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.finance.errors.chargeAlreadyAdjusted;
     case "payment_already_reversed":
       return t.finance.errors.paymentAlreadyReversed;
+    case "expense_already_reversed":
+      return t.finance.errors.expenseAlreadyReversed;
     case "reservation_folio_not_supported":
       return t.finance.errors.reservationFolioNotSupported;
     case "active_invoice_exists":

@@ -198,23 +198,33 @@ export interface ExpenseBody {
   description: string;
   amount: string;
   method?: string;
-  paid_at?: string | null;
   vendor_name?: string;
   reference?: string;
   notes?: string;
-  currency?: string;
+}
+
+/** PATCH accepts ONLY these descriptive fields (server rejects anything else). */
+export interface ExpenseUpdateBody {
+  description?: string;
+  notes?: string;
+  reference?: string;
+  vendor_name?: string;
 }
 
 export function createExpense(body: ExpenseBody): Promise<Expense> {
   return hotelJson<Expense>(`${B}/expenses`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export function updateExpense(id: number, body: Partial<ExpenseBody>): Promise<Expense> {
+export function updateExpense(id: number, body: ExpenseUpdateBody): Promise<Expense> {
   return hotelJson<Expense>(`${B}/expenses/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 export function voidExpense(id: number, reason: string): Promise<Expense> {
   return hotelJson<Expense>(`${B}/expenses/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
+export function reverseExpense(id: number, reason: string): Promise<Expense> {
+  return hotelJson<Expense>(`${B}/expenses/${id}/reverse`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
 export function getExpenseVoucher(id: number): Promise<{ document: string; hotel: import("./types").HotelHeader; expense: Expense }> {

@@ -12,12 +12,15 @@ export function VoidDialog({
   open,
   title,
   confirmLabel,
+  description,
   onClose,
   onConfirm,
 }: {
   open: boolean;
   title?: string;
   confirmLabel?: string;
+  /** Optional explanatory line shown above the reason field. */
+  description?: string;
   onClose: () => void;
   onConfirm: (reason: string) => Promise<void>;
 }) {
@@ -61,6 +64,7 @@ export function VoidDialog({
     >
       <form id="void-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
+        {description ? <p className="muted">{description}</p> : null}
         <FormField label={t.finance.void.reason} htmlFor="void-reason">
           <Textarea id="void-reason" value={reason} required placeholder={t.finance.void.reasonPlaceholder} onChange={(e) => setReason(e.target.value)} />
         </FormField>

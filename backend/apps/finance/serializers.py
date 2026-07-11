@@ -145,20 +145,34 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
+    """Read + CREATE shape. The execution timestamp, financial date, and
+    currency are backend-decided (expenses closure); the descriptive-edit
+    path uses ``ExpenseUpdateSerializer``."""
+
     created_by = serializers.SerializerMethodField()
     voided_by = serializers.SerializerMethodField()
-    paid_at = serializers.DateTimeField(required=False)
+    shift_number = serializers.CharField(
+        source="shift.shift_number", read_only=True, default=None
+    )
+    reverses_number = serializers.CharField(
+        source="reverses.expense_number", read_only=True, default=None
+    )
+    reversed_by_number = serializers.SerializerMethodField()
 
     class Meta:
         model = Expense
         fields = [
             "id", "expense_number", "category", "description", "amount", "currency",
-            "method", "paid_at", "vendor_name", "reference", "notes", "status",
+            "method", "paid_at", "business_date", "shift", "shift_number",
+            "reverses", "reverses_number", "reversed_by_number",
+            "vendor_name", "reference", "notes", "status",
             "void_reason", "voided_at", "voided_by", "created_by",
             "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "expense_number", "status", "void_reason", "voided_at",
+            "id", "expense_number", "currency", "paid_at", "business_date",
+            "shift", "shift_number", "reverses", "reverses_number",
+            "reversed_by_number", "status", "void_reason", "voided_at",
             "voided_by", "created_by", "created_at", "updated_at",
         ]
 
@@ -168,10 +182,35 @@ class ExpenseSerializer(serializers.ModelSerializer):
     def get_voided_by(self, obj):
         return obj.voided_by.email if obj.voided_by_id else None
 
+    def get_reversed_by_number(self, obj):
+        posted = [r for r in obj.reversals.all() if r.status == "posted"]
+        return posted[0].expense_number if posted else None
+
     def validate_amount(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError("Amount must be positive.")
         return value
+
+    def validate(self, attrs):
+        _reject_fields(self, "paid_at", "business_date", "currency", "shift", "reverses")
+        return attrs
+
+
+class ExpenseUpdateSerializer(serializers.Serializer):
+    """The ONLY editable voucher fields — descriptive text, same open
+    business date (enforced by the service)."""
+
+    description = serializers.CharField(max_length=255, required=False)
+    notes = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    reference = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    vendor_name = serializers.CharField(max_length=180, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        _reject_fields(
+            self, "amount", "category", "method", "currency", "paid_at",
+            "business_date", "shift", "hotel", "status", "reverses",
+        )
+        return attrs
 
 
 # --- Write / action payloads ------------------------------------------------

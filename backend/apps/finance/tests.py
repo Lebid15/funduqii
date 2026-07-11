@@ -26,6 +26,7 @@ ALL_FINANCE = [
     "finance.payment_create", "finance.payment_void", "finance.invoice_create",
     "finance.invoice_issue", "finance.invoice_void",
     "expenses.view", "expenses.create", "expenses.update", "expenses.void",
+    "expenses.reverse",
 ]
 
 
@@ -1179,3 +1180,329 @@ class FinanceActivityTests(APITestCase, ClosureMixin):
             hotel=self.hotel, event_type="charge.voided"
         ).latest("id")
         self.assertIn("typo in amount", event.message)
+
+
+# --------------------------------------------------------------------------- #
+# Expenses final closure round                                                 #
+# --------------------------------------------------------------------------- #
+
+from django.utils import timezone
+
+from apps.finance.models import Expense as ExpenseModel
+
+
+class ExpensesClosureBase(APITestCase, ClosureMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        HotelSettings.objects.create(hotel=self.hotel, default_currency="SAR")
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE)
+        self.client.force_authenticate(self.manager)
+
+    def create_exp(self, **body):
+        body.setdefault("category", "supplies")
+        body.setdefault("description", "Towels")
+        body.setdefault("amount", "80.00")
+        body.setdefault("method", "cash")
+        return self.client.post(
+            reverse("finance:expense-list"), body, format="json", **HDR(self.hotel)
+        )
+
+    def patch_exp(self, eid, **body):
+        return self.client.patch(
+            reverse("finance:expense-detail", args=[eid]), body, format="json",
+            **HDR(self.hotel),
+        )
+
+    def void_exp(self, eid, reason="mistake"):
+        return self.client.post(
+            reverse("finance:expense-void", args=[eid]), {"reason": reason},
+            format="json", **HDR(self.hotel),
+        )
+
+    def reverse_exp(self, eid, reason="late correction", hotel=None):
+        return self.client.post(
+            reverse("finance:expense-reverse", args=[eid]), {"reason": reason},
+            format="json", **HDR(hotel or self.hotel),
+        )
+
+    def age_exp(self, eid, days=1):
+        ExpenseModel.objects.filter(pk=eid).update(
+            business_date=self.bd() - timedelta(days=days)
+        )
+
+
+class ExpenseStampingTests(ExpensesClosureBase):
+    def test_business_date_and_paid_at_stamped_by_backend(self):
+        res = self.create_exp()
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["business_date"], str(self.bd()))
+        self.assertIsNotNone(res.data["paid_at"])
+        self.assertEqual(res.data["currency"], "SAR")
+
+    def test_client_paid_at_business_date_currency_rejected(self):
+        for payload in (
+            {"paid_at": "2020-01-01T00:00:00Z"},
+            {"business_date": "2020-01-01"},
+            {"currency": "EUR"},
+        ):
+            res = self.create_exp(**payload)
+            self.assertEqual(res.status_code, 400, payload)
+
+    def test_create_refused_on_closed_business_day(self):
+        self.close_day()
+        res = self.create_exp()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "business_day_closed")
+
+    def test_cash_expense_joins_open_shift(self):
+        from apps.shifts.services import open_shift, shift_cash_summary
+
+        shift = open_shift(self.hotel, user=self.manager, opening_cash_amount="100.00")
+        self.create_exp(amount="20.00")
+        summary = shift_cash_summary(shift)
+        self.assertEqual(str(summary["expected_cash"]), "80.00")
+
+
+class ExpensePatchGuardTests(ExpensesClosureBase):
+    """The P0 fix: money is immutable; only descriptive fields, same open day."""
+
+    def setUp(self):
+        super().setUp()
+        self.eid = self.create_exp().data["id"]
+
+    def test_descriptive_fields_editable_same_day_with_activity_diff(self):
+        res = self.patch_exp(
+            self.eid, description="Bath towels", notes="urgent",
+            reference="INV-77", vendor_name="Al Amal",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["description"], "Bath towels")
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).latest("id")
+        self.assertIn("Towels", event.message)       # old value
+        self.assertIn("Bath towels", event.message)  # new value
+
+    def test_no_activity_when_nothing_changes(self):
+        before = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).count()
+        res = self.patch_exp(self.eid, description="Towels")
+        self.assertEqual(res.status_code, 200)
+        after = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).count()
+        self.assertEqual(before, after)
+
+    def test_every_financial_field_rejected(self):
+        for payload in (
+            {"amount": "999.00"}, {"category": "salary"}, {"method": "card"},
+            {"currency": "EUR"}, {"paid_at": "2020-01-01T00:00:00Z"},
+            {"business_date": "2020-01-01"}, {"shift": 1}, {"status": "voided"},
+            {"reverses": 1}, {"hotel": 999},
+        ):
+            res = self.patch_exp(self.eid, **payload)
+            self.assertEqual(res.status_code, 400, payload)
+        expense = ExpenseModel.objects.get(pk=self.eid)
+        self.assertEqual(str(expense.amount), "80.00")
+        self.assertEqual(expense.category, "supplies")
+
+    def test_edit_refused_after_record_day_passed(self):
+        self.age_exp(self.eid)
+        res = self.patch_exp(self.eid, description="late edit")
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "void_window_closed")
+
+    def test_edit_refused_after_day_closed(self):
+        self.close_day()
+        res = self.patch_exp(self.eid, description="late edit")
+        self.assertEqual(res.status_code, 409)
+
+    def test_edit_refused_on_voided(self):
+        self.void_exp(self.eid)
+        res = self.patch_exp(self.eid, description="zombie")
+        self.assertEqual(res.status_code, 400)
+
+
+class ExpenseVoidWindowTests(ExpensesClosureBase):
+    def test_same_day_void_ok(self):
+        eid = self.create_exp().data["id"]
+        res = self.void_exp(eid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], "voided")
+
+    def test_void_refused_after_record_day_passed(self):
+        eid = self.create_exp().data["id"]
+        self.age_exp(eid)
+        res = self.void_exp(eid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "void_window_closed")
+
+    def test_void_refused_after_day_closed(self):
+        eid = self.create_exp().data["id"]
+        self.close_day()
+        res = self.void_exp(eid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "void_window_closed")
+
+    def test_void_requires_reason(self):
+        eid = self.create_exp().data["id"]
+        res = self.client.post(
+            reverse("finance:expense-void", args=[eid]), {}, format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 400)
+
+
+class ExpenseReversalTests(ExpensesClosureBase):
+    def _aged(self, **kw):
+        eid = self.create_exp(**kw).data["id"]
+        self.age_exp(eid)
+        return eid
+
+    def test_reverse_full_linked_negative(self):
+        eid = self._aged(amount="80.00", vendor_name="Al Amal", reference="INV-9")
+        res = self.reverse_exp(eid)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["amount"], "-80.00")
+        self.assertEqual(res.data["reverses"], eid)
+        self.assertEqual(res.data["business_date"], str(self.bd()))
+        self.assertEqual(res.data["vendor_name"], "Al Amal")
+        self.assertEqual(res.data["reference"], "INV-9")
+        original = ExpenseModel.objects.get(pk=eid)
+        self.assertEqual(original.status, "posted")
+
+    def test_reverse_refused_while_void_window_open(self):
+        eid = self.create_exp().data["id"]
+        res = self.reverse_exp(eid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "void_window_open")
+
+    def test_reverse_twice_refused(self):
+        eid = self._aged()
+        self.assertEqual(self.reverse_exp(eid).status_code, 201)
+        res = self.reverse_exp(eid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "expense_already_reversed")
+
+    def test_reverse_a_reversal_refused(self):
+        eid = self._aged()
+        rid = self.reverse_exp(eid).data["id"]
+        self.age_exp(rid)
+        res = self.reverse_exp(rid)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "invalid_finance_operation")
+
+    def test_reverse_voided_refused(self):
+        eid = self.create_exp().data["id"]
+        self.void_exp(eid)
+        self.age_exp(eid)
+        res = self.reverse_exp(eid)
+        self.assertEqual(res.status_code, 400)
+
+    def test_void_reversal_same_day_then_corrected_reverse(self):
+        eid = self._aged()
+        rid = self.reverse_exp(eid).data["id"]
+        self.assertEqual(self.void_exp(rid, reason="wrong reversal").status_code, 200)
+        res = self.reverse_exp(eid, reason="corrected")
+        self.assertEqual(res.status_code, 201)
+
+    def test_reversal_joins_executor_shift_drawer(self):
+        from apps.shifts.services import open_shift, shift_cash_summary
+
+        eid = self._aged(amount="30.00", method="cash")
+        shift = open_shift(self.hotel, user=self.manager, opening_cash_amount="50.00")
+        self.reverse_exp(eid)
+        summary = shift_cash_summary(shift)
+        # Negative cash expense returns money to the drawer: 50 + 30.
+        self.assertEqual(str(summary["expected_cash"]), "80.00")
+
+    def test_reverse_permission_enforced(self):
+        eid = self._aged()
+        staff = add_member(self.hotel, "s@x.com",
+                           perms=["expenses.view", "expenses.void", "expenses.create"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.reverse_exp(eid).status_code, 403)
+        rev = add_member(self.hotel, "r@x.com", perms=["expenses.reverse"])
+        self.client.force_authenticate(rev)
+        self.assertEqual(self.reverse_exp(eid).status_code, 201)
+
+    def test_reverse_cross_hotel_isolated(self):
+        eid = self._aged()
+        other = make_hotel(slug="o")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        om = User.objects.get(email="om@x.com")
+        self.client.force_authenticate(om)
+        self.assertEqual(self.reverse_exp(eid, hotel=other).status_code, 404)
+
+    def test_db_backstop_unique_posted_reversal(self):
+        eid = self._aged()
+        self.reverse_exp(eid)
+        original = ExpenseModel.objects.get(pk=eid)
+        with self.assertRaises(IntegrityError):
+            with db_transaction.atomic():
+                ExpenseModel.objects.create(
+                    hotel=self.hotel, expense_number="EXPX9999",
+                    category="other", description="dup", amount=Decimal("-80.00"),
+                    method="cash", paid_at=timezone.now(), reverses=original,
+                )
+
+    def test_db_backstop_amount_sign(self):
+        with self.assertRaises(IntegrityError):
+            with db_transaction.atomic():
+                ExpenseModel.objects.create(
+                    hotel=self.hotel, expense_number="EXPX9998",
+                    category="other", description="neg", amount=Decimal("-5.00"),
+                    method="cash", paid_at=timezone.now(),
+                )
+
+
+class ExpenseDerivationTests(ExpensesClosureBase):
+    def test_overview_and_voucher_and_events(self):
+        eid = self.create_exp(amount="70.00").data["id"]
+        ov = self.client.get(reverse("finance:overview"), **HDR(self.hotel)).data
+        self.assertEqual(ov["expenses_today"], "70.00")
+        voucher = self.client.get(
+            reverse("finance:expense-voucher", args=[eid]), **HDR(self.hotel)
+        ).data
+        self.assertEqual(voucher["expense"]["business_date"], str(self.bd()))
+        self.assertEqual(voucher["expense"]["status"], "posted")
+        # Reversal cross-references appear on both documents.
+        self.age_exp(eid)
+        rid = self.reverse_exp(eid).data["id"]
+        v_orig = self.client.get(
+            reverse("finance:expense-voucher", args=[eid]), **HDR(self.hotel)
+        ).data["expense"]
+        v_rev = self.client.get(
+            reverse("finance:expense-voucher", args=[rid]), **HDR(self.hotel)
+        ).data["expense"]
+        self.assertEqual(v_orig["reversed_by_number"], v_rev["expense_number"])
+        self.assertEqual(v_rev["reverses_number"], v_orig["expense_number"])
+        types = set(
+            ActivityEvent.objects.filter(hotel=self.hotel).values_list(
+                "event_type", flat=True
+            )
+        )
+        self.assertTrue({"expense.created", "expense.reversed"}.issubset(types))
+
+    def test_legacy_fallback_paid_at_date(self):
+        legacy = ExpenseModel.objects.create(
+            hotel=self.hotel, expense_number="EXPLEG01", category="other",
+            description="legacy", amount=Decimal("11.00"), method="cash",
+            paid_at=timezone.now(), business_date=None,
+        )
+        ov = self.client.get(reverse("finance:overview"), **HDR(self.hotel)).data
+        self.assertEqual(ov["expenses_today"], "11.00")
+        from apps.shifts.services import unassigned_movements
+
+        rep = unassigned_movements(self.hotel, self.bd())
+        self.assertEqual(rep["expenses_total"], "11.00")
+
+    def test_date_filter_on_business_date(self):
+        self.create_exp(amount="5.00")
+        res = self.client.get(
+            reverse("finance:expense-list"),
+            {"date_from": str(self.bd()), "date_to": str(self.bd())},
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.data["count"], 1)

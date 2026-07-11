@@ -6,6 +6,7 @@ from .views import (
     ChargeVoidView,
     ExpenseDetailView,
     ExpenseListCreateView,
+    ExpenseReverseView,
     ExpenseVoidView,
     ExpenseVoucherView,
     FinanceOverviewView,
@@ -59,5 +60,6 @@ urlpatterns = [
     path("finance/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
     path("finance/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),
     path("finance/expenses/<int:pk>/void/", ExpenseVoidView.as_view(), name="expense-void"),
+    path("finance/expenses/<int:pk>/reverse/", ExpenseReverseView.as_view(), name="expense-reverse"),
     path("finance/expenses/<int:pk>/voucher/", ExpenseVoucherView.as_view(), name="expense-voucher"),
 ]

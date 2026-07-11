@@ -36,6 +36,7 @@ from .models import (
 from .serializers import (
     ChargeCreateSerializer,
     ExpenseSerializer,
+    ExpenseUpdateSerializer,
     FolioCreateSerializer,
     FolioListSerializer,
     FolioSerializer,
@@ -67,6 +68,7 @@ ExpView = HasHotelPermission("expenses.view")
 ExpCreate = HasHotelPermission("expenses.create")
 ExpUpdate = HasHotelPermission("expenses.update")
 ExpVoid = HasHotelPermission("expenses.void")
+ExpReverse = HasHotelPermission("expenses.reverse")
 
 
 def _guard_write(request: Request) -> None:
@@ -504,10 +506,18 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
             qs = qs.filter(category=p["category"])
         if p.get("method"):
             qs = qs.filter(method=p["method"])
+        # Expenses closure: date filters run on the BUSINESS date (legacy
+        # rows without one fall back to their paid_at calendar date).
         if p.get("date_from"):
-            qs = qs.filter(paid_at__date__gte=p["date_from"])
+            qs = qs.filter(
+                Q(business_date__gte=p["date_from"])
+                | Q(business_date__isnull=True, paid_at__date__gte=p["date_from"])
+            )
         if p.get("date_to"):
-            qs = qs.filter(paid_at__date__lte=p["date_to"])
+            qs = qs.filter(
+                Q(business_date__lte=p["date_to"])
+                | Q(business_date__isnull=True, paid_at__date__lte=p["date_to"])
+            )
         search = p.get("search")
         if search:
             qs = (
@@ -529,11 +539,9 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
             description=d["description"],
             amount=d["amount"],
             method=d.get("method", "cash"),
-            paid_at=d.get("paid_at"),
             vendor_name=d.get("vendor_name", ""),
             reference=d.get("reference", ""),
             notes=d.get("notes", ""),
-            currency=(d.get("currency") or None),
             user=request.user,
         )
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
@@ -550,14 +558,31 @@ class ExpenseDetailView(generics.RetrieveUpdateAPIView):
         return Expense.objects.filter(hotel=self.request.hotel)
 
     def update(self, request: Request, *args, **kwargs) -> Response:
+        # Expenses closure (P0 fix): only the DESCRIPTIVE fields, only inside
+        # the voucher's own open business date — through the central service.
         _guard_write(request)
         expense = self.get_object()
-        if expense.status != PostingStatus.POSTED:
-            raise InvalidFinanceOperation({"reason": "not_editable"})
-        s = ExpenseSerializer(expense, data=request.data, partial=True)
+        s = ExpenseUpdateSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
-        s.save(updated_by=request.user)
+        expense = services.update_expense(expense, user=request.user, **s.validated_data)
         return Response(ExpenseSerializer(expense).data)
+
+
+class ExpenseReverseView(APIView):
+    """Full counter-voucher for an expense whose void window has closed."""
+
+    def get_permissions(self):
+        return [ExpReverse()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        expense = _get(Expense, request, pk)
+        s = VoidSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        reversal = services.reverse_expense(
+            expense, reason=s.validated_data["reason"], user=request.user
+        )
+        return Response(ExpenseSerializer(reversal).data, status=status.HTTP_201_CREATED)
 
 
 class ExpenseVoidView(APIView):
@@ -623,7 +648,9 @@ class FinanceOverviewView(APIView):
             status=PostingStatus.POSTED,
         ).aggregate(t=Sum("amount"))["t"] or ZERO
         expenses_today = Expense.objects.filter(
-            hotel=hotel, status=PostingStatus.POSTED, paid_at__date=today
+            Q(business_date=today) | Q(business_date__isnull=True, paid_at__date=today),
+            hotel=hotel,
+            status=PostingStatus.POSTED,
         ).aggregate(t=Sum("amount"))["t"] or ZERO
         return Response(
             {

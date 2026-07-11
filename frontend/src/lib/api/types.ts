@@ -938,7 +938,17 @@ export interface Expense {
   amount: string;
   currency: string;
   method: PaymentMethod;
+  /** Execution timestamp — the financial date is `business_date`. */
   paid_at: string;
+  /** THE financial date of the voucher (null on legacy rows). */
+  business_date: string | null;
+  shift: number | null;
+  shift_number: string | null;
+  /** Set when this row is a reversal of another voucher. */
+  reverses: number | null;
+  reverses_number: string | null;
+  /** Set when this voucher has been reversed by a later voucher. */
+  reversed_by_number: string | null;
   vendor_name: string;
   reference: string;
   notes: string;
