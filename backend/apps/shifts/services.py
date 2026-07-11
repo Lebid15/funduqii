@@ -10,9 +10,10 @@ Money boundaries (deliberate):
   appear in the summary. Voided records are excluded everywhere.
 - The daily close stores a documenting snapshot; finance records remain the
   only source of financial truth. Closing locks SAFE integrated flows for
-  that business date (payment/expense creation, service-order posting, shift
-  operations) — finance VOIDS stay allowed by design (corrections keep
-  Phase 8 rules: void with a reason, never delete).
+  that business date (payment/expense creation, manual charges, service-order
+  posting, shift operations). Folio closure round: finance VOIDS are now also
+  bound to the record's own OPEN business date — later corrections are linked
+  counter-postings (adjustment / payment reversal), never edits or deletes.
 """
 from __future__ import annotations
 

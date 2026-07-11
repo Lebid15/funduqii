@@ -289,6 +289,12 @@ class CheckInService:
             StayGuest.objects.create(
                 hotel=hotel, stay=stay, guest=companion, role=StayGuestRole.COMPANION
             )
+        # Folio closure round: every stay opens with its ONE operational folio
+        # (same transaction — a failed folio rolls the whole check-in back).
+        # Lazy import: finance is a later phase.
+        from apps.finance.services import ensure_stay_folio
+
+        ensure_stay_folio(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
             stay,

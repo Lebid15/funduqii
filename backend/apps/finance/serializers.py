@@ -16,14 +16,17 @@ from .services import folio_balance
 
 class FolioChargeSerializer(serializers.ModelSerializer):
     voided_by = serializers.SerializerMethodField()
+    adjusts_number = serializers.CharField(
+        source="adjusts.charge_number", read_only=True, default=None
+    )
 
     class Meta:
         model = FolioCharge
         fields = [
             "id", "charge_number", "type", "description", "quantity",
             "unit_amount", "amount", "tax_rate", "tax_amount", "total_amount",
-            "charge_date", "source", "status", "void_reason", "voided_at",
-            "voided_by", "created_at",
+            "charge_date", "source", "adjusts", "adjusts_number", "status",
+            "void_reason", "voided_at", "voided_by", "created_at",
         ]
         read_only_fields = fields
 
@@ -40,11 +43,16 @@ class PaymentSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
     voided_by = serializers.SerializerMethodField()
 
+    reverses_receipt = serializers.CharField(
+        source="reverses.receipt_number", read_only=True, default=None
+    )
+
     class Meta:
         model = Payment
         fields = [
             "id", "folio", "folio_number", "reservation_number", "receipt_number",
-            "amount", "currency", "method", "status", "paid_at", "payer_name",
+            "amount", "currency", "method", "status", "paid_at", "business_date",
+            "reverses", "reverses_receipt", "payer_name",
             "reference", "notes", "void_reason", "voided_at", "voided_by",
             "created_by", "created_at",
         ]
@@ -169,13 +177,27 @@ class ExpenseSerializer(serializers.ModelSerializer):
 # --- Write / action payloads ------------------------------------------------
 
 
+def _reject_fields(serializer, *names):
+    """Folio closure round: fields the backend now decides (business date,
+    payment time, currency) are refused outright so a client can never
+    believe it controlled them."""
+    provided = [n for n in names if n in (serializer.initial_data or {})]
+    if provided:
+        raise serializers.ValidationError(
+            {name: "This field is set by the backend." for name in provided}
+        )
+
+
 class FolioCreateSerializer(serializers.Serializer):
     reservation = serializers.IntegerField(required=False, allow_null=True)
     stay = serializers.IntegerField(required=False, allow_null=True)
     guest = serializers.IntegerField(required=False, allow_null=True)
     customer_name = serializers.CharField(max_length=180, required=False, allow_blank=True, default="")
-    currency = serializers.CharField(max_length=3, required=False, allow_blank=True, default="")
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        _reject_fields(self, "currency")
+        return attrs
 
 
 class ChargeCreateSerializer(serializers.Serializer):
@@ -184,13 +206,15 @@ class ChargeCreateSerializer(serializers.Serializer):
     quantity = serializers.DecimalField(max_digits=8, decimal_places=2, default=1)
     unit_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
-    charge_date = serializers.DateField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        _reject_fields(self, "charge_date")
+        return attrs
 
 
 class PaymentCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     method = serializers.ChoiceField(choices=Payment._meta.get_field("method").choices)
-    paid_at = serializers.DateTimeField(required=False, allow_null=True)
     payer_name = serializers.CharField(max_length=180, required=False, allow_blank=True, default="")
     reference = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
     notes = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
@@ -199,6 +223,10 @@ class PaymentCreateSerializer(serializers.Serializer):
         if value <= 0:
             raise serializers.ValidationError("Amount must be positive.")
         return value
+
+    def validate(self, attrs):
+        _reject_fields(self, "paid_at", "currency")
+        return attrs
 
 
 class InvoiceCreateSerializer(serializers.Serializer):

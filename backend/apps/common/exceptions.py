@@ -497,6 +497,70 @@ class InvalidAmount(FunduqiiAPIException):
     default_code = "invalid_amount"
 
 
+# --- Finance (folio final closure round) --------------------------------------
+
+
+class VoidWindowClosed(FunduqiiAPIException):
+    """Void is only allowed on the record's own OPEN business date. Once that
+    day has passed or was closed, the correction is an adjustment/reversal."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "The void window for this record has closed; post an adjustment or "
+        "a payment reversal instead."
+    )
+    default_code = "void_window_closed"
+
+
+class VoidWindowOpen(FunduqiiAPIException):
+    """Adjustments/reversals are for records whose void window has PASSED —
+    same-day corrections must use void so the two paths never overlap."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This record can still be voided; use void instead."
+    default_code = "void_window_open"
+
+
+class FolioHasPostings(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "A folio with any charge, payment, or invoice cannot be voided; "
+        "settle and close it instead."
+    )
+    default_code = "folio_has_postings"
+
+
+class ChargeAlreadyAdjusted(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This charge already has a posted adjustment."
+    default_code = "charge_already_adjusted"
+
+
+class PaymentAlreadyReversed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This payment already has a posted reversal."
+    default_code = "payment_already_reversed"
+
+
+class ReservationFolioNotSupported(FunduqiiAPIException):
+    """Pre-arrival (reservation-only) folios are not supported: nothing links
+    them to the stay at check-in and the check-out gate never sees them. A
+    reservation may only be referenced on a folio together with its stay."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A folio cannot be linked to a reservation without a stay."
+    default_code = "reservation_folio_not_supported"
+
+
+class ActiveInvoiceExists(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This folio already has an issued invoice; void it before issuing "
+        "a new one."
+    )
+    default_code = "active_invoice_exists"
+
+
 # --- Platform owner panel / subscription enforcement (Phase 16) -------------
 
 

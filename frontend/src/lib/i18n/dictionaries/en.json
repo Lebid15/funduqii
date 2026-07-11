@@ -964,7 +964,8 @@
       "paymentsToday": "Payments today",
       "expensesToday": "Expenses today",
       "netToday": "Net today",
-      "issuedInvoices": "Issued invoices"
+      "issuedInvoices": "Issued invoices",
+      "foreignCurrencyWarning": "{count} open folios in other currencies ({currencies}) are excluded from the outstanding balance."
     },
     "folioStatus": {
       "open": "Open",
@@ -1036,7 +1037,12 @@
       "voidPayment": "Void",
       "printReceipt": "Receipt",
       "voided": "Voided",
-      "invoices": "Invoices"
+      "invoices": "Invoices",
+      "statement": "Statement",
+      "adjust": "Adjust",
+      "reverse": "Reverse",
+      "adjustsRef": "Adjustment of charge",
+      "reversesRef": "Reversal of payment"
     },
     "chargeForm": {
       "title": "Add charge",
@@ -1112,6 +1118,14 @@
       "reasonPlaceholder": "Why is this being voided?",
       "confirm": "Void"
     },
+    "adjust": {
+      "title": "Adjust charge",
+      "confirm": "Post adjustment"
+    },
+    "reverse": {
+      "title": "Reverse payment",
+      "confirm": "Post reversal"
+    },
     "print": {
       "print": "Print",
       "close": "Close",
@@ -1137,7 +1151,14 @@
       "customerPhone": "Phone",
       "customerEmail": "Email",
       "customerDocument": "Document no.",
-      "balanceAtIssue": "Balance at issue"
+      "balanceAtIssue": "Balance at issue",
+      "statementTitle": "Folio statement",
+      "status": "Status",
+      "opened": "Opened",
+      "closed": "Closed",
+      "room": "Room",
+      "plannedCheckIn": "Planned check-in",
+      "plannedCheckOut": "Planned check-out"
     },
     "financeNote": "All amounts are recorded internally only — no real payment is processed.",
     "errors": {
@@ -1145,7 +1166,14 @@
       "folioNotBalanced": "A folio can only be closed when its balance is zero.",
       "voidReasonRequired": "A reason is required to void this record.",
       "invalidOperation": "This financial operation is not allowed.",
-      "invalidAmount": "The amount is not valid."
+      "invalidAmount": "The amount is not valid.",
+      "voidWindowClosed": "This record's business day has been closed — post an adjustment (for charges) or a payment reversal instead of voiding.",
+      "voidWindowOpen": "This record's business day is still open — void it instead.",
+      "folioHasPostings": "A folio with charges, payments or invoices cannot be voided — close it instead.",
+      "chargeAlreadyAdjusted": "This charge already has a posted adjustment.",
+      "paymentAlreadyReversed": "This payment already has a posted reversal.",
+      "reservationFolioNotSupported": "A folio cannot be linked to a reservation without a stay.",
+      "activeInvoiceExists": "An issued invoice already exists for this folio — void it before issuing a new one."
     }
   },
   "services": {

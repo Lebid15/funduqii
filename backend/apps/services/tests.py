@@ -659,3 +659,72 @@ class RegressionTests(APITestCase):
             "/api/v1/hotel/attendance/",
         ):
             self.assertEqual(self.client.get(path).status_code, 404, path)
+
+
+class PostedOrderCorrectionTests(APITestCase, ServicesMixin):
+    """Folio closure round: correcting a POSTED order is finance-side —
+    void inside the charge's open business date, a linked adjustment after.
+    The order itself stays posted (posted_charge is the permanent reference)
+    and can never be posted twice."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.make_catalog()
+        self.stay = make_stay(self.hotel)
+
+    def _posted_charge(self):
+        oid = self.create_order(
+            stay=self.stay.id,
+            items=[{"service_item": self.item.id, "quantity": "1"}],
+        ).data["id"]
+        self.deliver(oid)
+        res = self.post_order(oid)
+        return oid, FolioCharge.objects.get(pk=res.data["posted_charge"])
+
+    def test_same_day_correction_is_void(self):
+        oid, charge = self._posted_charge()
+        r = self.client.post(
+            reverse("finance:charge-void", args=[charge.id]),
+            {"reason": "wrong order"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200)
+        charge.refresh_from_db()
+        self.assertEqual(charge.status, "voided")
+        # The order remains posted and can never be posted again.
+        again = self.post_order(oid)
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(again.data["code"], "order_already_posted")
+
+    def test_after_window_correction_is_adjustment(self):
+        from datetime import timedelta
+
+        from apps.shifts.services import get_business_date
+
+        oid, charge = self._posted_charge()
+        FolioCharge.objects.filter(pk=charge.pk).update(
+            charge_date=get_business_date(self.hotel) - timedelta(days=1)
+        )
+        # Void is now refused...
+        void = self.client.post(
+            reverse("finance:charge-void", args=[charge.id]),
+            {"reason": "late"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(void.status_code, 409)
+        self.assertEqual(void.data["code"], "void_window_closed")
+        # ...the correction is a linked full adjustment.
+        adj = self.client.post(
+            reverse("finance:charge-adjust", args=[charge.id]),
+            {"reason": "order served to wrong room"}, format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(adj.status_code, 201)
+        adjustment = FolioCharge.objects.get(adjusts=charge)
+        self.assertEqual(adjustment.total_amount, -charge.total_amount)
+        charge.refresh_from_db()
+        self.assertEqual(charge.status, "posted")
+        self.assertEqual(str(folio_balance(charge.folio)["balance"]), "0.00")
+        # The order still points at its original charge.
+        again = self.post_order(oid)
+        self.assertEqual(again.status_code, 409)

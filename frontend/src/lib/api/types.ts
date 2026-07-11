@@ -821,6 +821,8 @@ export interface FolioCharge {
   charge_date: string;
   source: string;
   status: PostingStatus;
+  adjusts: number | null;
+  adjusts_number: string | null;
   void_reason: string;
   voided_at: string | null;
   voided_by: string | null;
@@ -838,6 +840,9 @@ export interface Payment {
   method: PaymentMethod;
   status: PostingStatus;
   paid_at: string;
+  business_date: string | null;
+  reverses: number | null;
+  reverses_receipt: string | null;
   payer_name: string;
   reference: string;
   notes: string;
@@ -953,6 +958,10 @@ export interface FinanceOverview {
   net_today: string;
   issued_invoices: number;
   currency: string;
+  foreign_currency_folios: {
+    count: number;
+    currencies: string[];
+  };
 }
 
 export interface HotelHeader {
@@ -968,6 +977,20 @@ export interface PrintDocument {
   payment?: Payment;
   invoice?: Invoice;
   expense?: Expense;
+}
+
+export interface FolioStatementStay {
+  id: number;
+  room_number: string;
+  planned_check_in_date: string;
+  planned_check_out_date: string;
+}
+
+export interface FolioStatement {
+  document: string;
+  hotel: HotelHeader;
+  folio: Folio;
+  stay: FolioStatementStay | null;
 }
 
 /* ==========================================================================

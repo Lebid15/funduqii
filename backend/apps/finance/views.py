@@ -8,17 +8,17 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.db.models import Sum
-from django.utils import timezone
+from django.db.models import Q, Sum
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import InvalidFinanceOperation
+from apps.common.exceptions import FolioClosed, InvalidFinanceOperation
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelPermission
 from apps.reservations.models import Reservation
+from apps.shifts.services import get_business_date
 from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
@@ -57,6 +57,8 @@ CanChargeCreate = HasHotelPermission("finance.charge_create")
 CanChargeVoid = HasHotelPermission("finance.charge_void")
 CanPaymentCreate = HasHotelPermission("finance.payment_create")
 CanPaymentVoid = HasHotelPermission("finance.payment_void")
+CanAdjust = HasHotelPermission("finance.adjust")
+CanPaymentReverse = HasHotelPermission("finance.payment_reverse")
 CanInvoiceCreate = HasHotelPermission("finance.invoice_create")
 CanInvoiceIssue = HasHotelPermission("finance.invoice_issue")
 CanInvoiceVoid = HasHotelPermission("finance.invoice_void")
@@ -126,17 +128,14 @@ class FolioListCreateView(generics.ListCreateAPIView):
         reservation = _get(Reservation, request, data["reservation"]) if data.get("reservation") else None
         stay = _get(Stay, request, data["stay"]) if data.get("stay") else None
         guest = _get(Guest, request, data["guest"]) if data.get("guest") else None
-        if stay is not None and Folio.objects.filter(
-            hotel=request.hotel, stay=stay, status=FolioStatus.OPEN
-        ).exists():
-            raise InvalidFinanceOperation({"reason": "open_folio_exists_for_stay"})
+        # Duplicate-open-folio and reservation-without-stay guards live in the
+        # central service (folio closure round) — nothing is checked here.
         folio = services.create_folio(
             request.hotel,
             reservation=reservation,
             stay=stay,
             guest=guest,
             customer_name=data.get("customer_name", ""),
-            currency=(data.get("currency") or None),
             notes=data.get("notes", ""),
             user=request.user,
         )
@@ -158,6 +157,10 @@ class FolioDetailView(generics.RetrieveUpdateAPIView):
     def update(self, request: Request, *args, **kwargs) -> Response:
         _guard_write(request)
         folio = self.get_object()
+        # Folio closure round: a closed/voided folio is fully read-only —
+        # even its free-text notes.
+        if folio.status != FolioStatus.OPEN:
+            raise FolioClosed({"folio": folio.id, "status": folio.status})
         # Only free-text notes may be patched on a folio.
         notes = request.data.get("notes")
         if notes is not None:
@@ -213,7 +216,6 @@ class FolioChargeCreateView(APIView):
             quantity=d["quantity"],
             unit_amount=d["unit_amount"],
             tax_rate=d.get("tax_rate", ZERO),
-            charge_date=d.get("charge_date"),
             user=request.user,
         )
         folio.refresh_from_db()
@@ -233,6 +235,21 @@ class ChargeVoidView(APIView):
         return Response(FolioSerializer(charge.folio).data)
 
 
+class ChargeAdjustView(APIView):
+    """Full counter-posting for a charge whose void window has closed."""
+
+    def get_permissions(self):
+        return [CanAdjust()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        charge = _get(FolioCharge, request, pk)
+        s = VoidSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        services.adjust_charge(charge, reason=s.validated_data["reason"], user=request.user)
+        return Response(FolioSerializer(charge.folio).data, status=status.HTTP_201_CREATED)
+
+
 # --- Payments ---------------------------------------------------------------
 
 
@@ -250,7 +267,6 @@ class FolioPaymentCreateView(APIView):
             folio,
             amount=d["amount"],
             method=d["method"],
-            paid_at=d.get("paid_at"),
             payer_name=d.get("payer_name", ""),
             reference=d.get("reference", ""),
             notes=d.get("notes", ""),
@@ -298,6 +314,29 @@ class PaymentVoidView(APIView):
         return Response(PaymentSerializer(payment).data)
 
 
+class PaymentReverseView(APIView):
+    """Full counter-payment for a payment whose void window has closed."""
+
+    def get_permissions(self):
+        return [CanPaymentReverse()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        payment = _get(Payment, request, pk)
+        s = VoidSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        reversal = services.reverse_payment(
+            payment, reason=s.validated_data["reason"], user=request.user
+        )
+        return Response(
+            {
+                "folio": FolioSerializer(payment.folio).data,
+                "payment": PaymentSerializer(reversal).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class PaymentReceiptView(APIView):
     def get_permissions(self):
         return [CanView()]
@@ -309,6 +348,42 @@ class PaymentReceiptView(APIView):
                 "document": "receipt",
                 "hotel": _hotel_header(request.hotel),
                 "payment": PaymentSerializer(payment).data,
+            }
+        )
+
+
+class FolioStatementView(APIView):
+    """The operational folio statement (print-friendly JSON, same pattern as
+    the receipt/invoice documents). NOT a tax invoice. Works for closed and
+    voided folios too — they are reprintable, never editable."""
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request, pk: int) -> Response:
+        folio = generics.get_object_or_404(
+            Folio.objects.select_related(
+                "reservation", "guest", "stay", "stay__room"
+            ).prefetch_related("charges__adjusts", "payments__reverses"),
+            pk=pk,
+            hotel=request.hotel,
+        )
+        stay = folio.stay
+        return Response(
+            {
+                "document": "statement",
+                "hotel": _hotel_header(request.hotel),
+                "folio": FolioSerializer(folio).data,
+                "stay": (
+                    {
+                        "id": stay.id,
+                        "room_number": stay.room.number,
+                        "planned_check_in_date": str(stay.planned_check_in_date),
+                        "planned_check_out_date": str(stay.planned_check_out_date),
+                    }
+                    if stay
+                    else None
+                ),
             }
         )
 
@@ -523,17 +598,29 @@ class FinanceOverviewView(APIView):
 
     def get(self, request: Request) -> Response:
         hotel = request.hotel
-        today = timezone.localdate()
+        # Folio closure round: "today" is the HOTEL business date, and money
+        # is never summed across currencies — legacy foreign-currency folios
+        # are counted and flagged separately instead.
+        today = get_business_date(hotel)
+        hotel_currency = _hotel_header(hotel)["currency"]
         open_folios = Folio.objects.filter(hotel=hotel, status=FolioStatus.OPEN)
         outstanding = ZERO
         unpaid = 0
+        foreign_count = 0
+        foreign_currencies = set()
         for folio in open_folios.prefetch_related("charges", "payments"):
+            if folio.currency != hotel_currency:
+                foreign_count += 1
+                foreign_currencies.add(folio.currency)
+                continue
             bal = services.folio_balance(folio)["balance"]
             outstanding += bal
             if bal > ZERO:
                 unpaid += 1
         payments_today = Payment.objects.filter(
-            hotel=hotel, status=PostingStatus.POSTED, paid_at__date=today
+            Q(business_date=today) | Q(business_date__isnull=True, paid_at__date=today),
+            hotel=hotel,
+            status=PostingStatus.POSTED,
         ).aggregate(t=Sum("amount"))["t"] or ZERO
         expenses_today = Expense.objects.filter(
             hotel=hotel, status=PostingStatus.POSTED, paid_at__date=today
@@ -543,12 +630,16 @@ class FinanceOverviewView(APIView):
                 "open_folios": open_folios.count(),
                 "outstanding_balance": str(services.money(outstanding)),
                 "unpaid_folios": unpaid,
+                "foreign_currency_folios": {
+                    "count": foreign_count,
+                    "currencies": sorted(foreign_currencies),
+                },
                 "payments_today": str(services.money(payments_today)),
                 "expenses_today": str(services.money(expenses_today)),
                 "net_today": str(services.money(payments_today - expenses_today)),
                 "issued_invoices": Invoice.objects.filter(
                     hotel=hotel, status=InvoiceStatus.ISSUED
                 ).count(),
-                "currency": _hotel_header(hotel)["currency"],
+                "currency": hotel_currency,
             }
         )

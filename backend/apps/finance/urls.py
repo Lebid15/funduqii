@@ -2,6 +2,7 @@
 from django.urls import path
 
 from .views import (
+    ChargeAdjustView,
     ChargeVoidView,
     ExpenseDetailView,
     ExpenseListCreateView,
@@ -14,6 +15,7 @@ from .views import (
     FolioInvoiceCreateView,
     FolioListCreateView,
     FolioPaymentCreateView,
+    FolioStatementView,
     FolioVoidView,
     InvoiceDetailView,
     InvoiceIssueView,
@@ -22,6 +24,7 @@ from .views import (
     InvoiceVoidView,
     PaymentListView,
     PaymentReceiptView,
+    PaymentReverseView,
     PaymentVoidView,
 )
 
@@ -37,11 +40,14 @@ urlpatterns = [
     path("finance/folios/<int:pk>/charges/", FolioChargeCreateView.as_view(), name="folio-charge-create"),
     path("finance/folios/<int:pk>/payments/", FolioPaymentCreateView.as_view(), name="folio-payment-create"),
     path("finance/folios/<int:pk>/invoices/", FolioInvoiceCreateView.as_view(), name="folio-invoice-create"),
+    path("finance/folios/<int:pk>/statement/", FolioStatementView.as_view(), name="folio-statement"),
     # Charges
     path("finance/charges/<int:pk>/void/", ChargeVoidView.as_view(), name="charge-void"),
+    path("finance/charges/<int:pk>/adjust/", ChargeAdjustView.as_view(), name="charge-adjust"),
     # Payments
     path("finance/payments/", PaymentListView.as_view(), name="payment-list"),
     path("finance/payments/<int:pk>/void/", PaymentVoidView.as_view(), name="payment-void"),
+    path("finance/payments/<int:pk>/reverse/", PaymentReverseView.as_view(), name="payment-reverse"),
     path("finance/payments/<int:pk>/receipt/", PaymentReceiptView.as_view(), name="payment-receipt"),
     # Invoices
     path("finance/invoices/", InvoiceListView.as_view(), name="invoice-list"),

@@ -137,6 +137,13 @@ class Folio(models.Model):
                 fields=["hotel", "folio_number"],
                 name="unique_folio_number_per_hotel",
             ),
+            # Folio closure round: ONE open operational folio per stay. The
+            # service checks under a stay row lock; this is the DB backstop.
+            models.UniqueConstraint(
+                fields=["stay"],
+                condition=models.Q(status="open", stay__isnull=False),
+                name="unique_open_folio_per_stay",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -185,6 +192,16 @@ class FolioCharge(models.Model):
     total_amount = models.DecimalField(**MONEY_KW, default=ZERO)
     charge_date = models.DateField()
     source = models.CharField(max_length=16, blank=True, default="manual")
+    # Folio closure round: a full counter-posting created AFTER the original
+    # charge's void window closed. The original is never edited; the link is
+    # the audit trail. Adjustments cannot themselves be adjusted (no chains).
+    adjusts = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="adjustments",
+    )
     status = models.CharField(
         max_length=16, choices=PostingStatus.choices, default=PostingStatus.POSTED
     )
@@ -210,6 +227,15 @@ class FolioCharge(models.Model):
     class Meta:
         db_table = "folio_charges"
         ordering = ["charge_date", "id"]
+        constraints = [
+            # Full-reversal rule: at most ONE posted adjustment per original
+            # charge (a voided adjustment frees the slot again).
+            models.UniqueConstraint(
+                fields=["adjusts"],
+                condition=models.Q(status="posted", adjusts__isnull=False),
+                name="unique_posted_adjustment_per_charge",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"charge {self.total_amount} on folio={self.folio_id}"
@@ -243,6 +269,20 @@ class Payment(models.Model):
         max_length=16, choices=PostingStatus.choices, default=PostingStatus.POSTED
     )
     paid_at = models.DateTimeField()
+    # Folio closure round: the HOTEL business date the payment belongs to
+    # (stamped by the service at creation; NULL only on legacy rows, where it
+    # is derived from ``paid_at`` in the hotel's timezone).
+    business_date = models.DateField(null=True, blank=True)
+    # Folio closure round: a full counter-payment (negative amount) created
+    # AFTER the original payment's void window closed. The original is never
+    # edited. Reversals cannot themselves be reversed (no chains).
+    reverses = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reversals",
+    )
     # Phase 12: the shift whose cash drawer received this payment. Attached
     # by the finance services when the creator has an open shift; NULL means
     # an "unassigned movement" (reported, never hidden).
@@ -283,6 +323,16 @@ class Payment(models.Model):
                 fields=["hotel", "receipt_number"],
                 name="unique_receipt_number_per_hotel",
             ),
+            # Full-reversal rule: at most ONE posted reversal per original
+            # payment (a voided reversal frees the slot again).
+            models.UniqueConstraint(
+                fields=["reverses"],
+                condition=models.Q(status="posted", reverses__isnull=False),
+                name="unique_posted_reversal_per_payment",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["hotel", "business_date"], name="pay_hotel_bizdate_idx"),
         ]
 
     def __str__(self) -> str:

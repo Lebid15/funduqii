@@ -97,6 +97,20 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.finance.errors.invalidOperation;
     case "invalid_amount":
       return t.finance.errors.invalidAmount;
+    case "void_window_closed":
+      return t.finance.errors.voidWindowClosed;
+    case "void_window_open":
+      return t.finance.errors.voidWindowOpen;
+    case "folio_has_postings":
+      return t.finance.errors.folioHasPostings;
+    case "charge_already_adjusted":
+      return t.finance.errors.chargeAlreadyAdjusted;
+    case "payment_already_reversed":
+      return t.finance.errors.paymentAlreadyReversed;
+    case "reservation_folio_not_supported":
+      return t.finance.errors.reservationFolioNotSupported;
+    case "active_invoice_exists":
+      return t.finance.errors.activeInvoiceExists;
     case "order_already_posted":
       return t.services.errors.alreadyPosted;
     case "order_not_postable":
