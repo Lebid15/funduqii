@@ -227,6 +227,8 @@ export function housekeepingStatusTone(status: HousekeepingStatus): BadgeTone {
       return "info";
     case "in_progress":
       return "primary";
+    case "awaiting_inspection":
+      return "warning";
     case "completed":
       return "success";
     case "cancelled":

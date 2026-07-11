@@ -187,7 +187,9 @@
       "publicMinNights": "En az gece sayısı (genel)",
       "publicMaxNights": "En fazla gece sayısı (genel)",
       "publicTerms": "Genel rezervasyon koşulları",
-      "publicTermsHint": "Ziyaretçilere rezervasyondan önce gösterilir."
+      "publicTermsHint": "Ziyaretçilere rezervasyondan önce gösterilir.",
+      "hkInspectionRequired": "Temizlik sonrası oda denetimi",
+      "hkInspectionRequiredHint": "Etkinleştirildiğinde: görevlinin tamamlaması görevi denetim bekleniyor durumuna alır ve oda ancak süpervizör onayından sonra hazır olur."
     }
   },
   "rooms": {
@@ -1350,7 +1352,8 @@
         "assigned": "Atandı",
         "in_progress": "Devam ediyor",
         "completed": "Tamamlandı",
-        "cancelled": "İptal edildi"
+        "cancelled": "İptal edildi",
+        "awaiting_inspection": "Denetim bekleniyor"
       },
       "assignee": "Atanan kişi",
       "unassigned": "Atanmadı",
@@ -1376,7 +1379,22 @@
       "empty": "Temizlik görevi yok",
       "emptyHint": "Bir temizlik görevi oluşturun veya çıkış yapın; görev otomatik açılır.",
       "searchPlaceholder": "Numara, oda veya nota göre ara…",
-      "roomRequired": "Bir oda seçin."
+      "roomRequired": "Bir oda seçin.",
+      "statusAwaiting": "Denetim bekleniyor",
+      "approveInspection": "Denetimi onayla",
+      "rejectInspection": "Denetimi reddet",
+      "rejectReason": "Ret nedeni (zorunlu)",
+      "assignTitle": "Görevi ata",
+      "assignTo": "Personel",
+      "assignMe": "Ben",
+      "unassign": "Atamayı kaldır",
+      "reassign": "Yeniden ata",
+      "mineOnly": "Sadece görevlerim",
+      "typeFilter": "Görev türü",
+      "dateFilter": "Tarih",
+      "orderingPriority": "Önceliğe göre sırala",
+      "editPriority": "Önceliği düzenle",
+      "priorityLabel": "Öncelik"
     },
     "mt": {
       "title": "Bakım talepleri",
@@ -1513,14 +1531,19 @@
       "markedAvailable": "Oda müsait işaretlendi.",
       "columnEmpty": "Bu durumda oda yok.",
       "empty": "Henüz oda yok",
-      "emptyHint": "Önce Odalar bölümünden odaları oluşturun."
+      "emptyHint": "Önce Odalar bölümünden odaları oluşturun.",
+      "arrivalNotReady": "Bugün varış — hazır değil",
+      "arrivalsNotReadyCount": "Bugünkü varışlar için hazır olmayan odalar",
+      "arrivalsOnly": "Sadece varışa hazır olmayanlar"
     },
     "errors": {
       "invalidTransition": "Bu durum değişikliğine izin verilmiyor.",
       "notEditable": "Bu kayıt artık düzenlenemez.",
       "roomBlocked": "Bu oda bakım nedeniyle bloke; müsait yapılamaz.",
       "claimantRequired": "Teslim alan adı (veya bağlı misafir) gereklidir.",
-      "disposalReasonRequired": "Eşyayı imha etmek için neden gereklidir."
+      "disposalReasonRequired": "Eşyayı imha etmek için neden gereklidir.",
+      "duplicateActive": "Bu odanın zaten aktif bir temizlik görevi var — önce tamamlayın veya iptal edin.",
+      "inspectionReasonRequired": "Denetim ret nedeni zorunludur."
     }
   },
   "staff": {

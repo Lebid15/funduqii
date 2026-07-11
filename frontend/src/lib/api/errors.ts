@@ -119,6 +119,10 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.claimantRequired;
     case "disposal_reason_required":
       return t.operations.errors.disposalReasonRequired;
+    case "duplicate_active_task":
+      return t.operations.errors.duplicateActive;
+    case "inspection_reason_required":
+      return t.operations.errors.inspectionReasonRequired;
     case "email_already_registered":
       return t.staff.errors.emailExists;
     case "membership_already_exists":

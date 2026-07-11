@@ -46,6 +46,21 @@ def change_room_status(room: Room, new_status: str, *, note: str, user) -> Room:
             "updated_at",
         ]
     )
+    # Housekeeping final closure: every real status move shows up in the
+    # activity feed (lazy import keeps app loading order simple).
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        room.hotel,
+        event_type="room.status_changed",
+        category="room",
+        severity="info",
+        title=f"Room {room.number}: {previous} → {new_status}",
+        message=note or "",
+        actor=actor,
+        related_object=room,
+        related_url="/hotel/rooms",
+    )
     return room
 
 

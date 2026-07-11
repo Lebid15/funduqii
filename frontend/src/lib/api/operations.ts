@@ -6,6 +6,7 @@
  */
 import { hotelJson } from "./hotelFetch";
 import type {
+  ArrivalNotReadyRow,
   HousekeepingTask,
   HousekeepingTaskListItem,
   LostFoundItem,
@@ -43,6 +44,8 @@ export interface HousekeepingListParams {
   priority?: string;
   room?: number;
   assigned_to?: number;
+  /** "true" limits the list to tasks assigned to the current user. */
+  mine?: "true";
   date?: string;
   ordering?: string;
   page?: number;
@@ -129,6 +132,28 @@ export function cancelHousekeepingTask(
     method: "POST",
     body: JSON.stringify({ reason }),
   });
+}
+
+export function approveInspection(id: number, note = ""): Promise<HousekeepingTask> {
+  return hotelJson<HousekeepingTask>(`${B}/housekeeping/${id}/inspect/approve`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function rejectInspection(
+  id: number,
+  reason: string,
+): Promise<HousekeepingTask> {
+  return hotelJson<HousekeepingTask>(`${B}/housekeeping/${id}/inspect/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Rooms with a confirmed arrival today that are not ready yet (plain array). */
+export function listArrivalsNotReady(): Promise<ArrivalNotReadyRow[]> {
+  return hotelJson<ArrivalNotReadyRow[]>(`${B}/housekeeping/arrivals-not-ready`);
 }
 
 // --- Maintenance ----------------------------------------------------------------

@@ -48,6 +48,7 @@ import type {
 import { formatDateTime, maintenanceStatusTone, operationPriorityTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useCurrentUser } from "@/lib/session/CurrentUserContext";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 const PAGE_SIZE = 25;
 const CATEGORIES: MaintenanceCategory[] = [
@@ -62,10 +63,18 @@ const CATEGORIES: MaintenanceCategory[] = [
 const STATUSES = ["open", "assigned", "in_progress", "resolved", "closed", "cancelled"] as const;
 const PRIORITIES: OperationPriority[] = ["low", "normal", "high", "urgent"];
 
+/** Cosmetic permission gate — every API re-checks server-side regardless. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
+
 export function MaintenanceTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const me = useCurrentUser();
+  const can = useCan();
 
   const [rows, setRows] = useState<MaintenanceRequestListItem[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -174,6 +183,7 @@ export function MaintenanceTab() {
       render: (r) => {
         const open = ["open", "assigned", "in_progress"].includes(r.status);
         if (r.status === "resolved") {
+          if (!can("maintenance.close")) return <span className="muted small">—</span>;
           return (
             <div className="table__actions">
               <Button size="sm" onClick={() => setCloseReq(r)}>
@@ -185,7 +195,7 @@ export function MaintenanceTab() {
         if (!open) return <span className="muted small">—</span>;
         return (
           <div className="table__actions">
-            {!r.assigned_to && me ? (
+            {!r.assigned_to && me && can("maintenance.assign") ? (
               <Button
                 size="sm"
                 variant="secondary"
@@ -198,7 +208,7 @@ export function MaintenanceTab() {
                 {mt.assignToMe}
               </Button>
             ) : null}
-            {r.status !== "in_progress" ? (
+            {r.status !== "in_progress" && can("maintenance.status_update") ? (
               <Button
                 size="sm"
                 variant="secondary"
@@ -211,19 +221,23 @@ export function MaintenanceTab() {
                 {mt.start}
               </Button>
             ) : null}
-            <Button
-              size="sm"
-              icon={CheckCircle2}
-              loading={busyId === r.id}
-              onClick={() =>
-                run(r.id, () => resolveMaintenanceRequest(r.id), mt.resolvedMsg)
-              }
-            >
-              {mt.resolve}
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => setCancelReq(r)}>
-              {t.common.cancel}
-            </Button>
+            {can("maintenance.status_update") ? (
+              <Button
+                size="sm"
+                icon={CheckCircle2}
+                loading={busyId === r.id}
+                onClick={() =>
+                  run(r.id, () => resolveMaintenanceRequest(r.id), mt.resolvedMsg)
+                }
+              >
+                {mt.resolve}
+              </Button>
+            ) : null}
+            {can("maintenance.cancel") ? (
+              <Button size="sm" variant="danger" onClick={() => setCancelReq(r)}>
+                {t.common.cancel}
+              </Button>
+            ) : null}
           </div>
         );
       },
@@ -236,9 +250,11 @@ export function MaintenanceTab() {
         <SectionHeader
           title={mt.title}
           actions={
-            <Button icon={Plus} onClick={() => setCreateOpen(true)}>
-              {mt.create}
-            </Button>
+            can("maintenance.create") ? (
+              <Button icon={Plus} onClick={() => setCreateOpen(true)}>
+                {mt.create}
+              </Button>
+            ) : null
           }
         />
         <form

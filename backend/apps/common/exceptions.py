@@ -447,6 +447,23 @@ class BlockReasonRequired(FunduqiiAPIException):
     default_code = "block_reason_required"
 
 
+# --- Housekeeping (final closure round) ---------------------------------------
+
+
+class DuplicateActiveTask(FunduqiiAPIException):
+    """A room may hold at most ONE active housekeeping task at a time."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This room already has an active housekeeping task."
+    default_code = "duplicate_active_task"
+
+
+class InspectionReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to reject an inspection."
+    default_code = "inspection_reason_required"
+
+
 # --- Finance (Phase 8) ------------------------------------------------------
 
 

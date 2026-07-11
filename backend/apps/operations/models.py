@@ -65,6 +65,9 @@ class HousekeepingStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     ASSIGNED = "assigned", "Assigned"
     IN_PROGRESS = "in_progress", "In progress"
+    # Final closure: parked here when the hotel requires supervisor
+    # inspection — approve completes it, reject sends it back to work.
+    AWAITING_INSPECTION = "awaiting_inspection", "Awaiting inspection"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
 
@@ -100,7 +103,7 @@ class HousekeepingTask(models.Model):
         default=HousekeepingTaskType.DAILY_CLEANING,
     )
     status = models.CharField(
-        max_length=16,
+        max_length=20,
         choices=HousekeepingStatus.choices,
         default=HousekeepingStatus.PENDING,
     )
@@ -169,8 +172,8 @@ class HousekeepingTaskStatusLog(models.Model):
     task = models.ForeignKey(
         HousekeepingTask, on_delete=models.CASCADE, related_name="status_logs"
     )
-    previous_status = models.CharField(max_length=16, blank=True, default="")
-    new_status = models.CharField(max_length=16)
+    previous_status = models.CharField(max_length=20, blank=True, default="")
+    new_status = models.CharField(max_length=20)
     note = models.CharField(max_length=255, blank=True, default="")
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
