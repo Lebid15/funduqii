@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ChefHat, LayoutDashboard, ListOrdered, UtensilsCrossed } from "lucide-react";
+import { Armchair, ChefHat, LayoutDashboard, ListOrdered, UtensilsCrossed } from "lucide-react";
 
 import { Tabs, type TabItem } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -10,8 +10,9 @@ import { BoardTab } from "./BoardTab";
 import { CatalogTab } from "./CatalogTab";
 import { OrdersTab } from "./OrdersTab";
 import { OverviewTab } from "./OverviewTab";
+import { TablesTab } from "./TablesTab";
 
-const TAB_KEYS = ["overview", "catalog", "orders", "board"];
+const TAB_KEYS = ["overview", "catalog", "tables", "orders", "board"];
 
 export function ServicesPanel() {
   const { t } = useI18n();
@@ -32,6 +33,7 @@ export function ServicesPanel() {
   const tabs: TabItem[] = [
     { key: "overview", label: t.services.tabs.overview, icon: LayoutDashboard },
     { key: "catalog", label: t.services.tabs.catalog, icon: UtensilsCrossed },
+    { key: "tables", label: t.services.tabs.tables, icon: Armchair },
     { key: "orders", label: t.services.tabs.orders, icon: ListOrdered },
     { key: "board", label: t.services.tabs.board, icon: ChefHat },
   ];
@@ -41,6 +43,7 @@ export function ServicesPanel() {
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "overview" ? <OverviewTab /> : null}
       {tab === "catalog" ? <CatalogTab /> : null}
+      {tab === "tables" ? <TablesTab /> : null}
       {tab === "orders" ? <OrdersTab /> : null}
       {tab === "board" ? <BoardTab /> : null}
     </>

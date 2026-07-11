@@ -56,6 +56,13 @@ class HotelSettings(models.Model):
     # hotels keep today's behavior unchanged.
     housekeeping_inspection_required = models.BooleanField(default=False)
 
+    # Restaurant & café final closure: the two FIXED service outlets can be
+    # switched off per hotel. Disabling only blocks NEW orders/tables/catalog
+    # rows for that outlet (and hides its creation UI) — existing data stays
+    # readable and reportable. Default ON — current hotels are unchanged.
+    restaurant_enabled = models.BooleanField(default=True)
+    cafe_enabled = models.BooleanField(default=True)
+
     # --- Contact ----------------------------------------------------------
     phone = models.CharField(max_length=32, blank=True, default="")
     whatsapp_number = models.CharField(max_length=32, blank=True, default="")

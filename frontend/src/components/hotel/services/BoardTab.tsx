@@ -28,7 +28,9 @@ export function BoardTab() {
         listServiceOrders({ status: "submitted" }),
         listServiceOrders({ status: "preparing" }),
         listServiceOrders({ status: "ready" }),
-        listServiceOrders({ status: "delivered", posted: "false" }),
+        // Final closure: "awaiting settlement" replaces "not posted" —
+        // direct-settled orders leave the board too.
+        listServiceOrders({ status: "delivered", settlement: "unsettled" }),
       ]);
       setColumns({
         submitted: submitted.results,
@@ -95,7 +97,13 @@ export function BoardTab() {
               <article key={order.id} className="board-card">
                 <div className="board-card__head">
                   <strong>{order.order_number}</strong>
-                  <span className="muted small">{order.room_number || t.services.orders.walkIn}</span>
+                  <span className="muted small">
+                    {order.room_number
+                      ? `${t.services.orders.room} ${order.room_number}`
+                      : order.table_number
+                        ? `${t.services.orders.table} ${order.table_number}`
+                        : order.customer_name || t.services.orders.walkIn}
+                  </span>
                 </div>
                 <span className="muted small">{formatDateTime(order.ordered_at, locale)}</span>
                 {def.next ? (

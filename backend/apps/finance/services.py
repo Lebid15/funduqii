@@ -35,6 +35,7 @@ from apps.common.exceptions import (
     InvalidFinanceOperation,
     PaymentAlreadyReversed,
     ReservationFolioNotSupported,
+    StayNotInHouse,
     VoidReasonRequired,
     VoidWindowClosed,
     VoidWindowOpen,
@@ -274,6 +275,12 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     payment, or deposit.
     """
     stay = type(stay).objects.select_for_update().get(pk=stay.pk)
+    # Restaurant closure (P0): a NEW operational folio may only be opened for
+    # an IN-HOUSE stay — a departed/cancelled stay can never grow new money.
+    # Reading, printing, and corrections on EXISTING folios are untouched;
+    # check-in calls this while the stay is already in-house.
+    if stay.status != "in_house":
+        raise StayNotInHouse({"stay": stay.pk, "status": stay.status})
     existing = Folio.objects.filter(
         hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
     ).first()

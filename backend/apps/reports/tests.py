@@ -430,7 +430,8 @@ class ServicesReportTests(APITestCase, ReportsMixin):
         )
         stay = make_stay(self.hotel, make_room(self.hotel, "101"))
         order = create_order(
-            self.hotel, user=self.manager, source="cafe", stay=stay,
+            self.hotel, user=self.manager, order_type="room",
+            outlet="restaurant", stay=stay,
             items_data=[{"service_item": item, "quantity": 2}],
         )
         change_status(order, new_status="delivered", user=self.manager)

@@ -189,7 +189,11 @@
       "publicTerms": "Public booking terms",
       "publicTermsHint": "Shown to visitors before they book.",
       "hkInspectionRequired": "Room inspection after cleaning",
-      "hkInspectionRequiredHint": "When enabled: a worker completing a task moves it to awaiting inspection, and the room only becomes ready after a supervisor approves it."
+      "hkInspectionRequiredHint": "When enabled: a worker completing a task moves it to awaiting inspection, and the room only becomes ready after a supervisor approves it.",
+      "restaurantEnabled": "Restaurant enabled",
+      "restaurantEnabledHint": "When off: no new restaurant orders, tables, categories or items can be created — existing data stays visible.",
+      "cafeEnabled": "Café enabled",
+      "cafeEnabledHint": "When off: no new café orders, tables, categories or items can be created — existing data stays visible."
     }
   },
   "rooms": {
@@ -1184,6 +1188,7 @@
     "tabs": {
       "overview": "Overview",
       "catalog": "Catalog",
+      "tables": "Tables",
       "orders": "Orders",
       "board": "Preparation board"
     },
@@ -1198,22 +1203,30 @@
       "deliveredHint": "Delivered orders placed today.",
       "notPosted": "Delivered, not posted",
       "notPostedHint": "Delivered orders not yet posted to a folio.",
+      "notSettled": "Delivered, not settled",
+      "notSettledHint": "Delivered orders awaiting folio posting or direct payment.",
       "postedToday": "Posted today",
       "postedTodayHint": "Total posted to folios today.",
+      "paidDirectToday": "Paid directly today",
+      "paidDirectTodayHint": "Total collected as direct payments today.",
       "activeItems": "Active items",
       "activeItemsHint": "Items available for ordering."
     },
-    "itemTypes": {
+    "outlet": "Outlet",
+    "outlets": {
       "restaurant": "Restaurant",
-      "cafe": "Café",
-      "room_service": "Room service",
-      "other": "Other"
+      "cafe": "Café"
     },
-    "sources": {
-      "room_service": "Room service",
-      "restaurant": "Restaurant",
-      "cafe": "Café",
-      "other": "Other"
+    "orderType": "Order type",
+    "orderTypes": {
+      "room": "Room",
+      "table": "Table"
+    },
+    "settlementLabel": "Settlement",
+    "settlement": {
+      "unsettled": "Unsettled",
+      "direct": "Direct payment",
+      "folio": "Posted to folio"
     },
     "status": {
       "draft": "Draft",
@@ -1240,7 +1253,7 @@
       "itemCode": "Code",
       "itemDescription": "Description",
       "itemCategory": "Category",
-      "itemTypeLabel": "Type",
+      "outletLocked": "The outlet cannot be changed after creation.",
       "price": "Price",
       "taxRate": "Tax %",
       "available": "Available",
@@ -1257,8 +1270,10 @@
     },
     "orders": {
       "number": "Order #",
-      "source": "Source",
       "room": "Room",
+      "table": "Table",
+      "customerName": "Customer name",
+      "businessDate": "Business date",
       "guest": "Guest",
       "stay": "Stay",
       "total": "Total",
@@ -1299,17 +1314,54 @@
       "postToFolio": "Post to folio",
       "postConfirmTitle": "Post to folio",
       "postConfirmBody": "The order total will be added to the guest folio as one charge. This can only happen once.",
-      "postHint": "This order is delivered and not posted yet — post it to the guest folio from here."
+      "postHint": "This order is delivered and not posted yet — post it to the guest folio from here.",
+      "settlementReceipt": "Receipt",
+      "cancelItem": "Cancel item",
+      "cancelItemTitle": "Cancel order item",
+      "itemCancelled": "Cancelled",
+      "directPayment": "Direct payment",
+      "paymentMethod": "Payment method",
+      "directPaymentConfirm": "The order will be financially closed with a direct payment. The settlement method cannot be changed after success — any later correction is made from the Finance section.",
+      "directPaymentConfirmAction": "Confirm payment",
+      "printReceipt": "Print receipt",
+      "noTablesAvailable": "No free tables for this outlet."
     },
     "board": {
       "empty": "No active orders",
       "hint": "New orders appear here as they are submitted.",
       "columnEmpty": "Empty",
-      "awaitingPost": "Awaiting folio posting"
+      "awaitingPost": "Awaiting settlement"
+    },
+    "tables": {
+      "number": "Table #",
+      "name": "Name",
+      "capacity": "Capacity",
+      "statuses": {
+        "available": "Available",
+        "out_of_service": "Out of service"
+      },
+      "occupied": "Occupied",
+      "free": "Free",
+      "openOrder": "Open order",
+      "addTable": "Add table",
+      "editTable": "Edit table",
+      "deleteTable": "Delete table",
+      "deleteConfirm": "Delete this table? Tables used in orders cannot be deleted — take them out of service instead.",
+      "deleteInUse": "This table was used in orders and cannot be deleted — take it out of service instead.",
+      "takeOutOfService": "Take out of service",
+      "backToService": "Return to service",
+      "outOfServiceTitle": "Take table out of service",
+      "outOfServiceReason": "Reason",
+      "newOrder": "New order",
+      "empty": "No tables yet",
+      "emptyHint": "Add your restaurant and café tables to take table orders."
     },
     "ticket": {
       "title": "Service ticket",
+      "guestCheckTitle": "Guest check",
       "roomLabel": "Room",
+      "tableLabel": "Table",
+      "customerLabel": "Customer",
       "guestLabel": "Guest",
       "timeLabel": "Time",
       "qty": "Qty",
@@ -1322,7 +1374,16 @@
       "notEditable": "This order can no longer be modified.",
       "itemsRequired": "Add at least one item to the order.",
       "invalidTransition": "This status change is not allowed.",
-      "itemUnavailable": "One of the selected items is inactive or unavailable."
+      "itemUnavailable": "One of the selected items is inactive or unavailable.",
+      "stayNotInHouse": "The selected stay is not in-house — room orders need a checked-in guest.",
+      "outletDisabled": "This outlet is disabled in the hotel settings.",
+      "outletMismatch": "All order items must belong to the order's outlet.",
+      "tableOccupied": "This table already has an open order.",
+      "tableOutOfService": "This table is out of service.",
+      "tableHasOpenOrder": "The table has an open order — settle or cancel it first.",
+      "alreadySettled": "This order is already settled and can no longer change.",
+      "lastItemNotCancellable": "The last active item cannot be cancelled — cancel the whole order instead.",
+      "invalidComposition": "The order composition is invalid — check the order type, stay and table."
     }
   },
   "operations": {
