@@ -187,7 +187,9 @@
       "publicMinNights": "Minimum nights (public)",
       "publicMaxNights": "Maximum nights (public)",
       "publicTerms": "Public booking terms",
-      "publicTermsHint": "Shown to visitors before they book."
+      "publicTermsHint": "Shown to visitors before they book.",
+      "hkInspectionRequired": "Room inspection after cleaning",
+      "hkInspectionRequiredHint": "When enabled: a worker completing a task moves it to awaiting inspection, and the room only becomes ready after a supervisor approves it."
     }
   },
   "rooms": {
@@ -1350,7 +1352,8 @@
         "assigned": "Assigned",
         "in_progress": "In progress",
         "completed": "Completed",
-        "cancelled": "Cancelled"
+        "cancelled": "Cancelled",
+        "awaiting_inspection": "Awaiting inspection"
       },
       "assignee": "Assignee",
       "unassigned": "Unassigned",
@@ -1376,7 +1379,22 @@
       "empty": "No housekeeping tasks",
       "emptyHint": "Create a cleaning task or check out a stay to get one automatically.",
       "searchPlaceholder": "Search by number, room or notes…",
-      "roomRequired": "Choose a room."
+      "roomRequired": "Choose a room.",
+      "statusAwaiting": "Awaiting inspection",
+      "approveInspection": "Approve inspection",
+      "rejectInspection": "Reject inspection",
+      "rejectReason": "Rejection reason (required)",
+      "assignTitle": "Assign task",
+      "assignTo": "Staff member",
+      "assignMe": "Me",
+      "unassign": "Unassign",
+      "reassign": "Reassign",
+      "mineOnly": "My tasks only",
+      "typeFilter": "Task type",
+      "dateFilter": "Date",
+      "orderingPriority": "Sort by priority",
+      "editPriority": "Edit priority",
+      "priorityLabel": "Priority"
     },
     "mt": {
       "title": "Maintenance requests",
@@ -1513,14 +1531,19 @@
       "markedAvailable": "Room marked available.",
       "columnEmpty": "No rooms in this status.",
       "empty": "No rooms yet",
-      "emptyHint": "Create rooms first from the Rooms section."
+      "emptyHint": "Create rooms first from the Rooms section.",
+      "arrivalNotReady": "Arrival today — not ready",
+      "arrivalsNotReadyCount": "Rooms with today's arrivals not ready",
+      "arrivalsOnly": "Not ready for arrival only"
     },
     "errors": {
       "invalidTransition": "This status change is not allowed.",
       "notEditable": "This record can no longer be modified.",
       "roomBlocked": "This room is blocked by maintenance and cannot be made available.",
       "claimantRequired": "A claimant name (or linked guest) is required.",
-      "disposalReasonRequired": "A reason is required to dispose of this item."
+      "disposalReasonRequired": "A reason is required to dispose of this item.",
+      "duplicateActive": "This room already has an active cleaning task — complete or cancel it first.",
+      "inspectionReasonRequired": "An inspection rejection reason is required."
     }
   },
   "staff": {

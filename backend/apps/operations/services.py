@@ -26,6 +26,8 @@ from apps.common.exceptions import (
     ClaimantRequired,
     CrossTenantReference,
     DisposalReasonRequired,
+    DuplicateActiveTask,
+    InspectionReasonRequired,
     InvalidOperationStatusTransition,
     OperationNotEditable,
     RoomBlockedByMaintenance,
@@ -71,12 +73,41 @@ OPEN_MAINTENANCE_STATUSES = (
     MaintenanceStatus.IN_PROGRESS,
 )
 
-#: Active (still workable) statuses per workflow.
+#: Active (still workable) statuses per workflow. awaiting_inspection counts
+#: as ACTIVE (final closure): the room's cycle is not finished until a
+#: supervisor approves, so it also blocks a second task on the same room.
 ACTIVE_HK_STATUSES = (
     HousekeepingStatus.PENDING,
     HousekeepingStatus.ASSIGNED,
     HousekeepingStatus.IN_PROGRESS,
+    HousekeepingStatus.AWAITING_INSPECTION,
 )
+
+#: Severity order for priority sorting (never sort the raw CharField —
+#: alphabetical order puts high < low). Lower rank = more urgent.
+PRIORITY_RANK = {
+    "urgent": 0,
+    "high": 1,
+    "normal": 2,
+    "low": 3,
+}
+
+
+def _hk_record(task, *, event_type, severity, title, message, user=None):
+    """Activity entry for a housekeeping task (lazy import, one shape)."""
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        task.hotel,
+        event_type=event_type,
+        category="operation",
+        severity=severity,
+        title=title,
+        message=message,
+        actor=user,
+        related_object=task,
+        related_url="/hotel/operations",
+    )
 ACTIVE_LF_STATUSES = (
     LostFoundStatus.FOUND,
     LostFoundStatus.STORED,
@@ -207,10 +238,22 @@ def create_housekeeping_task(
     assigned_to=None,
     notes="",
     internal_notes="",
-) -> HousekeepingTask:
+    on_active="raise",
+) -> HousekeepingTask | None:
     _check_same_hotel(hotel, field="room", obj=room)
     _check_same_hotel(hotel, field="stay", obj=stay)
     _check_assignee(hotel, assigned_to)
+    # Final closure: at most ONE active task per room. The room row is
+    # locked so two concurrent creations serialize; automatic callers
+    # (check-out / room move) pass on_active="skip" so an existing active
+    # task never breaks their own transaction.
+    room = Room.objects.select_for_update().get(pk=room.pk)
+    if HousekeepingTask.objects.filter(
+        hotel=hotel, room=room, status__in=ACTIVE_HK_STATUSES
+    ).exists():
+        if on_active == "skip":
+            return None
+        raise DuplicateActiveTask({"room": room.id})
     actor = _actor(user)
     task = HousekeepingTask.objects.create(
         hotel=hotel,
@@ -263,6 +306,9 @@ def create_checkout_cleaning_task(stay, *, user=None) -> HousekeepingTask | None
         return None
     from .models import OperationPriority
 
+    # on_active="skip": if the room already carries an active task (e.g. a
+    # manual deep-clean), check-out must never fail — the room is already on
+    # housekeeping's plate.
     return create_housekeeping_task(
         stay.hotel,
         user=user,
@@ -270,6 +316,7 @@ def create_checkout_cleaning_task(stay, *, user=None) -> HousekeepingTask | None
         stay=stay,
         task_type=HousekeepingTaskType.CHECKOUT_CLEANING,
         priority=OperationPriority.NORMAL,
+        on_active="skip",
     )
 
 
@@ -278,11 +325,21 @@ def update_housekeeping_task(task: HousekeepingTask, *, user=None, **meta) -> Ho
     """Edit task metadata (type/priority/notes) while it is still active."""
     if task.status not in ACTIVE_HK_STATUSES:
         raise OperationNotEditable({"status": task.status})
+    old_priority = task.priority
     for field in ("task_type", "priority", "notes", "internal_notes"):
         if field in meta:
             setattr(task, field, meta[field])
     task.updated_by = _actor(user)
     task.save()
+    if task.priority != old_priority:
+        _hk_record(
+            task,
+            event_type="housekeeping.priority_changed",
+            severity="info",
+            title=f"Housekeeping task {task.task_number} priority changed",
+            message=f"{old_priority} → {task.priority}",
+            user=user,
+        )
     return task
 
 
@@ -291,14 +348,36 @@ def assign_housekeeping_task(task: HousekeepingTask, *, assigned_to, user=None) 
     if task.status not in ACTIVE_HK_STATUSES:
         raise OperationNotEditable({"status": task.status})
     _check_assignee(task.hotel, assigned_to)
-    previous = task.status
+    previous_status = task.status
+    previous_assignee = task.assigned_to
     task.assigned_to = assigned_to
     if task.status == HousekeepingStatus.PENDING and assigned_to is not None:
         task.status = HousekeepingStatus.ASSIGNED
+    elif assigned_to is None and task.status == HousekeepingStatus.ASSIGNED:
+        # Final closure: unassigning returns the task to the open pool.
+        task.status = HousekeepingStatus.PENDING
     task.updated_by = _actor(user)
     task.save()
-    if task.status != previous:
-        _hk_log(task, previous, task.status, user)
+    if task.status != previous_status:
+        _hk_log(task, previous_status, task.status, user)
+    if previous_assignee != assigned_to:
+        if assigned_to is None:
+            event, title_verb = "housekeeping.task_unassigned", "unassigned"
+        elif previous_assignee is None:
+            event, title_verb = "housekeeping.task_assigned", "assigned"
+        else:
+            event, title_verb = "housekeeping.task_reassigned", "reassigned"
+        _hk_record(
+            task,
+            event_type=event,
+            severity="info",
+            title=f"Housekeeping task {task.task_number} {title_verb}",
+            message=(
+                f"{previous_assignee.email if previous_assignee else '—'} → "
+                f"{assigned_to.email if assigned_to else '—'}"
+            ),
+            user=user,
+        )
     return task
 
 
@@ -318,7 +397,24 @@ def change_housekeeping_status(
     task.updated_by = _actor(user)
     task.save()
     _hk_log(task, previous, new_status, user, note)
+    if new_status == HousekeepingStatus.IN_PROGRESS:
+        _hk_record(
+            task,
+            event_type="housekeeping.task_started",
+            severity="info",
+            title=f"Housekeeping task {task.task_number} started",
+            message=f"Room {task.room.number}" if task.room_id else "",
+            user=user,
+        )
     return task
+
+
+def _inspection_required(hotel) -> bool:
+    """The per-hotel inspection policy (safe when settings don't exist yet)."""
+    settings_obj = getattr(hotel, "settings", None)
+    return bool(
+        settings_obj and settings_obj.housekeeping_inspection_required
+    )
 
 
 @transaction.atomic
@@ -329,6 +425,31 @@ def complete_housekeeping_task(
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
         )
+    # Inspection policy (final closure): with the hotel setting ON, the
+    # attendant's completion parks the task for a supervisor — the room is
+    # NOT released and mark_room_available is ignored. Approving is the only
+    # path to completed. (A task already awaiting inspection can only move
+    # through approve/reject, never through this endpoint again.)
+    if task.status == HousekeepingStatus.AWAITING_INSPECTION:
+        raise InvalidOperationStatusTransition(
+            {"from": task.status, "reason": "use_inspection_endpoint"}
+        )
+    if _inspection_required(task.hotel):
+        previous = task.status
+        task.status = HousekeepingStatus.AWAITING_INSPECTION
+        task.started_at = task.started_at or timezone.now()
+        task.updated_by = _actor(user)
+        task.save()
+        _hk_log(task, previous, task.status, user, note)
+        _hk_record(
+            task,
+            event_type="housekeeping.awaiting_inspection",
+            severity="info",
+            title=f"Housekeeping task {task.task_number} awaiting inspection",
+            message=f"Room {task.room.number}" if task.room_id else "",
+            user=user,
+        )
+        return task
     previous = task.status
     task.status = HousekeepingStatus.COMPLETED
     task.started_at = task.started_at or timezone.now()
@@ -397,6 +518,89 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
             user=user,
         )
     _hk_log(task, previous, HousekeepingStatus.CANCELLED, user, reason.strip())
+    _hk_record(
+        task,
+        event_type="housekeeping.task_cancelled",
+        severity="warning",
+        title=f"Housekeeping task {task.task_number} cancelled",
+        message=reason.strip(),
+        user=user,
+    )
+    return task
+
+
+@transaction.atomic
+def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> HousekeepingTask:
+    """Supervisor approval: the task completes and the room is released —
+    unless maintenance still blocks it (maintenance stays the master)."""
+    if task.status != HousekeepingStatus.AWAITING_INSPECTION:
+        raise InvalidOperationStatusTransition(
+            {"from": task.status, "to": HousekeepingStatus.COMPLETED}
+        )
+    room = task.room
+    if room is not None:
+        # Same guard as an explicit release: never override maintenance /
+        # out_of_service / archived or an open blocking request.
+        _ensure_room_releasable(room)
+    previous = task.status
+    task.status = HousekeepingStatus.COMPLETED
+    task.completed_at = timezone.now()
+    task.updated_by = _actor(user)
+    task.save()
+    if room is not None and room.status != RoomStatus.AVAILABLE:
+        change_room_status(
+            room,
+            RoomStatus.AVAILABLE,
+            note=f"Housekeeping {task.task_number} inspection approved",
+            user=user,
+        )
+    _hk_log(task, previous, HousekeepingStatus.COMPLETED, user, note or "inspection approved")
+    _hk_record(
+        task,
+        event_type="housekeeping.inspection_approved",
+        severity="success",
+        title=f"Housekeeping task {task.task_number} inspection approved",
+        message=f"Room {room.number}" if room is not None else "",
+        user=user,
+    )
+    return task
+
+
+@transaction.atomic
+def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> HousekeepingTask:
+    """Supervisor rejection: the room goes back to dirty and the task returns
+    to in_progress so the attendant can finish it again. The rejection reason
+    is mandatory and preserved in the status log."""
+    if not (reason or "").strip():
+        raise InspectionReasonRequired()
+    if task.status != HousekeepingStatus.AWAITING_INSPECTION:
+        raise InvalidOperationStatusTransition(
+            {"from": task.status, "to": HousekeepingStatus.IN_PROGRESS}
+        )
+    previous = task.status
+    task.status = HousekeepingStatus.IN_PROGRESS
+    task.updated_by = _actor(user)
+    task.save()
+    room = task.room
+    if room is not None and room.status in (
+        RoomStatus.CLEANING,
+        RoomStatus.AVAILABLE,
+    ):
+        change_room_status(
+            room,
+            RoomStatus.DIRTY,
+            note=f"Housekeeping {task.task_number} inspection rejected",
+            user=user,
+        )
+    _hk_log(task, previous, HousekeepingStatus.IN_PROGRESS, user, reason.strip())
+    _hk_record(
+        task,
+        event_type="housekeeping.inspection_rejected",
+        severity="warning",
+        title=f"Housekeeping task {task.task_number} inspection rejected",
+        message=reason.strip(),
+        user=user,
+    )
     return task
 
 
@@ -634,6 +838,19 @@ def close_maintenance_request(
                 user=user,
             )
     _mt_log(request, previous, MaintenanceStatus.CLOSED, user, note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        request.hotel,
+        event_type="maintenance.request_closed",
+        category="operation",
+        severity="info",
+        title=f"Maintenance {request.request_number} closed",
+        message=f"room next status: {room_next_status}",
+        actor=user,
+        related_object=request,
+        related_url="/hotel/operations",
+    )
     return request
 
 
@@ -668,6 +885,19 @@ def cancel_maintenance_request(
             user=user,
         )
     _mt_log(request, previous, MaintenanceStatus.CANCELLED, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        request.hotel,
+        event_type="maintenance.request_cancelled",
+        category="operation",
+        severity="warning",
+        title=f"Maintenance {request.request_number} cancelled",
+        message=reason.strip(),
+        actor=user,
+        related_object=request,
+        related_url="/hotel/operations",
+    )
     return request
 
 
@@ -727,6 +957,20 @@ def create_lost_found_item(
         updated_by=actor,
     )
     _lf_log(item, "", item.status, user)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="lost_found.item_created",
+        category="operation",
+        severity="info",
+        title=f"Lost & found {item.item_number} recorded",
+        message=f"{item.title}"
+        + (f" · room {room.number}" if room is not None else ""),
+        actor=user,
+        related_object=item,
+        related_url="/hotel/operations",
+    )
     return item
 
 
@@ -813,6 +1057,19 @@ def return_lost_found_item(
     item.updated_by = _actor(user)
     item.save()
     _lf_log(item, previous, LostFoundStatus.RETURNED, user, note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        item.hotel,
+        event_type="lost_found.item_returned",
+        category="operation",
+        severity="success",
+        title=f"Lost & found {item.item_number} returned",
+        message=name,
+        actor=user,
+        related_object=item,
+        related_url="/hotel/operations",
+    )
     return item
 
 
@@ -830,6 +1087,19 @@ def dispose_lost_found_item(item: LostFoundItem, *, reason, user=None) -> LostFo
     item.updated_by = _actor(user)
     item.save()
     _lf_log(item, previous, LostFoundStatus.DISPOSED, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        item.hotel,
+        event_type="lost_found.item_disposed",
+        category="operation",
+        severity="warning",
+        title=f"Lost & found {item.item_number} disposed",
+        message=reason.strip(),
+        actor=user,
+        related_object=item,
+        related_url="/hotel/operations",
+    )
     return item
 
 

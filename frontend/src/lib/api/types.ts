@@ -325,6 +325,7 @@ export interface HotelSettings {
   allow_public_booking: boolean;
   require_guest_phone: boolean;
   require_guest_document: boolean;
+  housekeeping_inspection_required: boolean;
   public_is_listed: boolean;
   public_slug: string | null;
   public_booking_requires_confirmation: boolean;
@@ -1141,6 +1142,7 @@ export type HousekeepingStatus =
   | "pending"
   | "assigned"
   | "in_progress"
+  | "awaiting_inspection"
   | "completed"
   | "cancelled";
 
@@ -1178,6 +1180,16 @@ export interface HousekeepingTask extends HousekeepingTaskListItem {
   status_logs: OperationStatusLogEntry[];
   created_at: string;
   updated_at: string;
+}
+
+/** Room expecting a confirmed arrival on the hotel business date but not yet
+ * ready (not `available` or still occupied). */
+export interface ArrivalNotReadyRow {
+  room: number;
+  room_number: string;
+  room_status: string;
+  occupied: boolean;
+  reservation_number: string;
 }
 
 export type MaintenanceCategory =

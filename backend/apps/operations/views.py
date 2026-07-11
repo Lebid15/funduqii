@@ -71,6 +71,7 @@ HkUpdate = HasHotelPermission("housekeeping.update")
 HkCancel = HasHotelPermission("housekeeping.cancel")
 HkStatus = HasHotelPermission("housekeeping.status_update")
 HkAssign = HasHotelPermission("housekeeping.assign")
+HkInspect = HasHotelPermission("housekeeping.inspect")
 
 MtView = HasHotelPermission("maintenance.view")
 MtCreate = HasHotelPermission("maintenance.create")
@@ -134,6 +135,9 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
             qs = qs.filter(room_id=int(p["room"]))
         if p.get("assigned_to") and str(p["assigned_to"]).isdigit():
             qs = qs.filter(assigned_to_id=int(p["assigned_to"]))
+        # Final closure: an attendant's own queue in one flag.
+        if p.get("mine") == "true":
+            qs = qs.filter(assigned_to=self.request.user)
         if p.get("date"):
             qs = qs.filter(requested_at__date=p["date"])
         if p.get("search"):
@@ -143,9 +147,25 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
                 | qs.filter(notes__icontains=p["search"])
             )
         ordering = p.get("ordering")
-        if ordering in (
+        if ordering in ("priority", "-priority"):
+            # Severity order, never the raw CharField (alphabetical puts
+            # high < low). urgent → high → normal → low.
+            from django.db.models import Case, IntegerField, Value, When
+
+            rank = Case(
+                *[
+                    When(priority=value, then=Value(rank))
+                    for value, rank in services.PRIORITY_RANK.items()
+                ],
+                default=Value(9),
+                output_field=IntegerField(),
+            )
+            qs = qs.annotate(priority_rank=rank).order_by(
+                "priority_rank" if ordering == "priority" else "-priority_rank",
+                "-requested_at",
+            )
+        elif ordering in (
             "requested_at", "-requested_at", "task_number", "-task_number",
-            "priority", "-priority",
         ):
             qs = qs.order_by(ordering)
         return qs.distinct()
@@ -252,6 +272,82 @@ class HousekeepingCancelView(APIView):
             task, reason=serializer.validated_data["reason"], user=request.user
         )
         return Response(HousekeepingTaskSerializer(task).data)
+
+
+class HousekeepingInspectApproveView(APIView):
+    permission_classes = [HkInspect]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        task = _get(HousekeepingTask, request, pk)
+        note = str(request.data.get("note", "") or "")[:255]
+        task = services.approve_inspection(task, user=request.user, note=note)
+        return Response(HousekeepingTaskSerializer(task).data)
+
+
+class HousekeepingInspectRejectView(APIView):
+    permission_classes = [HkInspect]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        task = _get(HousekeepingTask, request, pk)
+        serializer = CancelSerializer(data=request.data)  # {"reason": ...}
+        serializer.is_valid(raise_exception=True)
+        task = services.reject_inspection(
+            task, reason=serializer.validated_data["reason"], user=request.user
+        )
+        return Response(HousekeepingTaskSerializer(task).data)
+
+
+class ArrivalRoomsNotReadyView(APIView):
+    """Rooms pinned to a CONFIRMED arrival on the hotel business date that are
+    not yet ready for check-in (not manually available, or still occupied).
+    Derived on the fly from existing data — nothing is stored."""
+
+    permission_classes = [HkView]
+
+    def get(self, request: Request) -> Response:
+        from apps.reservations.models import Reservation, ReservationStatus
+        from apps.shifts.services import get_business_date
+        from apps.stays.models import Stay, StayStatus
+
+        today = get_business_date(request.hotel)
+        pinned = (
+            Reservation.objects.filter(
+                hotel=request.hotel,
+                status=ReservationStatus.CONFIRMED,
+                check_in_date=today,
+            )
+            .prefetch_related("lines__room")
+        )
+        occupied = set(
+            Stay.objects.filter(
+                hotel=request.hotel, status=StayStatus.IN_HOUSE
+            ).values_list("room_id", flat=True)
+        )
+        rows = []
+        seen = set()
+        for reservation in pinned:
+            for line in reservation.lines.all():
+                room = line.room
+                if room is None or room.id in seen:
+                    continue
+                not_ready = (
+                    room.status != RoomStatus.AVAILABLE or room.id in occupied
+                )
+                if not_ready:
+                    seen.add(room.id)
+                    rows.append(
+                        {
+                            "room": room.id,
+                            "room_number": room.number,
+                            "room_status": room.status,
+                            "occupied": room.id in occupied,
+                            "reservation_number": reservation.reservation_number,
+                        }
+                    )
+        rows.sort(key=lambda r: r["room_number"])
+        return Response(rows)
 
 
 # --- Maintenance ------------------------------------------------------------------

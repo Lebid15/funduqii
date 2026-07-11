@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Brush, Play, Plus, UserCheck } from "lucide-react";
+import { Brush, ClipboardCheck, Pencil, Play, Plus, UserCheck } from "lucide-react";
 
 import { useQuickAction } from "@/lib/useQuickAction";
 
@@ -26,15 +26,19 @@ import {
   type Column,
 } from "@/components/ui";
 import {
+  approveInspection,
   assignHousekeepingTask,
   cancelHousekeepingTask,
   completeHousekeepingTask,
   createHousekeepingTask,
   listHousekeepingTasks,
+  rejectInspection,
   setHousekeepingStatus,
+  updateHousekeepingTask,
   type HousekeepingCreateBody,
 } from "@/lib/api/operations";
 import { listRooms } from "@/lib/api/rooms";
+import { listStaff } from "@/lib/api/staff";
 import { listCurrentResidents } from "@/lib/api/stays";
 import { messageForError } from "@/lib/api/errors";
 import type {
@@ -47,6 +51,7 @@ import type {
 import { formatDateTime, housekeepingStatusTone, operationPriorityTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useCurrentUser } from "@/lib/session/CurrentUserContext";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 const PAGE_SIZE = 25;
 const TASK_TYPES: HousekeepingTaskType[] = [
@@ -56,21 +61,39 @@ const TASK_TYPES: HousekeepingTaskType[] = [
   "inspection",
   "other",
 ];
-const STATUSES = ["pending", "assigned", "in_progress", "completed", "cancelled"] as const;
+const STATUSES = [
+  "pending",
+  "assigned",
+  "in_progress",
+  "awaiting_inspection",
+  "completed",
+  "cancelled",
+] as const;
 const PRIORITIES: OperationPriority[] = ["low", "normal", "high", "urgent"];
+
+/** Cosmetic permission gate — every API re-checks server-side regardless. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
 
 export function HousekeepingTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
-  const me = useCurrentUser();
+  const can = useCan();
 
   const [rows, setRows] = useState<HousekeepingTaskListItem[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
+  const [taskType, setTaskType] = useState("");
   const [priority, setPriority] = useState("");
   const [room, setRoom] = useState("");
+  const [date, setDate] = useState("");
+  const [mineOnly, setMineOnly] = useState(false);
+  const [ordering, setOrdering] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -87,6 +110,9 @@ export function HousekeepingTab() {
   });
   const [completeTask, setCompleteTask] = useState<HousekeepingTaskListItem | null>(null);
   const [cancelTask, setCancelTask] = useState<HousekeepingTaskListItem | null>(null);
+  const [assignTask, setAssignTask] = useState<HousekeepingTaskListItem | null>(null);
+  const [rejectTask, setRejectTask] = useState<HousekeepingTaskListItem | null>(null);
+  const [priorityTask, setPriorityTask] = useState<HousekeepingTaskListItem | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,8 +123,12 @@ export function HousekeepingTab() {
           page,
           search: query || undefined,
           status: status || undefined,
+          task_type: taskType || undefined,
           priority: priority || undefined,
           room: room ? Number(room) : undefined,
+          date: date || undefined,
+          mine: mineOnly ? "true" : undefined,
+          ordering: ordering || undefined,
         }),
         listRooms({ page_size: 100 }),
       ]);
@@ -110,7 +140,7 @@ export function HousekeepingTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, query, status, priority, room, t]);
+  }, [page, query, status, taskType, priority, room, date, mineOnly, ordering, t]);
 
   useEffect(() => {
     load();
@@ -137,6 +167,7 @@ export function HousekeepingTab() {
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const roomOptions = rooms.map((r) => ({ value: String(r.id), label: r.number }));
   const statusOptions = STATUSES.map((s) => ({ value: s, label: hk.status[s] }));
+  const typeOptions = TASK_TYPES.map((v) => ({ value: v, label: hk.types[v] }));
   const priorityOptions = PRIORITIES.map((p) => ({
     value: p,
     label: t.operations.priority[p],
@@ -177,24 +208,51 @@ export function HousekeepingTab() {
       header: t.common.actions,
       align: "end",
       render: (r) => {
+        if (r.status === "awaiting_inspection") {
+          if (!can("housekeeping.inspect")) return <span className="muted small">—</span>;
+          return (
+            <div className="table__actions">
+              <Button
+                size="sm"
+                icon={ClipboardCheck}
+                loading={busyId === r.id}
+                onClick={() =>
+                  run(r.id, () => approveInspection(r.id), t.operations.saved)
+                }
+              >
+                {hk.approveInspection}
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => setRejectTask(r)}>
+                {hk.rejectInspection}
+              </Button>
+            </div>
+          );
+        }
         const active = ["pending", "assigned", "in_progress"].includes(r.status);
         if (!active) return <span className="muted small">—</span>;
         return (
           <div className="table__actions">
-            {!r.assigned_to && me ? (
+            {can("housekeeping.assign") ? (
               <Button
                 size="sm"
                 variant="secondary"
                 icon={UserCheck}
-                loading={busyId === r.id}
-                onClick={() =>
-                  run(r.id, () => assignHousekeepingTask(r.id, me.id), hk.assignedMsg)
-                }
+                onClick={() => setAssignTask(r)}
               >
-                {hk.assignToMe}
+                {r.assigned_to ? hk.reassign : hk.assignTitle}
               </Button>
             ) : null}
-            {r.status !== "in_progress" ? (
+            {can("housekeeping.update") ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={Pencil}
+                onClick={() => setPriorityTask(r)}
+              >
+                {hk.editPriority}
+              </Button>
+            ) : null}
+            {r.status !== "in_progress" && can("housekeeping.status_update") ? (
               <Button
                 size="sm"
                 variant="secondary"
@@ -211,12 +269,16 @@ export function HousekeepingTab() {
                 {hk.start}
               </Button>
             ) : null}
-            <Button size="sm" onClick={() => setCompleteTask(r)}>
-              {hk.complete}
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => setCancelTask(r)}>
-              {t.common.cancel}
-            </Button>
+            {r.status === "in_progress" && can("housekeeping.status_update") ? (
+              <Button size="sm" onClick={() => setCompleteTask(r)}>
+                {hk.complete}
+              </Button>
+            ) : null}
+            {can("housekeeping.cancel") ? (
+              <Button size="sm" variant="danger" onClick={() => setCancelTask(r)}>
+                {t.common.cancel}
+              </Button>
+            ) : null}
           </div>
         );
       },
@@ -229,9 +291,11 @@ export function HousekeepingTab() {
         <SectionHeader
           title={hk.title}
           actions={
-            <Button icon={Plus} onClick={() => setCreateOpen(true)}>
-              {hk.create}
-            </Button>
+            can("housekeeping.create") ? (
+              <Button icon={Plus} onClick={() => setCreateOpen(true)}>
+                {hk.create}
+              </Button>
+            ) : null
           }
         />
         <form
@@ -262,6 +326,18 @@ export function HousekeepingTab() {
                 }}
               />
             </FormField>
+            <FormField label={hk.typeFilter} htmlFor="hk-type">
+              <Select
+                id="hk-type"
+                value={taskType}
+                placeholder={t.common.all}
+                options={typeOptions}
+                onChange={(e) => {
+                  setPage(1);
+                  setTaskType(e.target.value);
+                }}
+              />
+            </FormField>
             <FormField label={t.operations.priorityLabel} htmlFor="hk-priority">
               <Select
                 id="hk-priority"
@@ -286,6 +362,38 @@ export function HousekeepingTab() {
                 }}
               />
             </FormField>
+            <FormField label={hk.dateFilter} htmlFor="hk-date">
+              <Input
+                id="hk-date"
+                type="date"
+                value={date}
+                onChange={(e) => {
+                  setPage(1);
+                  setDate(e.target.value);
+                }}
+              />
+            </FormField>
+            <FormField label={hk.orderingPriority} htmlFor="hk-ordering">
+              <Select
+                id="hk-ordering"
+                value={ordering}
+                placeholder={t.common.all}
+                options={[{ value: "priority", label: hk.priorityLabel }]}
+                onChange={(e) => {
+                  setPage(1);
+                  setOrdering(e.target.value);
+                }}
+              />
+            </FormField>
+            <Switch
+              id="hk-mine"
+              checked={mineOnly}
+              onChange={(v) => {
+                setPage(1);
+                setMineOnly(v);
+              }}
+              label={hk.mineOnly}
+            />
           </FilterBar>
         </form>
         {loading ? <LoadingState label={t.common.loading} /> : null}
@@ -352,6 +460,33 @@ export function HousekeepingTab() {
         onDone={() => {
           setCancelTask(null);
           notify(hk.cancelledMsg);
+          load();
+        }}
+      />
+      <AssignModal
+        task={assignTask}
+        onClose={() => setAssignTask(null)}
+        onDone={(unassigned) => {
+          setAssignTask(null);
+          notify(unassigned ? t.operations.saved : hk.assignedMsg);
+          load();
+        }}
+      />
+      <RejectInspectionModal
+        task={rejectTask}
+        onClose={() => setRejectTask(null)}
+        onDone={() => {
+          setRejectTask(null);
+          notify(t.operations.saved);
+          load();
+        }}
+      />
+      <PriorityModal
+        task={priorityTask}
+        onClose={() => setPriorityTask(null)}
+        onDone={() => {
+          setPriorityTask(null);
+          notify(t.operations.saved);
           load();
         }}
       />
@@ -634,6 +769,259 @@ function CancelModal({
             id="hk-cancel-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
+          />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function AssignModal({
+  task,
+  onClose,
+  onDone,
+}: {
+  task: HousekeepingTaskListItem | null;
+  onClose: () => void;
+  /** `unassigned` is true when the task was returned to the pending pool. */
+  onDone: (unassigned: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const hk = t.operations.hk;
+  const me = useCurrentUser();
+  const [staffOptions, setStaffOptions] = useState<{ value: string; label: string }[]>([]);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!task) return;
+    setValue(task.assigned_to ? String(task.assigned_to) : me ? String(me.id) : "");
+    setError(null);
+    listStaff({ page_size: 100 })
+      .then((res) => {
+        const options = res.results
+          .filter((m) => m.is_active)
+          .map((m) => ({ value: String(m.user_id), label: m.full_name }));
+        if (me && !options.some((o) => o.value === String(me.id))) {
+          options.unshift({ value: String(me.id), label: me.full_name });
+        }
+        setStaffOptions(options);
+      })
+      .catch(() => {
+        // Fallback: at least allow assigning to the current user.
+        setStaffOptions(me ? [{ value: String(me.id), label: me.full_name }] : []);
+      });
+  }, [task, me]);
+
+  async function assign(userId: number | null) {
+    if (!task) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await assignHousekeepingTask(task.id, userId);
+      onDone(userId === null);
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!value) return setError(t.errors.validation);
+    assign(Number(value));
+  }
+
+  return (
+    <Modal
+      open={task !== null}
+      onClose={onClose}
+      title={hk.assignTitle}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          {task?.assigned_to ? (
+            <Button variant="dangerSoft" loading={busy} onClick={() => assign(null)}>
+              {hk.unassign}
+            </Button>
+          ) : null}
+          <Button form="hk-assign-form" type="submit" loading={busy}>
+            {t.common.save}
+          </Button>
+        </>
+      }
+    >
+      <form id="hk-assign-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={hk.assignTo} htmlFor="hk-assign-user">
+          <Select
+            id="hk-assign-user"
+            value={value}
+            placeholder={hk.unassigned}
+            options={staffOptions}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </FormField>
+        {me ? (
+          <div className="cluster">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              icon={UserCheck}
+              disabled={busy}
+              onClick={() => setValue(String(me.id))}
+            >
+              {hk.assignMe}
+            </Button>
+          </div>
+        ) : null}
+      </form>
+    </Modal>
+  );
+}
+
+function RejectInspectionModal({
+  task,
+  onClose,
+  onDone,
+}: {
+  task: HousekeepingTaskListItem | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const hk = t.operations.hk;
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (task) {
+      setReason("");
+      setError(null);
+    }
+  }, [task]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!task) return;
+    if (!reason.trim()) return setError(t.operations.errors.inspectionReasonRequired);
+    setBusy(true);
+    setError(null);
+    try {
+      await rejectInspection(task.id, reason.trim());
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={task !== null}
+      onClose={onClose}
+      title={hk.rejectInspection}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.close}
+          </Button>
+          <Button form="hk-reject-form" type="submit" variant="danger" loading={busy}>
+            {hk.rejectInspection}
+          </Button>
+        </>
+      }
+    >
+      <form id="hk-reject-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={hk.rejectReason} htmlFor="hk-reject-reason">
+          <Input
+            id="hk-reject-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function PriorityModal({
+  task,
+  onClose,
+  onDone,
+}: {
+  task: HousekeepingTaskListItem | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const hk = t.operations.hk;
+  const [priority, setPriority] = useState<OperationPriority>("normal");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (task) {
+      setPriority(task.priority);
+      setError(null);
+    }
+  }, [task]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!task) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await updateHousekeepingTask(task.id, { priority });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const priorityOptions = PRIORITIES.map((p) => ({
+    value: p,
+    label: t.operations.priority[p],
+  }));
+
+  return (
+    <Modal
+      open={task !== null}
+      onClose={onClose}
+      title={hk.editPriority}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          <Button form="hk-priority-form" type="submit" loading={busy}>
+            {t.common.save}
+          </Button>
+        </>
+      }
+    >
+      <form id="hk-priority-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={t.operations.priorityLabel} htmlFor="hk-priority-select">
+          <Select
+            id="hk-priority-select"
+            value={priority}
+            options={priorityOptions}
+            onChange={(e) => setPriority(e.target.value as OperationPriority)}
           />
         </FormField>
       </form>

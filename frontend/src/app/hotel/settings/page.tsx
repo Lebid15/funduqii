@@ -538,6 +538,18 @@ export default function HotelSettingsPage() {
                   disabled={suspended}
                   onChange={(v) => patch("require_guest_document", v)}
                 />
+                <div>
+                  <Switch
+                    id="housekeeping_inspection_required"
+                    label={t.hotel.settings.hkInspectionRequired}
+                    checked={s.housekeeping_inspection_required}
+                    disabled={suspended}
+                    onChange={(v) => patch("housekeeping_inspection_required", v)}
+                  />
+                  <p className="field__hint">
+                    {t.hotel.settings.hkInspectionRequiredHint}
+                  </p>
+                </div>
               </div>
             </Card>
 

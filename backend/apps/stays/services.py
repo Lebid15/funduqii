@@ -598,7 +598,8 @@ class RoomMoveService:
         from apps.operations.services import create_housekeeping_task
 
         # stay=None so the real check-out's idempotent task (keyed by stay)
-        # is not suppressed later.
+        # is not suppressed later; on_active="skip" so an already-active task
+        # on the vacated room never breaks the move.
         create_housekeeping_task(
             stay.hotel,
             user=user,
@@ -607,6 +608,7 @@ class RoomMoveService:
             task_type=HousekeepingTaskType.CHECKOUT_CLEANING,
             priority=OperationPriority.NORMAL,
             notes=f"Room move: guest moved to room {new_room.number}",
+            on_active="skip",
         )
         note = f"room moved {old_room.number} -> {new_room.number} · {reason.strip()}"
         _log(stay, StayStatus.IN_HOUSE, StayStatus.IN_HOUSE, note=note, user=user)

@@ -52,6 +52,7 @@ export interface StaffListParams {
   has_permission?: string;
   ordering?: string;
   page?: number;
+  page_size?: number;
 }
 
 export function listStaff(

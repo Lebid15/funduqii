@@ -298,7 +298,11 @@ class HousekeepingTests(APITestCase, OperationsMixin):
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.data["task_number"], "HK00001")
         self.assertEqual(r.data["status"], "pending")
-        self.assertEqual(self.create_hk().data["task_number"], "HK00002")
+        # Final closure: one active task per room — use a second room.
+        room2 = make_room(self.hotel, number="102", status=RoomStatus.DIRTY)
+        self.assertEqual(
+            self.create_hk(room=room2.id).data["task_number"], "HK00002"
+        )
 
     def test_numbering_is_per_hotel(self):
         self.create_hk()
@@ -311,7 +315,10 @@ class HousekeepingTests(APITestCase, OperationsMixin):
 
     def test_list_filters_and_search(self):
         self.create_hk(priority="urgent")
-        self.create_hk(task_type="inspection")
+        # Final closure: one active task per room — the second task needs its
+        # own room (completed/cancelled tasks would still count on room 1).
+        room2 = make_room(self.hotel, number="103", status=RoomStatus.DIRTY)
+        self.create_hk(task_type="inspection", room=room2.id)
         base = reverse("operations:housekeeping-list")
         self.assertEqual(
             self.client.get(base + "?priority=urgent", **HDR(self.hotel)).data["count"], 1
@@ -323,7 +330,7 @@ class HousekeepingTests(APITestCase, OperationsMixin):
             self.client.get(base + "?search=HK00002", **HDR(self.hotel)).data["count"], 1
         )
         self.assertEqual(
-            self.client.get(base + f"?room={self.room.id}", **HDR(self.hotel)).data["count"], 2
+            self.client.get(base + f"?room={self.room.id}", **HDR(self.hotel)).data["count"], 1
         )
 
     def test_cross_tenant_room_rejected(self):
@@ -868,3 +875,349 @@ class RoomStatusIntegrationTests(APITestCase, OperationsMixin):
         for name in ("shifts", "daily-close", "inventory", "purchasing", "reports"):
             with self.assertRaises(NoReverseMatch):
                 reverse(f"operations:{name}-list")
+
+
+# --------------------------------------------------------------------------- #
+# Final closure round                                                          #
+# --------------------------------------------------------------------------- #
+
+from apps.hotels.models import HotelSettings
+from apps.notifications.models import ActivityEvent
+from apps.operations.services import create_checkout_cleaning_task as _auto_task
+from apps.reservations.models import Reservation, ReservationRoomLine, ReservationStatus
+
+
+def _enable_inspection(hotel, enabled=True):
+    HotelSettings.objects.update_or_create(
+        hotel=hotel, defaults={"housekeeping_inspection_required": enabled}
+    )
+
+
+class ActiveTaskCapTests(APITestCase, OperationsMixin):
+    """A room may hold at most ONE active housekeeping task."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel, status=RoomStatus.DIRTY)
+        self.client.force_authenticate(self.manager)
+
+    def test_second_manual_task_refused(self):
+        self.assertEqual(self.create_hk().status_code, 201)
+        r = self.create_hk()
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "duplicate_active_task")
+
+    def test_auto_checkout_task_skips_when_room_busy(self):
+        # A manual task is active on the room; check-out's auto task must
+        # neither duplicate nor fail.
+        self.create_hk()
+        stay = make_stay(self.hotel, self.room)
+        self.assertIsNone(_auto_task(stay, user=self.manager))
+        active = HousekeepingTask.objects.filter(
+            hotel=self.hotel, room=self.room,
+            status__in=("pending", "assigned", "in_progress", "awaiting_inspection"),
+        ).count()
+        self.assertEqual(active, 1)
+
+    def test_checkout_idempotency_preserved(self):
+        stay = make_stay(self.hotel, self.room)
+        first = _auto_task(stay, user=self.manager)
+        self.assertIsNotNone(first)
+        self.assertIsNone(_auto_task(stay, user=self.manager))
+
+    def test_new_task_allowed_after_completion(self):
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "complete", {"mark_room_available": False})
+        self.assertEqual(self.create_hk().status_code, 201)
+
+    def test_new_task_allowed_after_cancellation(self):
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "cancel", {"reason": "test"})
+        self.assertEqual(self.create_hk().status_code, 201)
+
+    def test_cap_is_hotel_scoped(self):
+        self.create_hk()
+        other = make_hotel(slug="ocap")
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        oroom = make_room(other)
+        self.client.force_authenticate(om)
+        self.assertEqual(self.create_hk(hotel=other, room=oroom.id).status_code, 201)
+
+    def test_awaiting_inspection_counts_as_active(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "complete", {"mark_room_available": True})
+        r = self.create_hk()
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "duplicate_active_task")
+
+
+class AssignmentFlowTests(APITestCase, OperationsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.worker = add_member(self.hotel, "w@x.com", perms=["housekeeping.view"])
+        self.worker2 = add_member(self.hotel, "w2@x.com", perms=["housekeeping.view"])
+        self.room = make_room(self.hotel, status=RoomStatus.DIRTY)
+        self.client.force_authenticate(self.manager)
+
+    def _assign(self, task_id, user_id):
+        return self.act("housekeeping", task_id, "assign", {"assigned_to": user_id})
+
+    def test_assign_reassign_and_activities(self):
+        task = self.create_hk().data
+        r = self._assign(task["id"], self.worker.id)
+        self.assertEqual(r.data["status"], "assigned")
+        r = self._assign(task["id"], self.worker2.id)
+        self.assertEqual(r.data["assigned_to"], self.worker2.id)
+        events = set(
+            ActivityEvent.objects.filter(hotel=self.hotel).values_list(
+                "event_type", flat=True
+            )
+        )
+        self.assertIn("housekeeping.task_assigned", events)
+        self.assertIn("housekeeping.task_reassigned", events)
+
+    def test_unassign_returns_to_pending(self):
+        task = self.create_hk().data
+        self._assign(task["id"], self.worker.id)
+        r = self._assign(task["id"], None)
+        self.assertEqual(r.data["status"], "pending")
+        self.assertIsNone(r.data["assigned_to"])
+        self.assertTrue(
+            ActivityEvent.objects.filter(
+                hotel=self.hotel, event_type="housekeeping.task_unassigned"
+            ).exists()
+        )
+
+    def test_mine_filter(self):
+        t1 = self.create_hk().data
+        room2 = make_room(self.hotel, number="102", status=RoomStatus.DIRTY)
+        self.create_hk(room=room2.id)
+        self._assign(t1["id"], self.worker.id)
+        self.client.force_authenticate(self.worker)
+        base = reverse("operations:housekeeping-list")
+        mine = self.client.get(base + "?mine=true", **HDR(self.hotel)).data
+        self.assertEqual(mine["count"], 1)
+        self.assertEqual(mine["results"][0]["id"], t1["id"])
+
+    def test_assign_cross_hotel_member_rejected(self):
+        other = make_hotel(slug="oas")
+        outsider = add_member(other, "out@x.com", kind=MembershipType.MANAGER)
+        task = self.create_hk().data
+        r = self._assign(task["id"], outsider.id)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["code"], "cross_tenant_reference")
+
+
+class InspectionPolicyTests(APITestCase, OperationsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel, status=RoomStatus.DIRTY)
+        self.client.force_authenticate(self.manager)
+
+    def _inspect(self, task_id, action, body=None):
+        return self.client.post(
+            reverse(f"operations:housekeeping-inspect-{action}", args=[task_id]),
+            body or {}, format="json", **HDR(self.hotel),
+        )
+
+    def test_policy_off_keeps_old_behavior(self):
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "status", {"status": "in_progress"})
+        r = self.act(
+            "housekeeping", task["id"], "complete", {"mark_room_available": True}
+        )
+        self.assertEqual(r.data["status"], "completed")
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.status, RoomStatus.AVAILABLE)
+
+    def test_policy_on_completion_parks_for_inspection(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "status", {"status": "in_progress"})
+        r = self.act(
+            "housekeeping", task["id"], "complete", {"mark_room_available": True}
+        )
+        self.assertEqual(r.data["status"], "awaiting_inspection")
+        self.room.refresh_from_db()
+        # Room NOT released — still not check-in-ready.
+        self.assertNotEqual(self.room.status, RoomStatus.AVAILABLE)
+
+    def test_approve_completes_and_releases(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "status", {"status": "in_progress"})
+        self.act("housekeeping", task["id"], "complete", {})
+        r = self._inspect(task["id"], "approve")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "completed")
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.status, RoomStatus.AVAILABLE)
+        self.assertTrue(
+            ActivityEvent.objects.filter(
+                hotel=self.hotel, event_type="housekeeping.inspection_approved"
+            ).exists()
+        )
+
+    def test_reject_requires_reason(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "complete", {})
+        r = self._inspect(task["id"], "reject", {"reason": ""})
+        self.assertEqual(r.status_code, 400)
+
+    def test_reject_returns_room_dirty_and_task_in_progress(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "status", {"status": "in_progress"})
+        self.act("housekeeping", task["id"], "complete", {})
+        r = self._inspect(task["id"], "reject", {"reason": "bathroom not clean"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "in_progress")
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.status, RoomStatus.DIRTY)
+        # The rejection reason is preserved in the status log.
+        logs = self.client.get(
+            reverse("operations:housekeeping-detail", args=[task["id"]]),
+            **HDR(self.hotel),
+        ).data["status_logs"]
+        self.assertTrue(any("bathroom not clean" in (l["note"] or "") for l in logs))
+        # The attendant can complete it again.
+        again = self.act("housekeeping", task["id"], "complete", {})
+        self.assertEqual(again.data["status"], "awaiting_inspection")
+
+    def test_inspect_requires_permission(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "complete", {})
+        staff = add_member(
+            self.hotel, "s@x.com",
+            perms=["housekeeping.view", "housekeeping.status_update"],
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(self._inspect(task["id"], "approve").status_code, 403)
+        self.assertEqual(
+            self._inspect(task["id"], "reject", {"reason": "x"}).status_code, 403
+        )
+        inspector = add_member(
+            self.hotel, "i@x.com", perms=["housekeeping.inspect"]
+        )
+        self.client.force_authenticate(inspector)
+        self.assertEqual(self._inspect(task["id"], "approve").status_code, 200)
+
+    def test_maintenance_block_beats_approval(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        self.act("housekeeping", task["id"], "complete", {})
+        # Blocking maintenance appears while awaiting inspection.
+        self.create_mt(
+            room=self.room.id,
+            affects_room_availability=True,
+            room_block_status="maintenance",
+        )
+        r = self._inspect(task["id"], "approve")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "room_blocked_by_maintenance")
+
+    def test_generic_status_cannot_reach_awaiting_inspection(self):
+        _enable_inspection(self.hotel)
+        task = self.create_hk().data
+        r = self.act(
+            "housekeeping", task["id"], "status", {"status": "awaiting_inspection"}
+        )
+        self.assertEqual(r.status_code, 400)
+
+
+class PriorityOrderingTests(APITestCase, OperationsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        # The mixin's create_hk touches self.room even with an override.
+        self.room = make_room(self.hotel, number="299", status=RoomStatus.DIRTY)
+        for i, prio in enumerate(["low", "urgent", "normal", "high"]):
+            room = make_room(self.hotel, number=f"20{i}", status=RoomStatus.DIRTY)
+            self.create_hk(room=room.id, priority=prio)
+
+    def test_priority_ordering_by_severity(self):
+        base = reverse("operations:housekeeping-list")
+        rows = self.client.get(base + "?ordering=priority", **HDR(self.hotel)).data[
+            "results"
+        ]
+        self.assertEqual(
+            [r["priority"] for r in rows], ["urgent", "high", "normal", "low"]
+        )
+        rows = self.client.get(base + "?ordering=-priority", **HDR(self.hotel)).data[
+            "results"
+        ]
+        self.assertEqual(
+            [r["priority"] for r in rows], ["low", "normal", "high", "urgent"]
+        )
+
+    def test_priority_change_logged(self):
+        base = reverse("operations:housekeeping-list")
+        task = self.client.get(base, **HDR(self.hotel)).data["results"][0]
+        r = self.client.patch(
+            reverse("operations:housekeeping-detail", args=[task["id"]]),
+            {"priority": "urgent"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200)
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="housekeeping.priority_changed"
+        ).latest("id")
+        self.assertIn("urgent", event.message)
+
+
+class ArrivalsNotReadyTests(APITestCase, OperationsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Std", code="STD", base_capacity=2, max_capacity=2
+        )
+        self.floor = Floor.objects.create(hotel=self.hotel, name="G", number="0")
+
+    def _room(self, number, status=RoomStatus.DIRTY):
+        return Room.objects.create(
+            hotel=self.hotel, floor=self.floor, room_type=self.rtype,
+            number=number, status=status,
+        )
+
+    def _arrival(self, room):
+        today = timezone.localdate()
+        res = Reservation.objects.create(
+            hotel=self.hotel, reservation_number=f"RA{room.number}",
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=today, check_out_date=today + timezone.timedelta(days=2),
+            primary_guest_name="Arrival Guest",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=res, room_type=self.rtype,
+            room=room, quantity=1,
+        )
+        return res
+
+    def test_flags_dirty_arrival_room_only(self):
+        dirty = self._room("301", RoomStatus.DIRTY)
+        ready = self._room("302", RoomStatus.AVAILABLE)
+        self._arrival(dirty)
+        self._arrival(ready)
+        r = self.client.get(
+            reverse("operations:housekeeping-arrivals-not-ready"), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        numbers = [row["room_number"] for row in r.data]
+        self.assertEqual(numbers, ["301"])
+        self.assertEqual(r.data[0]["room_status"], "dirty")
+
+    def test_requires_view_permission(self):
+        nobody = add_member(self.hotel, "n@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(nobody)
+        r = self.client.get(
+            reverse("operations:housekeeping-arrivals-not-ready"), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 403)

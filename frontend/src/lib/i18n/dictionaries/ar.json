@@ -187,7 +187,9 @@
       "publicMinNights": "الحد الأدنى لعدد الليالي (عام)",
       "publicMaxNights": "الحد الأقصى لعدد الليالي (عام)",
       "publicTerms": "شروط الحجز العامة",
-      "publicTermsHint": "تُعرض للزوار قبل إتمام الحجز."
+      "publicTermsHint": "تُعرض للزوار قبل إتمام الحجز.",
+      "hkInspectionRequired": "فحص الغرف بعد التنظيف",
+      "hkInspectionRequiredHint": "عند التفعيل: إكمال العامل يحوّل المهمة إلى بانتظار الفحص، ولا تصبح الغرفة جاهزة إلا بعد اعتماد المشرف."
     }
   },
   "rooms": {
@@ -1350,7 +1352,8 @@
         "assigned": "مسندة",
         "in_progress": "قيد التنفيذ",
         "completed": "مكتملة",
-        "cancelled": "ملغاة"
+        "cancelled": "ملغاة",
+        "awaiting_inspection": "بانتظار الفحص"
       },
       "assignee": "المسند إليه",
       "unassigned": "غير مسندة",
@@ -1376,7 +1379,22 @@
       "empty": "لا توجد مهام تنظيف",
       "emptyHint": "أنشئ مهمة تنظيف، أو أنهِ إقامة لتُنشأ مهمة تلقائيًا.",
       "searchPlaceholder": "ابحث بالرقم أو الغرفة أو الملاحظات…",
-      "roomRequired": "اختر غرفة."
+      "roomRequired": "اختر غرفة.",
+      "statusAwaiting": "بانتظار الفحص",
+      "approveInspection": "اعتماد الفحص",
+      "rejectInspection": "رفض الفحص",
+      "rejectReason": "سبب الرفض (إلزامي)",
+      "assignTitle": "تعيين المهمة",
+      "assignTo": "الموظف",
+      "assignMe": "أنا",
+      "unassign": "إزالة التعيين",
+      "reassign": "إعادة التعيين",
+      "mineOnly": "مهامي فقط",
+      "typeFilter": "نوع المهمة",
+      "dateFilter": "التاريخ",
+      "orderingPriority": "ترتيب بالأولوية",
+      "editPriority": "تعديل الأولوية",
+      "priorityLabel": "الأولوية"
     },
     "mt": {
       "title": "طلبات الصيانة",
@@ -1513,14 +1531,19 @@
       "markedAvailable": "أصبحت الغرفة متاحة.",
       "columnEmpty": "لا غرف في هذه الحالة.",
       "empty": "لا توجد غرف بعد",
-      "emptyHint": "أنشئ الغرف أولًا من قسم الغرف."
+      "emptyHint": "أنشئ الغرف أولًا من قسم الغرف.",
+      "arrivalNotReady": "وصول اليوم — غير جاهزة",
+      "arrivalsNotReadyCount": "غرف وصول اليوم غير الجاهزة",
+      "arrivalsOnly": "غير الجاهزة للوصول فقط"
     },
     "errors": {
       "invalidTransition": "تغيير الحالة هذا غير مسموح.",
       "notEditable": "لم يعد يمكن تعديل هذا السجل.",
       "roomBlocked": "هذه الغرفة محجوبة بالصيانة ولا يمكن إتاحتها.",
       "claimantRequired": "اسم المستلم (أو نزيل مرتبط) مطلوب.",
-      "disposalReasonRequired": "السبب مطلوب للتخلص من الغرض."
+      "disposalReasonRequired": "السبب مطلوب للتخلص من الغرض.",
+      "duplicateActive": "للغرفة مهمة تنظيف نشطة بالفعل — أكملها أو ألغِها أولًا.",
+      "inspectionReasonRequired": "سبب رفض الفحص إلزامي."
     }
   },
   "staff": {

@@ -45,6 +45,7 @@ import type {
 } from "@/lib/api/types";
 import { formatDateTime, lostFoundStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 const PAGE_SIZE = 25;
 const CATEGORIES: LostFoundCategory[] = [
@@ -60,10 +61,18 @@ const STATUSES = ["found", "stored", "claimed", "returned", "disposed", "closed"
 
 type HandOverMode = "claim" | "return";
 
+/** Cosmetic permission gate — every API re-checks server-side regardless. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
+
 export function LostFoundTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const lf = t.operations.lf;
+  const can = useCan();
 
   const [rows, setRows] = useState<LostFoundItemListItem[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -161,6 +170,7 @@ export function LostFoundTab() {
       align: "end",
       render: (r) => {
         if (r.status === "returned" || r.status === "disposed") {
+          if (!can("lost_found.close")) return <span className="muted small">—</span>;
           return (
             <div className="table__actions">
               <Button size="sm" variant="secondary" onClick={() => setCloseItem(r)}>
@@ -170,6 +180,9 @@ export function LostFoundTab() {
           );
         }
         if (r.status === "claimed") {
+          if (!can("lost_found.status_update")) {
+            return <span className="muted small">—</span>;
+          }
           return (
             <div className="table__actions">
               <Button size="sm" onClick={() => setHandOver({ item: r, mode: "return" })}>
@@ -179,6 +192,9 @@ export function LostFoundTab() {
           );
         }
         if (r.status === "found" || r.status === "stored") {
+          if (!can("lost_found.status_update")) {
+            return <span className="muted small">—</span>;
+          }
           return (
             <div className="table__actions">
               {r.status === "found" ? (
@@ -221,9 +237,11 @@ export function LostFoundTab() {
         <SectionHeader
           title={lf.title}
           actions={
-            <Button icon={Plus} onClick={() => setCreateOpen(true)}>
-              {lf.create}
-            </Button>
+            can("lost_found.create") ? (
+              <Button icon={Plus} onClick={() => setCreateOpen(true)}>
+                {lf.create}
+              </Button>
+            ) : null
           }
         />
         <form

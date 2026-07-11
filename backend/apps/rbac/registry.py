@@ -77,6 +77,8 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     "restaurant": ["view", "create_order"],
     # Daily room operations (Phase 10): housekeeping tasks, maintenance
     # requests and lost & found — each with explicit operation codes.
+    # housekeeping.inspect arrived with the housekeeping final closure —
+    # supervisor-only approve/reject of completed rooms (policy-gated).
     "housekeeping": [
         "view",
         "create",
@@ -84,6 +86,7 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "cancel",
         "status_update",
         "assign",
+        "inspect",
     ],
     "maintenance": [
         "view",

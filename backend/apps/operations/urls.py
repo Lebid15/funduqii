@@ -2,10 +2,13 @@
 from django.urls import path
 
 from .views import (
+    ArrivalRoomsNotReadyView,
     HousekeepingAssignView,
     HousekeepingCancelView,
     HousekeepingCompleteView,
     HousekeepingDetailView,
+    HousekeepingInspectApproveView,
+    HousekeepingInspectRejectView,
     HousekeepingListCreateView,
     HousekeepingStatusView,
     LostFoundClaimView,
@@ -59,6 +62,21 @@ urlpatterns = [
         "operations/housekeeping/<int:pk>/complete/",
         HousekeepingCompleteView.as_view(),
         name="housekeeping-complete",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/inspect/approve/",
+        HousekeepingInspectApproveView.as_view(),
+        name="housekeeping-inspect-approve",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/inspect/reject/",
+        HousekeepingInspectRejectView.as_view(),
+        name="housekeeping-inspect-reject",
+    ),
+    path(
+        "operations/housekeeping/arrivals-not-ready/",
+        ArrivalRoomsNotReadyView.as_view(),
+        name="housekeeping-arrivals-not-ready",
     ),
     # Maintenance
     path(

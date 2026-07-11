@@ -49,6 +49,13 @@ class HotelSettings(models.Model):
     default_currency = models.CharField(max_length=3, default="USD")
     timezone = models.CharField(max_length=64, default="UTC")
 
+    # Housekeeping final closure: when enabled, an attendant's "complete"
+    # parks the task at awaiting_inspection and only a supervisor with
+    # `housekeeping.inspect` can approve (room released) or reject (room
+    # back to dirty, task back to in_progress). Default OFF — existing
+    # hotels keep today's behavior unchanged.
+    housekeeping_inspection_required = models.BooleanField(default=False)
+
     # --- Contact ----------------------------------------------------------
     phone = models.CharField(max_length=32, blank=True, default="")
     whatsapp_number = models.CharField(max_length=32, blank=True, default="")
