@@ -201,6 +201,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.shifts.errors.dayClosed;
     case "day_already_closed":
       return t.shifts.errors.dayAlreadyClosed;
+    case "business_date_mismatch":
+      return t.shifts.errors.businessDateMismatch;
     case "open_shifts_prevent_close":
       return t.shifts.errors.openShifts;
     case "pending_handovers_prevent_close":

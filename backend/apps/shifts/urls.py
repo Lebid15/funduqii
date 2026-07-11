@@ -7,6 +7,7 @@ from .views import (
     DailyCloseDetailView,
     DailyCloseListView,
     DailyClosePrepareView,
+    DailyCloseStatementView,
     HandoverAcceptView,
     HandoverCancelView,
     HandoverDetailView,
@@ -71,6 +72,11 @@ urlpatterns = [
         "shifts/daily-close/close/",
         DailyCloseCloseView.as_view(),
         name="daily-close-close",
+    ),
+    path(
+        "shifts/daily-close/<int:pk>/statement/",
+        DailyCloseStatementView.as_view(),
+        name="daily-close-statement",
     ),
     path(
         "shifts/daily-close/<str:business_date>/",

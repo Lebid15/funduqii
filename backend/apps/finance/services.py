@@ -99,9 +99,12 @@ def _actor(user):
 
 
 def _business_date(hotel):
-    from apps.shifts.services import get_business_date
+    # Daily-close serialization: every dated finance write reads the operational
+    # date UNDER a row lock on HotelSettings (all callers here run inside a
+    # transaction), so a write and the daily close can never straddle a roll.
+    from apps.shifts.services import lock_business_date
 
-    return get_business_date(hotel)
+    return lock_business_date(hotel)
 
 
 def _ensure_day_open(hotel, on_date) -> None:

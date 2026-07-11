@@ -10,15 +10,17 @@ and the business-day lock on the safe integrated flows.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from django.urls import NoReverseMatch, reverse
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import AccountType, User
-from apps.common.exceptions import BusinessDayClosed
+from apps.common.exceptions import BusinessDateMismatch, BusinessDayClosed
 from apps.finance.models import PaymentMethod
 from apps.finance.services import create_expense, create_folio, record_payment, void_payment
+from apps.hotels.models import HotelSettings
 from apps.rbac.services import grant_permission
 from apps.shifts.models import (
     DailyClose,
@@ -27,7 +29,7 @@ from apps.shifts.models import (
     ShiftHandover,
     ShiftStatus,
 )
-from apps.shifts.services import get_business_date
+from apps.shifts.services import ensure_business_day_open, get_business_date
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
 
 HDR = lambda h: {"HTTP_X_HOTEL_ID": str(h.id)}  # noqa: E731
@@ -80,6 +82,13 @@ class ShiftsMixin:
         body = {"business_date": str(business_date)} if business_date else {}
         return self.client.post(
             reverse("shifts:daily-close-close"), body, format="json",
+            **HDR(hotel or self.hotel),
+        )
+
+    def prepare(self, business_date=None, hotel=None):
+        body = {"business_date": str(business_date)} if business_date else {}
+        return self.client.post(
+            reverse("shifts:daily-close-prepare"), body, format="json",
             **HDR(hotel or self.hotel),
         )
 
@@ -213,10 +222,13 @@ class SuspendedHotelTests(APITestCase, ShiftsMixin):
             reverse("shifts:daily-close-close"), {}, format="json", **HDR(self.hotel)
         )
         self.assertEqual(r.data["code"], "hotel_suspended")
-        r = self.client.post(
-            reverse("shifts:daily-close-prepare"), {}, format="json", **HDR(self.hotel)
-        )
-        self.assertEqual(r.data["code"], "hotel_suspended")
+
+    def test_prepare_allowed_on_suspended_hotel(self):
+        # Prepare is READ-ONLY now — a suspended (read-only) hotel may preview.
+        r = self.prepare()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("can_close", r.data)
+        self.assertIn("blocking_errors", r.data)
 
 
 # --------------------------------------------------------------------------- #
@@ -519,116 +531,335 @@ class DailyCloseTests(APITestCase, ShiftsMixin):
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
         self.client.force_authenticate(self.manager)
+        self.settings = HotelSettings.objects.create(
+            hotel=self.hotel, default_currency="USD", timezone="UTC"
+        )
         self.today = get_business_date(self.hotel)
+        self.settings.business_date = self.today
+        self.settings.save(update_fields=["business_date"])
+        # Drop the cached reverse OneToOne so later reads see the seeded value.
+        self.hotel = Hotel.objects.get(pk=self.hotel.pk)
 
-    def test_prepare_creates_draft_snapshot(self):
-        r = self.client.post(
-            reverse("shifts:daily-close-prepare"), {}, format="json", **HDR(self.hotel)
+    def fresh_hotel(self):
+        # A hotel instance with NO cached settings — needed after a close has
+        # rolled the stored business_date via a different instance.
+        return Hotel.objects.get(pk=self.hotel.pk)
+
+    # --- business_date (stored) ------------------------------------------
+
+    def test_get_business_date_reads_stored(self):
+        self.settings.business_date = self.today + timedelta(days=10)
+        self.settings.save(update_fields=["business_date"])
+        self.assertEqual(get_business_date(self.fresh_hotel()), self.today + timedelta(days=10))
+
+    def test_get_business_date_fallback_when_unset_does_not_persist(self):
+        self.settings.business_date = None
+        self.settings.save(update_fields=["business_date"])
+        self.assertIsNotNone(get_business_date(self.fresh_hotel()))
+        self.settings.refresh_from_db()
+        self.assertIsNone(self.settings.business_date)
+
+    def test_migration_backfill_from_last_close_and_localdate(self):
+        # Exercise the backfill helper directly (no closed day → localdate;
+        # with a closed day → latest + 1).
+        from django.apps import apps as dj_apps
+        from importlib import import_module
+
+        mod = import_module("apps.hotels.migrations.0005_hotelsettings_business_date")
+        # no closed day -> localdate seed
+        self.settings.business_date = None
+        self.settings.save(update_fields=["business_date"])
+        mod.backfill_business_date(dj_apps, None)
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today)
+        # a closed day -> latest closed + 1
+        DailyClose.objects.create(
+            hotel=self.hotel, close_number="DC00050",
+            business_date=self.today, status=DailyCloseStatus.CLOSED,
+            snapshot_json={}, totals_json={},
         )
+        self.settings.business_date = None
+        self.settings.save(update_fields=["business_date"])
+        mod.backfill_business_date(dj_apps, None)
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today + timedelta(days=1))
+
+    # --- Prepare (read-only) ---------------------------------------------
+
+    def test_prepare_is_read_only(self):
+        r = self.prepare()
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["status"], "draft")
-        self.assertEqual(r.data["close_number"], "DC00001")
-        self.assertEqual(r.data["snapshot_json"]["business_date"], str(self.today))
-        self.assertIn("payments", r.data["snapshot_json"])
-        # Idempotent: preparing again refreshes, no new row/number.
-        r2 = self.client.post(
-            reverse("shifts:daily-close-prepare"), {}, format="json", **HDR(self.hotel)
-        )
-        self.assertEqual(r2.data["close_number"], "DC00001")
-        self.assertEqual(DailyClose.objects.filter(hotel=self.hotel).count(), 1)
+        for key in ("business_date", "can_close", "blocking_errors",
+                    "warnings", "informational_alerts", "preview_totals"):
+            self.assertIn(key, r.data)
+        self.assertEqual(r.data["business_date"], str(self.today))
+        self.assertTrue(r.data["can_close"])
+        self.assertEqual(DailyClose.objects.filter(hotel=self.hotel).count(), 0)
 
-    def test_cannot_close_day_with_open_shift(self):
+    def test_prepare_repeatable_no_side_effects(self):
+        self.prepare()
+        self.prepare()
+        self.assertEqual(DailyClose.objects.filter(hotel=self.hotel).count(), 0)
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today)
+
+    def test_prepare_flags_open_shift_blocking(self):
+        self.open_shift()
+        r = self.prepare()
+        self.assertFalse(r.data["can_close"])
+        self.assertIn("open_shifts", [b["code"] for b in r.data["blocking_errors"]])
+
+    # --- The one blocker: open shift -------------------------------------
+
+    def test_open_shift_blocks_close_no_roll(self):
         self.open_shift()
         r = self.close_day()
         self.assertEqual(r.status_code, 409)
         self.assertEqual(r.data["code"], "open_shifts_prevent_close")
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today)
 
-    def test_cannot_close_day_with_pending_handover(self):
+    # --- Pending handover is a WARNING, not a blocker --------------------
+
+    def test_pending_handover_is_warning_not_block(self):
         shift = self.open_shift().data
         receiver = add_member(self.hotel, "r@x.com", perms=["shifts.view"])
         handover = self.client.post(
             reverse("shifts:handover-list"),
             {"from_shift": shift["id"], "to_user": receiver.id},
-            format="json",
-            **HDR(self.hotel),
+            format="json", **HDR(self.hotel),
         ).data
         self.act("handover-submit", handover["id"])
         self.close_shift(shift["id"], "100.00")
+        prep = self.prepare()
+        self.assertTrue(prep.data["can_close"])
+        self.assertIn("pending_handovers", [w["code"] for w in prep.data["warnings"]])
         r = self.close_day()
-        self.assertEqual(r.status_code, 409)
-        self.assertEqual(r.data["code"], "pending_handovers_prevent_close")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "closed")
 
-    def test_close_day_and_snapshot(self):
+    # --- Close contract: roll, idempotency, mismatch ---------------------
+
+    def test_close_rolls_business_date_one_day(self):
+        r = self.close_day()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "closed")
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today + timedelta(days=1))
+        self.assertEqual(get_business_date(self.fresh_hotel()), self.today + timedelta(days=1))
+
+    def test_close_rejects_future_date(self):
+        r = self.close_day(self.today + timedelta(days=3))
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "business_date_mismatch")
+
+    def test_close_rejects_past_date_after_roll(self):
+        self.close_day()
+        r = self.close_day(self.today)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "business_date_mismatch")
+
+    def test_close_rejects_already_closed_current_date(self):
+        DailyClose.objects.create(
+            hotel=self.hotel, close_number="DC00099",
+            business_date=self.today, status=DailyCloseStatus.CLOSED,
+            snapshot_json={}, totals_json={},
+        )
+        r = self.close_day(self.today)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "day_already_closed")
+
+    def test_forced_failure_rolls_back_fully(self):
+        from unittest.mock import patch
+
+        from apps.shifts.services import close_business_day
+
+        with patch("apps.notifications.services.record_activity", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                close_business_day(self.hotel, self.today, user=self.manager)
+        self.assertEqual(
+            DailyClose.objects.filter(hotel=self.hotel, status=DailyCloseStatus.CLOSED).count(), 0
+        )
+        self.settings.refresh_from_db()
+        self.assertEqual(self.settings.business_date, self.today)
+
+    # --- New activity after close lands on the new open day --------------
+
+    def test_new_activity_after_close_uses_next_day(self):
+        self.close_day()
+        nxt = self.today + timedelta(days=1)
+        hotel = self.fresh_hotel()
+        folio = create_folio(hotel, customer_name="W")
+        p = record_payment(folio, amount="10.00", method=PaymentMethod.CASH, user=self.manager)
+        self.assertEqual(p.business_date, nxt)
+        r = self.open_shift()
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["business_date"], str(nxt))
+
+    def test_closed_day_guard_refuses_explicit_old_date(self):
+        self.close_day()
+        with self.assertRaises(BusinessDayClosed):
+            ensure_business_day_open(self.fresh_hotel(), self.today)
+
+    # --- Snapshot: shape, totals, immutability ---------------------------
+
+    def test_close_records_totals_and_snapshot_sections(self):
         shift = self.open_shift().data
         folio = create_folio(self.hotel, customer_name="W")
         record_payment(folio, amount="50.00", method=PaymentMethod.CASH, user=self.manager)
         self.close_shift(shift["id"], "150.00")
         r = self.close_day()
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["status"], "closed")
+        snap = r.data["snapshot_json"]
+        for key in ("identity", "shifts", "payments", "expenses",
+                    "restaurant", "folios", "operations", "exceptions"):
+            self.assertIn(key, snap)
+        self.assertEqual(snap["identity"]["business_date"], str(self.today))
+        self.assertEqual(snap["identity"]["next_business_date"], str(self.today + timedelta(days=1)))
+        self.assertEqual(snap["identity"]["currency"], "USD")
         self.assertEqual(r.data["totals_json"]["payments_cash_total"], "50.00")
         self.assertEqual(r.data["totals_json"]["shifts_count"], 1)
-        self.assertEqual(len(r.data["snapshot_json"]["shifts"]), 1)
+        self.assertEqual(len(snap["shifts"]["items"]), 1)
         detail = self.client.get(
-            reverse("shifts:daily-close-detail", args=[str(self.today)]),
-            **HDR(self.hotel),
+            reverse("shifts:daily-close-detail", args=[str(self.today)]), **HDR(self.hotel)
         )
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.data["status"], "closed")
 
-    def test_cannot_close_day_twice(self):
-        self.close_day()
-        r = self.close_day()
-        self.assertEqual(r.status_code, 409)
-        self.assertEqual(r.data["code"], "day_already_closed")
+    def test_snapshot_separates_reversals(self):
+        from apps.finance.models import Payment
 
-    def test_lock_blocks_new_payment_and_expense(self):
-        self.close_day()
         folio = create_folio(self.hotel, customer_name="W")
-        with self.assertRaises(BusinessDayClosed):
-            record_payment(folio, amount="10.00", method=PaymentMethod.CASH, user=self.manager)
-        with self.assertRaises(BusinessDayClosed):
-            create_expense(
-                self.hotel, category="supplies", description="Late",
-                amount="5.00", method=PaymentMethod.CASH, user=self.manager,
-            )
+        orig = record_payment(folio, amount="40.00", method=PaymentMethod.CASH, user=self.manager)
+        Payment.objects.create(
+            hotel=self.hotel, folio=folio, receipt_number="RV00001",
+            amount=Decimal("-40.00"), currency="USD", method=PaymentMethod.CASH,
+            paid_at=orig.paid_at, business_date=self.today, reverses=orig,
+        )
+        r = self.close_day()
+        pay = r.data["snapshot_json"]["payments"]
+        self.assertEqual(pay["reversals_count"], 1)
+        self.assertEqual(pay["reversals_total"], "-40.00")
+        self.assertEqual(pay["cash_total"], "40.00")
 
-    def test_lock_blocks_opening_shift_on_closed_day(self):
+    def test_unassigned_cash_reported_not_blocking(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="30.00", method=PaymentMethod.CASH, user=self.manager)
+        r = self.close_day()
+        self.assertEqual(r.status_code, 200)
+        un = r.data["snapshot_json"]["exceptions"]["unassigned_movements"]
+        self.assertEqual(un["cash_payments"]["count"], 1)
+        self.assertEqual(un["cash_payments"]["total"], "30.00")
+        self.assertEqual(un["net_cash"], "30.00")
+
+    def test_open_folio_with_balance_does_not_block(self):
+        from apps.finance.services import add_charge
+
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(
+            folio, charge_type="service", description="svc",
+            quantity=1, unit_amount="200.00", user=self.manager,
+        )
+        r = self.close_day()
+        self.assertEqual(r.status_code, 200)
+        fol = r.data["snapshot_json"]["folios"]
+        self.assertEqual(fol["open_folios_count"], 1)
+        self.assertEqual(fol["positive_balance_count"], 1)
+        self.assertEqual(fol["positive_balance_amount"], "200.00")
+
+    # --- Room charges & taxes -------------------------------------------
+
+    def test_close_creates_no_room_charge(self):
+        from apps.finance.models import FolioCharge
+
+        before = FolioCharge.objects.filter(hotel=self.hotel).count()
         self.close_day()
-        r = self.open_shift()
-        self.assertEqual(r.status_code, 409)
-        self.assertEqual(r.data["code"], "business_day_closed")
+        self.assertEqual(FolioCharge.objects.filter(hotel=self.hotel, type="room").count(), 0)
+        self.assertEqual(FolioCharge.objects.filter(hotel=self.hotel).count(), before)
 
-    def test_lock_blocks_service_posting_on_closed_day(self):
-        from apps.services.services import post_order_to_folio
-        from apps.services.models import (
-            OrderStatus,
-            ServiceCategory,
-            ServiceItem,
-            ServiceOrder,
-            ServiceOrderItem,
-        )
+    def test_close_does_not_recompute_tax(self):
+        from apps.finance.services import add_charge
 
-        category = ServiceCategory.objects.create(hotel=self.hotel, name="Cafe")
-        item = ServiceItem.objects.create(
-            hotel=self.hotel, category=category, name="Tea",
-            unit_price=Decimal("10.00"),
+        folio = create_folio(self.hotel, customer_name="W")
+        charge = add_charge(
+            folio, charge_type="service", description="svc",
+            quantity=1, unit_amount="100.00", tax_rate="10.00", user=self.manager,
         )
+        tax_before = charge.tax_amount
+        self.close_day()
+        charge.refresh_from_db()
+        self.assertEqual(charge.tax_amount, tax_before)
+
+    # --- Operations: overdue departure is a warning ----------------------
+
+    def test_overdue_departure_is_warning_and_unchanged(self):
         from django.utils import timezone as dj_tz
 
-        order = ServiceOrder.objects.create(
-            hotel=self.hotel, order_number="ORD00001",
-            status=OrderStatus.DELIVERED, ordered_at=dj_tz.now(),
-            folio=create_folio(self.hotel, customer_name="W"),
+        from apps.guests.models import Guest
+        from apps.rooms.models import Floor, Room, RoomType
+        from apps.stays.models import Stay, StayStatus
+
+        rt = RoomType.objects.create(
+            hotel=self.hotel, name="Std", code="STD", base_capacity=2, max_capacity=2
         )
-        ServiceOrderItem.objects.create(
-            hotel=self.hotel, order=order, service_item=item, item_name="Tea",
-            quantity=1, unit_price=Decimal("10.00"), amount=Decimal("10.00"),
-            tax_amount=Decimal("0.00"), total_amount=Decimal("10.00"),
+        floor = Floor.objects.create(hotel=self.hotel, name="G", number="0")
+        room = Room.objects.create(hotel=self.hotel, floor=floor, room_type=rt, number="101")
+        guest = Guest.objects.create(hotel=self.hotel, full_name="Guest")
+        stay = Stay.objects.create(
+            hotel=self.hotel, room=room, primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=self.today - timedelta(days=2),
+            planned_check_out_date=self.today,
+            actual_check_in_at=dj_tz.now(),
+        )
+        prep = self.prepare()
+        self.assertTrue(prep.data["can_close"])
+        self.assertIn("overdue_departures", [w["code"] for w in prep.data["warnings"]])
+        r = self.close_day()
+        self.assertEqual(r.status_code, 200)
+        stay.refresh_from_db()
+        self.assertEqual(stay.status, StayStatus.IN_HOUSE)
+
+    # --- Print / permissions / isolation / reopen ------------------------
+
+    def test_statement_reads_stored_snapshot(self):
+        self.close_day()
+        dc = DailyClose.objects.get(hotel=self.hotel, business_date=self.today)
+        r = self.client.get(
+            reverse("shifts:daily-close-statement", args=[dc.id]), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["document"], "daily_close_statement")
+        self.assertIn("snapshot_json", r.data["close"])
+        self.assertEqual(
+            r.data["close"]["snapshot_json"]["identity"]["business_date"], str(self.today)
+        )
+
+    def test_statement_requires_view_permission(self):
+        self.close_day()
+        dc = DailyClose.objects.get(hotel=self.hotel, business_date=self.today)
+        staff = add_member(self.hotel, "noview@x.com", perms=["shifts.view"])
+        self.client.force_authenticate(staff)
+        r = self.client.get(
+            reverse("shifts:daily-close-statement", args=[dc.id]), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_view_only_cannot_prepare_or_close(self):
+        viewer = add_member(self.hotel, "v@x.com", perms=["daily_close.view"])
+        self.client.force_authenticate(viewer)
+        self.assertEqual(self.prepare().status_code, 403)
+        self.assertEqual(self.close_day().status_code, 403)
+
+    def test_isolation_between_hotels(self):
+        other = make_hotel(slug="o2")
+        HotelSettings.objects.create(
+            hotel=other, default_currency="USD", timezone="UTC", business_date=self.today
         )
         self.close_day()
-        with self.assertRaises(BusinessDayClosed):
-            post_order_to_folio(order, user=self.manager)
+        osettings = HotelSettings.objects.get(hotel=other)
+        self.assertEqual(osettings.business_date, self.today)
+        self.assertEqual(DailyClose.objects.filter(hotel=other).count(), 0)
 
     def test_no_hard_delete_and_list(self):
         self.close_day()

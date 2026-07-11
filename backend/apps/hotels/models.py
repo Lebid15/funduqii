@@ -49,6 +49,13 @@ class HotelSettings(models.Model):
     default_currency = models.CharField(max_length=3, default="USD")
     timezone = models.CharField(max_length=64, default="UTC")
 
+    # Daily closing (Phase 12 final closure): the hotel's ONE stored operational
+    # date. It is decoupled from the wall clock — the day advances ONLY when the
+    # daily close rolls it forward by one. Nullable for legacy/new rows;
+    # ``get_business_date`` falls back to the timezone-computed date (a pure
+    # read, never persisted) until the first close establishes a stored value.
+    business_date = models.DateField(null=True, blank=True)
+
     # Housekeeping final closure: when enabled, an attendant's "complete"
     # parks the task at awaiting_inspection and only a supervisor with
     # `housekeeping.inspect` can approve (room released) or reject (room

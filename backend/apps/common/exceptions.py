@@ -378,6 +378,16 @@ class PendingHandoversPreventClose(FunduqiiAPIException):
     default_code = "pending_handovers_prevent_close"
 
 
+class BusinessDateMismatch(FunduqiiAPIException):
+    """The daily close targets a date that is not the hotel's current stored
+    business date — a past date (already rolled) or a future one. Closing is
+    only ever allowed for the current open business date."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The requested date is not the hotel's current business date."
+    default_code = "business_date_mismatch"
+
+
 # --- Reservations & availability (Phase 6) ---------------------------------
 
 
