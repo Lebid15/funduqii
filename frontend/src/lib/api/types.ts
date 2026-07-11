@@ -1579,33 +1579,131 @@ export interface HandoverVoucher {
   handover: ShiftHandover;
 }
 
-export interface DailyCloseTotals {
-  payments_total: string;
-  payments_cash_total: string;
-  expenses_total: string;
-  expenses_cash_total: string;
-  service_postings_total: string;
-  shifts_count: number;
-  open_shifts_count: number;
+/** One issue surfaced by the daily-close checks. `code` is stable; the extra
+ *  fields only appear on the codes that carry them. */
+export interface DailyCloseException {
+  code: string;
+  count?: number;
+  shifts?: string[];
+  total_balance?: string;
+  net_cash?: string;
 }
 
+/** Money totals for a close. Identical keys appear in the list `totals_json`
+ *  and in the prepare `preview_totals`. */
+export interface DailyCloseTotals {
+  payments_cash_total: string;
+  payments_non_cash_total: string;
+  expenses_cash_total: string;
+  expenses_non_cash_total: string;
+  restaurant_sales: string;
+  cafe_sales: string;
+  shifts_count: number;
+  expected_cash_total: string;
+  actual_cash_total: string;
+  difference_total: string;
+}
+
+export interface DailyCloseMethodTotals {
+  count: number;
+  total: string;
+}
+
+export interface DailyCloseUnassignedMovements {
+  cash_payments: DailyCloseMethodTotals;
+  cash_expenses: DailyCloseMethodTotals;
+  cash_payment_reversals: DailyCloseMethodTotals;
+  cash_expense_reversals: DailyCloseMethodTotals;
+  net_cash: string;
+}
+
+/** Stored snapshot on a closed DailyClose row (read-only, sectioned). */
 export interface DailyCloseSnapshot {
+  identity: {
+    hotel_id: number;
+    business_date: string;
+    previous_business_date: string;
+    next_business_date: string;
+    timezone: string;
+    currency: string;
+  };
+  shifts: {
+    closed_shifts_count: number;
+    cancelled_shifts_count: number;
+    opening_balances_total: string;
+    expected_cash_total: string;
+    actual_cash_total: string;
+    difference_total: string;
+    shifts_with_difference_count: number;
+    difference_reasons_summary: unknown[];
+    items: Array<{
+      shift_number: string;
+      status: string;
+      responsible: string;
+      opening_cash: string;
+      expected_cash: string;
+      actual_cash: string;
+      cash_difference: string;
+    }>;
+  };
+  payments: {
+    posted_by_method: Record<string, DailyCloseMethodTotals>;
+    cash_total: string;
+    non_cash_total: string;
+    voided_count: number;
+    voided_total: string;
+    reversals_count: number;
+    reversals_total: string;
+    cash_reversals_total: string;
+    non_cash_reversals_total: string;
+  };
+  expenses: {
+    posted_by_method: Record<string, DailyCloseMethodTotals>;
+    posted_by_category: Record<string, DailyCloseMethodTotals>;
+    cash_total: string;
+    non_cash_total: string;
+    voided_count: number;
+    voided_total: string;
+    reversals_count: number;
+    reversals_total: string;
+    cash_reversals_total: string;
+    non_cash_reversals_total: string;
+  };
+  restaurant: {
+    restaurant_sales: string;
+    cafe_sales: string;
+    direct_settlements: DailyCloseMethodTotals;
+    folio_postings: DailyCloseMethodTotals;
+    open_orders_count: number;
+    cancelled_orders_count: number;
+  };
+  folios: {
+    open_folios_count: number;
+    total_balance: string;
+    positive_balance_count: number;
+    positive_balance_amount: string;
+    negative_balance_count: number;
+    negative_balance_amount: string;
+    zero_balance_count: number;
+    folios_closed_during_day: number;
+    foreign_currency_folios: unknown[];
+  };
+  operations: {
+    in_house_stays: number;
+    arrivals_not_checked_in: number;
+    overdue_departures: number;
+    open_housekeeping_tasks: number;
+    open_maintenance_requests: number;
+    not_ready_rooms: number;
+    open_lost_found_records: number;
+  };
+  exceptions: {
+    blocking_errors: DailyCloseException[];
+    warnings: DailyCloseException[];
+    informational_alerts: DailyCloseException[];
+    unassigned_movements: DailyCloseUnassignedMovements;
+  };
   business_date: string;
-  payments: { count: number; total: string; cash_total: string; voided_count: number };
-  expenses: { count: number; total: string; cash_total: string; voided_count: number };
-  service_postings: { count: number; total: string };
-  stays: { arrivals: number; departures: number };
-  shifts: Array<{
-    shift_number: string;
-    status: ShiftStatus;
-    responsible: string;
-    opening_cash: string;
-    expected_cash: string;
-    actual_cash: string | null;
-    cash_difference: string;
-  }>;
-  pending_handovers: number;
-  unassigned_movements: UnassignedMovements;
 }
 
 export interface DailyClose {
@@ -1621,6 +1719,23 @@ export interface DailyClose {
   totals_json: DailyCloseTotals;
   created_at: string;
   updated_at: string;
+}
+
+/** POST /shifts/daily-close/prepare — read-only pre-close check. Writes nothing. */
+export interface DailyClosePreview {
+  business_date: string;
+  can_close: boolean;
+  blocking_errors: DailyCloseException[];
+  warnings: DailyCloseException[];
+  informational_alerts: DailyCloseException[];
+  preview_totals: DailyCloseTotals;
+}
+
+/** GET /shifts/daily-close/<pk>/statement — print-friendly stored statement. */
+export interface DailyCloseStatement {
+  document: string;
+  hotel: HotelHeader;
+  close: DailyClose;
 }
 
 export interface DailyCloseListItem {

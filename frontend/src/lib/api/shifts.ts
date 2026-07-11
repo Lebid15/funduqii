@@ -8,6 +8,8 @@ import { hotelJson } from "./hotelFetch";
 import type {
   DailyClose,
   DailyCloseListItem,
+  DailyClosePreview,
+  DailyCloseStatement,
   HandoverVoucher,
   PaginatedResponse,
   Shift,
@@ -218,13 +220,17 @@ export function listDailyCloses(
   );
 }
 
+/**
+ * Read-only pre-close check. Writes nothing and no longer returns a DailyClose
+ * row — it returns the blocking errors, warnings, informational alerts and the
+ * preview totals the backend computed for the current business date.
+ */
 export function prepareDailyClose(
   businessDate?: string,
-  notes = "",
-): Promise<DailyClose> {
-  return hotelJson<DailyClose>(`${B}/daily-close/prepare`, {
+): Promise<DailyClosePreview> {
+  return hotelJson<DailyClosePreview>(`${B}/daily-close/prepare`, {
     method: "POST",
-    body: JSON.stringify({ business_date: businessDate || null, notes }),
+    body: JSON.stringify(businessDate ? { business_date: businessDate } : {}),
   });
 }
 
@@ -240,4 +246,9 @@ export function closeBusinessDay(
 
 export function getDailyClose(businessDate: string): Promise<DailyClose> {
   return hotelJson<DailyClose>(`${B}/daily-close/${businessDate}`);
+}
+
+/** Print-friendly daily-close statement built from the STORED snapshot. */
+export function getDailyCloseStatement(pk: number): Promise<DailyCloseStatement> {
+  return hotelJson<DailyCloseStatement>(`${B}/daily-close/${pk}/statement`);
 }

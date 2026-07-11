@@ -539,19 +539,13 @@ class DailyClosePrepareView(APIView):
     permission_classes = [DailyClosePrepare]
 
     def post(self, request: Request) -> Response:
-        _guard_write(request)
+        # READ-ONLY preview — no _guard_write, no writes, fully repeatable.
         serializer = DailyCloseActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         business_date = _parse_business_date(
             serializer.validated_data.get("business_date"), request.hotel
         )
-        close = services.prepare_daily_close(
-            request.hotel,
-            business_date,
-            user=request.user,
-            notes=serializer.validated_data.get("notes", ""),
-        )
-        return Response(DailyCloseSerializer(close).data)
+        return Response(services.prepare_daily_close(request.hotel, business_date))
 
 
 class DailyCloseCloseView(APIView):
@@ -585,3 +579,21 @@ class DailyCloseDetailView(APIView):
             DailyClose, hotel=request.hotel, business_date=on_date
         )
         return Response(DailyCloseSerializer(close).data)
+
+
+class DailyCloseStatementView(APIView):
+    """The print-friendly daily-close statement. Read-only; every figure comes
+    from the STORED ``snapshot_json``/``totals_json`` — nothing is recomputed
+    from the live tables at print time."""
+
+    permission_classes = [DailyCloseView]
+
+    def get(self, request: Request, pk: int) -> Response:
+        close = _get(DailyClose, request, pk)
+        return Response(
+            {
+                "document": "daily_close_statement",
+                "hotel": _hotel_header(request.hotel),
+                "close": DailyCloseSerializer(close).data,
+            }
+        )

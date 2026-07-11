@@ -103,9 +103,12 @@ def next_order_number(hotel) -> str:
 
 
 def _business_date(hotel):
-    from apps.shifts.services import get_business_date
+    # Daily-close serialization: read the operational date UNDER a HotelSettings
+    # row lock (callers run inside a transaction) so an order posting/settlement
+    # and the daily close never straddle a business-date roll.
+    from apps.shifts.services import lock_business_date
 
-    return get_business_date(hotel)
+    return lock_business_date(hotel)
 
 
 def outlet_enabled(hotel, outlet: str) -> bool:
