@@ -1563,6 +1563,22 @@ export interface ShiftHandover extends ShiftHandoverListItem {
   updated_at: string;
 }
 
+/** GET /shifts/<id>/statement — print-friendly operational shift statement. */
+export interface ShiftStatement {
+  document: string;
+  hotel: HotelHeader;
+  shift: Shift;
+  cash_summary: ShiftCashSummary;
+  unassigned_movements: UnassignedMovements;
+}
+
+/** GET /shifts/handovers/<id>/voucher — print-friendly handover voucher. */
+export interface HandoverVoucher {
+  document: string;
+  hotel: HotelHeader;
+  handover: ShiftHandover;
+}
+
 export interface DailyCloseTotals {
   payments_total: string;
   payments_cash_total: string;

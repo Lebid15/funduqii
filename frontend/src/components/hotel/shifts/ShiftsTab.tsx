@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Clock, PlayCircle } from "lucide-react";
+import { Clock, PlayCircle, Printer } from "lucide-react";
 
 import {
   Alert,
@@ -22,13 +22,13 @@ import {
   useToast,
   type Column,
 } from "@/components/ui";
-import { cancelShift, getShiftSummary, listShifts } from "@/lib/api/shifts";
+import { cancelShift, getShiftStatement, getShiftSummary, listShifts } from "@/lib/api/shifts";
 import { messageForError } from "@/lib/api/errors";
-import type { ShiftCashSummary, ShiftListItem, ShiftStatus } from "@/lib/api/types";
+import type { ShiftCashSummary, ShiftListItem, ShiftStatement, ShiftStatus } from "@/lib/api/types";
 import { formatDateTime, shiftStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useCurrentUser } from "@/lib/session/CurrentUserContext";
-import { CloseShiftModal, OpenShiftModal } from "./CurrentShiftTab";
+import { CloseShiftModal, OpenShiftModal, ShiftStatementPrintModal } from "./CurrentShiftTab";
 
 const PAGE_SIZE = 25;
 const STATUSES: ShiftStatus[] = ["open", "closed", "cancelled"];
@@ -59,6 +59,7 @@ export function ShiftsTab() {
     shift: ShiftListItem;
     summary: ShiftCashSummary;
   } | null>(null);
+  const [statementTarget, setStatementTarget] = useState<ShiftStatement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,6 +92,14 @@ export function ShiftsTab() {
       } else {
         setSummaryTarget({ shift: row, summary: data.cash_summary });
       }
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
+
+  async function openStatement(row: ShiftListItem) {
+    try {
+      setStatementTarget(await getShiftStatement(row.id));
     } catch (err) {
       notify(messageForError(err, t), "error");
     }
@@ -141,6 +150,9 @@ export function ShiftsTab() {
         <div className="table__actions">
           <Button size="sm" variant="secondary" onClick={() => openSummary(r, false)}>
             {l.summary}
+          </Button>
+          <Button size="sm" variant="ghost" icon={Printer} onClick={() => openStatement(r)}>
+            {t.shifts.print.printStatement}
           </Button>
           {r.status === "open" ? (
             <>
@@ -275,6 +287,10 @@ export function ShiftsTab() {
       <SummaryModal
         state={summaryTarget}
         onClose={() => setSummaryTarget(null)}
+      />
+      <ShiftStatementPrintModal
+        statement={statementTarget}
+        onClose={() => setStatementTarget(null)}
       />
       {me ? null : null}
     </>
