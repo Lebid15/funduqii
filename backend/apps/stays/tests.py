@@ -769,7 +769,8 @@ class ShortenStayTests(StayChangeBase):
         from apps.finance import services as fin
         from apps.finance.models import PostingStatus
 
-        folio = fin.create_folio(self.hotel, stay=self.stay, guest=self.guest)
+        # Check-in auto-opens the stay folio (folio closure round) — reuse it.
+        folio = fin.ensure_stay_folio(self.stay)
         charge = fin.add_charge(
             folio, charge_type="service", description="minibar",
             quantity=1, unit_amount="30.00",
@@ -934,7 +935,8 @@ class CheckOutFolioTests(StayChangeBase):
     def _folio(self):
         from apps.finance import services as fin
 
-        return fin.create_folio(self.hotel, stay=self.stay, guest=self.guest)
+        # Check-in auto-opens the stay folio (folio closure round) — reuse it.
+        return fin.ensure_stay_folio(self.stay)
 
     def test_checkout_without_folio_succeeds(self):
         self.assertEqual(self._co().status_code, 200)
@@ -1062,7 +1064,8 @@ class EarlyDepartureTests(APITestCase):
         from apps.finance.models import PostingStatus
 
         res, stay = self._admit(ci=D1, co=D1 + timedelta(days=4))
-        folio = fin.create_folio(self.hotel, stay=stay, guest=self.guest)
+        # Check-in auto-opens the stay folio (folio closure round) — reuse it.
+        folio = fin.ensure_stay_folio(stay)
         fin.add_charge(folio, charge_type="service", description="laundry",
                        quantity=1, unit_amount="20.00")
         fin.record_payment(folio, amount="20.00", method="cash")
@@ -1098,3 +1101,70 @@ class EarlyDepartureTests(APITestCase):
         self._co(stay, checkout_reason="left early")
         res.refresh_from_db()
         self.assertEqual(res.check_out_date, D1 + timedelta(days=4))
+
+
+class CheckInFolioTests(APITestCase):
+    """Folio closure round: every successful check-in opens the stay's ONE
+    operational folio inside the same transaction (rollback on failure)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel)
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype)
+
+    def _check_in(self):
+        return self.client.post(
+            reverse("stays:stay-check-in"),
+            {"reservation": self.res.id, "reservation_line": self.line.id,
+             "room": self.room.id, "primary_guest": self.guest.id},
+            format="json", **HDR(self.hotel),
+        )
+
+    def test_check_in_creates_open_folio(self):
+        from apps.finance.models import Folio, FolioStatus
+
+        self.assertEqual(self._check_in().status_code, 201)
+        stay = Stay.objects.get(hotel=self.hotel)
+        folio = Folio.objects.get(hotel=self.hotel, stay=stay)
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+        self.assertEqual(folio.guest_id, self.guest.id)
+        self.assertEqual(folio.reservation_id, self.res.id)
+        self.assertEqual(folio.customer_name, self.guest.full_name)
+        self.assertEqual(folio.currency, "USD")
+
+    def test_check_in_folio_is_idempotent_single(self):
+        from apps.finance.models import Folio
+        from apps.finance.services import ensure_stay_folio
+
+        self._check_in()
+        stay = Stay.objects.get(hotel=self.hotel)
+        first = Folio.objects.get(hotel=self.hotel, stay=stay)
+        again = ensure_stay_folio(stay)
+        self.assertEqual(again.id, first.id)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel, stay=stay).count(), 1)
+
+    def test_failed_folio_rolls_back_whole_check_in(self):
+        from apps.finance.models import Folio
+
+        with mock.patch(
+            "apps.finance.services.next_number", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                self._check_in()
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_second_manual_folio_for_stay_refused_via_api(self):
+        self._check_in()
+        stay = Stay.objects.get(hotel=self.hotel)
+        # The manager membership inherits all finance permissions.
+        r = self.client.post(
+            reverse("finance:folio-list"), {"stay": stay.id}, format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["code"], "invalid_finance_operation")

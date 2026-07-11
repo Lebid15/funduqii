@@ -11,11 +11,13 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 export function VoidDialog({
   open,
   title,
+  confirmLabel,
   onClose,
   onConfirm,
 }: {
   open: boolean;
   title?: string;
+  confirmLabel?: string;
   onClose: () => void;
   onConfirm: (reason: string) => Promise<void>;
 }) {
@@ -53,7 +55,7 @@ export function VoidDialog({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="void-form" type="submit" variant="danger" loading={busy}>{t.finance.void.confirm}</Button>
+          <Button form="void-form" type="submit" variant="danger" loading={busy}>{confirmLabel ?? t.finance.void.confirm}</Button>
         </>
       }
     >

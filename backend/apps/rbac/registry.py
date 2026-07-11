@@ -55,8 +55,12 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "void",
         "charge_create",
         "charge_void",
+        # Folio closure round: corrections AFTER a record's void window
+        # closed — deliberately separate from charge_create/payment_void.
+        "adjust",
         "payment_create",
         "payment_void",
+        "payment_reverse",
         "invoice_create",
         "invoice_issue",
         "invoice_void",

@@ -964,7 +964,8 @@
       "paymentsToday": "Bugünkü ödemeler",
       "expensesToday": "Bugünkü giderler",
       "netToday": "Bugünkü net",
-      "issuedInvoices": "Kesilen faturalar"
+      "issuedInvoices": "Kesilen faturalar",
+      "foreignCurrencyWarning": "Diğer para birimlerindeki {count} açık folyo ({currencies}) bekleyen bakiyeye dahil edilmez."
     },
     "folioStatus": {
       "open": "Açık",
@@ -1036,7 +1037,12 @@
       "voidPayment": "İptal",
       "printReceipt": "Makbuz",
       "voided": "İptal",
-      "invoices": "Faturalar"
+      "invoices": "Faturalar",
+      "statement": "Hesap özeti",
+      "adjust": "Düzeltme",
+      "reverse": "Ters kayıt",
+      "adjustsRef": "Ücret düzeltmesi",
+      "reversesRef": "Ödeme ters kaydı"
     },
     "chargeForm": {
       "title": "Ücret ekle",
@@ -1112,6 +1118,14 @@
       "reasonPlaceholder": "Neden iptal ediliyor?",
       "confirm": "İptal"
     },
+    "adjust": {
+      "title": "Ücreti düzelt",
+      "confirm": "Düzeltmeyi kaydet"
+    },
+    "reverse": {
+      "title": "Ödemeyi ters kaydet",
+      "confirm": "Ters kaydı işle"
+    },
     "print": {
       "print": "Yazdır",
       "close": "Kapat",
@@ -1137,7 +1151,14 @@
       "customerPhone": "Telefon",
       "customerEmail": "E-posta",
       "customerDocument": "Belge no",
-      "balanceAtIssue": "Düzenleme anındaki bakiye"
+      "balanceAtIssue": "Düzenleme anındaki bakiye",
+      "statementTitle": "Folyo hesap özeti",
+      "status": "Durum",
+      "opened": "Açılış",
+      "closed": "Kapanış",
+      "room": "Oda",
+      "plannedCheckIn": "Planlanan giriş",
+      "plannedCheckOut": "Planlanan çıkış"
     },
     "financeNote": "Tüm tutarlar yalnızca dahili olarak kaydedilir — gerçek ödeme işlenmez.",
     "errors": {
@@ -1145,7 +1166,14 @@
       "folioNotBalanced": "Folyo yalnızca bakiyesi sıfırken kapatılabilir.",
       "voidReasonRequired": "Bu kaydı iptal etmek için bir neden gerekir.",
       "invalidOperation": "Bu finansal işleme izin verilmiyor.",
-      "invalidAmount": "Tutar geçersiz."
+      "invalidAmount": "Tutar geçersiz.",
+      "voidWindowClosed": "Bu kaydın iş günü kapatıldı — iptal yerine düzeltme (ücretler için) veya ödeme ters kaydı işleyin.",
+      "voidWindowOpen": "Bu kaydın iş günü hâlâ açık — bunun yerine iptal kullanın.",
+      "folioHasPostings": "Ücret, ödeme veya faturası olan bir folyo iptal edilemez — bunun yerine kapatın.",
+      "chargeAlreadyAdjusted": "Bu ücretin işlenmiş bir düzeltmesi zaten var.",
+      "paymentAlreadyReversed": "Bu ödemenin işlenmiş bir ters kaydı zaten var.",
+      "reservationFolioNotSupported": "Konaklama olmadan folyo bir rezervasyona bağlanamaz.",
+      "activeInvoiceExists": "Bu folyo için kesilmiş bir fatura zaten var — yenisini kesmeden önce onu iptal edin."
     }
   },
   "services": {

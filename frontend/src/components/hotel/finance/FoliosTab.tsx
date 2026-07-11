@@ -26,20 +26,23 @@ import {
 } from "@/components/ui";
 import {
   addCharge,
+  adjustCharge,
   closeFolio,
   createFolio,
   createInvoice,
   getFolio,
+  getFolioStatement,
   getReceipt,
   issueInvoice,
   listFolios,
   recordPayment,
+  reversePayment,
   voidCharge,
   voidFolio,
   voidPayment,
 } from "@/lib/api/finance";
 import { messageForError } from "@/lib/api/errors";
-import type { Folio, FolioListItem, Payment } from "@/lib/api/types";
+import type { Folio, FolioListItem, FolioStatement, Payment } from "@/lib/api/types";
 import { folioStatusTone, formatDate, formatMoney, postingStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { PrintModal, VoidDialog } from "./shared";
@@ -159,13 +162,12 @@ export function FoliosTab() {
 function FolioCreateModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: (f: Folio) => void }) {
   const { t } = useI18n();
   const [customer, setCustomer] = useState("");
-  const [currency, setCurrency] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) { setCustomer(""); setCurrency(""); setNotes(""); setError(null); }
+    if (open) { setCustomer(""); setNotes(""); setError(null); }
   }, [open]);
 
   async function submit(event: FormEvent) {
@@ -173,7 +175,7 @@ function FolioCreateModal({ open, onClose, onSaved }: { open: boolean; onClose: 
     setBusy(true);
     setError(null);
     try {
-      const folio = await createFolio({ customer_name: customer.trim(), currency: currency.trim() || undefined, notes: notes.trim() });
+      const folio = await createFolio({ customer_name: customer.trim(), notes: notes.trim() });
       onSaved(folio);
     } catch (err) {
       setError(messageForError(err, t));
@@ -189,7 +191,6 @@ function FolioCreateModal({ open, onClose, onSaved }: { open: boolean; onClose: 
         {error ? <Alert tone="error">{error}</Alert> : null}
         <div className="form-grid">
           <FormField label={t.finance.folios.customerName} htmlFor="fo-cust"><Input id="fo-cust" value={customer} onChange={(e) => setCustomer(e.target.value)} /></FormField>
-          <FormField label={t.finance.folios.currency} htmlFor="fo-cur"><Input id="fo-cur" value={currency} maxLength={3} placeholder="USD" onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></FormField>
         </div>
         <FormField label={t.finance.folios.notes} htmlFor="fo-notes"><Textarea id="fo-notes" value={notes} onChange={(e) => setNotes(e.target.value)} /></FormField>
       </form>
@@ -204,7 +205,9 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<"charge" | "payment" | null>(null);
   const [voidTarget, setVoidTarget] = useState<{ kind: "charge" | "payment" | "folio"; id: number } | null>(null);
+  const [actionTarget, setActionTarget] = useState<{ kind: "adjust" | "reverse"; id: number } | null>(null);
   const [receipt, setReceipt] = useState<{ hotel: import("@/lib/api/types").HotelHeader; payment: Payment } | null>(null);
+  const [statement, setStatement] = useState<FolioStatement | null>(null);
 
   const reload = useCallback(async () => {
     if (id === null) return;
@@ -261,6 +264,15 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
     }
   }
 
+  async function openStatement() {
+    if (!folio) return;
+    try {
+      setStatement(await getFolioStatement(folio.id));
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
+
   return (
     <Modal open={id !== null} onClose={onClose} title={folio ? `${t.finance.folio.title} ${folio.folio_number}` : t.finance.folio.title} closeLabel={t.common.close}
       footer={<Button variant="secondary" onClick={onClose}>{t.common.close}</Button>}>
@@ -270,6 +282,7 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
           <div className="cluster">
             <Badge tone={folioStatusTone(folio.status)}>{t.finance.folioStatus[folio.status]}</Badge>
             <span className="muted">{folio.customer_name || folio.guest_name || "—"}</span>
+            <Button size="sm" variant="ghost" icon={Printer} onClick={openStatement}>{t.finance.folio.statement}</Button>
           </div>
 
           <StatusSummaryCard
@@ -307,12 +320,22 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
                   <li key={c.id} className="mini-list__row">
                     <span className="mini-list__main">
                       <strong>{c.description}</strong>
-                      <span className="muted">{t.finance.chargeTypes[c.type]} · {c.charge_date}</span>
+                      <span className="muted">
+                        {t.finance.chargeTypes[c.type]} · {c.charge_date}
+                        {c.adjusts !== null ? <span title={t.finance.folio.adjustsRef}> · ↩ {c.adjusts_number}</span> : null}
+                      </span>
                     </span>
                     <span className="mini-list__side">
                       <span>{m(c.total_amount)}</span>
                       {c.status === "voided" ? <Badge tone="danger">{t.finance.folio.voided}</Badge> :
-                        editable ? <Button size="sm" variant="ghost" onClick={() => setVoidTarget({ kind: "charge", id: c.id })}>{t.finance.folio.voidCharge}</Button> : null}
+                        editable ? (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => setVoidTarget({ kind: "charge", id: c.id })}>{t.finance.folio.voidCharge}</Button>
+                            {c.status === "posted" && c.adjusts === null ? (
+                              <Button size="sm" variant="ghost" onClick={() => setActionTarget({ kind: "adjust", id: c.id })}>{t.finance.folio.adjust}</Button>
+                            ) : null}
+                          </>
+                        ) : null}
                     </span>
                   </li>
                 ))}
@@ -328,13 +351,19 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
                   <li key={p.id} className="mini-list__row">
                     <span className="mini-list__main">
                       <strong>{p.receipt_number}</strong>
-                      <span className="muted">{t.finance.methods[p.method]} · {formatDate(p.paid_at, locale)}</span>
+                      <span className="muted">
+                        {t.finance.methods[p.method]} · {formatDate(p.paid_at, locale)}
+                        {p.reverses !== null ? <span title={t.finance.folio.reversesRef}> · ↩ {p.reverses_receipt}</span> : null}
+                      </span>
                     </span>
                     <span className="mini-list__side">
                       <span>{m(p.amount)}</span>
                       <Badge tone={postingStatusTone(p.status)}>{t.finance.postingStatus[p.status]}</Badge>
                       <Button size="sm" variant="ghost" icon={Printer} onClick={() => openReceipt(p.id)}>{t.finance.folio.printReceipt}</Button>
                       {p.status === "posted" && editable ? <Button size="sm" variant="ghost" onClick={() => setVoidTarget({ kind: "payment", id: p.id })}>{t.finance.folio.voidPayment}</Button> : null}
+                      {p.status === "posted" && p.reverses === null && Number(p.amount) > 0 && editable ? (
+                        <Button size="sm" variant="ghost" onClick={() => setActionTarget({ kind: "reverse", id: p.id })}>{t.finance.folio.reverse}</Button>
+                      ) : null}
                     </span>
                   </li>
                 ))}
@@ -353,6 +382,19 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
           else if (voidTarget.kind === "payment") await voidPayment(voidTarget.id, reason);
           else await voidFolio(voidTarget.id, reason);
           setVoidTarget(null);
+          await afterMutation();
+        }}
+      />
+      <VoidDialog
+        open={actionTarget !== null}
+        title={actionTarget?.kind === "reverse" ? t.finance.reverse.title : t.finance.adjust.title}
+        confirmLabel={actionTarget?.kind === "reverse" ? t.finance.reverse.confirm : t.finance.adjust.confirm}
+        onClose={() => setActionTarget(null)}
+        onConfirm={async (reason) => {
+          if (!actionTarget) return;
+          if (actionTarget.kind === "adjust") await adjustCharge(actionTarget.id, reason);
+          else await reversePayment(actionTarget.id, reason);
+          setActionTarget(null);
           await afterMutation();
         }}
       />
@@ -385,6 +427,92 @@ function FolioDetailModal({ id, onClose, onChanged }: { id: number | null; onClo
             signatureLabel={t.finance.print.signature}
             footer={t.finance.print.thanks}
           />
+        ) : null}
+      </PrintModal>
+      <PrintModal open={statement !== null} title={t.finance.print.statementTitle} onClose={() => setStatement(null)}>
+        {statement ? (
+          <PrintDocumentLayout
+            hotelName={statement.hotel.hotel_name}
+            hotelAddress={statement.hotel.address}
+            hotelPhone={statement.hotel.phone}
+            docTitle={t.finance.print.statementTitle}
+            docNumber={statement.folio.folio_number}
+            meta={[
+              { label: t.finance.print.status, value: t.finance.folioStatus[statement.folio.status] },
+              { label: t.finance.print.customer, value: statement.folio.customer_name || statement.folio.guest_name || "—" },
+              ...(statement.stay
+                ? [
+                    { label: t.finance.print.room, value: statement.stay.room_number },
+                    { label: t.finance.print.plannedCheckIn, value: formatDate(statement.stay.planned_check_in_date, locale) },
+                    { label: t.finance.print.plannedCheckOut, value: formatDate(statement.stay.planned_check_out_date, locale) },
+                  ]
+                : []),
+              { label: t.finance.print.opened, value: formatDate(statement.folio.opened_at, locale) },
+              ...(statement.folio.closed_at
+                ? [{ label: t.finance.print.closed, value: formatDate(statement.folio.closed_at, locale) }]
+                : []),
+            ]}
+            totals={[
+              { label: t.finance.folio.totalCharges, value: formatMoney(statement.folio.balance.total_charges, statement.folio.currency, locale) },
+              { label: t.finance.folio.totalPayments, value: formatMoney(statement.folio.balance.total_payments, statement.folio.currency, locale) },
+              { label: t.finance.folio.balance, value: <strong>{formatMoney(statement.folio.balance.balance, statement.folio.currency, locale)}</strong> },
+            ]}
+          >
+            <h4>{t.finance.folio.charges}</h4>
+            {statement.folio.charges.length === 0 ? <p className="muted">{t.finance.folio.noCharges}</p> : (
+              <table className="print-table">
+                <thead>
+                  <tr>
+                    <th>{t.finance.chargeForm.description}</th>
+                    <th>{t.finance.chargeForm.type}</th>
+                    <th>{t.finance.print.date}</th>
+                    <th>{t.finance.print.total}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {statement.folio.charges.map((c) => (
+                    <tr key={c.id}>
+                      <td>
+                        {c.description}
+                        {c.adjusts !== null ? <span className="muted"> → {c.adjusts_number}</span> : null}
+                        {c.status === "voided" ? <> <Badge tone="danger">{t.finance.folio.voided}</Badge></> : null}
+                      </td>
+                      <td>{t.finance.chargeTypes[c.type]}</td>
+                      <td>{formatDate(c.charge_date, locale)}</td>
+                      <td>{formatMoney(c.total_amount, statement.folio.currency, locale)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <h4>{t.finance.folio.payments}</h4>
+            {statement.folio.payments.length === 0 ? <p className="muted">{t.finance.folio.noPayments}</p> : (
+              <table className="print-table">
+                <thead>
+                  <tr>
+                    <th>{t.finance.payments.number}</th>
+                    <th>{t.finance.print.method}</th>
+                    <th>{t.finance.print.date}</th>
+                    <th>{t.finance.print.amount}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {statement.folio.payments.map((p) => (
+                    <tr key={p.id}>
+                      <td>
+                        {p.receipt_number}
+                        {p.reverses !== null ? <span className="muted"> → {p.reverses_receipt}</span> : null}
+                        {p.status === "voided" ? <> <Badge tone="danger">{t.finance.folio.voided}</Badge></> : null}
+                      </td>
+                      <td>{t.finance.methods[p.method]}</td>
+                      <td>{formatDate(p.paid_at, locale)}</td>
+                      <td>{formatMoney(p.amount, statement.folio.currency, locale)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </PrintDocumentLayout>
         ) : null}
       </PrintModal>
     </Modal>

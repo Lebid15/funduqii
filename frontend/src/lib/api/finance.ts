@@ -9,6 +9,7 @@ import type {
   FinanceOverview,
   Folio,
   FolioListItem,
+  FolioStatement,
   Invoice,
   PaginatedResponse,
   Payment,
@@ -55,7 +56,6 @@ export interface FolioCreateBody {
   stay?: number | null;
   guest?: number | null;
   customer_name?: string;
-  currency?: string;
   notes?: string;
 }
 
@@ -71,6 +71,10 @@ export function voidFolio(id: number, reason: string): Promise<Folio> {
   return hotelJson<Folio>(`${B}/folios/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
+export function getFolioStatement(id: number): Promise<FolioStatement> {
+  return hotelJson<FolioStatement>(`${B}/folios/${id}/statement`);
+}
+
 // --- Charges ----------------------------------------------------------------
 
 export interface ChargeBody {
@@ -79,7 +83,6 @@ export interface ChargeBody {
   quantity: string;
   unit_amount: string;
   tax_rate?: string;
-  charge_date?: string | null;
 }
 
 export function addCharge(folioId: number, body: ChargeBody): Promise<Folio> {
@@ -90,12 +93,15 @@ export function voidCharge(id: number, reason: string): Promise<Folio> {
   return hotelJson<Folio>(`${B}/charges/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
+export function adjustCharge(id: number, reason: string): Promise<Folio> {
+  return hotelJson<Folio>(`${B}/charges/${id}/adjust`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
 // --- Payments ---------------------------------------------------------------
 
 export interface PaymentBody {
   amount: string;
   method: string;
-  paid_at?: string | null;
   payer_name?: string;
   reference?: string;
   notes?: string;
@@ -120,6 +126,10 @@ export function listPayments(params?: PaymentListParams): Promise<PaginatedRespo
 
 export function voidPayment(id: number, reason: string): Promise<Payment> {
   return hotelJson<Payment>(`${B}/payments/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
+export function reversePayment(id: number, reason: string): Promise<{ folio: Folio; payment: Payment }> {
+  return hotelJson<{ folio: Folio; payment: Payment }>(`${B}/payments/${id}/reverse`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
 export function getReceipt(id: number): Promise<{ document: string; hotel: import("./types").HotelHeader; payment: Payment }> {

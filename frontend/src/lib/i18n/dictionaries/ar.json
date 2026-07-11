@@ -964,7 +964,8 @@
       "paymentsToday": "دفعات اليوم",
       "expensesToday": "مصروفات اليوم",
       "netToday": "الصافي اليوم",
-      "issuedInvoices": "فواتير صادرة"
+      "issuedInvoices": "فواتير صادرة",
+      "foreignCurrencyWarning": "{count} حسابات مفتوحة بعملات أخرى ({currencies}) مستثناة من الرصيد المستحق."
     },
     "folioStatus": {
       "open": "مفتوح",
@@ -1036,7 +1037,12 @@
       "voidPayment": "إلغاء",
       "printReceipt": "سند",
       "voided": "ملغى",
-      "invoices": "الفواتير"
+      "invoices": "الفواتير",
+      "statement": "كشف الحساب",
+      "adjust": "تسوية",
+      "reverse": "عكس",
+      "adjustsRef": "تسوية للبند",
+      "reversesRef": "عكس للدفعة"
     },
     "chargeForm": {
       "title": "إضافة بند",
@@ -1112,6 +1118,14 @@
       "reasonPlaceholder": "لماذا يُلغى هذا؟",
       "confirm": "إلغاء"
     },
+    "adjust": {
+      "title": "تسوية البند",
+      "confirm": "ترحيل التسوية"
+    },
+    "reverse": {
+      "title": "عكس الدفعة",
+      "confirm": "ترحيل العكس"
+    },
     "print": {
       "print": "طباعة",
       "close": "إغلاق",
@@ -1137,7 +1151,14 @@
       "customerPhone": "الهاتف",
       "customerEmail": "البريد الإلكتروني",
       "customerDocument": "رقم الوثيقة",
-      "balanceAtIssue": "الرصيد عند الإصدار"
+      "balanceAtIssue": "الرصيد عند الإصدار",
+      "statementTitle": "كشف حساب",
+      "status": "الحالة",
+      "opened": "فُتح",
+      "closed": "أُغلق",
+      "room": "الغرفة",
+      "plannedCheckIn": "الوصول المخطط",
+      "plannedCheckOut": "المغادرة المخططة"
     },
     "financeNote": "كل المبالغ تُسجَّل داخليًا فقط — لا تتم معالجة دفع فعلي.",
     "errors": {
@@ -1145,7 +1166,14 @@
       "folioNotBalanced": "لا يمكن إغلاق الحساب إلا عندما يكون الرصيد صفرًا.",
       "voidReasonRequired": "يلزم سبب لإلغاء هذا السجل.",
       "invalidOperation": "هذه العملية المالية غير مسموحة.",
-      "invalidAmount": "المبلغ غير صالح."
+      "invalidAmount": "المبلغ غير صالح.",
+      "voidWindowClosed": "أُغلق اليوم التشغيلي لهذا السجل — سجّل تسوية (للبنود) أو عكس دفعة بدلًا من الإلغاء.",
+      "voidWindowOpen": "اليوم التشغيلي لهذا السجل ما يزال مفتوحًا — استخدم الإلغاء بدلًا من ذلك.",
+      "folioHasPostings": "لا يمكن إلغاء حساب فيه بنود أو دفعات أو فواتير — أغلقه بدلًا من ذلك.",
+      "chargeAlreadyAdjusted": "لهذا البند تسوية مُرحَّلة بالفعل.",
+      "paymentAlreadyReversed": "لهذه الدفعة عكس مُرحَّل بالفعل.",
+      "reservationFolioNotSupported": "لا يمكن ربط الحساب بحجز دون إقامة.",
+      "activeInvoiceExists": "توجد فاتورة صادرة لهذا الحساب بالفعل — ألغِها قبل إصدار فاتورة جديدة."
     }
   },
   "services": {

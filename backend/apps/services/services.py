@@ -238,18 +238,9 @@ def _resolve_folio(order: ServiceOrder, *, user=None) -> Folio:
             raise CrossTenantReference({"field": "folio"})
         return order.folio
     if order.stay is not None:
-        existing = Folio.objects.filter(
-            hotel=order.hotel, stay=order.stay, status=FolioStatus.OPEN
-        ).first()
-        if existing:
-            return existing
-        return finance_services.create_folio(
-            order.hotel,
-            reservation=order.stay.reservation,
-            stay=order.stay,
-            guest=order.stay.primary_guest,
-            user=user,
-        )
+        # Folio closure round: the ONE central get-or-create (stay row lock +
+        # unique-open-folio constraint) — no local duplicate-folio logic.
+        return finance_services.ensure_stay_folio(order.stay, user=user)
     raise OrderNotPostable({"reason": "no_folio"})
 
 
