@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ArrowLeftRight, Plus, Send } from "lucide-react";
+import { ArrowLeftRight, Plus, Printer, Send } from "lucide-react";
 
 import {
   Alert,
@@ -18,6 +18,7 @@ import {
   LoadingState,
   Modal,
   Pagination,
+  PrintDocumentLayout,
   SectionHeader,
   Select,
   useToast,
@@ -27,6 +28,7 @@ import {
   acceptHandover,
   cancelHandover,
   createHandover,
+  getHandoverVoucher,
   listHandovers,
   listShifts,
   rejectHandover,
@@ -37,12 +39,14 @@ import { listStaff } from "@/lib/api/staff";
 import { messageForError } from "@/lib/api/errors";
 import type {
   HandoverStatus,
+  HandoverVoucher,
   ShiftHandoverListItem,
   ShiftListItem,
   StaffMemberListItem,
 } from "@/lib/api/types";
 import { formatDateTime, handoverStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { PrintModal } from "../finance/shared";
 
 const PAGE_SIZE = 25;
 const STATUSES: HandoverStatus[] = ["draft", "submitted", "accepted", "rejected", "cancelled"];
@@ -66,6 +70,15 @@ export function HandoversTab() {
   const [acceptTarget, setAcceptTarget] = useState<ShiftHandoverListItem | null>(null);
   const [rejectTarget, setRejectTarget] = useState<ShiftHandoverListItem | null>(null);
   const [cancelTarget, setCancelTarget] = useState<ShiftHandoverListItem | null>(null);
+  const [voucher, setVoucher] = useState<HandoverVoucher | null>(null);
+
+  async function openVoucher(row: ShiftHandoverListItem) {
+    try {
+      setVoucher(await getHandoverVoucher(row.id));
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,10 +138,13 @@ export function HandoversTab() {
       key: "actions",
       header: t.common.actions,
       align: "end",
-      render: (r) => {
-        if (r.status === "draft") {
-          return (
-            <div className="table__actions">
+      render: (r) => (
+        <div className="table__actions">
+          <Button size="sm" variant="ghost" icon={Printer} onClick={() => openVoucher(r)}>
+            {t.shifts.print.printVoucher}
+          </Button>
+          {r.status === "draft" ? (
+            <>
               <Button
                 size="sm"
                 icon={Send}
@@ -140,12 +156,10 @@ export function HandoversTab() {
               <Button size="sm" variant="danger" onClick={() => setCancelTarget(r)}>
                 {t.common.cancel}
               </Button>
-            </div>
-          );
-        }
-        if (r.status === "submitted") {
-          return (
-            <div className="table__actions">
+            </>
+          ) : null}
+          {r.status === "submitted" ? (
+            <>
               <Button size="sm" onClick={() => setAcceptTarget(r)}>
                 {h.accept}
               </Button>
@@ -155,11 +169,10 @@ export function HandoversTab() {
               <Button size="sm" variant="danger" onClick={() => setCancelTarget(r)}>
                 {t.common.cancel}
               </Button>
-            </div>
-          );
-        }
-        return <span className="muted small">—</span>;
-      },
+            </>
+          ) : null}
+        </div>
+      ),
     },
   ];
 
@@ -292,7 +305,74 @@ export function HandoversTab() {
           load();
         }}
       />
+      <HandoverVoucherPrintModal voucher={voucher} onClose={() => setVoucher(null)} />
     </>
+  );
+}
+
+/** Print-friendly handover voucher (reprintable GET). */
+function HandoverVoucherPrintModal({
+  voucher,
+  onClose,
+}: {
+  voucher: HandoverVoucher | null;
+  onClose: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const h = t.shifts.ho;
+  const p = t.shifts.print;
+  if (!voucher) return null;
+  const ho = voucher.handover;
+  const meta = [
+    { label: t.common.status, value: t.shifts.hoStatus[ho.status] },
+    { label: h.fromShift, value: ho.from_shift_number || "—" },
+    { label: h.toUser, value: ho.to_user_name || "—" },
+    ...(ho.submitted_at
+      ? [{ label: p.submittedAt, value: formatDateTime(ho.submitted_at, locale) }]
+      : []),
+    ...(ho.accepted_at
+      ? [{ label: p.acceptedAt, value: formatDateTime(ho.accepted_at, locale) }]
+      : []),
+  ];
+  return (
+    <PrintModal open={voucher !== null} title={p.voucherTitle} onClose={onClose}>
+      <PrintDocumentLayout
+        hotelName={voucher.hotel.hotel_name}
+        hotelAddress={voucher.hotel.address}
+        hotelPhone={voucher.hotel.phone}
+        docTitle={p.voucherTitle}
+        docNumber={ho.handover_number}
+        meta={meta}
+        signatureLabel={t.finance.print.signature}
+      >
+        <dl className="print-grid">
+          <div>
+            <dt>{h.summaryNotes}</dt>
+            <dd>{ho.summary_notes || "—"}</dd>
+          </div>
+          <div>
+            <dt>{h.pendingTasks}</dt>
+            <dd>{ho.pending_tasks_notes || "—"}</dd>
+          </div>
+          <div>
+            <dt>{h.cashNotes}</dt>
+            <dd>{ho.cash_notes || "—"}</dd>
+          </div>
+          <div>
+            <dt>{h.guestNotes}</dt>
+            <dd>{ho.guest_notes || "—"}</dd>
+          </div>
+          <div>
+            <dt>{h.maintenanceNotes}</dt>
+            <dd>{ho.maintenance_notes || "—"}</dd>
+          </div>
+          <div>
+            <dt>{h.lostFoundNotes}</dt>
+            <dd>{ho.lost_found_notes || "—"}</dd>
+          </div>
+        </dl>
+      </PrintDocumentLayout>
+    </PrintModal>
   );
 }
 

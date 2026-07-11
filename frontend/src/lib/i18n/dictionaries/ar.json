@@ -1871,6 +1871,14 @@
       "closed": "مغلق",
       "reopened": "معاد فتحه"
     },
+    "print": {
+      "printStatement": "طباعة كشف الوردية",
+      "statementTitle": "كشف الوردية",
+      "printVoucher": "طباعة سند التسليم",
+      "voucherTitle": "سند تسليم الوردية",
+      "submittedAt": "أُرسل في",
+      "acceptedAt": "قُبل في"
+    },
     "overview": {
       "openShifts": "ورديات مفتوحة",
       "openShiftsHint": "ورديات تعمل الآن.",

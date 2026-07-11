@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ArrowLeftRight, Clock, Lock, PlayCircle } from "lucide-react";
+import { ArrowLeftRight, Clock, Lock, PlayCircle, Printer } from "lucide-react";
 
 import {
   Alert,
@@ -14,16 +14,18 @@ import {
   Input,
   LoadingState,
   Modal,
+  PrintDocumentLayout,
   SectionHeader,
   StatCard,
   useToast,
 } from "@/components/ui";
-import { closeShift, getCurrentShift, openShift } from "@/lib/api/shifts";
+import { closeShift, getCurrentShift, getShiftStatement, openShift } from "@/lib/api/shifts";
 import { messageForError } from "@/lib/api/errors";
-import type { Shift, ShiftCashSummary } from "@/lib/api/types";
+import type { Shift, ShiftCashSummary, ShiftStatement } from "@/lib/api/types";
 import { formatDateTime, shiftStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { HandoverFormModal } from "./HandoversTab";
+import { PrintModal } from "../finance/shared";
 
 export function CurrentShiftTab() {
   const { t, locale } = useI18n();
@@ -37,6 +39,15 @@ export function CurrentShiftTab() {
   const [openModal, setOpenModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   const [handoverModal, setHandoverModal] = useState(false);
+  const [statement, setStatement] = useState<ShiftStatement | null>(null);
+
+  async function openStatement(id: number) {
+    try {
+      setStatement(await getShiftStatement(id));
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +126,13 @@ export function CurrentShiftTab() {
             >
               {c.handover}
             </Button>
+            <Button
+              variant="ghost"
+              icon={Printer}
+              onClick={() => openStatement(shift.id)}
+            >
+              {t.shifts.print.printStatement}
+            </Button>
           </div>
         </Card>
       )}
@@ -152,7 +170,61 @@ export function CurrentShiftTab() {
           }}
         />
       ) : null}
+      <ShiftStatementPrintModal statement={statement} onClose={() => setStatement(null)} />
     </>
+  );
+}
+
+/** Print-friendly shift statement (reprintable GET). Shared by the current
+ *  shift card and the shifts list. */
+export function ShiftStatementPrintModal({
+  statement,
+  onClose,
+}: {
+  statement: ShiftStatement | null;
+  onClose: () => void;
+}) {
+  const { t, locale } = useI18n();
+  if (!statement) return null;
+  const { shift, cash_summary } = statement;
+  const meta = [
+    { label: t.common.status, value: t.shifts.status[shift.status] },
+    { label: t.shifts.list.responsible, value: shift.responsible_name || "—" },
+    { label: t.shifts.list.businessDate, value: shift.business_date },
+    { label: t.shifts.list.openedAt, value: formatDateTime(shift.opened_at, locale) },
+    ...(shift.closed_at
+      ? [{ label: t.shifts.list.closedAt, value: formatDateTime(shift.closed_at, locale) }]
+      : []),
+    { label: t.shifts.current.openingCash, value: shift.opening_cash_amount },
+    { label: t.shifts.current.expectedCash, value: shift.expected_cash_amount },
+    ...(shift.actual_cash_amount !== null
+      ? [{ label: t.shifts.list.actual, value: shift.actual_cash_amount }]
+      : []),
+    { label: t.shifts.list.difference, value: shift.cash_difference },
+    ...(shift.difference_reason
+      ? [{ label: t.shifts.form.differenceReason, value: shift.difference_reason }]
+      : []),
+    {
+      label: t.shifts.current.cashIn,
+      value: `${cash_summary.cash_payments_total} (${cash_summary.payments_count})`,
+    },
+    {
+      label: t.shifts.current.cashOut,
+      value: `${cash_summary.cash_expenses_total} (${cash_summary.expenses_count})`,
+    },
+  ];
+  return (
+    <PrintModal open={statement !== null} title={t.shifts.print.statementTitle} onClose={onClose}>
+      <PrintDocumentLayout
+        hotelName={statement.hotel.hotel_name}
+        hotelAddress={statement.hotel.address}
+        hotelPhone={statement.hotel.phone}
+        docTitle={t.shifts.print.statementTitle}
+        docNumber={shift.shift_number}
+        meta={meta}
+        signatureLabel={t.finance.print.signature}
+      />
+    </PrintModal>
   );
 }
 

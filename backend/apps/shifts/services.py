@@ -157,6 +157,27 @@ def _check_member(hotel, user, *, field: str) -> None:
         raise CrossTenantReference({"field": field})
 
 
+def _record(hotel, *, event_type, severity, title, message="", user=None, obj=None,
+            target_user=None):
+    """One shift/handover activity event through the Phase 14 system (lazy
+    import keeps app loading order simple). Category ``shift`` matches the
+    existing shift.closed / daily_close.closed events."""
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type=event_type,
+        category="shift",
+        severity=severity,
+        title=title,
+        message=message,
+        actor=user,
+        target_user=target_user,
+        related_object=obj,
+        related_url="/hotel/shifts",
+    )
+
+
 @transaction.atomic
 def open_shift(
     hotel,
@@ -190,18 +211,32 @@ def open_shift(
         updated_by=actor,
     )
     _shift_log(shift, "", ShiftStatus.OPEN, user)
+    _record(
+        hotel,
+        event_type="shift.opened",
+        severity="info",
+        title=f"Shift {shift.shift_number} opened",
+        message=(
+            f"{responsible.full_name} · float {money(opening_cash_amount)} · "
+            f"{on_date}"
+        ),
+        user=user,
+        obj=shift,
+        target_user=responsible,
+    )
     return shift
 
 
 @transaction.atomic
 def update_shift(shift: Shift, *, user=None, **fields) -> Shift:
-    """Edit an OPEN shift's notes/opening float (typo fixes). Closed and
-    cancelled shifts are history — only ``internal_notes`` (the limited
-    managerial remark) stays writable on them."""
+    """Edit an OPEN shift's notes/opening float (typo fixes). A CLOSED or
+    CANCELLED shift is fully read-only — no field, not even the internal note,
+    may change (final closure decision); corrections live in the finance
+    services on later shifts."""
     editable = (
         ("opening_cash_amount", "opening_notes", "internal_notes")
         if shift.status == ShiftStatus.OPEN
-        else ("internal_notes",)
+        else ()
     )
     for field in fields:
         if field not in editable:
@@ -319,6 +354,16 @@ def cancel_shift(shift: Shift, *, reason, user=None) -> Shift:
     shift.updated_by = _actor(user)
     shift.save()
     _shift_log(shift, ShiftStatus.OPEN, ShiftStatus.CANCELLED, user, reason.strip())
+    _record(
+        shift.hotel,
+        event_type="shift.cancelled",
+        severity="warning",
+        title=f"Shift {shift.shift_number} cancelled",
+        message=reason.strip(),
+        user=user,
+        obj=shift,
+        target_user=shift.responsible_user,
+    )
     return shift
 
 
@@ -423,6 +468,16 @@ def submit_handover(handover: ShiftHandover, *, user=None) -> ShiftHandover:
     handover.updated_by = _actor(user)
     handover.save()
     _ho_log(handover, HandoverStatus.DRAFT, HandoverStatus.SUBMITTED, user)
+    _record(
+        handover.hotel,
+        event_type="handover.submitted",
+        severity="info",
+        title=f"Handover {handover.handover_number} submitted",
+        message=f"{handover.from_shift.shift_number} → {handover.to_user.full_name}",
+        user=user,
+        obj=handover,
+        target_user=handover.to_user,
+    )
     return handover
 
 
@@ -445,6 +500,16 @@ def accept_handover(handover: ShiftHandover, *, user=None, note="") -> ShiftHand
     handover.updated_by = _actor(user)
     handover.save()
     _ho_log(handover, HandoverStatus.SUBMITTED, HandoverStatus.ACCEPTED, user, note)
+    _record(
+        handover.hotel,
+        event_type="handover.accepted",
+        severity="success",
+        title=f"Handover {handover.handover_number} accepted",
+        message=(note or "").strip(),
+        user=user,
+        obj=handover,
+        target_user=handover.to_user,
+    )
     return handover
 
 
@@ -461,6 +526,16 @@ def reject_handover(handover: ShiftHandover, *, user=None, reason) -> ShiftHando
     handover.updated_by = _actor(user)
     handover.save()
     _ho_log(handover, HandoverStatus.SUBMITTED, HandoverStatus.REJECTED, user, reason.strip())
+    _record(
+        handover.hotel,
+        event_type="handover.rejected",
+        severity="danger",
+        title=f"Handover {handover.handover_number} rejected",
+        message=reason.strip(),
+        user=user,
+        obj=handover,
+        target_user=handover.to_user,
+    )
     return handover
 
 
@@ -477,6 +552,16 @@ def cancel_handover(handover: ShiftHandover, *, user=None, reason) -> ShiftHando
     handover.updated_by = _actor(user)
     handover.save()
     _ho_log(handover, previous, HandoverStatus.CANCELLED, user, reason.strip())
+    _record(
+        handover.hotel,
+        event_type="handover.cancelled",
+        severity="warning",
+        title=f"Handover {handover.handover_number} cancelled",
+        message=reason.strip(),
+        user=user,
+        obj=handover,
+        target_user=handover.to_user,
+    )
     return handover
 
 

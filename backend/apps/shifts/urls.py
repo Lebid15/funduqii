@@ -13,11 +13,13 @@ from .views import (
     HandoverListCreateView,
     HandoverRejectView,
     HandoverSubmitView,
+    HandoverVoucherView,
     ShiftCancelView,
     ShiftCloseView,
     ShiftDetailView,
     ShiftListCreateView,
     ShiftsOverviewView,
+    ShiftStatementView,
     ShiftSummaryView,
 )
 
@@ -53,6 +55,11 @@ urlpatterns = [
         HandoverCancelView.as_view(),
         name="handover-cancel",
     ),
+    path(
+        "shifts/handovers/<int:pk>/voucher/",
+        HandoverVoucherView.as_view(),
+        name="handover-voucher",
+    ),
     # Daily close
     path("shifts/daily-close/", DailyCloseListView.as_view(), name="daily-close-list"),
     path(
@@ -76,4 +83,9 @@ urlpatterns = [
     path("shifts/<int:pk>/close/", ShiftCloseView.as_view(), name="shift-close"),
     path("shifts/<int:pk>/cancel/", ShiftCancelView.as_view(), name="shift-cancel"),
     path("shifts/<int:pk>/summary/", ShiftSummaryView.as_view(), name="shift-summary"),
+    path(
+        "shifts/<int:pk>/statement/",
+        ShiftStatementView.as_view(),
+        name="shift-statement",
+    ),
 ]

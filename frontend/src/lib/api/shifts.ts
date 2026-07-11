@@ -8,12 +8,14 @@ import { hotelJson } from "./hotelFetch";
 import type {
   DailyClose,
   DailyCloseListItem,
+  HandoverVoucher,
   PaginatedResponse,
   Shift,
   ShiftCashSummary,
   ShiftHandover,
   ShiftHandoverListItem,
   ShiftListItem,
+  ShiftStatement,
   ShiftsOverview,
   UnassignedMovements,
 } from "./types";
@@ -111,6 +113,10 @@ export function getShiftSummary(id: number): Promise<{
   return hotelJson(`${B}/${id}/summary`);
 }
 
+export function getShiftStatement(id: number): Promise<ShiftStatement> {
+  return hotelJson<ShiftStatement>(`${B}/${id}/statement`);
+}
+
 // --- Handovers -------------------------------------------------------------------
 
 export interface HandoverListParams {
@@ -133,6 +139,10 @@ export function listHandovers(
 
 export function getHandover(id: number): Promise<ShiftHandover> {
   return hotelJson<ShiftHandover>(`${B}/handovers/${id}`);
+}
+
+export function getHandoverVoucher(id: number): Promise<HandoverVoucher> {
+  return hotelJson<HandoverVoucher>(`${B}/handovers/${id}/voucher`);
 }
 
 export interface HandoverBody {

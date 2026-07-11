@@ -293,25 +293,18 @@ class ShiftTests(APITestCase, ShiftsMixin):
         r = self.act("shift-cancel", shift["id"], {"reason": "again"})
         self.assertEqual(r.status_code, 409)
 
-    def test_closed_shift_only_internal_notes_editable(self):
+    def test_closed_shift_is_fully_read_only(self):
+        # Shifts final closure: a closed shift is fully read-only — NO field,
+        # not even the internal note, may change after close.
         shift = self.open_shift().data
         self.close_shift(shift["id"], "100.00")
-        r = self.client.patch(
-            reverse("shifts:shift-detail", args=[shift["id"]]),
-            {"opening_cash_amount": "999.00"},
-            format="json",
-            **HDR(self.hotel),
-        )
-        self.assertEqual(r.status_code, 409)
-        self.assertEqual(r.data["code"], "operation_not_editable")
-        r = self.client.patch(
-            reverse("shifts:shift-detail", args=[shift["id"]]),
-            {"internal_notes": "management remark"},
-            format="json",
-            **HDR(self.hotel),
-        )
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["internal_notes"], "management remark")
+        for payload in ({"opening_cash_amount": "999.00"}, {"internal_notes": "late remark"}):
+            r = self.client.patch(
+                reverse("shifts:shift-detail", args=[shift["id"]]),
+                payload, format="json", **HDR(self.hotel),
+            )
+            self.assertEqual(r.status_code, 409, payload)
+            self.assertEqual(r.data["code"], "operation_not_editable")
 
     def test_status_logs_created(self):
         shift = self.open_shift().data
@@ -691,3 +684,178 @@ class RegressionTests(APITestCase, ShiftsMixin):
         for name in ("attendance-list", "payroll-list", "schedule-list", "reports"):
             with self.assertRaises(NoReverseMatch):
                 reverse(f"shifts:{name}")
+
+
+# --------------------------------------------------------------------------- #
+# Shifts final closure round                                                   #
+# --------------------------------------------------------------------------- #
+
+from apps.notifications.models import ActivityEvent
+
+
+class ClosureBase(APITestCase, ShiftsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+
+    def _types(self, hotel=None):
+        return set(
+            ActivityEvent.objects.filter(hotel=hotel or self.hotel).values_list(
+                "event_type", flat=True
+            )
+        )
+
+
+class ClosedShiftReadOnlyTests(ClosureBase):
+    def test_open_shift_still_editable(self):
+        shift = self.open_shift().data
+        r = self.client.patch(
+            reverse("shifts:shift-detail", args=[shift["id"]]),
+            {"internal_notes": "while open", "opening_notes": "float ok"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["internal_notes"], "while open")
+
+    def test_closed_shift_rejects_every_field(self):
+        shift = self.open_shift().data
+        self.close_shift(shift["id"], "100.00")
+        for payload in (
+            {"internal_notes": "x"}, {"opening_notes": "x"},
+            {"opening_cash_amount": "5.00"},
+        ):
+            r = self.client.patch(
+                reverse("shifts:shift-detail", args=[shift["id"]]),
+                payload, format="json", **HDR(self.hotel),
+            )
+            self.assertEqual(r.status_code, 409, payload)
+            self.assertEqual(r.data["code"], "operation_not_editable")
+
+    def test_cancelled_shift_rejects_every_field(self):
+        shift = self.open_shift().data
+        self.act("shift-cancel", shift["id"], {"reason": "mistake"})
+        r = self.client.patch(
+            reverse("shifts:shift-detail", args=[shift["id"]]),
+            {"internal_notes": "x"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "operation_not_editable")
+
+
+class ClosureActivityTests(ClosureBase):
+    def test_shift_opened_and_cancelled_events(self):
+        shift = self.open_shift().data
+        self.assertIn("shift.opened", self._types())
+        self.act("shift-cancel", shift["id"], {"reason": "opened by mistake"})
+        types = self._types()
+        self.assertIn("shift.cancelled", types)
+        ev = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="shift.cancelled"
+        ).latest("id")
+        self.assertIn("opened by mistake", ev.message)
+
+    def test_handover_lifecycle_events(self):
+        # opener + recipient
+        shift = self.open_shift().data
+        recipient = add_member(self.hotel, "rec@x.com", perms=["shifts.view", "shifts.accept_handover"])
+        rec_m = recipient
+        h = self.client.post(
+            reverse("shifts:handover-list"),
+            {"from_shift": shift["id"], "to_user": recipient.id, "summary_notes": "all good"},
+            format="json", **HDR(self.hotel),
+        ).data
+        self.act("handover-submit", h["id"])
+        self.assertIn("handover.submitted", self._types())
+        # accept as recipient
+        self.client.force_authenticate(recipient)
+        self.act("handover-accept", h["id"], {"note": "received"})
+        self.assertIn("handover.accepted", self._types())
+
+    def test_handover_reject_and_cancel_events(self):
+        shift = self.open_shift().data
+        recipient = add_member(self.hotel, "rec2@x.com", perms=["shifts.view", "shifts.accept_handover"])
+        # reject path
+        h1 = self.client.post(
+            reverse("shifts:handover-list"),
+            {"from_shift": shift["id"], "to_user": recipient.id}, format="json", **HDR(self.hotel),
+        ).data
+        self.act("handover-submit", h1["id"])
+        self.client.force_authenticate(recipient)
+        self.act("handover-reject", h1["id"], {"reason": "wrong recipient"})
+        self.assertIn("handover.rejected", self._types())
+        # cancel path (manager cancels a draft)
+        self.client.force_authenticate(self.manager)
+        h2 = self.client.post(
+            reverse("shifts:handover-list"),
+            {"from_shift": shift["id"], "to_user": recipient.id}, format="json", **HDR(self.hotel),
+        ).data
+        self.act("handover-cancel", h2["id"], {"reason": "not needed"})
+        self.assertIn("handover.cancelled", self._types())
+
+    def test_closed_event_still_present(self):
+        shift = self.open_shift().data
+        self.close_shift(shift["id"], "100.00")
+        self.assertIn("shift.closed", self._types())
+
+
+class ShiftPrintTests(ClosureBase):
+    def test_shift_statement(self):
+        shift = self.open_shift(opening_cash_amount="100.00").data
+        # take a cash payment so the drawer moves
+        folio = create_folio(self.hotel, customer_name="W", user=self.manager)
+        record_payment(folio, amount="40.00", method=PaymentMethod.CASH, user=self.manager)
+        self.close_shift(shift["id"], "140.00")
+        r = self.client.get(
+            reverse("shifts:shift-statement", args=[shift["id"]]), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["document"], "shift_statement")
+        self.assertIn("hotel_name", r.data["hotel"])
+        self.assertEqual(r.data["cash_summary"]["expected_cash"], "140.00")
+        self.assertEqual(r.data["shift"]["actual_cash_amount"], "140.00")
+        self.assertEqual(r.data["shift"]["cash_difference"], "0.00")
+
+    def test_handover_voucher(self):
+        shift = self.open_shift().data
+        recipient = add_member(self.hotel, "rv@x.com", perms=["shifts.view"])
+        h = self.client.post(
+            reverse("shifts:handover-list"),
+            {"from_shift": shift["id"], "to_user": recipient.id,
+             "summary_notes": "night notes", "pending_tasks_notes": "restock"},
+            format="json", **HDR(self.hotel),
+        ).data
+        r = self.client.get(
+            reverse("shifts:handover-voucher", args=[h["id"]]), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["document"], "handover_voucher")
+        self.assertEqual(r.data["handover"]["summary_notes"], "night notes")
+
+    def test_print_requires_view_permission(self):
+        shift = self.open_shift().data
+        staff = add_member(self.hotel, "noview@x.com")  # no shifts.view
+        self.client.force_authenticate(staff)
+        self.assertEqual(
+            self.client.get(
+                reverse("shifts:shift-statement", args=[shift["id"]]), **HDR(self.hotel)
+            ).status_code, 403,
+        )
+        viewer = add_member(self.hotel, "viewer@x.com", perms=["shifts.view"])
+        self.client.force_authenticate(viewer)
+        self.assertEqual(
+            self.client.get(
+                reverse("shifts:shift-statement", args=[shift["id"]]), **HDR(self.hotel)
+            ).status_code, 200,
+        )
+
+    def test_print_hotel_isolated(self):
+        shift = self.open_shift().data
+        other = make_hotel(slug="other")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        om = User.objects.get(email="om@x.com")
+        self.client.force_authenticate(om)
+        r = self.client.get(
+            reverse("shifts:shift-statement", args=[shift["id"]]), **HDR(other)
+        )
+        self.assertEqual(r.status_code, 404)

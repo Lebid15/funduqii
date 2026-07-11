@@ -312,6 +312,42 @@ class ShiftSummaryView(APIView):
         )
 
 
+def _hotel_header(hotel) -> dict:
+    s = getattr(hotel, "settings", None)
+    return {
+        "hotel_name": (getattr(s, "display_name", "") or hotel.name),
+        "currency": getattr(s, "default_currency", "") or "USD",
+        "phone": getattr(s, "phone", "") or "",
+        "address": getattr(s, "address_line", "") or "",
+    }
+
+
+class ShiftStatementView(APIView):
+    """The operational shift statement (print-friendly JSON, same document
+    pattern as the finance receipt/statement). Read-only; nothing is
+    recomputed as new financial truth — the drawer summary is derived."""
+
+    permission_classes = [ShiftsView]
+
+    def get(self, request: Request, pk: int) -> Response:
+        shift = _get(Shift, request, pk)
+        summary = services.shift_cash_summary(shift)
+        return Response(
+            {
+                "document": "shift_statement",
+                "hotel": _hotel_header(request.hotel),
+                "shift": ShiftSerializer(shift).data,
+                "cash_summary": {
+                    k: (str(v) if not isinstance(v, (int, dict)) else v)
+                    for k, v in summary.items()
+                },
+                "unassigned_movements": services.unassigned_movements(
+                    request.hotel, shift.business_date
+                ),
+            }
+        )
+
+
 # --- Handovers -------------------------------------------------------------------
 
 
@@ -394,6 +430,22 @@ class HandoverDetailView(APIView):
             handover, user=request.user, to_user=to_user, **data
         )
         return Response(HandoverSerializer(handover).data)
+
+
+class HandoverVoucherView(APIView):
+    """The print-friendly handover voucher (same document pattern). Read-only."""
+
+    permission_classes = [ShiftsView]
+
+    def get(self, request: Request, pk: int) -> Response:
+        handover = _get(ShiftHandover, request, pk)
+        return Response(
+            {
+                "document": "handover_voucher",
+                "hotel": _hotel_header(request.hotel),
+                "handover": HandoverSerializer(handover).data,
+            }
+        )
 
 
 class HandoverSubmitView(APIView):

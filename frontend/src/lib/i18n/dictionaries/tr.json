@@ -1871,6 +1871,14 @@
       "closed": "Kapalı",
       "reopened": "Yeniden açıldı"
     },
+    "print": {
+      "printStatement": "Vardiya özetini yazdır",
+      "statementTitle": "Vardiya özeti",
+      "printVoucher": "Devir belgesini yazdır",
+      "voucherTitle": "Vardiya devir belgesi",
+      "submittedAt": "Gönderilme",
+      "acceptedAt": "Kabul edilme"
+    },
     "overview": {
       "openShifts": "Açık vardiyalar",
       "openShiftsHint": "Şu anda süren vardiyalar.",

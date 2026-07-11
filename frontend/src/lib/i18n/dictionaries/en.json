@@ -1871,6 +1871,14 @@
       "closed": "Closed",
       "reopened": "Reopened"
     },
+    "print": {
+      "printStatement": "Print statement",
+      "statementTitle": "Shift statement",
+      "printVoucher": "Print voucher",
+      "voucherTitle": "Handover voucher",
+      "submittedAt": "Submitted at",
+      "acceptedAt": "Accepted at"
+    },
     "overview": {
       "openShifts": "Open shifts",
       "openShiftsHint": "Shifts currently running.",
