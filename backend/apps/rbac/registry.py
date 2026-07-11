@@ -65,7 +65,9 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "invoice_issue",
         "invoice_void",
     ],
-    "expenses": ["view", "create", "update", "void"],
+    # Expenses closure: `reverse` = the full linked counter-voucher AFTER the
+    # record's void window closed — deliberately separate from create/void.
+    "expenses": ["view", "create", "update", "void", "reverse"],
     # Service catalog + internal service orders (Phase 9): restaurant / café /
     # room service. The blueprint's `restaurant.*` codes below are vestigial and
     # NOT used; Phase 9 uses these explicit sections instead.

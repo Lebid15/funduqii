@@ -468,7 +468,22 @@ class Expense(models.Model):
     method = models.CharField(
         max_length=16, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
+    # Expenses closure: ``paid_at`` is the EXECUTION timestamp only (stamped
+    # by the service, never client-sent); the financial date is business_date.
     paid_at = models.DateTimeField()
+    # The HOTEL business date the voucher belongs to (stamped by the service;
+    # NULL only on legacy rows, derived from ``paid_at`` in the hotel tz).
+    business_date = models.DateField(null=True, blank=True)
+    # A full counter-voucher (negative amount) created AFTER the original's
+    # void window closed. The original is never edited; reversals cannot
+    # themselves be reversed (no chains).
+    reverses = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reversals",
+    )
     # Phase 12: the shift whose cash drawer paid this expense (see Payment).
     shift = models.ForeignKey(
         "shifts.Shift",
@@ -517,6 +532,21 @@ class Expense(models.Model):
                 fields=["hotel", "expense_number"],
                 name="unique_expense_number_per_hotel",
             ),
+            # Full-reversal rule: at most ONE posted reversal per original
+            # (a voided reversal frees the slot again).
+            models.UniqueConstraint(
+                fields=["reverses"],
+                condition=models.Q(status="posted", reverses__isnull=False),
+                name="unique_posted_reversal_per_expense",
+            ),
+            # Negative amounts exist ONLY on reversal rows (service-built).
+            models.CheckConstraint(
+                condition=models.Q(reverses__isnull=False) | models.Q(amount__gt=0),
+                name="expense_amount_sign",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["hotel", "business_date"], name="exp_hotel_bizdate_idx"),
         ]
 
     def __str__(self) -> str:

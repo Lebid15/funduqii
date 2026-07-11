@@ -1114,7 +1114,16 @@
       "void": "إلغاء",
       "voucher": "سند صرف",
       "createTitle": "مصروف جديد",
-      "submit": "حفظ المصروف"
+      "submit": "حفظ المصروف",
+      "edit": "تعديل",
+      "editTitle": "تعديل سند الصرف",
+      "editSave": "حفظ التعديلات",
+      "reverse": "عكس",
+      "reverseTitle": "عكس سند الصرف",
+      "reverseConfirm": "ترحيل السند العكسي",
+      "reverseHint": "يُنشئ سندًا عكسيًا كاملًا مرتبطًا بالسند الأصلي.",
+      "reversalOf": "سند عكسي للسند",
+      "reversedBy": "عُكس بالسند"
     },
     "void": {
       "title": "إلغاء السجل",
@@ -1162,7 +1171,14 @@
       "closed": "أُغلق",
       "room": "الغرفة",
       "plannedCheckIn": "الوصول المخطط",
-      "plannedCheckOut": "المغادرة المخططة"
+      "plannedCheckOut": "المغادرة المخططة",
+      "businessDate": "تاريخ العمل",
+      "executedAt": "وقت التنفيذ",
+      "shift": "الوردية",
+      "voidReason": "سبب الإلغاء",
+      "voidedBy": "ألغاه",
+      "reversalOf": "عكس للسند",
+      "reversedBy": "عُكس بالسند"
     },
     "financeNote": "كل المبالغ تُسجَّل داخليًا فقط — لا تتم معالجة دفع فعلي.",
     "errors": {
@@ -1176,6 +1192,7 @@
       "folioHasPostings": "لا يمكن إلغاء حساب فيه بنود أو دفعات أو فواتير — أغلقه بدلًا من ذلك.",
       "chargeAlreadyAdjusted": "لهذا البند تسوية مُرحَّلة بالفعل.",
       "paymentAlreadyReversed": "لهذه الدفعة عكس مُرحَّل بالفعل.",
+      "expenseAlreadyReversed": "لهذا المصروف سند عكسي مُرحَّل بالفعل.",
       "reservationFolioNotSupported": "لا يمكن ربط الحساب بحجز دون إقامة.",
       "activeInvoiceExists": "توجد فاتورة صادرة لهذا الحساب بالفعل — ألغِها قبل إصدار فاتورة جديدة."
     }

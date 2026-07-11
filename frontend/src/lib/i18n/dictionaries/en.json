@@ -1114,7 +1114,16 @@
       "void": "Void",
       "voucher": "Voucher",
       "createTitle": "New expense",
-      "submit": "Save expense"
+      "submit": "Save expense",
+      "edit": "Edit",
+      "editTitle": "Edit expense voucher",
+      "editSave": "Save changes",
+      "reverse": "Reverse",
+      "reverseTitle": "Reverse expense voucher",
+      "reverseConfirm": "Post reversal",
+      "reverseHint": "This creates a full reversal voucher linked to the original.",
+      "reversalOf": "Reversal of voucher",
+      "reversedBy": "Reversed by voucher"
     },
     "void": {
       "title": "Void record",
@@ -1162,7 +1171,14 @@
       "closed": "Closed",
       "room": "Room",
       "plannedCheckIn": "Planned check-in",
-      "plannedCheckOut": "Planned check-out"
+      "plannedCheckOut": "Planned check-out",
+      "businessDate": "Business date",
+      "executedAt": "Executed at",
+      "shift": "Shift",
+      "voidReason": "Void reason",
+      "voidedBy": "Voided by",
+      "reversalOf": "Reversal of",
+      "reversedBy": "Reversed by"
     },
     "financeNote": "All amounts are recorded internally only — no real payment is processed.",
     "errors": {
@@ -1176,6 +1192,7 @@
       "folioHasPostings": "A folio with charges, payments or invoices cannot be voided — close it instead.",
       "chargeAlreadyAdjusted": "This charge already has a posted adjustment.",
       "paymentAlreadyReversed": "This payment already has a posted reversal.",
+      "expenseAlreadyReversed": "This expense already has a posted reversal.",
       "reservationFolioNotSupported": "A folio cannot be linked to a reservation without a stay.",
       "activeInvoiceExists": "An issued invoice already exists for this folio — void it before issuing a new one."
     }

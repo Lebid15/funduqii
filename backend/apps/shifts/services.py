@@ -11,9 +11,11 @@ Money boundaries (deliberate):
 - The daily close stores a documenting snapshot; finance records remain the
   only source of financial truth. Closing locks SAFE integrated flows for
   that business date (payment/expense creation, manual charges, service-order
-  posting, shift operations). Folio closure round: finance VOIDS are now also
-  bound to the record's own OPEN business date — later corrections are linked
-  counter-postings (adjustment / payment reversal), never edits or deletes.
+  posting, shift operations). Folio + expenses closure rounds: ALL finance
+  VOIDS are bound to the record's own OPEN business date — later corrections
+  are linked counter-postings (adjustment / payment reversal / expense
+  reversal), never edits or deletes. Daily derivations here run on the
+  stamped business_date (legacy rows fall back to paid_at).
 """
 from __future__ import annotations
 
@@ -320,16 +322,26 @@ def cancel_shift(shift: Shift, *, reason, user=None) -> Shift:
     return shift
 
 
+def _on_business_date(on_date):
+    """Expenses closure: daily derivations run on the stamped BUSINESS date;
+    legacy rows without one fall back to their paid_at calendar date."""
+    from django.db.models import Q
+
+    return Q(business_date=on_date) | Q(
+        business_date__isnull=True, paid_at__date=on_date
+    )
+
+
 def unassigned_movements(hotel, on_date) -> dict:
     """POSTED payments/expenses dated to the business date with NO shift —
     reported (never hidden) so the drawer story stays honest."""
     payments = Payment.objects.filter(
+        _on_business_date(on_date),
         hotel=hotel, shift__isnull=True, status=PostingStatus.POSTED,
-        paid_at__date=on_date,
     )
     expenses = Expense.objects.filter(
+        _on_business_date(on_date),
         hotel=hotel, shift__isnull=True, status=PostingStatus.POSTED,
-        paid_at__date=on_date,
     )
     return {
         "payments_count": payments.count(),
@@ -488,8 +500,8 @@ def build_daily_snapshot(hotel, business_date) -> tuple[dict, dict]:
     from apps.services.models import ServiceOrder
     from apps.stays.models import Stay
 
-    payments = Payment.objects.filter(hotel=hotel, paid_at__date=business_date)
-    expenses = Expense.objects.filter(hotel=hotel, paid_at__date=business_date)
+    payments = Payment.objects.filter(_on_business_date(business_date), hotel=hotel)
+    expenses = Expense.objects.filter(_on_business_date(business_date), hotel=hotel)
     posted_orders = ServiceOrder.objects.filter(
         hotel=hotel, posted_at__date=business_date
     )

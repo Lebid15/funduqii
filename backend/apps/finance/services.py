@@ -28,6 +28,7 @@ from django.utils import timezone
 from apps.common.exceptions import (
     ActiveInvoiceExists,
     ChargeAlreadyAdjusted,
+    ExpenseAlreadyReversed,
     FolioClosed,
     FolioHasPostings,
     FolioNotBalanced,
@@ -511,18 +512,6 @@ def adjust_charge(charge, *, reason, user=None) -> FolioCharge:
 # --- Payments ---------------------------------------------------------------
 
 
-def _shift_context(hotel, user, when):
-    """Phase 12 hooks (imported lazily to avoid app-load cycles): refuse new
-    dated activity on a CLOSED business day, and attach the movement to the
-    creator's open shift when one exists — a missing shift never blocks the
-    operation (it becomes a reported "unassigned movement"). Still used by
-    the EXPENSE services (untouched this round)."""
-    from apps.shifts.services import ensure_business_day_open, get_open_shift_for
-
-    ensure_business_day_open(hotel, when.date())
-    return get_open_shift_for(user, hotel)
-
-
 @transaction.atomic
 def record_payment(folio, *, amount, method, payer_name="",
                    reference="", notes="", user=None) -> Payment:
@@ -754,44 +743,188 @@ def void_invoice(invoice, *, reason, user=None) -> Invoice:
     return invoice
 
 
-# --- Expenses (deliberately untouched in the folio closure round) ------------
+# --- Expenses (final closure round) ------------------------------------------
+
+
+def _expense_business_date(expense):
+    """The expense's business date; legacy rows (NULL) fall back to the
+    calendar date of ``paid_at`` in the hotel's timezone."""
+    if expense.business_date:
+        return expense.business_date
+    hotel_settings = getattr(expense.hotel, "settings", None)
+    tz_name = ((getattr(hotel_settings, "timezone", "") or "")).strip()
+    if tz_name:
+        try:
+            return expense.paid_at.astimezone(ZoneInfo(tz_name)).date()
+        except (KeyError, ValueError):
+            pass
+    return timezone.localtime(expense.paid_at).date()
+
+
+#: The ONLY fields a posted voucher may still change — descriptive text,
+#: inside its own open business date. Money/date/shift are immutable.
+EXPENSE_EDITABLE_FIELDS = ("description", "notes", "reference", "vendor_name")
 
 
 @transaction.atomic
-def create_expense(hotel, *, category, description, amount, method, paid_at=None,
-                   vendor_name="", reference="", notes="", currency=None, user=None) -> Expense:
+def create_expense(hotel, *, category, description, amount, method,
+                   vendor_name="", reference="", notes="", user=None) -> Expense:
+    """Record an expense voucher stamped to NOW and to the current open
+    hotel business date, in the HOTEL currency (the caller never chooses
+    the timestamp, the financial date, or the currency)."""
+    from apps.shifts.services import get_open_shift_for
+
     if money(amount) <= ZERO:
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
     actor = _actor(user)
-    paid_at = paid_at or timezone.now()
-    shift = _shift_context(hotel, user, paid_at)
-    return Expense.objects.create(
+    business_date = _business_date(hotel)
+    _ensure_day_open(hotel, business_date)
+    expense = Expense.objects.create(
         hotel=hotel,
         expense_number=next_number(hotel, NumberKind.EXPENSE),
         category=category,
         description=description,
         amount=money(amount),
-        currency=currency or _hotel_currency(hotel),
+        currency=_hotel_currency(hotel),
         method=method,
-        paid_at=paid_at,
-        shift=shift,
+        paid_at=timezone.now(),
+        business_date=business_date,
+        shift=get_open_shift_for(user, hotel),
         vendor_name=vendor_name or "",
         reference=reference or "",
         notes=notes or "",
         created_by=actor,
         updated_by=actor,
     )
+    _record_event(
+        hotel,
+        event_type="expense.created",
+        severity="info",
+        title=f"Expense {expense.expense_number} recorded",
+        message=f"{expense.category} · {expense.amount} {expense.currency} · {expense.method}",
+        user=user,
+        obj=expense,
+    )
+    return expense
+
+
+@transaction.atomic
+def update_expense(expense, *, user=None, **fields) -> Expense:
+    """Edit the DESCRIPTIVE fields of a posted voucher — only inside its own
+    open business date. Money, category, method, currency, dates, and the
+    shift are immutable; corrections are void (same day) or a reversal."""
+    expense = Expense.objects.select_for_update().get(pk=expense.pk)
+    if expense.status != PostingStatus.POSTED:
+        raise InvalidFinanceOperation({"reason": "not_editable", "status": expense.status})
+    for field in fields:
+        if field not in EXPENSE_EDITABLE_FIELDS:
+            raise InvalidFinanceOperation({"reason": "field_not_editable", "field": field})
+    _require_void_window(expense.hotel, _expense_business_date(expense))
+    changes = {}
+    for field, value in fields.items():
+        value = (value or "").strip() if isinstance(value, str) else value
+        old = getattr(expense, field)
+        if value != old:
+            changes[field] = (old, value)
+            setattr(expense, field, value)
+    if not changes:
+        # Nothing actually changed — no write, no activity (owner rule).
+        return expense
+    expense.updated_by = _actor(user)
+    expense.save(update_fields=[*changes.keys(), "updated_by", "updated_at"])
+    diff = " · ".join(
+        f"{field}: '{old}' → '{new}'" for field, (old, new) in changes.items()
+    )
+    _record_event(
+        expense.hotel,
+        event_type="expense.updated",
+        severity="info",
+        title=f"Expense {expense.expense_number} updated",
+        message=diff,
+        user=user,
+        obj=expense,
+    )
+    return expense
 
 
 @transaction.atomic
 def void_expense(expense, *, reason, user=None) -> Expense:
-    if not (reason or "").strip():
-        raise VoidReasonRequired()
+    """Void a voucher — only inside its own open business date. Later
+    corrections go through ``reverse_expense``."""
+    reason = _require_reason(reason)
+    expense = Expense.objects.select_for_update().get(pk=expense.pk)
     if expense.status == PostingStatus.VOIDED:
         raise InvalidFinanceOperation({"reason": "already_voided"})
+    if expense.reversals.filter(status=PostingStatus.POSTED).exists():
+        raise InvalidFinanceOperation({"reason": "expense_reversed"})
+    _require_void_window(expense.hotel, _expense_business_date(expense))
     expense.status = PostingStatus.VOIDED
-    expense.void_reason = reason.strip()
+    expense.void_reason = reason
     expense.voided_at = timezone.now()
     expense.voided_by = _actor(user)
     expense.save(update_fields=["status", "void_reason", "voided_at", "voided_by", "updated_at"])
+    _record_event(
+        expense.hotel,
+        event_type="expense.voided",
+        severity="danger",
+        title=f"Expense {expense.expense_number} voided",
+        message=f"{expense.amount} {expense.currency} · {reason}",
+        user=user,
+        obj=expense,
+    )
     return expense
+
+
+@transaction.atomic
+def reverse_expense(expense, *, reason, user=None) -> Expense:
+    """Post the FULL counter-voucher (negative amount, new EXP number) for an
+    original whose void window has closed. The original stays posted and is
+    never edited; reversals cannot be reversed and repeats are impossible."""
+    from apps.shifts.services import get_open_shift_for
+
+    reason = _require_reason(reason)
+    expense = Expense.objects.select_for_update().get(pk=expense.pk)
+    if expense.status != PostingStatus.POSTED:
+        raise InvalidFinanceOperation({"reason": "not_posted"})
+    if expense.reverses_id is not None:
+        raise InvalidFinanceOperation({"reason": "cannot_reverse_reversal"})
+    if expense.reversals.filter(status=PostingStatus.POSTED).exists():
+        raise ExpenseAlreadyReversed({"expense": expense.id})
+    _require_void_window_passed(expense.hotel, _expense_business_date(expense))
+    business_date = _business_date(expense.hotel)
+    _ensure_day_open(expense.hotel, business_date)
+    actor = _actor(user)
+    try:
+        reversal = Expense.objects.create(
+            hotel=expense.hotel,
+            expense_number=next_number(expense.hotel, NumberKind.EXPENSE),
+            category=expense.category,
+            description=f"Reversal ({expense.expense_number}): {reason}",
+            amount=-expense.amount,
+            currency=expense.currency,
+            method=expense.method,
+            paid_at=timezone.now(),
+            business_date=business_date,
+            reverses=expense,
+            shift=get_open_shift_for(user, expense.hotel),
+            vendor_name=expense.vendor_name,
+            reference=expense.reference,
+            notes=reason,
+            created_by=actor,
+            updated_by=actor,
+        )
+    except IntegrityError:
+        raise ExpenseAlreadyReversed({"expense": expense.id})
+    _record_event(
+        expense.hotel,
+        event_type="expense.reversed",
+        severity="warning",
+        title=f"Expense {expense.expense_number} reversed",
+        message=(
+            f"{reversal.expense_number}: {reversal.amount} "
+            f"{reversal.currency} · {reason}"
+        ),
+        user=user,
+        obj=reversal,
+    )
+    return reversal

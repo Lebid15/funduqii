@@ -1114,7 +1114,16 @@
       "void": "İptal",
       "voucher": "Fiş",
       "createTitle": "Yeni gider",
-      "submit": "Gideri kaydet"
+      "submit": "Gideri kaydet",
+      "edit": "Düzenle",
+      "editTitle": "Gider fişini düzenle",
+      "editSave": "Değişiklikleri kaydet",
+      "reverse": "Ters kaydet",
+      "reverseTitle": "Gider fişini ters kaydet",
+      "reverseConfirm": "Ters kaydı işle",
+      "reverseHint": "Orijinaline bağlı tam bir ters kayıt fişi oluşturur.",
+      "reversalOf": "Ters kaydedilen fiş",
+      "reversedBy": "Ters kaydeden fiş"
     },
     "void": {
       "title": "Kaydı iptal et",
@@ -1162,7 +1171,14 @@
       "closed": "Kapanış",
       "room": "Oda",
       "plannedCheckIn": "Planlanan giriş",
-      "plannedCheckOut": "Planlanan çıkış"
+      "plannedCheckOut": "Planlanan çıkış",
+      "businessDate": "İş tarihi",
+      "executedAt": "İşlem zamanı",
+      "shift": "Vardiya",
+      "voidReason": "İptal nedeni",
+      "voidedBy": "İptal eden",
+      "reversalOf": "Ters kaydedilen fiş",
+      "reversedBy": "Ters kaydeden fiş"
     },
     "financeNote": "Tüm tutarlar yalnızca dahili olarak kaydedilir — gerçek ödeme işlenmez.",
     "errors": {
@@ -1176,6 +1192,7 @@
       "folioHasPostings": "Ücret, ödeme veya faturası olan bir folyo iptal edilemez — bunun yerine kapatın.",
       "chargeAlreadyAdjusted": "Bu ücretin işlenmiş bir düzeltmesi zaten var.",
       "paymentAlreadyReversed": "Bu ödemenin işlenmiş bir ters kaydı zaten var.",
+      "expenseAlreadyReversed": "Bu giderin işlenmiş bir ters kaydı zaten var.",
       "reservationFolioNotSupported": "Konaklama olmadan folyo bir rezervasyona bağlanamaz.",
       "activeInvoiceExists": "Bu folyo için kesilmiş bir fatura zaten var — yenisini kesmeden önce onu iptal edin."
     }

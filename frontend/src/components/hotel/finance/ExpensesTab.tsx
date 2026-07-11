@@ -9,16 +9,27 @@ import {
   Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, FilterBar, FormField,
   Input, LoadingState, Modal, Pagination, PrintDocumentLayout, Select, Textarea, useToast, type Column,
 } from "@/components/ui";
-import { createExpense, getExpenseVoucher, listExpenses, voidExpense, type ExpenseBody } from "@/lib/api/finance";
+import {
+  createExpense, getExpenseVoucher, listExpenses, reverseExpense, updateExpense, voidExpense,
+  type ExpenseBody, type ExpenseUpdateBody,
+} from "@/lib/api/finance";
 import { messageForError } from "@/lib/api/errors";
 import type { Expense, HotelHeader } from "@/lib/api/types";
-import { formatDate, formatMoney, postingStatusTone } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, postingStatusTone } from "@/lib/format";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { PrintModal, VoidDialog } from "./shared";
 
 const PAGE_SIZE = 25;
 const CATEGORIES = ["operations", "maintenance", "supplies", "marketing", "salary", "utilities", "other"] as const;
 const METHODS = ["cash", "card", "bank_transfer", "electronic", "other"] as const;
+
+/** Cosmetic permission gate — every API re-checks server-side regardless. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
 
 export function ExpensesTab() {
   const { t, locale } = useI18n();
@@ -35,7 +46,10 @@ export function ExpensesTab() {
   // Topbar quick action: ?action=new opens the EXISTING expense modal once.
   useQuickAction("new", () => setCreating(true));
   const [voidTarget, setVoidTarget] = useState<Expense | null>(null);
+  const [editTarget, setEditTarget] = useState<Expense | null>(null);
+  const [reverseTarget, setReverseTarget] = useState<Expense | null>(null);
   const [voucher, setVoucher] = useState<{ hotel: HotelHeader; expense: Expense } | null>(null);
+  const can = useCan();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,18 +76,29 @@ export function ExpensesTab() {
   }
 
   const columns: Column<Expense>[] = [
-    { key: "expense_number", header: t.finance.expenses.number },
+    {
+      key: "expense_number", header: t.finance.expenses.number,
+      render: (r) => (
+        <>
+          {r.expense_number}
+          {r.reverses_number ? <span className="muted" title={t.finance.expenses.reversalOf}> ↩ {r.reverses_number}</span> : null}
+          {r.reversed_by_number ? <span className="muted" title={t.finance.expenses.reversedBy}> ↩ {r.reversed_by_number}</span> : null}
+        </>
+      ),
+    },
     { key: "category", header: t.finance.expenses.category, render: (r) => t.finance.categories[r.category] },
     { key: "description", header: t.finance.expenses.description },
     { key: "amount", header: t.finance.expenses.amount, render: (r) => formatMoney(r.amount, r.currency, locale) },
-    { key: "paid_at", header: t.finance.expenses.date, render: (r) => formatDate(r.paid_at, locale) },
+    { key: "business_date", header: t.finance.expenses.date, render: (r) => formatDate(r.business_date ?? r.paid_at, locale) },
     { key: "status", header: t.common.status, render: (r) => <Badge tone={postingStatusTone(r.status)}>{t.finance.postingStatus[r.status]}</Badge> },
     {
       key: "actions", header: t.common.actions, align: "end",
       render: (r) => (
         <div className="table__actions">
           <Button size="sm" variant="secondary" icon={Printer} onClick={() => openVoucher(r.id)}>{t.finance.expenses.voucher}</Button>
-          {r.status === "posted" ? <Button size="sm" variant="danger" onClick={() => setVoidTarget(r)}>{t.finance.expenses.void}</Button> : null}
+          {r.status === "posted" && can("expenses.update") ? <Button size="sm" variant="ghost" onClick={() => setEditTarget(r)}>{t.finance.expenses.edit}</Button> : null}
+          {r.status === "posted" && r.reverses === null && !r.reversed_by_number && can("expenses.reverse") ? <Button size="sm" variant="ghost" onClick={() => setReverseTarget(r)}>{t.finance.expenses.reverse}</Button> : null}
+          {r.status === "posted" && can("expenses.void") ? <Button size="sm" variant="danger" onClick={() => setVoidTarget(r)}>{t.finance.expenses.void}</Button> : null}
         </div>
       ),
     },
@@ -103,8 +128,12 @@ export function ExpensesTab() {
       ) : null}
 
       <ExpenseModal open={creating} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); notify(t.finance.saved); setPage(1); load(); }} />
+      <ExpenseEditModal expense={editTarget} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); notify(t.finance.saved); load(); }} />
       <VoidDialog open={voidTarget !== null} onClose={() => setVoidTarget(null)}
         onConfirm={async (reason) => { if (voidTarget) { await voidExpense(voidTarget.id, reason); setVoidTarget(null); notify(t.finance.saved); load(); } }} />
+      <VoidDialog open={reverseTarget !== null} title={t.finance.expenses.reverseTitle} confirmLabel={t.finance.expenses.reverseConfirm}
+        description={t.finance.expenses.reverseHint} onClose={() => setReverseTarget(null)}
+        onConfirm={async (reason) => { if (reverseTarget) { await reverseExpense(reverseTarget.id, reason); setReverseTarget(null); notify(t.finance.saved); load(); } }} />
       <PrintModal open={voucher !== null} title={t.finance.print.voucherTitle} onClose={() => setVoucher(null)}>
         {voucher ? (
           <PrintDocumentLayout
@@ -116,12 +145,29 @@ export function ExpensesTab() {
             meta={[
               { label: t.finance.print.vendor, value: voucher.expense.vendor_name || "—" },
               { label: t.finance.expenses.category, value: t.finance.categories[voucher.expense.category] },
-              { label: t.finance.print.date, value: formatDate(voucher.expense.paid_at, locale) },
+              { label: t.finance.print.status, value: t.finance.postingStatus[voucher.expense.status] },
+              { label: t.finance.print.businessDate, value: formatDate(voucher.expense.business_date ?? voucher.expense.paid_at, locale) },
+              { label: t.finance.print.executedAt, value: formatDateTime(voucher.expense.paid_at, locale) },
+              ...(voucher.expense.shift_number
+                ? [{ label: t.finance.print.shift, value: voucher.expense.shift_number }]
+                : []),
               { label: t.finance.print.method, value: t.finance.methods[voucher.expense.method] },
               { label: t.finance.print.amount, value: <strong>{formatMoney(voucher.expense.amount, voucher.expense.currency, locale)}</strong> },
               { label: t.finance.expenses.description, value: voucher.expense.description },
               ...(voucher.expense.reference
                 ? [{ label: t.finance.print.reference, value: voucher.expense.reference }]
+                : []),
+              ...(voucher.expense.reverses_number
+                ? [{ label: t.finance.print.reversalOf, value: voucher.expense.reverses_number }]
+                : []),
+              ...(voucher.expense.reversed_by_number
+                ? [{ label: t.finance.print.reversedBy, value: voucher.expense.reversed_by_number }]
+                : []),
+              ...(voucher.expense.status === "voided"
+                ? [
+                    { label: t.finance.print.voidReason, value: voucher.expense.void_reason || "—" },
+                    { label: t.finance.print.voidedBy, value: voucher.expense.voided_by || "—" },
+                  ]
                 : []),
               ...(voucher.expense.created_by
                 ? [{ label: t.finance.print.createdBy, value: voucher.expense.created_by }]
@@ -181,6 +227,55 @@ function ExpenseModal({ open, onClose, onSaved }: { open: boolean; onClose: () =
         </div>
         <FormField label={t.finance.expenses.description} htmlFor="e-desc"><Input id="e-desc" value={form.description ?? ""} onChange={(e) => set("description", e.target.value)} /></FormField>
         <FormField label={t.finance.folios.notes} htmlFor="e-notes"><Textarea id="e-notes" value={form.notes ?? ""} onChange={(e) => set("notes", e.target.value)} /></FormField>
+      </form>
+    </Modal>
+  );
+}
+
+/** Edits the four descriptive fields only — the server rejects anything else
+ *  and enforces the open-business-day window (409 void_window_closed). */
+function ExpenseEditModal({ expense, onClose, onSaved }: { expense: Expense | null; onClose: () => void; onSaved: () => void }) {
+  const { t } = useI18n();
+  const [form, setForm] = useState<ExpenseUpdateBody>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (expense) {
+      setForm({ description: expense.description, notes: expense.notes, reference: expense.reference, vendor_name: expense.vendor_name });
+      setError(null);
+    }
+  }, [expense]);
+
+  function set<K extends keyof ExpenseUpdateBody>(k: K, v: ExpenseUpdateBody[K]) { setForm((p) => ({ ...p, [k]: v })); }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!expense) return;
+    setError(null);
+    if (!form.description?.trim()) return setError(t.errors.validation);
+    setBusy(true);
+    try {
+      await updateExpense(expense.id, { ...form, description: form.description.trim() });
+      onSaved();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={expense !== null} onClose={onClose} title={t.finance.expenses.editTitle} closeLabel={t.common.close}
+      footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button><Button form="exp-edit-form" type="submit" loading={busy}>{t.finance.expenses.editSave}</Button></>}>
+      <form id="exp-edit-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={t.finance.expenses.description} htmlFor="ee-desc"><Input id="ee-desc" value={form.description ?? ""} onChange={(e) => set("description", e.target.value)} /></FormField>
+        <div className="form-grid">
+          <FormField label={t.finance.expenses.vendor} htmlFor="ee-vendor"><Input id="ee-vendor" value={form.vendor_name ?? ""} onChange={(e) => set("vendor_name", e.target.value)} /></FormField>
+          <FormField label={t.finance.expenses.reference} htmlFor="ee-ref"><Input id="ee-ref" value={form.reference ?? ""} onChange={(e) => set("reference", e.target.value)} /></FormField>
+        </div>
+        <FormField label={t.finance.folios.notes} htmlFor="ee-notes"><Textarea id="ee-notes" value={form.notes ?? ""} onChange={(e) => set("notes", e.target.value)} /></FormField>
       </form>
     </Modal>
   );

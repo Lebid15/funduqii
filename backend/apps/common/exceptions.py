@@ -625,6 +625,12 @@ class InvalidOrderComposition(FunduqiiAPIException):
     default_code = "invalid_order_composition"
 
 
+class ExpenseAlreadyReversed(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This expense already has a posted reversal."
+    default_code = "expense_already_reversed"
+
+
 class LastActiveItemNotCancellable(FunduqiiAPIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = (
