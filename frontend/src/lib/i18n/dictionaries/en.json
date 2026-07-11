@@ -1713,7 +1713,26 @@
       "resetDoneMsg": "Password has been reset.",
       "empty": "No staff yet",
       "emptyHint": "Add your first staff member to get started.",
-      "searchPlaceholder": "Search by name, email, phone, title or code…"
+      "searchPlaceholder": "Search by name, email, phone, title or code…",
+      "promote": "Promote to manager",
+      "demote": "Demote to staff",
+      "changeEmail": "Change email",
+      "delete": "Delete",
+      "promoteTitle": "Promote to manager",
+      "promoteConfirm": "Promote {name} to manager? Managers hold every permission in this hotel.",
+      "promotedMsg": "Member promoted to manager.",
+      "demoteTitle": "Demote to staff",
+      "demoteConfirm": "Demote {name} to staff? They will keep only the permissions you grant them.",
+      "demotedMsg": "Member demoted to staff.",
+      "changeEmailTitle": "Change sign-in email",
+      "changeEmailLabel": "New email",
+      "emailChangedMsg": "Email updated.",
+      "deleteTitle": "Delete staff member",
+      "deleteWarning": "This permanently removes the membership. It only works when the member has no operational history — otherwise deactivate them instead.",
+      "deleteUserLabel": "Also delete the user account if it is completely clean",
+      "deleteConfirm": "Delete",
+      "deletedMsg": "Membership deleted.",
+      "deletedWithUserMsg": "Membership and user account deleted."
     },
     "form": {
       "createTitle": "New staff member",
@@ -1747,7 +1766,8 @@
       "reset": "Reset changes",
       "savedMsg": "Permissions updated.",
       "grantedCount": "{count} granted",
-      "inactiveNote": "This member is deactivated; permissions remain stored but have no effect until reactivation."
+      "inactiveNote": "This member is deactivated; permissions remain stored but have no effect until reactivation.",
+      "selfCannotEdit": "You cannot edit your own permissions."
     },
     "registry": {
       "title": "Permission reference",
@@ -1811,7 +1831,15 @@
       "platformOwner": "A platform owner account cannot be managed as hotel staff.",
       "escalationBlocked": "You cannot grant a permission you do not hold yourself.",
       "managerNotEditable": "A manager already holds every permission; grants are not editable.",
-      "unknownPermission": "One of the permissions is not recognized."
+      "unknownPermission": "One of the permissions is not recognized.",
+      "cannotEditOwnPermissions": "You cannot edit your own permissions.",
+      "selfActionBlocked": "You cannot perform this action on your own account.",
+      "notAManager": "Only a real manager can change management roles.",
+      "invalidMembershipType": "This membership type does not support this action.",
+      "primaryManagerProtected": "The primary manager cannot be demoted or deleted.",
+      "staffHasOpenShift": "Close the employee's open shift first.",
+      "staffHasTrace": "This member has operational history and cannot be deleted — deactivate them instead.",
+      "crossTenantIdentity": "This account is shared across hotels and its email cannot be changed here."
     }
   },
   "shifts": {

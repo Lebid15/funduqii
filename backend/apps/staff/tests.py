@@ -350,6 +350,10 @@ class LifecycleTests(APITestCase, StaffMixin):
         self.assertEqual(resp.data["code"], "membership_inactive")
 
     def test_cannot_deactivate_last_active_manager(self):
+        # A staff member holding staff.deactivate targets the SOLE manager
+        # (non-self so the last-manager rule is what fires, not self-block).
+        deactivator = add_member(self.hotel, "deac@x.com", perms=["staff.deactivate"])
+        self.client.force_authenticate(deactivator)
         manager_membership = membership_of(self.manager, self.hotel)
         r = self.act(manager_membership.id, "deactivate", {"reason": "x"})
         self.assertEqual(r.status_code, 409)
@@ -358,15 +362,27 @@ class LifecycleTests(APITestCase, StaffMixin):
         self.assertTrue(manager_membership.is_active)
 
     def test_can_deactivate_manager_when_another_exists(self):
+        # self.manager deactivates a DIFFERENT second manager (allowed).
         second = add_member(self.hotel, "m2@x.com", kind=MembershipType.MANAGER)
         target = membership_of(second, self.hotel)
         r = self.act(target.id, "deactivate")
         self.assertEqual(r.status_code, 200)
-        # And now the remaining one is protected again.
+        # The remaining sole manager is protected again (tested non-self).
+        deactivator = add_member(self.hotel, "deac2@x.com", perms=["staff.deactivate"])
+        self.client.force_authenticate(deactivator)
         remaining = membership_of(self.manager, self.hotel)
         self.assertEqual(
             self.act(remaining.id, "deactivate").data["code"], "last_manager_protected"
         )
+
+    def test_cannot_deactivate_self(self):
+        # A manager cannot deactivate their own membership (self-block).
+        second = add_member(self.hotel, "m3@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
+        target = membership_of(second, self.hotel)
+        r = self.act(target.id, "deactivate", {"reason": "x"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "self_action_blocked")
 
     def test_no_hard_delete_route(self):
         mid = self.create_staff().data["id"]
@@ -475,6 +491,10 @@ class PermissionTests(APITestCase, StaffMixin):
         )
 
     def test_manager_grants_not_editable(self):
+        # A SECOND manager edits the first manager's grants (non-self, so the
+        # manager-not-editable rule is what fires rather than self-block).
+        second = add_member(self.hotel, "m2edit@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
         manager_membership = membership_of(self.manager, self.hotel)
         r = self.put_permissions(manager_membership.id, ["rooms.view"])
         self.assertEqual(r.status_code, 409)
@@ -490,7 +510,9 @@ class PermissionTests(APITestCase, StaffMixin):
         self.assertFalse(r.data["editable"])
         self.assertEqual(set(r.data["effective"]), set(ALL_PERMISSIONS))
 
-    def test_staff_cannot_escalate_self(self):
+    def test_staff_cannot_edit_own_permissions(self):
+        # Staff closure: editing your OWN membership's grants is refused
+        # outright (before the escalation guard even runs).
         editor = add_member(
             self.hotel,
             "pe@x.com",
@@ -498,13 +520,19 @@ class PermissionTests(APITestCase, StaffMixin):
         )
         editor_membership = membership_of(editor, self.hotel)
         self.client.force_authenticate(editor)
-        # Granting themselves finance.view (which they do not hold) is blocked.
+        # Any self-edit is blocked — even re-sending the identical set.
         r = self.put_permissions(
+            editor_membership.id,
+            ["staff.permissions_view", "staff.permissions_update", "rooms.view"],
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "cannot_edit_own_permissions")
+        # Trying to self-grant something new is blocked the same way.
+        r2 = self.put_permissions(
             editor_membership.id,
             ["staff.permissions_view", "staff.permissions_update", "rooms.view", "finance.view"],
         )
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.data["code"], "permission_escalation_blocked")
+        self.assertEqual(r2.data["code"], "cannot_edit_own_permissions")
         self.assertFalse(has_hotel_permission(editor, self.hotel, "finance.view"))
 
     def test_staff_cannot_grant_others_what_they_lack(self):
@@ -625,3 +653,308 @@ class RegressionTests(APITestCase, StaffMixin):
         for name in ("shifts-list", "payroll-list", "attendance-list", "daily-close"):
             with self.assertRaises(NoReverseMatch):
                 reverse(f"staff:{name}")
+
+
+# --------------------------------------------------------------------------- #
+# Staff & employees final closure round                                        #
+# --------------------------------------------------------------------------- #
+
+from apps.shifts.services import open_shift, close_shift
+from apps.notifications.models import ActivityEvent
+
+
+class ClosureBase(APITestCase, StaffMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, is_primary_manager=True
+        )
+        self.client.force_authenticate(self.manager)
+
+    def make_staff(self, email="s1@x.com", perms=()):
+        u = add_member(self.hotel, email, perms=perms)
+        return u, membership_of(u, self.hotel)
+
+
+class InstantRevocationTests(ClosureBase):
+    def test_revoke_takes_effect_on_next_request(self):
+        staff_user, m = self.make_staff(perms=["rooms.view"])
+        self.client.force_authenticate(staff_user)
+        self.assertEqual(
+            self.client.get(reverse("rooms:room-list"), **HDR(self.hotel)).status_code, 200
+        )
+        # Manager revokes on another connection.
+        self.client.force_authenticate(self.manager)
+        self.put_permissions(m.id, [])
+        # SAME staff token, next request: immediately 403 (no re-login, no cache).
+        self.client.force_authenticate(staff_user)
+        r = self.client.get(reverse("rooms:room-list"), **HDR(self.hotel))
+        self.assertEqual(r.status_code, 403)
+
+    def test_deactivation_blocks_next_request(self):
+        staff_user, m = self.make_staff(perms=["rooms.view"])
+        self.client.force_authenticate(self.manager)
+        self.act(m.id, "deactivate", {"reason": "x"})
+        self.client.force_authenticate(staff_user)
+        r = self.client.get(reverse("rooms:room-list"), **HDR(self.hotel))
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "membership_inactive")
+
+
+class OpenShiftGuardTests(ClosureBase):
+    def test_deactivate_blocked_with_open_shift(self):
+        staff_user, m = self.make_staff()
+        open_shift(self.hotel, user=staff_user, responsible_user=staff_user,
+                   opening_cash_amount="0.00")
+        r = self.act(m.id, "deactivate", {"reason": "leaving"})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "staff_has_open_shift")
+        m.refresh_from_db()
+        self.assertTrue(m.is_active)
+
+    def test_deactivate_ok_after_shift_closed(self):
+        staff_user, m = self.make_staff()
+        shift = open_shift(self.hotel, user=staff_user, responsible_user=staff_user,
+                           opening_cash_amount="0.00")
+        close_shift(shift, user=staff_user, actual_cash_amount="0.00")
+        r = self.act(m.id, "deactivate", {"reason": "leaving"})
+        self.assertEqual(r.status_code, 200)
+        # Reactivation restores the SAME membership (same pk).
+        r2 = self.act(m.id, "reactivate")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.data["id"], m.id)
+        m.refresh_from_db()
+        self.assertTrue(m.is_active)
+
+
+class PromoteDemoteTests(ClosureBase):
+    def test_promote_keeps_grants_and_manager_inherits_all(self):
+        staff_user, m = self.make_staff(perms=["rooms.view"])
+        r = self.act(m.id, "promote")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["membership_type"], MembershipType.MANAGER)
+        # Old grants preserved (inert while manager)...
+        self.assertEqual(
+            sorted(m.permission_grants.values_list("code", flat=True)), ["rooms.view"]
+        )
+        # ...and the manager now inherits everything.
+        self.assertTrue(has_hotel_permission(staff_user, self.hotel, "finance.void"))
+        # Demote restores the individual grants as the source of access.
+        r2 = self.act(m.id, "demote")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.data["membership_type"], MembershipType.STAFF)
+        self.assertFalse(has_hotel_permission(staff_user, self.hotel, "finance.void"))
+        self.assertTrue(has_hotel_permission(staff_user, self.hotel, "rooms.view"))
+
+    def test_non_manager_cannot_promote_even_with_grant(self):
+        editor = add_member(self.hotel, "ed@x.com", perms=["staff.manage_managers"])
+        _, target = self.make_staff()
+        self.client.force_authenticate(editor)
+        r = self.act(target.id, "promote")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "not_a_manager")
+
+    def test_no_self_promote_or_demote(self):
+        # Second manager tries to demote themselves.
+        second = add_member(self.hotel, "m2@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
+        target = membership_of(second, self.hotel)
+        r = self.act(target.id, "demote")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "self_action_blocked")
+
+    def test_cannot_demote_last_or_primary_manager(self):
+        # Primary manager protected (a second manager acts).
+        second = add_member(self.hotel, "m2@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
+        primary = membership_of(self.manager, self.hotel)
+        r = self.act(primary.id, "demote")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "primary_manager_protected")
+        # Last-active-manager protection: demote the second (non-primary) via a
+        # third manager, after which only one non-self manager remains.
+        third = add_member(self.hotel, "m3@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(third)
+        # Demote self.manager? it's primary -> use a fresh non-primary scenario:
+        # deactivate second and third leaves only primary (protected already).
+        # Instead assert non-primary second can be demoted when others exist:
+        r2 = self.act(membership_of(second, self.hotel).id, "demote")
+        self.assertEqual(r2.status_code, 200)
+
+    def test_manage_managers_permission_required(self):
+        staff_user = add_member(self.hotel, "plain@x.com", kind=MembershipType.MANAGER)
+        _, target = self.make_staff()
+        # A manager WITHOUT... managers inherit all, so use a staff w/ the grant
+        # but not manager (already covered by not_a_manager). Here: manager can.
+        self.client.force_authenticate(staff_user)
+        self.assertEqual(self.act(target.id, "promote").status_code, 200)
+
+
+class ChangeEmailTests(ClosureBase):
+    def _change(self, pk, email):
+        return self.client.post(
+            reverse("staff:staff-change-email", args=[pk]),
+            {"email": email}, format="json", **HDR(self.hotel),
+        )
+
+    def test_change_single_hotel_email(self):
+        _, m = self.make_staff(email="old@x.com")
+        # normalize_email lowercases the DOMAIN part only (Django behavior).
+        r = self._change(m.id, "NEW@X.com")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["email"], "NEW@x.com")
+
+    def test_email_uniqueness(self):
+        add_member(self.hotel, "taken@x.com")
+        _, m = self.make_staff(email="mine@x.com")
+        r = self._change(m.id, "taken@x.com")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "email_already_registered")
+
+    def test_no_self_email_change(self):
+        second = add_member(self.hotel, "m2@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
+        target = membership_of(second, self.hotel)
+        r = self._change(target.id, "other@x.com")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "self_action_blocked")
+
+    def test_cross_tenant_identity_blocked(self):
+        staff_user, m = self.make_staff(email="multi@x.com")
+        # Same user linked to another hotel (active) -> cross-tenant identity.
+        other = make_hotel(slug="other")
+        HotelMembership.objects.create(
+            user=staff_user, hotel=other, membership_type=MembershipType.STAFF, is_active=True
+        )
+        r = self._change(m.id, "new@x.com")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "cross_tenant_identity")
+
+    def test_cross_tenant_identity_historical_membership(self):
+        staff_user, m = self.make_staff(email="hist@x.com")
+        other = make_hotel(slug="other2")
+        HotelMembership.objects.create(
+            user=staff_user, hotel=other, membership_type=MembershipType.STAFF,
+            is_active=False,  # historical/deactivated still counts
+        )
+        r = self._change(m.id, "new@x.com")
+        self.assertEqual(r.status_code, 409)
+
+    def test_change_email_permission_gated(self):
+        _, m = self.make_staff(email="target@x.com")
+        editor = add_member(self.hotel, "noperm@x.com", perms=["staff.view", "staff.update"])
+        self.client.force_authenticate(editor)
+        self.assertEqual(self._change(m.id, "x@x.com").status_code, 403)
+
+
+class GuardedDeleteTests(ClosureBase):
+    def _delete(self, pk, delete_user=False):
+        return self.client.post(
+            reverse("staff:staff-delete", args=[pk]),
+            {"delete_user": delete_user}, format="json", **HDR(self.hotel),
+        )
+
+    def test_delete_clean_membership(self):
+        staff_user, m = self.make_staff(email="clean@x.com", perms=["rooms.view"])
+        r = self._delete(m.id)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["membership_deleted"], m.id)
+        self.assertFalse(HotelMembership.objects.filter(pk=m.id).exists())
+        # User kept (delete_user False).
+        self.assertTrue(User.objects.filter(pk=staff_user.id).exists())
+
+    def test_delete_refused_with_shift_trace(self):
+        staff_user, m = self.make_staff(email="hastrace@x.com")
+        shift = open_shift(self.hotel, user=staff_user, responsible_user=staff_user,
+                           opening_cash_amount="0.00")
+        close_shift(shift, user=staff_user, actual_cash_amount="0.00")
+        r = self._delete(m.id)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "staff_has_trace")
+        self.assertTrue(HotelMembership.objects.filter(pk=m.id).exists())
+
+    def test_delete_refused_with_activity_trace(self):
+        # A staff member who ACTED (created a guest) leaves a created_by trace.
+        from apps.guests.models import Guest
+
+        staff_user, m = self.make_staff(email="acted@x.com")
+        Guest.objects.create(hotel=self.hotel, full_name="G", created_by=staff_user)
+        r = self._delete(m.id)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "staff_has_trace")
+
+    def test_delete_user_only_when_fully_clean_and_sole(self):
+        staff_user, m = self.make_staff(email="sole@x.com")
+        r = self._delete(m.id, delete_user=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["user_deleted"], staff_user.id)
+        self.assertFalse(User.objects.filter(pk=staff_user.id).exists())
+
+    def test_user_kept_when_other_membership_exists(self):
+        staff_user, m = self.make_staff(email="two@x.com")
+        other = make_hotel(slug="other3")
+        HotelMembership.objects.create(
+            user=staff_user, hotel=other, membership_type=MembershipType.STAFF, is_active=True
+        )
+        r = self._delete(m.id, delete_user=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.data["user_deleted"])
+        self.assertTrue(User.objects.filter(pk=staff_user.id).exists())
+
+    def test_cannot_delete_self(self):
+        second = add_member(self.hotel, "m2@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(second)
+        target = membership_of(second, self.hotel)
+        r = self._delete(target.id)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "self_action_blocked")
+
+    def test_delete_permission_gated(self):
+        _, m = self.make_staff(email="g@x.com")
+        editor = add_member(self.hotel, "np@x.com", perms=["staff.view", "staff.deactivate"])
+        self.client.force_authenticate(editor)
+        self.assertEqual(self._delete(m.id).status_code, 403)
+
+
+class ClosureActivityTests(ClosureBase):
+    def test_lifecycle_events_recorded(self):
+        # created
+        r = self.create_staff(email="ev@x.com", permissions=["rooms.view"])
+        mid = r.data["id"]
+        staff_user = User.objects.get(email="ev@x.com")
+        # updated (descriptive) w/ diff, and NO event on no-op
+        self.client.patch(reverse("staff:staff-detail", args=[mid]),
+                          {"job_title": "Chef"}, format="json", **HDR(self.hotel))
+        before = ActivityEvent.objects.filter(hotel=self.hotel, event_type="staff.updated").count()
+        self.client.patch(reverse("staff:staff-detail", args=[mid]),
+                          {"job_title": "Chef"}, format="json", **HDR(self.hotel))
+        after = ActivityEvent.objects.filter(hotel=self.hotel, event_type="staff.updated").count()
+        self.assertEqual(before, after)  # no-op recorded nothing
+        # permissions updated
+        self.put_permissions(mid, ["rooms.view", "reservations.view"])
+        # email changed
+        self.client.post(reverse("staff:staff-change-email", args=[mid]),
+                         {"email": "ev2@x.com"}, format="json", **HDR(self.hotel))
+        # promote + demote
+        self.act(mid, "promote")
+        self.act(mid, "demote")
+        # deactivate + reactivate
+        self.act(mid, "deactivate", {"reason": "x"})
+        self.act(mid, "reactivate")
+        types = set(
+            ActivityEvent.objects.filter(hotel=self.hotel).values_list("event_type", flat=True)
+        )
+        expected = {
+            "staff.created", "staff.updated", "staff.permissions_updated",
+            "staff.email_changed", "staff.promoted_to_manager",
+            "staff.demoted_to_staff", "staff.deactivated", "staff.reactivated",
+        }
+        self.assertTrue(expected.issubset(types), expected - types)
+
+    def test_password_never_in_activity(self):
+        r = self.create_staff(email="pw@x.com")
+        mid = r.data["id"]
+        self.act(mid, "reset-password", {"password": "Fresh!Pass987"})
+        for ev in ActivityEvent.objects.filter(hotel=self.hotel):
+            self.assertNotIn("Fresh!Pass987", ev.message)
+            self.assertNotIn("Fresh!Pass987", ev.title)

@@ -246,6 +246,81 @@ class ManagerPermissionsNotEditable(FunduqiiAPIException):
     default_code = "manager_permissions_not_editable"
 
 
+# --- Staff & employees (final closure round) ---------------------------------
+
+
+class CannotEditOwnPermissions(FunduqiiAPIException):
+    """A user may never change the permission grants of their own membership —
+    add, remove, replace, or re-send the same set (no self-service access)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "You cannot edit the permissions of your own membership."
+    default_code = "cannot_edit_own_permissions"
+
+
+class SelfActionBlocked(FunduqiiAPIException):
+    """Deactivate / promote / demote / delete / change-email against oneself
+    is refused (no self-management of sensitive lifecycle actions)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "You cannot perform this action on your own account."
+    default_code = "self_action_blocked"
+
+
+class NotAManager(FunduqiiAPIException):
+    """Manager-only lifecycle actions (promote/demote) require the ACTOR to be
+    a real manager — holding the task permission alone is not enough."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "Only a manager can manage manager memberships."
+    default_code = "not_a_manager"
+
+
+class InvalidMembershipType(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The membership is not of the expected type for this action."
+    default_code = "invalid_membership_type"
+
+
+class PrimaryManagerProtected(FunduqiiAPIException):
+    """The hotel's primary manager cannot be deactivated, demoted, or deleted
+    through staff management — ownership moves have their own path."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The hotel's primary manager cannot be changed here."
+    default_code = "primary_manager_protected"
+
+
+class StaffHasOpenShift(FunduqiiAPIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Close the employee's open shift before deactivating them."
+    default_code = "staff_has_open_shift"
+
+
+class StaffHasTrace(FunduqiiAPIException):
+    """A membership/user with any operational, financial, or security trace can
+    never be deleted — deactivation is the only path (history is preserved)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This account has operational history and cannot be deleted; "
+        "deactivate it instead."
+    )
+    default_code = "staff_has_trace"
+
+
+class CrossTenantIdentity(FunduqiiAPIException):
+    """The user's email is a global login identity shared beyond this hotel;
+    a single-hotel manager may not change it here."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This user's identity spans more than one tenant; change the email "
+        "from central identity management."
+    )
+    default_code = "cross_tenant_identity"
+
+
 # --- Shifts / handover / daily close (Phase 12) ------------------------------
 
 

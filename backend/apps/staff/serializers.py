@@ -73,6 +73,16 @@ class StaffCreateSerializer(serializers.Serializer):
     )
 
 
+class ChangeEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class DeleteStaffSerializer(serializers.Serializer):
+    # When true, also delete the underlying user IF it becomes a fully-clean
+    # orphan; the service decides and never forces it.
+    delete_user = serializers.BooleanField(required=False, default=False)
+
+
 class LinkExistingUserSerializer(serializers.Serializer):
     email = serializers.EmailField()
     job_title = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")

@@ -1,7 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { KeyRound, Link2, Pencil, Plus, ShieldCheck, Users } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  KeyRound,
+  Link2,
+  Mail,
+  Pencil,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 
 import {
   Alert,
@@ -21,14 +32,19 @@ import {
   PasswordInput,
   SectionHeader,
   Select,
+  Switch,
   useToast,
   type Column,
 } from "@/components/ui";
 import {
+  changeStaffEmail,
   createStaffMember,
   deactivateStaffMember,
+  deleteStaffMember,
+  demoteStaffMember,
   linkExistingUser,
   listStaff,
+  promoteStaffMember,
   reactivateStaffMember,
   resetStaffPassword,
   updateStaffMember,
@@ -40,8 +56,18 @@ import { messageForError } from "@/lib/api/errors";
 import type { StaffMemberListItem } from "@/lib/api/types";
 import { formatDate } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useCurrentUser } from "@/lib/session/CurrentUserContext";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 const PAGE_SIZE = 25;
+
+/** Cosmetic permission gate (APIs still enforce). Null access = platform
+ * console context, where these tabs never render — treat as permitted. */
+function useCan() {
+  const access = useHotelAccess();
+  return (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+}
 
 export function StaffListTab({
   onOpenPermissions,
@@ -50,6 +76,8 @@ export function StaffListTab({
 }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
+  const can = useCan();
+  const me = useCurrentUser();
   const s = t.staff.list;
 
   const [rows, setRows] = useState<StaffMemberListItem[]>([]);
@@ -67,6 +95,10 @@ export function StaffListTab({
   const [deactivateRow, setDeactivateRow] = useState<StaffMemberListItem | null>(null);
   const [reactivateRow, setReactivateRow] = useState<StaffMemberListItem | null>(null);
   const [resetRow, setResetRow] = useState<StaffMemberListItem | null>(null);
+  const [promoteRow, setPromoteRow] = useState<StaffMemberListItem | null>(null);
+  const [demoteRow, setDemoteRow] = useState<StaffMemberListItem | null>(null);
+  const [emailRow, setEmailRow] = useState<StaffMemberListItem | null>(null);
+  const [deleteRow, setDeleteRow] = useState<StaffMemberListItem | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,35 +164,70 @@ export function StaffListTab({
       key: "actions",
       header: t.common.actions,
       align: "end",
-      render: (r) => (
-        <div className="table__actions">
-          <Button size="sm" variant="secondary" icon={Pencil} onClick={() => setEditRow(r)}>
-            {s.edit}
-          </Button>
-          {!r.is_manager ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={ShieldCheck}
-              onClick={() => onOpenPermissions(r.id)}
-            >
-              {s.permissions}
+      render: (r) => {
+        const isSelf = me?.id === r.user_id;
+        return (
+          <div className="table__actions">
+            <Button size="sm" variant="secondary" icon={Pencil} onClick={() => setEditRow(r)}>
+              {s.edit}
             </Button>
-          ) : null}
-          <Button size="sm" variant="secondary" icon={KeyRound} onClick={() => setResetRow(r)}>
-            {s.resetPassword}
-          </Button>
-          {r.is_active ? (
-            <Button size="sm" variant="danger" onClick={() => setDeactivateRow(r)}>
-              {s.deactivate}
+            {!r.is_manager ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={ShieldCheck}
+                onClick={() => onOpenPermissions(r.id)}
+              >
+                {s.permissions}
+              </Button>
+            ) : null}
+            {!r.is_manager && !isSelf && can("staff.manage_managers") ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={ArrowUp}
+                onClick={() => setPromoteRow(r)}
+              >
+                {s.promote}
+              </Button>
+            ) : null}
+            {r.is_manager && !r.is_primary_manager && !isSelf && can("staff.manage_managers") ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={ArrowDown}
+                onClick={() => setDemoteRow(r)}
+              >
+                {s.demote}
+              </Button>
+            ) : null}
+            {!isSelf && can("staff.change_email") ? (
+              <Button size="sm" variant="secondary" icon={Mail} onClick={() => setEmailRow(r)}>
+                {s.changeEmail}
+              </Button>
+            ) : null}
+            <Button size="sm" variant="secondary" icon={KeyRound} onClick={() => setResetRow(r)}>
+              {s.resetPassword}
             </Button>
-          ) : (
-            <Button size="sm" onClick={() => setReactivateRow(r)}>
-              {s.reactivate}
-            </Button>
-          )}
-        </div>
-      ),
+            {!r.is_primary_manager ? (
+              r.is_active ? (
+                <Button size="sm" variant="danger" onClick={() => setDeactivateRow(r)}>
+                  {s.deactivate}
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => setReactivateRow(r)}>
+                  {s.reactivate}
+                </Button>
+              )
+            ) : null}
+            {!r.is_primary_manager && !isSelf && can("staff.delete") ? (
+              <Button size="sm" variant="danger" icon={Trash2} onClick={() => setDeleteRow(r)}>
+                {s.delete}
+              </Button>
+            ) : null}
+          </div>
+        );
+      },
     },
   ];
 
@@ -307,6 +374,66 @@ export function StaffListTab({
         onDone={() => {
           setResetRow(null);
           notify(s.resetDoneMsg);
+        }}
+      />
+      <ConfirmDialog
+        open={promoteRow !== null}
+        title={s.promoteTitle}
+        body={s.promoteConfirm.replace("{name}", promoteRow?.full_name ?? "")}
+        confirmLabel={s.promote}
+        cancelLabel={t.common.cancel}
+        closeLabel={t.common.close}
+        onClose={() => setPromoteRow(null)}
+        onConfirm={async () => {
+          if (!promoteRow) return;
+          try {
+            await promoteStaffMember(promoteRow.id);
+            notify(s.promotedMsg);
+            load();
+          } catch (err) {
+            notify(messageForError(err, t), "error");
+          } finally {
+            setPromoteRow(null);
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={demoteRow !== null}
+        title={s.demoteTitle}
+        body={s.demoteConfirm.replace("{name}", demoteRow?.full_name ?? "")}
+        confirmLabel={s.demote}
+        cancelLabel={t.common.cancel}
+        closeLabel={t.common.close}
+        onClose={() => setDemoteRow(null)}
+        onConfirm={async () => {
+          if (!demoteRow) return;
+          try {
+            await demoteStaffMember(demoteRow.id);
+            notify(s.demotedMsg);
+            load();
+          } catch (err) {
+            notify(messageForError(err, t), "error");
+          } finally {
+            setDemoteRow(null);
+          }
+        }}
+      />
+      <ChangeEmailModal
+        row={emailRow}
+        onClose={() => setEmailRow(null)}
+        onDone={() => {
+          setEmailRow(null);
+          notify(s.emailChangedMsg);
+          load();
+        }}
+      />
+      <DeleteModal
+        row={deleteRow}
+        onClose={() => setDeleteRow(null)}
+        onDone={(msg) => {
+          setDeleteRow(null);
+          notify(msg);
+          load();
         }}
       />
     </>
@@ -744,6 +871,145 @@ function ResetPasswordModal({
             onChange={(e) => setPassword(e.target.value)}
           />
         </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function ChangeEmailModal({
+  row,
+  onClose,
+  onDone,
+}: {
+  row: StaffMemberListItem | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const s = t.staff.list;
+  const f = t.staff.form;
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (row) {
+      setEmail(row.email);
+      setError(null);
+    }
+  }, [row]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!row) return;
+    if (!email.trim()) return setError(f.emailRequired);
+    setBusy(true);
+    setError(null);
+    try {
+      await changeStaffEmail(row.id, email.trim());
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={row !== null}
+      onClose={onClose}
+      title={s.changeEmailTitle}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          <Button form="staff-email-form" type="submit" loading={busy}>
+            {t.common.save}
+          </Button>
+        </>
+      }
+    >
+      <form id="staff-email-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField label={s.changeEmailLabel} htmlFor="sce-email">
+          <Input
+            id="sce-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function DeleteModal({
+  row,
+  onClose,
+  onDone,
+}: {
+  row: StaffMemberListItem | null;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const { t } = useI18n();
+  const s = t.staff.list;
+  const [deleteUser, setDeleteUser] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (row) {
+      setDeleteUser(false);
+      setError(null);
+    }
+  }, [row]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!row) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await deleteStaffMember(row.id, deleteUser);
+      onDone(result.user_deleted !== null ? s.deletedWithUserMsg : s.deletedMsg);
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={row !== null}
+      onClose={onClose}
+      title={s.deleteTitle}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          <Button form="staff-delete-form" type="submit" variant="danger" loading={busy}>
+            {s.deleteConfirm}
+          </Button>
+        </>
+      }
+    >
+      <form id="staff-delete-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <Alert tone="warning">{s.deleteWarning}</Alert>
+        <Switch
+          id="sd-delete-user"
+          checked={deleteUser}
+          onChange={setDeleteUser}
+          label={s.deleteUserLabel}
+        />
       </form>
     </Modal>
   );
