@@ -1798,7 +1798,8 @@
 ---
 
 ## جولة إغلاق — الباقات والاشتراكات (Plans & Subscriptions final closure)
-- الحالة: **بانتظار الاعتماد 🔎** (جولة إغلاق متوسطة — ليست مرحلة)
+- الحالة: **مكتملة ✅ ومعتمدة ومدموجة** (جولة إغلاق متوسطة — ليست مرحلة)
+- الدمج: PR #36 · squash · merge commit `acb9e42` · اعتماد المالك الصريح («اعتماد تنفيذ جولة إغلاق قسم الباقات والاشتراكات وبدء بروتوكول الدمج النهائي لـ PR #36 ✅») — الفرع محذوف محليًا وبعيدًا.
 - الفرع: `claude/subscriptions-final-closure` · الأساس: `origin/main@8c6a02c` · العنوان: «Plans and subscriptions final closure»
 - **المنهج:** القسم كان موجودًا وعاملًا (Phase 3 + 16 + 17)؛ هذه جولة إكمال، لا إعادة بناء. النماذج القائمة أُبقيت (SubscriptionPlan باقة+سعر مدمج، HotelSubscription، PlatformSubscriptionPayment).
 - **Grandfathering:** حقل `plan_snapshot` (JSON) على HotelSubscription يُجمّد شروط الباقة عند البدء (تجربة/تفعيل/تغيير باقة/إعادة تفعيل) — الاشتراك القائم يقرأ سعره/حدوده/مزاياه من اللقطة لا من الباقة الحية، فتعديل الباقة لا يؤثّر رجعيًا. **Migration واحدة فقط** (`0004_hotelsubscription_plan_snapshot`) — إضافية Nullable + backfill آمن من الباقة الحالية، بلا حذف، reverse واضح.
