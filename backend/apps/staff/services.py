@@ -53,6 +53,7 @@ from apps.common.exceptions import (
 from apps.rbac.registry import PERMISSIONS_BY_SECTION, is_valid_permission
 from apps.rbac.services import get_active_membership, get_hotel_permissions
 from apps.rbac.models import HotelPermissionGrant
+from apps.subscriptions.entitlements import check_staff_quota
 from apps.tenancy.models import HotelMembership, MembershipType
 
 User = get_user_model()
@@ -185,6 +186,9 @@ def create_staff_member(
     _validate_password(password)
     codes = _validate_codes(permissions)
     _guard_escalation(hotel, actor, codes)
+    # Entitlement gate (subscriptions closure): the plan's user_limit blocks a
+    # NEW active staff member; existing staff are grandfathered (never removed).
+    check_staff_quota(hotel)
 
     user = User.objects.create_user(
         email=email, password=password, full_name=full_name, phone=phone or ""
@@ -237,6 +241,9 @@ def link_existing_user(
         raise MembershipAlreadyExists({"email": user.email})
     codes = _validate_codes(permissions)
     _guard_escalation(hotel, actor, codes)
+    # Entitlement gate (subscriptions closure): the plan's user_limit blocks a
+    # NEW active staff member; existing staff are grandfathered (never removed).
+    check_staff_quota(hotel)
 
     membership = HotelMembership.objects.create(
         user=user,

@@ -232,6 +232,11 @@ def create_public_booking(
     manage token. Returns ``(reservation, plaintext_token)`` — the only
     moment the plaintext exists."""
     hotel = settings_obj.hotel
+    # Entitlement gate (subscriptions closure): the plan's monthly public-booking
+    # allowance blocks a NEW public booking; existing bookings are never touched.
+    from apps.subscriptions.entitlements import check_public_booking_quota
+
+    check_public_booking_quota(hotel)
     validate_public_dates(settings_obj, check_in, check_out)
     if room_type.hotel_id != hotel.id or not room_type.public_is_visible:
         raise serializers.ValidationError({"room_type": "Unknown room type."})

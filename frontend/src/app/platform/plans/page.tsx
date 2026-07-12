@@ -258,6 +258,7 @@ function PlanModal({
   const [priceYearly, setPriceYearly] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const [maxPublicBookings, setMaxPublicBookings] = useState("");
+  const [sortOrder, setSortOrder] = useState("0");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -282,6 +283,7 @@ function PlanModal({
         ? String(plan.max_public_bookings_per_month)
         : "",
     );
+    setSortOrder(String(plan?.sort_order ?? 0));
     setNotes(plan?.notes ?? "");
     setError(null);
   }, [open, plan]);
@@ -302,6 +304,7 @@ function PlanModal({
       user_limit: userLimit === "" ? null : Number(userLimit),
       max_public_bookings_per_month:
         maxPublicBookings === "" ? null : Number(maxPublicBookings),
+      sort_order: Number(sortOrder) || 0,
       is_public: isPublic,
       notes: notes.trim(),
       feature_codes: features
@@ -450,6 +453,15 @@ function PlanModal({
               min="0"
               value={maxPublicBookings}
               onChange={(event) => setMaxPublicBookings(event.target.value)}
+            />
+          </FormField>
+          <FormField label={t.plans.sortOrder} htmlFor="plan-sort-order">
+            <Input
+              id="plan-sort-order"
+              type="number"
+              min="0"
+              value={sortOrder}
+              onChange={(event) => setSortOrder(event.target.value)}
             />
           </FormField>
         </div>

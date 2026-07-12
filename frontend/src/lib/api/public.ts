@@ -7,6 +7,7 @@
  * visitor's browser (shown once at booking time); it is never stored here.
  */
 import type { ApiError } from "./client";
+import type { PublicPlan } from "./types";
 
 const PROXY_BASE = "/api/public";
 
@@ -184,6 +185,12 @@ export function resolvePublicText(
 
 export function getPublicSiteSettings(): Promise<PublicSiteSettings> {
   return publicFetch("/site-settings");
+}
+
+/** Anonymous list of active + public plans (already filtered and sorted by the
+ * Django side). No checkout — the pricing page only renders these. */
+export function getPublicPlans(): Promise<{ plans: PublicPlan[] }> {
+  return publicFetch("/plans");
 }
 
 export function listPublicHotels(params?: {

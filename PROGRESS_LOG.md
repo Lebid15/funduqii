@@ -1794,3 +1794,21 @@
 - **إصلاح المراجعة (بطلب المالك):** التبويبات الداخلية للصفحتين المشتركتين صارت **permission-aware** — ‏FinancePanel: تبويبات النظرة/الفوليو/الدفعات/الفواتير خلف `finance.view` والمصروفات خلف `expenses.view`؛ ‏ShiftsPanel: تبويبات الورديات خلف `shifts.view` والإغلاق اليومي خلف `daily_close.view` (الأكواد القائمة حصرًا). التبويب غير المسموح لا يُعرض ولا يُفتح برابط مباشر (`?tab=` غير المسموح يُحسم لأول تبويب مسموح ويُطبَّع الـ URL — الـ URL مصدر الحقيقة الوحيد فلا loop)، ومن بلا أي صلاحية يرى Access denied القائمة. **إثبات كودي موثق: 19/19 حالة** (المستخدم محدود الصلاحية بكل نوع، الروابط المباشرة المهاجمة، المدير، الجمع بين الصلاحيتين، صفر صلاحيات بلا crash، ونقطة ثبات التطبيع).
 - **الفحوصات:** ‏lint ✅ · tsc ✅ · build ✅ (`/hotel/subscription` في الشجرة) · الجرس سليم · المسارات تستجيب خلف بوابة الجلسة · القواميس الثلاث متكافئة · محاكاة صلاحيات التبويبات 19/19.
 - **الاعتماد:** بانتظار قرار المالك — لا دمج ولا اعتماد ذاتي.
+
+---
+
+## جولة إغلاق — الباقات والاشتراكات (Plans & Subscriptions final closure)
+- الحالة: **بانتظار الاعتماد 🔎** (جولة إغلاق متوسطة — ليست مرحلة)
+- الفرع: `claude/subscriptions-final-closure` · الأساس: `origin/main@8c6a02c` · العنوان: «Plans and subscriptions final closure»
+- **المنهج:** القسم كان موجودًا وعاملًا (Phase 3 + 16 + 17)؛ هذه جولة إكمال، لا إعادة بناء. النماذج القائمة أُبقيت (SubscriptionPlan باقة+سعر مدمج، HotelSubscription، PlatformSubscriptionPayment).
+- **Grandfathering:** حقل `plan_snapshot` (JSON) على HotelSubscription يُجمّد شروط الباقة عند البدء (تجربة/تفعيل/تغيير باقة/إعادة تفعيل) — الاشتراك القائم يقرأ سعره/حدوده/مزاياه من اللقطة لا من الباقة الحية، فتعديل الباقة لا يؤثّر رجعيًا. **Migration واحدة فقط** (`0004_hotelsubscription_plan_snapshot`) — إضافية Nullable + backfill آمن من الباقة الحالية، بلا حذف، reverse واضح.
+- **بوابة Entitlement مركزية** (`subscriptions/entitlements.py`): تُقيَّم بعد بوابة التشغيل و RBAC — حدود الغرف والموظفين (block-new + grandfather-existing، تحت قفل صف)، الحجز العام الشهري، `usage_state` (normal/nearing≥80%/limit_reached/over)، `has_subscription_feature` (قائمة رسمية `restaurant_cafe/advanced_reports/public_booking`، بلا حجب أقسام قائمة)، `effective_subscription_state`. موصولة في حُرّاس إنشاء: الغرف (rooms) والموظفين (staff: create + link) والحجز العام (public_site).
+- **عدّ الاستهلاك (مصدر مركزي):** الغرف = غير المؤرشفة (نفس تعريف rooms) · الموظفون = العضويات النشطة (يشمل المدير الأساسي) · الحجز العام = `source=PUBLIC_WEBSITE` في الشهر المحلي، مستبعدًا الملغاة/المنتهية.
+- **دورة الحياة:** `change_subscription_plan` صريح (upgrade/downgrade/lateral، فوري، بلا proration، grandfather للموارد، حدث `plan_changed`) + `reactivate_subscription` (اشتراك جديد بعد الحالة النهائية) + توحيد extend (حدث `subscription.extended`) + أقفال `select_for_update` وإعادة فحص وتحويل IntegrityError لاستثناء تشغيلي.
+- **الحالة الفعّالة:** `effective_status` مشتقّ من التاريخ (trial/active منتهٍ بالتاريخ = expired دون job) + عدّادات Overview/Dashboard صحّحت لتستخدم الحالة الفعّالة.
+- **الدفعات:** حارس مرجع مكرّر لكل فندق (قفل صف الفندق، غير المُبطَلة) + وصل واجهة تسجيل الدفع (activate/renew/change/reactivate) + زر Void (سبب إلزامي) + أحداث `payment_recorded`/`payment_voided`. لا تعديل/حذف — Void فقط.
+- **الأسطح:** لوحة المالك (نموذج دفع + Void + تغيير باقة + إعادة تفعيل + عرض الاستهلاك/اللقطة/الحالة الفعّالة + sort_order) · صفحة الفندق قراءة-فقط مُثراة (الشروط + الاستهلاك/الحدود + المزايا + سجل الدفعات + CTA تواصل) · **كتالوج باقات عام جديد** `GET /api/v1/public/plans/` + صفحة `/pricing` (active+public فقط، من نفس الكتالوج، بلا checkout).
+- **عقد أحداث الإشعارات:** ثابت `SUBSCRIPTION_EVENT_TYPES` (15 نوعًا) عبر `record_activity` القائم — بلا Events Model، جاهز لاستهلاك قسم الإشعارات التالي.
+- **صفر صلاحيات جديدة · صفر بوابة دفع/جدولة/فوترة · لا تعديل route guards · لا إعادة تصميم RBAC.**
+- **الفحوصات:** Django check ✅ · `makemigrations --check` = No changes (migration واحدة) ✅ · **الباك إند 1075 اختبارًا OK** (‏+51 جديدًا) ✅ · frontend lint ✅ tsc ✅ build ✅ (`/pricing` في الشجرة) · تكافؤ الترجمات ar/en/tr = **2545×3** ✅ · **سبر حي معزول 26/26 وقبل==بعد مطابق (صفر بقايا)** ✅.
+- **الاعتماد:** بانتظار قرار المالك — لا دمج ولا اعتماد ذاتي.

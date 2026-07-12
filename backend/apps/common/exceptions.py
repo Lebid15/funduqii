@@ -749,6 +749,56 @@ class InvalidHotelStatusTransition(FunduqiiAPIException):
     default_code = "invalid_hotel_status_transition"
 
 
+# --- Subscription entitlements / limits (subscriptions final closure) --------
+
+
+class RoomLimitReached(FunduqiiAPIException):
+    """The hotel's plan room limit is reached. Existing rooms are grandfathered
+    (never deleted or disabled); no NEW room may be created until usage drops
+    below the limit or the plan is upgraded."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This hotel has reached the room limit of its subscription plan; "
+        "existing rooms are kept, but new rooms cannot be created."
+    )
+    default_code = "room_limit_reached"
+
+
+class StaffLimitReached(FunduqiiAPIException):
+    """The hotel's plan staff (user) limit is reached. Existing staff are
+    grandfathered; no NEW staff may be created until usage drops below the
+    limit or the plan is upgraded."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This hotel has reached the staff limit of its subscription plan; "
+        "existing staff are kept, but new staff cannot be created."
+    )
+    default_code = "staff_limit_reached"
+
+
+class PublicBookingLimitReached(FunduqiiAPIException):
+    """The hotel's monthly public-booking allowance is reached. Existing
+    bookings are untouched; new PUBLIC bookings are refused for this month."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This hotel has reached its monthly public-booking limit; existing "
+        "bookings are kept, but new public bookings cannot be created now."
+    )
+    default_code = "public_booking_limit_reached"
+
+
+class DuplicatePaymentReference(FunduqiiAPIException):
+    """A manual subscription payment reference is unique per hotel among
+    non-voided payments (enforced only when a reference is supplied)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "A payment with this reference already exists for this hotel."
+    default_code = "duplicate_payment_reference"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

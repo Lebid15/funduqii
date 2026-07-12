@@ -72,8 +72,11 @@ class HotelProfileView(APIView):
 
     def get(self, request: Request) -> Response:
         # Phase 16: the hotel console reads its own billing state here (safe,
-        # read-only) to show the subscription banners.
-        from apps.subscriptions.enforcement import subscription_state
+        # read-only) to show the subscription banners. Subscriptions closure:
+        # the enriched state adds the frozen terms + entitlement usage/limits.
+        from apps.subscriptions.entitlements import (
+            effective_subscription_state as subscription_state,
+        )
 
         hotel = request.hotel
         settings_obj = _get_settings(hotel)

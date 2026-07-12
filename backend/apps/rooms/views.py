@@ -6,6 +6,7 @@ inventory only: no reservations, availability, guests or money.
 """
 from __future__ import annotations
 
+from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from rest_framework.views import APIView
 
 from apps.rbac.permissions import HasHotelPermission
 from apps.subscriptions.enforcement import ensure_hotel_operational
+from apps.subscriptions.entitlements import check_room_quota
 
 from . import services
 from .models import Floor, Room, RoomStatus, RoomType
@@ -167,7 +169,12 @@ class RoomListCreateView(_HotelScopedMixin, generics.ListCreateAPIView):
         _guard_write(request)
         serializer = RoomWriteSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        room = serializer.save(hotel=request.hotel)
+        # Entitlement gate (subscriptions closure): the plan's room_limit is
+        # enforced under a row lock so a concurrent create cannot exceed it.
+        # Existing rooms are grandfathered — only NEW rooms are blocked.
+        with transaction.atomic():
+            check_room_quota(request.hotel)
+            room = serializer.save(hotel=request.hotel)
         return Response(
             RoomSerializer(room).data, status=status.HTTP_201_CREATED
         )

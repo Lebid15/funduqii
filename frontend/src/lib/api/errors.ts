@@ -47,6 +47,14 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.subscriptions.errors.conflicting;
     case "invalid_subscription_transition":
       return t.subscriptions.errors.invalidTransition;
+    case "room_limit_reached":
+      return t.subscriptions.errors.roomLimitReached;
+    case "staff_limit_reached":
+      return t.subscriptions.errors.staffLimitReached;
+    case "public_booking_limit_reached":
+      return t.subscriptions.errors.publicBookingLimitReached;
+    case "duplicate_payment_reference":
+      return t.subscriptions.errors.duplicatePaymentReference;
     case "plan_in_use":
       return t.plans.inUseCannotDelete;
     case "resource_in_use":
