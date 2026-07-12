@@ -66,11 +66,27 @@ class ActivitySeverity(models.TextChoices):
     DANGER = "danger", "Danger"
 
 
+class NotificationScope(models.TextChoices):
+    """Who the event/notification is FOR. ``hotel`` (the default and every
+    legacy row) stays inside the hotel console; ``platform`` is addressed to the
+    platform owner's own centre and never appears in a hotel console. ``hotel``
+    is always kept as a safe reference even on a platform-scoped row (so the
+    owner can open the right hotel), so ``hotel`` is never nullable."""
+
+    HOTEL = "hotel", "Hotel"
+    PLATFORM = "platform", "Platform"
+
+
 class ActivityEvent(models.Model):
     """One operational event inside a hotel — the activity-center feed row."""
 
     hotel = models.ForeignKey(
         "tenancy.Hotel", on_delete=models.CASCADE, related_name="activity_events"
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=NotificationScope.choices,
+        default=NotificationScope.HOTEL,
     )
     event_number = models.CharField(max_length=20)
     event_type = models.CharField(max_length=64)
@@ -119,6 +135,7 @@ class ActivityEvent(models.Model):
         indexes = [
             models.Index(fields=["hotel", "category"]),
             models.Index(fields=["hotel", "occurred_at"]),
+            models.Index(fields=["scope", "hotel", "occurred_at"]),
         ]
 
     def __str__(self) -> str:
@@ -132,6 +149,11 @@ class Notification(models.Model):
 
     hotel = models.ForeignKey(
         "tenancy.Hotel", on_delete=models.CASCADE, related_name="notifications"
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=NotificationScope.choices,
+        default=NotificationScope.HOTEL,
     )
     notification_number = models.CharField(max_length=20)
     recipient = models.ForeignKey(
@@ -163,6 +185,13 @@ class Notification(models.Model):
     read_at = models.DateTimeField(null=True, blank=True)
     is_archived = models.BooleanField(default=False)
     archived_at = models.DateTimeField(null=True, blank=True)
+    # Optional idempotency key (subscriptions/notifications closure). When set,
+    # a recipient can hold at most ONE notification per key — a re-emitted event
+    # (e.g. a subscription lifecycle event to the platform owner) never
+    # duplicates. NULL keeps the legacy behaviour (a fresh row every time). The
+    # key itself carries all scope dimensions, so the constraint is per
+    # (recipient, dedup_key) only.
+    dedup_key = models.CharField(max_length=200, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -173,10 +202,18 @@ class Notification(models.Model):
                 fields=["hotel", "notification_number"],
                 name="unique_notification_number_per_hotel",
             ),
+            models.UniqueConstraint(
+                fields=["recipient", "dedup_key"],
+                condition=models.Q(dedup_key__isnull=False),
+                name="unique_notification_dedup_per_recipient",
+            ),
         ]
         indexes = [
             models.Index(fields=["hotel", "recipient", "is_read"]),
             models.Index(fields=["hotel", "recipient", "is_archived"]),
+            models.Index(fields=["recipient", "scope", "is_read"]),
+            models.Index(fields=["recipient", "scope", "is_archived"]),
+            models.Index(fields=["recipient", "scope", "created_at"]),
         ]
 
     def __str__(self) -> str:

@@ -60,6 +60,10 @@ def change_room_status(room: Room, new_status: str, *, note: str, user) -> Room:
         actor=actor,
         related_object=room,
         related_url="/hotel/rooms",
+        # Noise control (notifications closure): only blocking moves
+        # (maintenance / out-of-service) notify; routine housekeeping moves
+        # (available/dirty/cleaning/ready) stay activity-only.
+        notify=new_status in NOTE_REQUIRED_STATUSES,
     )
     return room
 

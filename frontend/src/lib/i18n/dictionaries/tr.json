@@ -2929,5 +2929,9 @@
     "ctaRegister": "Otelinizi kaydedin",
     "empty": "Şu anda uygun paket yok.",
     "nav": "Fiyatlandırma"
+  },
+  "platformNotifications": {
+    "title": "Bildirimler",
+    "subtitle": "Yeni oteller, abonelikler ve platform etkinliği"
   }
 }

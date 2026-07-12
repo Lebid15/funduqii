@@ -276,7 +276,7 @@ class RecipientTests(APITestCase):
 
     def test_finance_event_recipients(self):
         event = record_activity(
-            self.hotel, event_type="payment.recorded", category="finance",
+            self.hotel, event_type="payment.reversed", category="finance",
             title="Payment", actor=self.plain_staff,
         )
         self.assertEqual(self.recipients_of(event), {"m@x.com", "fin@x.com"})
@@ -290,7 +290,7 @@ class RecipientTests(APITestCase):
 
     def test_actor_not_notified(self):
         event = record_activity(
-            self.hotel, event_type="payment.recorded", category="finance",
+            self.hotel, event_type="payment.reversed", category="finance",
             title="Payment", actor=self.finance_staff,
         )
         self.assertEqual(self.recipients_of(event), {"m@x.com"})
@@ -305,7 +305,7 @@ class RecipientTests(APITestCase):
         other = make_hotel(slug="o")
         add_member(other, "om@x.com", kind=MembershipType.MANAGER)
         event = record_activity(
-            self.hotel, event_type="payment.recorded", category="finance", title="P"
+            self.hotel, event_type="payment.reversed", category="finance", title="P"
         )
         self.assertNotIn("om@x.com", self.recipients_of(event))
 
@@ -314,7 +314,7 @@ class RecipientTests(APITestCase):
         owner.account_type = AccountType.PLATFORM_OWNER
         owner.save(update_fields=["account_type"])
         event = record_activity(
-            self.hotel, event_type="payment.recorded", category="finance", title="P"
+            self.hotel, event_type="payment.reversed", category="finance", title="P"
         )
         self.assertNotIn("po@x.com", self.recipients_of(event))
 

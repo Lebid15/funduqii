@@ -1813,3 +1813,20 @@
 - **صفر صلاحيات جديدة · صفر بوابة دفع/جدولة/فوترة · لا تعديل route guards · لا إعادة تصميم RBAC.**
 - **الفحوصات:** Django check ✅ · `makemigrations --check` = No changes (migration واحدة) ✅ · **الباك إند 1075 اختبارًا OK** (‏+51 جديدًا) ✅ · frontend lint ✅ tsc ✅ build ✅ (`/pricing` في الشجرة) · تكافؤ الترجمات ar/en/tr = **2545×3** ✅ · **سبر حي معزول 26/26 وقبل==بعد مطابق (صفر بقايا)** ✅.
 - **الاعتماد:** بانتظار قرار المالك — لا دمج ولا اعتماد ذاتي.
+
+---
+
+## جولة إغلاق — الإشعارات (Notifications final closure)
+- الحالة: **بانتظار الاعتماد 🔎** (جولة إغلاق صغيرة-إلى-متوسطة — ليست مرحلة)
+- الفرع: `claude/notifications-final-closure` · الأساس: `origin/main@d1767c3` · العنوان: «Notifications final closure»
+- **المنهج:** القسم قائم من Phase 14 وعامل (record_activity مركزي، ActivityEvent سجل، Notification تسليم fan-out-on-write، جرس + صفحة، صلاحيات موجودة) — جولة إكمال لا إعادة بناء.
+- **نطاق platform/hotel:** حقل `scope` (hotel/platform) على ActivityEvent وNotification (‏hotel يبقى غير-null، الفندق مرجع آمن حتى لإشعار المنصة) — إشعار المنصة لمالك المنصة فقط، إشعار الفندق للفندق فقط، لا اختلاط. استعلام الفندق مُقيَّد صراحةً بـscope=hotel.
+- **Migration واحدة** (`0002_scope_dedup`): إضافة scope على النموذجين + `dedup_key` (nullable) على Notification + الفهارس + قيد فريد شرطي على (recipient, dedup_key)؛ backfill صريح كل القديم scope=hotel، بلا حذف/تغيير مستلمين/إعادة توليد.
+- **Deduplication + Idempotency:** `dedup_key` اختياري — بلا مفتاح السلوك القديم، مع مفتاح لا تكرار لنفس (recipient, dedup_key)؛ IntegrityError تحت التزامن يُحوَّل لنتيجة idempotent (لا 500). ActivityEvent يبقى append-only.
+- **إشعارات المنصة:** `platform_owner_recipients` + `notify_platform_owners` (حدث منصة منفصل + fan-out لمُلّاك المنصة). موصولة: `platform.hotel_registered` عند إنشاء فندق (‏dedup per-hotel، لا يُرسَل لموظفي الفندق) + كل أحداث الاشتراك (activated/renewed/extended/plan_changed/cancelled/expired/reactivated/payment_recorded/payment_voided/trial_started) كجمهور مزدوج (مدراء الفندق + مالك المنصة).
+- **ضبط الضوضاء:** `ROUTINE_ACTIVITY_ONLY` مركزي (stay.checked_in/out، payment.recorded، expense.created، shift.opened/closed، service_order.created/status_changed/paid_direct، report.exported) = ActivityEvent بلا Notification؛ و`room.status_changed` يُخطِر فقط عند maintenance/out_of_service. الأحداث المهمة تبقى تُخطِر.
+- **APIs المنصة:** `/api/v1/platform/notifications/` (overview/unread-count/list/detail/mark-read/mark-all-read/archive) تحت `IsPlatformOwner`، scope=platform، Pagination الافتراضية، ترتيب danger→warning→success→info ثم الأحدث. **لا DELETE، GET لا يكتب، صفر صلاحيات جديدة.**
+- **الواجهة:** جرس منصة جديد + صفحة `/platform/notifications` (Inbox + فلاتر + pagination + mark-read/all + archive + open) + polling خفيف 60ث للجرسين (يتوقف عند إخفاء التبويب، تنظيف عند unmount) + i18n.
+- **صفر بريد/SMS/Push · صفر Scheduler · صفر WebSocket/SSE · صفر Broadcast · صفر إشعارات زمنية · لا تغيير on_delete/RBAC.**
+- **الفحوصات:** Django check ✅ · `makemigrations --check` = No changes (migration واحدة) ✅ · **الباك إند 1092 اختبارًا OK** (‏+17 جديدًا) ✅ · frontend lint ✅ tsc ✅ build ✅ (`/platform/notifications` في الشجرة) · تكافؤ الترجمات ar/en/tr = **2547×3** ✅ · **سبر حي معزول 20/20 وقبل==بعد مطابق (صفر بقايا)** ✅.
+- **الاعتماد:** بانتظار قرار المالك — لا دمج ولا اعتماد ذاتي.

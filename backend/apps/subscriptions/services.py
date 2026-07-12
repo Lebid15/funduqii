@@ -77,8 +77,9 @@ def _record_platform_event(hotel, *, event_type: str, title: str, message="",
     event contract fields (subscription id, old/new plan, statuses, period,
     reason, payment reference) — scrubbed of secrets by the notifications layer.
     """
-    from apps.notifications.services import record_activity
+    from apps.notifications.services import notify_platform_owners, record_activity
 
+    # Hotel side: the hotel's managers see it (category `system`).
     record_activity(
         hotel,
         event_type=event_type,
@@ -87,6 +88,20 @@ def _record_platform_event(hotel, *, event_type: str, title: str, message="",
         actor=actor,
         related_object=related_object,
         metadata=metadata or {},
+    )
+    # Platform side (notifications closure): a SEPARATE platform-scoped event so
+    # the platform owner is notified of every subscription lifecycle change. The
+    # link opens the hotel inside the owner panel. Distinct transitions each
+    # notify (the subscription services already guard against double
+    # transitions), so no static dedup_key is used here.
+    notify_platform_owners(
+        event_type=event_type,
+        title=title,
+        message=message,
+        hotel=hotel,
+        related_url=f"/platform/hotels/{hotel.id}",
+        metadata=metadata or {},
+        actor=actor,
     )
 
 
