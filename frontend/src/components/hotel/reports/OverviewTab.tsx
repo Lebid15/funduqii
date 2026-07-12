@@ -4,13 +4,11 @@ import { useState } from "react";
 import {
   ArrowLeftRight,
   BedDouble,
-  Banknote,
   CalendarCheck,
   ClipboardList,
   LogIn,
   LogOut,
   Printer,
-  Receipt,
   UtensilsCrossed,
 } from "lucide-react";
 
@@ -71,32 +69,11 @@ export function OverviewTab({ range }: { range: ReportRange }) {
               description={o.occupancyHint}
             />
             <WorkflowCard
-              icon={Banknote}
-              tone="success"
-              title={o.payments}
-              value={data.total_payments}
-              description={o.paymentsHint}
-            />
-            <WorkflowCard
-              icon={Receipt}
-              tone="warning"
-              title={o.expenses}
-              value={data.total_expenses}
-              description={o.expensesHint}
-            />
-            <WorkflowCard
-              icon={Banknote}
-              tone={data.net_cashflow_simple.startsWith("-") ? "danger" : "success"}
-              title={o.net}
-              value={data.net_cashflow_simple}
-              description={o.netHint}
-            />
-            <WorkflowCard
               icon={UtensilsCrossed}
               tone="info"
               title={o.services}
               value={data.service_orders_total}
-              description={`${o.servicesHint} (${data.service_orders_posted_total})`}
+              description={o.servicesHint}
             />
             <WorkflowCard
               icon={ClipboardList}
@@ -141,12 +118,6 @@ export function OverviewTab({ range }: { range: ReportRange }) {
                 { label: o.inHouse, value: data.in_house_count },
                 { label: o.roomsSnapshot, value: data.rooms_total },
               ]}
-              totals={[
-                { label: o.payments, value: data.total_payments },
-                { label: o.expenses, value: data.total_expenses },
-                { label: o.net, value: data.net_cashflow_simple },
-              ]}
-              footer={t.reports.finance.disclaimer}
             />
           </PrintModal>
         </>

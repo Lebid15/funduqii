@@ -2,19 +2,27 @@
 from django.urls import path
 
 from .views import (
+    ComparisonsReportView,
     DailyCloseReportDetailView,
     DailyCloseReportListView,
+    ExpensesReportView,
+    FinanceOverviewView,
     FinanceReportView,
+    FolioBalancesReportView,
     GuestsReportView,
     OccupancyReportView,
     OperationsReportView,
     OverviewReportView,
     PaymentsExportView,
+    PaymentsReportView,
     ReservationsExportView,
     ReservationsReportView,
+    RestaurantCafeReportView,
+    RevenueReportView,
     ServicesReportView,
     ShiftsExportView,
     ShiftsReportView,
+    TaxReportView,
 )
 
 app_name = "reports"
@@ -35,6 +43,19 @@ urlpatterns = [
         PaymentsExportView.as_view(),
         name="payments-export",
     ),
+    # Finance reports (business_date-keyed, under reports.finance)
+    path("reports/finance/overview/", FinanceOverviewView.as_view(), name="finance-overview"),
+    path("reports/finance/revenue/", RevenueReportView.as_view(), name="revenue"),
+    path("reports/finance/payments/", PaymentsReportView.as_view(), name="payments"),
+    path("reports/finance/expenses/", ExpensesReportView.as_view(), name="expenses"),
+    path("reports/finance/taxes/", TaxReportView.as_view(), name="taxes"),
+    path("reports/finance/folios/", FolioBalancesReportView.as_view(), name="folio-balances"),
+    path(
+        "reports/finance/restaurant-cafe/",
+        RestaurantCafeReportView.as_view(),
+        name="restaurant-cafe",
+    ),
+    path("reports/finance/comparisons/", ComparisonsReportView.as_view(), name="comparisons"),
     path("reports/services/", ServicesReportView.as_view(), name="services"),
     path("reports/operations/", OperationsReportView.as_view(), name="operations"),
     path("reports/shifts/", ShiftsReportView.as_view(), name="shifts"),

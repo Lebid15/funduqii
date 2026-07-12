@@ -15,12 +15,28 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import AccountType, User
-from apps.finance.models import PaymentMethod
-from apps.finance.services import create_folio, create_expense, record_payment, void_payment
+from apps.finance.models import (
+    ChargeType,
+    Expense,
+    Folio,
+    Payment,
+    PaymentMethod,
+    PostingStatus,
+)
+from apps.finance.services import (
+    add_charge,
+    create_expense,
+    create_folio,
+    record_payment,
+    void_payment,
+)
 from apps.guests.models import Guest
+from apps.hotels.models import HotelSettings
+from apps.notifications.models import ActivityEvent
 from apps.rbac.services import grant_permission
 from apps.reservations.models import Reservation, ReservationStatus
 from apps.rooms.models import Floor, Room, RoomStatus, RoomType
+from apps.shifts.models import DailyClose, DailyCloseStatus
 from apps.shifts.services import close_business_day, get_business_date, open_shift, close_shift
 from apps.stays.models import Stay, StayStatus
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
@@ -235,8 +251,12 @@ class FilterTests(APITestCase, ReportsMixin):
         r = self.get_report("overview", date_from="2020-01-01", date_to="2020-01-31")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["reservations_count"], 0)
-        self.assertEqual(r.data["total_payments"], "0.00")
-        self.assertEqual(r.data["net_cashflow_simple"], "0.00")
+        # Financial totals moved to finance-overview (reports.finance).
+        fin = self.get_report(
+            "finance-overview", date_from="2020-01-01", date_to="2020-01-31"
+        )
+        self.assertEqual(fin.data["net_payments"], "0.00")
+        self.assertEqual(fin.data["net_cashflow"], "0.00")
 
     def test_default_range_is_current_month(self):
         r = self.get_report("overview")
@@ -273,11 +293,15 @@ class OverviewTests(APITestCase, ReportsMixin):
         self.assertEqual(data["cancelled_reservations_count"], 1)
         self.assertEqual(data["arrivals_count"], 1)
         self.assertEqual(data["in_house_count"], 1)
-        self.assertEqual(data["total_payments"], "100.00")
-        self.assertEqual(data["total_expenses"], "30.00")
-        self.assertEqual(data["net_cashflow_simple"], "70.00")
+        # Financial totals live in finance-overview (reports.finance), not the
+        # operational overview (leak fix, final closure).
+        self.assertNotIn("total_payments", data)
+        fin = self.get_report("finance-overview").data
+        self.assertEqual(fin["net_payments"], "100.00")
+        self.assertEqual(fin["net_expenses"], "30.00")
+        self.assertEqual(fin["net_cashflow"], "70.00")
         # The word "profit" must never appear in the payload.
-        self.assertNotIn("profit", str(data).lower())
+        self.assertNotIn("profit", str(fin).lower())
 
     def test_room_status_counts(self):
         make_room(self.hotel, "102", status=RoomStatus.DIRTY)
@@ -341,7 +365,9 @@ class OccupancyTests(APITestCase, ReportsMixin):
         make_room(self.hotel, "102", status=RoomStatus.OUT_OF_SERVICE)
         data = self.get_report("occupancy").data
         self.assertEqual(data["room_status_now"]["out_of_service"], 1)
-        self.assertEqual(data["rooms_capacity"], 2)
+        # Sellable capacity EXCLUDES out-of-service (and maintenance/archived)
+        # per the central availability definition (final closure).
+        self.assertEqual(data["rooms_capacity"], 1)
 
 
 class GuestsReportTests(APITestCase, ReportsMixin):
@@ -580,3 +606,257 @@ class RegressionTests(APITestCase, ReportsMixin):
         for name in ("scheduled", "designer", "email-export", "bi"):
             with self.assertRaises(NoReverseMatch):
                 reverse(f"reports:{name}")
+
+
+# --------------------------------------------------------------------------- #
+# Finance & Reports final closure — the unified business_date engine            #
+# --------------------------------------------------------------------------- #
+
+
+class FinanceEngineTests(APITestCase, ReportsMixin):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.settings = HotelSettings.objects.create(
+            hotel=self.hotel, default_currency="USD", timezone="UTC"
+        )
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.today = get_business_date(self.hotel)
+        self.settings.business_date = self.today
+        self.settings.save(update_fields=["business_date"])
+        self.hotel = Hotel.objects.get(pk=self.hotel.pk)
+
+    def fresh(self):
+        return Hotel.objects.get(pk=self.hotel.pk)
+
+    def rng(self, d=None):
+        d = d or self.today
+        return {"date_from": str(d), "date_to": str(d)}
+
+    # --- permissions / leak -------------------------------------------------
+
+    def test_finance_reports_require_finance_perm(self):
+        viewer = add_member(self.hotel, "v@x.com", perms=["reports.view"])
+        self.client.force_authenticate(viewer)
+        for name in ("finance-overview", "revenue", "payments", "expenses",
+                     "taxes", "folio-balances", "restaurant-cafe"):
+            self.assertEqual(self.get_report(name, **self.rng()).status_code, 403, name)
+        self.assertEqual(self.get_report("comparisons").status_code, 403)
+
+    def test_operational_overview_hides_financials(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="50.00", method=PaymentMethod.CASH, user=self.manager)
+        data = self.get_report("overview", **self.rng()).data
+        for k in ("total_payments", "total_expenses", "net_cashflow_simple"):
+            self.assertNotIn(k, data)
+
+    # --- business_date keying ----------------------------------------------
+
+    def test_finance_keyed_by_business_date_not_paid_at(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        p = record_payment(folio, amount="70.00", method=PaymentMethod.CASH, user=self.manager)
+        Payment.objects.filter(pk=p.pk).update(
+            business_date=self.today - datetime.timedelta(days=1)
+        )
+        d = self.get_report("finance-overview", **self.rng()).data
+        self.assertEqual(d["net_payments"], "0.00")
+
+    # --- revenue / tax ------------------------------------------------------
+
+    def test_revenue_by_category_from_charges(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.ROOM, description="room",
+                   quantity=1, unit_amount="120.00", user=self.manager)
+        add_charge(folio, charge_type=ChargeType.SERVICE, description="svc",
+                   quantity=1, unit_amount="40.00", user=self.manager)
+        rev = self.get_report("revenue", **self.rng()).data
+        self.assertEqual(rev["by_category"]["room"], "120.00")
+        self.assertEqual(rev["by_category"]["services"], "40.00")
+        self.assertEqual(rev["net_revenue"], "160.00")
+
+    def test_tax_report_reads_stored_tax_amount(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.ROOM, description="r",
+                   quantity=1, unit_amount="100.00", tax_rate="10.00", user=self.manager)
+        t = self.get_report("taxes", **self.rng()).data
+        self.assertEqual(t["total_tax"], "10.00")
+        self.assertEqual(t["net_revenue_ex_tax"], "100.00")
+
+    def test_room_revenue_data_quality_when_no_room_charges(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.SERVICE, description="svc",
+                   quantity=1, unit_amount="40.00", user=self.manager)
+        d = self.get_report("finance-overview", **self.rng()).data
+        self.assertEqual(d["kpis"]["room_revenue"], "0.00")
+        self.assertFalse(d["data_quality"]["has_room_charges"])
+        self.assertEqual(d["data_quality"]["room_revenue_source"], "manual_charges_only")
+        self.assertEqual(d["adr"], "0.00")
+        self.assertEqual(d["revpar"], "0.00")
+
+    # --- payments / expenses reversals & voids -----------------------------
+
+    def test_payments_reversals_separated(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        orig = record_payment(folio, amount="80.00", method=PaymentMethod.CASH, user=self.manager)
+        Payment.objects.create(
+            hotel=self.hotel, folio=folio, receipt_number="RVU1",
+            amount=Decimal("-80.00"), currency="USD", method=PaymentMethod.CASH,
+            paid_at=orig.paid_at, business_date=self.today, reverses=orig,
+        )
+        p = self.get_report("payments", **self.rng()).data["payments"]
+        self.assertEqual(p["gross"], "80.00")
+        self.assertEqual(p["reversals"]["count"], 1)
+        self.assertEqual(p["reversals"]["amount"], "-80.00")
+        self.assertEqual(p["net"], "0.00")
+
+    def test_expenses_reversals_separated(self):
+        e = create_expense(self.hotel, category="supplies", description="x",
+                           amount="20.00", method=PaymentMethod.CASH, user=self.manager)
+        Expense.objects.create(
+            hotel=self.hotel, expense_number="EXRU1", category="supplies",
+            description="rev", amount=Decimal("-20.00"), currency="USD",
+            method=PaymentMethod.CASH, paid_at=e.paid_at, business_date=self.today,
+            reverses=e,
+        )
+        exp = self.get_report("expenses", **self.rng()).data["expenses"]
+        self.assertEqual(exp["gross"], "20.00")
+        self.assertEqual(exp["reversals"]["count"], 1)
+        self.assertEqual(exp["net"], "0.00")
+
+    def test_voided_payment_excluded_and_counted(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        p = record_payment(folio, amount="15.00", method=PaymentMethod.CASH, user=self.manager)
+        void_payment(p, reason="mistake", user=self.manager)
+        pay = self.get_report("payments", **self.rng()).data["payments"]
+        self.assertEqual(pay["gross"], "0.00")
+        self.assertEqual(pay["voided"]["count"], 1)
+
+    # --- folio balances -----------------------------------------------------
+
+    def test_folio_balances_buckets(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.SERVICE, description="s",
+                   quantity=1, unit_amount="200.00", user=self.manager)
+        d = self.get_report("folio-balances", **self.rng()).data
+        self.assertEqual(d["open_folios_count"], 1)
+        self.assertEqual(d["positive_balance_count"], 1)
+        self.assertEqual(d["positive_balance_amount"], "200.00")
+
+    def test_restaurant_cafe_report_shape(self):
+        d = self.get_report("restaurant-cafe", **self.rng()).data
+        for k in ("restaurant_sales", "cafe_sales", "direct_settlements",
+                  "folio_postings", "open_orders_count", "cancelled_orders_count"):
+            self.assertIn(k, d)
+
+    # --- KPIs ---------------------------------------------------------------
+
+    def test_adr_revpar_from_actuals(self):
+        room = make_room(self.hotel, "201")
+        make_stay(self.hotel, room, days_ago_in=0)
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.ROOM, description="r",
+                   quantity=1, unit_amount="150.00", user=self.manager)
+        d = self.get_report("finance-overview", **self.rng()).data
+        self.assertEqual(d["kpis"]["room_revenue"], "150.00")
+        self.assertEqual(d["adr"], "150.00")
+        self.assertEqual(d["revpar"], "150.00")
+        self.assertEqual(d["occupancy"], "100.00")
+
+    def test_occupancy_excludes_blocked_rooms(self):
+        make_room(self.hotel, "301")
+        make_room(self.hotel, "302", status=RoomStatus.MAINTENANCE)
+        make_room(self.hotel, "303", status=RoomStatus.OUT_OF_SERVICE)
+        occ = self.get_report("occupancy", **self.rng()).data
+        self.assertEqual(occ["rooms_capacity"], 1)
+
+    def test_adr_revpar_zero_guard(self):
+        d = self.get_report("finance-overview", **self.rng()).data
+        self.assertEqual(d["adr"], "0.00")
+        self.assertEqual(d["revpar"], "0.00")
+        self.assertEqual(d["occupancy"], "0.00")
+
+    # --- open vs closed vs mixed -------------------------------------------
+
+    def test_closed_day_read_from_snapshot(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        add_charge(folio, charge_type=ChargeType.ROOM, description="r",
+                   quantity=1, unit_amount="90.00", user=self.manager)
+        record_payment(folio, amount="90.00", method=PaymentMethod.CASH, user=self.manager)
+        close_business_day(self.fresh(), self.today, user=self.manager)
+        d = self.get_report(
+            "finance-overview", date_from=str(self.today), date_to=str(self.today)
+        ).data
+        self.assertEqual(d["source_status"], "snapshot")
+        self.assertEqual(d["revenue"]["room"], "90.00")
+        self.assertEqual(d["net_payments"], "90.00")
+
+    def test_closed_day_snapshot_is_stable(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="50.00", method=PaymentMethod.CASH, user=self.manager)
+        close_business_day(self.fresh(), self.today, user=self.manager)
+        rng = {"date_from": str(self.today), "date_to": str(self.today)}
+        before = self.get_report("finance-overview", **rng).data["net_payments"]
+        f2 = create_folio(self.fresh(), customer_name="W2")
+        record_payment(f2, amount="999.00", method=PaymentMethod.CASH, user=self.manager)
+        after = self.get_report("finance-overview", **rng).data["net_payments"]
+        self.assertEqual(before, "50.00")
+        self.assertEqual(after, "50.00")
+
+    def test_days_missing_close_flagged(self):
+        past = self.today - datetime.timedelta(days=3)
+        d = self.get_report(
+            "finance-overview", date_from=str(past), date_to=str(self.today)
+        ).data
+        self.assertIn(str(past), d["days_missing_close"])
+        self.assertEqual(d["source_status"], "live")
+
+    # --- comparisons --------------------------------------------------------
+
+    def test_comparisons_minimal_with_zero_guard(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="60.00", method=PaymentMethod.CASH, user=self.manager)
+        d = self.get_report("comparisons").data
+        self.assertIn("day_vs_previous", d)
+        self.assertIn("mtd_vs_previous_month", d)
+        self.assertEqual(d["day_vs_previous"]["net_payments"]["current"], "60.00")
+        self.assertEqual(d["day_vs_previous"]["net_payments"]["previous"], "0.00")
+        self.assertIsNone(d["day_vs_previous"]["net_payments"]["delta_pct"])
+
+    # --- export / logging / isolation / no-write ---------------------------
+
+    def test_csv_export_has_utf8_bom(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="10.00", method=PaymentMethod.CASH, user=self.manager)
+        r = self.client.get(reverse("reports:payments-export"), **HDR(self.hotel))
+        self.assertTrue(r.content.startswith(b"\xef\xbb\xbf"))
+
+    def test_financial_export_is_logged(self):
+        before = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="report.exported"
+        ).count()
+        self.client.get(reverse("reports:payments-export"), **HDR(self.hotel))
+        after = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="report.exported"
+        ).count()
+        self.assertEqual(after, before + 1)
+
+    def test_finance_isolation(self):
+        folio = create_folio(self.hotel, customer_name="W")
+        record_payment(folio, amount="40.00", method=PaymentMethod.CASH, user=self.manager)
+        other = make_hotel(slug="ofin")
+        HotelSettings.objects.create(
+            hotel=other, default_currency="USD", timezone="UTC", business_date=self.today
+        )
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(om)
+        d = self.get_report("finance-overview", hotel=other, **self.rng()).data
+        self.assertEqual(d["net_payments"], "0.00")
+
+    def test_reports_do_not_write(self):
+        before = {m.__name__: m.objects.count() for m in (Payment, DailyClose, Folio)}
+        for name in ("finance-overview", "revenue", "payments", "expenses",
+                     "taxes", "folio-balances", "restaurant-cafe"):
+            self.get_report(name, **self.rng())
+        self.get_report("comparisons")
+        after = {m.__name__: m.objects.count() for m in (Payment, DailyClose, Folio)}
+        self.assertEqual(before, after)

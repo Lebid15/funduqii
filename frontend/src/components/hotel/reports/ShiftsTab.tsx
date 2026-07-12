@@ -12,14 +12,9 @@ import {
   StatCard,
   type Column,
 } from "@/components/ui";
-import {
-  csvExportUrl,
-  getDailyCloseReport,
-  getShiftsReport,
-  type ReportRange,
-} from "@/lib/api/reports";
-import type { DailyCloseReportRow, ShiftsReport } from "@/lib/api/types";
-import { formatDateTime, shiftStatusTone } from "@/lib/format";
+import { csvExportUrl, getShiftsReport, type ReportRange } from "@/lib/api/reports";
+import type { ShiftsReport } from "@/lib/api/types";
+import { shiftStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { BucketTable, ReportState, useReport } from "./shared";
@@ -27,11 +22,10 @@ import { BucketTable, ReportState, useReport } from "./shared";
 type ShiftRow = ShiftsReport["shifts"][number];
 
 export function ShiftsTab({ range }: { range: ReportRange }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const access = useHotelAccess();
   const s = t.reports.shifts;
   const shiftsReport = useReport(getShiftsReport, range);
-  const closesReport = useReport(getDailyCloseReport, range);
   const canExport = !access || access.can("reports.export");
 
   const shiftColumns: Column<ShiftRow>[] = [
@@ -58,26 +52,6 @@ export function ShiftsTab({ range }: { range: ReportRange }) {
       ),
     },
     { key: "difference_reason", header: s.reason, render: (r) => r.difference_reason || "—" },
-  ];
-
-  const closeColumns: Column<DailyCloseReportRow>[] = [
-    { key: "close_number", header: s.dcNumber },
-    { key: "business_date", header: s.businessDate },
-    {
-      key: "status",
-      header: t.reports.common.status,
-      render: (r) => (
-        <Badge tone={r.status === "closed" ? "success" : "warning"}>
-          {t.shifts.dcStatus[r.status]}
-        </Badge>
-      ),
-    },
-    { key: "closed_by", header: s.dcClosedBy, render: (r) => r.closed_by || "—" },
-    {
-      key: "closed_at",
-      header: s.dcClosedAt,
-      render: (r) => formatDateTime(r.closed_at, locale),
-    },
   ];
 
   return (
@@ -153,23 +127,6 @@ export function ShiftsTab({ range }: { range: ReportRange }) {
                 columns={shiftColumns}
                 rows={shiftsReport.data.shifts}
                 rowKey={(row) => row.shift_number}
-              />
-            )}
-          </Card>
-          <Card>
-            <SectionHeader title={s.closedDays} />
-            {closesReport.loading || closesReport.error || !closesReport.data ? null : closesReport
-                .data.results.length === 0 ? (
-              <EmptyState
-                title={t.reports.common.empty}
-                hint={t.reports.common.emptyHint}
-              />
-            ) : (
-              <DataTable
-                caption={s.closedDays}
-                columns={closeColumns}
-                rows={closesReport.data.results}
-                rowKey={(row) => row.id}
               />
             )}
           </Card>

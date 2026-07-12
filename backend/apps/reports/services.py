@@ -20,9 +20,11 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 
-from django.db.models import Avg, Count, F, Q, Sum
+from django.db.models import Avg, Count, DateField, F, Q, Sum
+from django.db.models.functions import Coalesce, TruncDate
 
 from apps.finance.models import (
+    ChargeType,
     Expense,
     Folio,
     FolioCharge,
@@ -46,7 +48,13 @@ from apps.operations.models import (
 )
 from apps.reservations.models import Reservation, ReservationStatus
 from apps.rooms.models import Room, RoomStatus
-from apps.services.models import OrderStatus, ServiceOrder, ServiceOrderItem
+from apps.services.models import (
+    OrderSettlement,
+    OrderStatus,
+    Outlet,
+    ServiceOrder,
+    ServiceOrderItem,
+)
 from apps.shifts.models import (
     DailyClose,
     DailyCloseStatus,
@@ -90,10 +98,10 @@ def _by(qs, field, amount=False) -> list[dict]:
 
 
 def _capacity_rooms(hotel):
-    """Rooms counted as sellable capacity: active and not archived."""
-    return Room.objects.filter(hotel=hotel, is_active=True).exclude(
-        status=RoomStatus.ARCHIVED
-    )
+    """Rooms counted as sellable capacity: active, not archived, and NOT
+    blocked from sale (maintenance / out_of_service). Uses the shared
+    ``_sellable_capacity`` definition — no separate rule inside reports."""
+    return _sellable_capacity(hotel)
 
 
 def occupied_counts_by_day(hotel, date_from, date_to) -> dict[str, int]:
@@ -151,28 +159,12 @@ def overview_report(hotel, date_from, date_to) -> dict:
         hotel=hotel, actual_check_out_at__date__range=(date_from, date_to)
     ).count()
     rooms = Room.objects.filter(hotel=hotel, is_active=True)
-    payments = Payment.objects.filter(
-        hotel=hotel, status=PostingStatus.POSTED,
-        paid_at__date__range=(date_from, date_to),
-    )
-    expenses = Expense.objects.filter(
-        hotel=hotel, status=PostingStatus.POSTED,
-        paid_at__date__range=(date_from, date_to),
-    )
-    total_payments = _amount(payments)
-    total_expenses = _amount(expenses)
     orders = ServiceOrder.objects.filter(
         hotel=hotel, ordered_at__date__range=(date_from, date_to)
     )
-    posted_orders = ServiceOrder.objects.filter(
-        hotel=hotel, posted_at__date__range=(date_from, date_to)
-    ).select_related("posted_charge")
-    posted_total = money(
-        sum(
-            (money(o.posted_charge.total_amount) for o in posted_orders if o.posted_charge),
-            ZERO,
-        )
-    )
+    # Financial totals are deliberately NOT exposed here: reports.view is
+    # operational-only. Money lives in ``finance_overview`` behind
+    # reports.finance (leak fix, final closure).
     rate, _by_day = occupancy_rate(hotel, date_from, date_to)
     return {
         "date_from": str(date_from),
@@ -202,11 +194,7 @@ def overview_report(hotel, date_from, date_to) -> dict:
         "rooms_maintenance": rooms.filter(
             status__in=[RoomStatus.MAINTENANCE, RoomStatus.OUT_OF_SERVICE]
         ).count(),
-        "total_payments": str(total_payments),
-        "total_expenses": str(total_expenses),
-        "net_cashflow_simple": str(money(total_payments - total_expenses)),
         "service_orders_total": orders.count(),
-        "service_orders_posted_total": str(posted_total),
         "open_housekeeping_tasks": HousekeepingTask.objects.filter(
             hotel=hotel, status__in=ACTIVE_HK
         ).count(),
@@ -395,12 +383,12 @@ def _per_day(qs, date_field) -> list[dict]:
 
 def finance_report(hotel, date_from, date_to) -> dict:
     payments = Payment.objects.filter(
+        _pay_bd_range(date_from, date_to),
         hotel=hotel, status=PostingStatus.POSTED,
-        paid_at__date__range=(date_from, date_to),
     )
     expenses = Expense.objects.filter(
+        _pay_bd_range(date_from, date_to),
         hotel=hotel, status=PostingStatus.POSTED,
-        paid_at__date__range=(date_from, date_to),
     )
     invoices = Invoice.objects.filter(
         hotel=hotel, status=InvoiceStatus.ISSUED,
@@ -426,9 +414,9 @@ def finance_report(hotel, date_from, date_to) -> dict:
         "date_from": str(date_from),
         "date_to": str(date_to),
         "payments_by_method": _by(payments, "method", amount=True),
-        "payments_by_day": _per_day(payments, "paid_at"),
+        "payments_by_day": _per_day_bd(payments),
         "expenses_by_category": _by(expenses, "category", amount=True),
-        "expenses_by_day": _per_day(expenses, "paid_at"),
+        "expenses_by_day": _per_day_bd(expenses),
         "total_payments": str(total_payments),
         "total_expenses": str(total_expenses),
         # Deliberately named "cashflow", NEVER "profit" — this is operational
@@ -609,3 +597,663 @@ def daily_close_list(hotel, date_from, date_to, *, page=1, page_size=25) -> dict
         for c in qs[start : start + page_size]
     ]
     return {"count": total, "page": page, "page_size": page_size, "results": rows}
+
+
+# ============================================================================
+# Unified financial engine (Finance & Reports final closure)
+# ----------------------------------------------------------------------------
+# ONE read-only computation of a business date's financial figures, keyed by
+# business_date. The OPEN day is computed LIVE; CLOSED days are read from the
+# frozen ``DailyClose`` snapshot (existing sections + the new ``reporting``
+# block); period reports SUM the per-day blocks, adding the open day ONCE.
+# No writes, no third store — reports never touch a live record for a day that
+# is already closed.
+# ============================================================================
+
+BLOCKED_ROOM_STATUSES = (
+    RoomStatus.ARCHIVED, RoomStatus.MAINTENANCE, RoomStatus.OUT_OF_SERVICE,
+)
+
+
+def _sellable_capacity(hotel):
+    """Sellable physical rooms: active, not archived, and NOT blocked from sale
+    (maintenance / out_of_service). Mirrors the central RoomStatus semantics —
+    no new availability definition is introduced inside reports."""
+    return Room.objects.filter(hotel=hotel, is_active=True).exclude(
+        status__in=BLOCKED_ROOM_STATUSES
+    )
+
+
+def _D(x):
+    return money(Decimal(str(x)) if x is not None else 0)
+
+
+def _pay_bd(d):
+    """A dated finance record belongs to business date ``d`` by its stored
+    business_date; legacy rows without one fall back to paid_at (documented)."""
+    return Q(business_date=d) | Q(business_date__isnull=True, paid_at__date=d)
+
+
+def _pay_bd_range(date_from, date_to):
+    return Q(business_date__range=(date_from, date_to)) | Q(
+        business_date__isnull=True, paid_at__date__range=(date_from, date_to)
+    )
+
+
+def _per_day_bd(qs):
+    """Per-BUSINESS-date money series (legacy rows fall back to paid_at)."""
+    rows = (
+        qs.annotate(
+            d=Coalesce("business_date", TruncDate("paid_at"), output_field=DateField())
+        )
+        .values("d")
+        .annotate(n=Count("id"), total=Sum("amount"))
+        .order_by("d")
+    )
+    return [
+        {"date": str(r["d"]), "count": r["n"], "total": str(money(r["total"] or 0))}
+        for r in rows
+    ]
+
+
+def _settled_orders_on(hotel, d):
+    """Service orders whose revenue lands on business date ``d`` — folio-posted
+    by the charge's business date, direct by the settlement payment's."""
+    return (
+        ServiceOrder.objects.filter(hotel=hotel)
+        .filter(
+            Q(settlement=OrderSettlement.FOLIO, posted_charge__charge_date=d)
+            | Q(settlement=OrderSettlement.DIRECT, settlement_payment__business_date=d)
+        )
+        .exclude(status=OrderStatus.CANCELLED)
+    )
+
+
+def _outlet_net(hotel, d, outlet):
+    ids = list(_settled_orders_on(hotel, d).filter(outlet=outlet).values_list("id", flat=True))
+    if not ids:
+        return ZERO
+    return money(
+        ServiceOrderItem.objects.filter(order_id__in=ids).aggregate(t=Sum("amount"))["t"] or 0
+    )
+
+
+def _revenue_day(hotel, d):
+    """Revenue by category for ONE business date, from POSTED FolioCharge ONLY
+    (the single financial revenue source). ``amount`` is net of tax; tax is the
+    stored ``tax_amount`` (never recomputed). POS is split by outlet from the
+    linked orders (operational refinement of the single ``service`` total, so
+    nothing is double-counted). Room revenue is manual ChargeType.ROOM only."""
+    charges = FolioCharge.objects.filter(
+        hotel=hotel, charge_date=d, status=PostingStatus.POSTED
+    )
+
+    def s(qs):
+        return money(qs.aggregate(t=Sum("amount"))["t"] or 0)
+
+    room = s(charges.filter(type=ChargeType.ROOM))
+    service = s(charges.filter(type=ChargeType.SERVICE))
+    other = s(charges.filter(type=ChargeType.OTHER))
+    adjustments = s(charges.filter(type=ChargeType.ADJUSTMENT))
+    discounts = s(charges.filter(type=ChargeType.DISCOUNT))
+    taxes = money(charges.aggregate(t=Sum("tax_amount"))["t"] or 0)
+    restaurant = _outlet_net(hotel, d, Outlet.RESTAURANT)
+    cafe = _outlet_net(hotel, d, Outlet.CAFE)
+    services_manual = money(service - restaurant - cafe)
+    total = money(room + service + other + adjustments + discounts)
+    return {
+        "room": room, "restaurant": restaurant, "cafe": cafe,
+        "services": services_manual, "other": other,
+        "adjustments": adjustments, "discounts": discounts,
+        "taxes": taxes, "total": total,
+    }
+
+
+def _occupancy_day(hotel, d):
+    sold = occupied_counts_by_day(hotel, d, d).get(str(d), 0)
+    return {"sold_rooms": sold, "available_rooms": _sellable_capacity(hotel).count()}
+
+
+def compute_day_reporting(hotel, business_date) -> dict:
+    """The NEW snapshot ``reporting`` block: the figures the finance reports
+    need that the Phase-12 snapshot did not already carry — revenue-by-category,
+    taxes, room revenue and occupancy components. JSON-ready (strings/ints).
+    Frozen at daily close; computed live for the open day. Everything else
+    (payments/expenses/restaurant/folios) is read from the existing snapshot
+    sections."""
+    rev = _revenue_day(hotel, business_date)
+    occ = _occupancy_day(hotel, business_date)
+    return {
+        "revenue": {k: str(money(v)) for k, v in rev.items()},
+        "room_revenue": str(money(rev["room"])),
+        "occupancy": occ,
+        "data_quality": {
+            "has_room_charges": rev["room"] != ZERO,
+            "room_revenue_source": "manual_charges_only",
+        },
+    }
+
+
+# --- Live movement/restaurant/folio blocks (SAME shape as the snapshot) -------
+
+
+def _mv_live(model, hotel, d, *, with_category=False):
+    posted = model.objects.filter(_pay_bd(d), hotel=hotel, status=PostingStatus.POSTED)
+    originals = posted.filter(reverses__isnull=True)
+    reversals = posted.filter(reverses__isnull=False)
+    voided = model.objects.filter(_pay_bd(d), hotel=hotel, status=PostingStatus.VOIDED)
+
+    def s(qs):
+        return money(qs.aggregate(t=Sum("amount"))["t"] or 0)
+
+    block = {
+        "cash_total": s(originals.filter(method=PaymentMethod.CASH)),
+        "non_cash_total": s(originals.exclude(method=PaymentMethod.CASH)),
+        "gross_total": s(originals),
+        "voided_count": voided.count(),
+        "voided_total": s(voided),
+        "reversals_count": reversals.count(),
+        "reversals_total": s(reversals),
+        "cash_reversals_total": s(reversals.filter(method=PaymentMethod.CASH)),
+        "non_cash_reversals_total": s(reversals.exclude(method=PaymentMethod.CASH)),
+        "by_method": {
+            r["method"]: money(r["t"] or 0)
+            for r in originals.values("method").annotate(t=Sum("amount"))
+        },
+    }
+    if with_category:
+        block["by_category"] = {
+            r["category"]: money(r["t"] or 0)
+            for r in originals.values("category").annotate(t=Sum("amount"))
+        }
+    return block
+
+
+def _restaurant_live(hotel, d):
+    settled = _settled_orders_on(hotel, d)
+    direct = settled.filter(settlement=OrderSettlement.DIRECT)
+    folio = settled.filter(settlement=OrderSettlement.FOLIO)
+
+    def total(qs):
+        ids = list(qs.values_list("id", flat=True))
+        if not ids:
+            return ZERO
+        return money(
+            ServiceOrderItem.objects.filter(order_id__in=ids).aggregate(t=Sum("total_amount"))["t"] or 0
+        )
+
+    return {
+        "restaurant_sales": _outlet_net(hotel, d, Outlet.RESTAURANT),
+        "cafe_sales": _outlet_net(hotel, d, Outlet.CAFE),
+        "direct_count": direct.count(),
+        "direct_total": total(direct),
+        "folio_count": folio.count(),
+        "folio_total": total(folio),
+        "open_orders": ServiceOrder.objects.filter(
+            hotel=hotel, settlement=OrderSettlement.UNSETTLED, ordered_at__date=d
+        ).exclude(status=OrderStatus.CANCELLED).count(),
+        "cancelled_orders": ServiceOrder.objects.filter(
+            hotel=hotel, status=OrderStatus.CANCELLED, ordered_at__date=d
+        ).count(),
+    }
+
+
+def folio_balances_now(hotel, date_from=None, date_to=None) -> dict:
+    """Current open-folio balances (a point-in-time report; balances are a
+    'now' concept and are never summed across days). Foreign-currency folios
+    are reported separately and NEVER mixed into the hotel-currency totals."""
+    from apps.finance.services import _hotel_currency, folio_balance
+
+    hotel_ccy = _hotel_currency(hotel)
+    pos_c = neg_c = zero_c = 0
+    pos_a = neg_a = total = ZERO
+    foreign = {}
+    for f in Folio.objects.filter(hotel=hotel, status=FolioStatus.OPEN):
+        bal = folio_balance(f)["balance"]
+        if f.currency and f.currency != hotel_ccy:
+            e = foreign.setdefault(f.currency, {"count": 0, "balance": ZERO})
+            e["count"] += 1
+            e["balance"] += bal
+            continue
+        total += bal
+        if bal > ZERO:
+            pos_c += 1
+            pos_a += bal
+        elif bal < ZERO:
+            neg_c += 1
+            neg_a += bal
+        else:
+            zero_c += 1
+    closed_in_range = 0
+    if date_from is not None:
+        closed_in_range = Folio.objects.filter(
+            hotel=hotel, status=FolioStatus.CLOSED,
+            closed_at__date__range=(date_from, date_to),
+        ).count()
+    return {
+        "currency": hotel_ccy,
+        "open_folios_count": pos_c + neg_c + zero_c,
+        "total_balance": str(money(total)),
+        "positive_balance_count": pos_c,
+        "positive_balance_amount": str(money(pos_a)),
+        "negative_balance_count": neg_c,
+        "negative_balance_amount": str(money(neg_a)),
+        "zero_balance_count": zero_c,
+        "closed_in_range": closed_in_range,
+        "foreign_currency_folios": [
+            {"currency": c, "count": v["count"], "balance": str(money(v["balance"]))}
+            for c, v in sorted(foreign.items())
+        ],
+    }
+
+
+# --- Day block (live open day OR frozen closed day) --------------------------
+
+
+def _snap_mv(section):
+    """Parse a snapshot payments/expenses section into Decimal-typed figures."""
+    section = section or {}
+    out = {
+        "cash_total": _D(section.get("cash_total")),
+        "non_cash_total": _D(section.get("non_cash_total")),
+        "gross_total": _D(section.get("cash_total")) + _D(section.get("non_cash_total")),
+        "voided_count": section.get("voided_count", 0) or 0,
+        "voided_total": _D(section.get("voided_total")),
+        "reversals_count": section.get("reversals_count", 0) or 0,
+        "reversals_total": _D(section.get("reversals_total")),
+        "cash_reversals_total": _D(section.get("cash_reversals_total")),
+        "non_cash_reversals_total": _D(section.get("non_cash_reversals_total")),
+        "by_method": {
+            m: _D(v.get("total")) for m, v in (section.get("posted_by_method") or {}).items()
+        },
+    }
+    if "posted_by_category" in section:
+        out["by_category"] = {
+            m: _D(v.get("total")) for m, v in (section.get("posted_by_category") or {}).items()
+        }
+    return out
+
+
+def _snap_restaurant(section):
+    section = section or {}
+    return {
+        "restaurant_sales": _D(section.get("restaurant_sales")),
+        "cafe_sales": _D(section.get("cafe_sales")),
+        "direct_count": (section.get("direct_settlements") or {}).get("count", 0) or 0,
+        "direct_total": _D((section.get("direct_settlements") or {}).get("total")),
+        "folio_count": (section.get("folio_postings") or {}).get("count", 0) or 0,
+        "folio_total": _D((section.get("folio_postings") or {}).get("total")),
+        "open_orders": section.get("open_orders_count", 0) or 0,
+        "cancelled_orders": section.get("cancelled_orders_count", 0) or 0,
+    }
+
+
+def _empty_reporting():
+    zero = str(ZERO)
+    return {
+        "revenue": {k: zero for k in (
+            "room", "restaurant", "cafe", "services", "other",
+            "adjustments", "discounts", "taxes", "total")},
+        "room_revenue": zero,
+        "occupancy": {"sold_rooms": 0, "available_rooms": 0},
+        "data_quality": {"has_room_charges": False, "room_revenue_source": "manual_charges_only"},
+    }
+
+
+def _day_block(hotel, d, current_bd):
+    """Normalized financial block for one business date. Returns Decimals/ints
+    plus a ``source`` marker. The open day is LIVE; a closed day is read from
+    its frozen snapshot; anything else is flagged and contributes nothing."""
+    if d == current_bd:
+        rep = compute_day_reporting(hotel, d)
+        return {
+            "source": "live",
+            "reporting_available": True,
+            "reporting": rep,
+            "payments": _mv_live(Payment, hotel, d),
+            "expenses": _mv_live(Expense, hotel, d, with_category=True),
+            "restaurant": _restaurant_live(hotel, d),
+        }
+    close = DailyClose.objects.filter(
+        hotel=hotel, business_date=d, status=DailyCloseStatus.CLOSED
+    ).first()
+    if close is None:
+        return {"source": "not_closed", "reporting_available": False}
+    snap = close.snapshot_json or {}
+    return {
+        "source": "snapshot",
+        "reporting_available": "reporting" in snap,
+        "reporting": snap.get("reporting") or _empty_reporting(),
+        "payments": _snap_mv(snap.get("payments")),
+        "expenses": _snap_mv(snap.get("expenses")),
+        "restaurant": _snap_restaurant(snap.get("restaurant")),
+    }
+
+
+def _parse_reporting(rep):
+    r = rep.get("revenue") or {}
+    return {
+        "revenue": {k: _D(r.get(k)) for k in (
+            "room", "restaurant", "cafe", "services", "other",
+            "adjustments", "discounts", "taxes", "total")},
+        "room_revenue": _D(rep.get("room_revenue")),
+        "sold_rooms": (rep.get("occupancy") or {}).get("sold_rooms", 0) or 0,
+        "available_rooms": (rep.get("occupancy") or {}).get("available_rooms", 0) or 0,
+        "has_room_charges": bool((rep.get("data_quality") or {}).get("has_room_charges")),
+    }
+
+
+def period_financials(hotel, date_from, date_to) -> dict:
+    """Aggregate the range: closed days from snapshots, the open day LIVE once.
+    Returns Decimal aggregates plus source_status, days_missing_close and
+    data_availability (days closed WITHOUT a reporting block)."""
+    current_bd = get_business_date(hotel)
+    rev = {k: ZERO for k in (
+        "room", "restaurant", "cafe", "services", "other",
+        "adjustments", "discounts", "taxes", "total")}
+    room_nights = 0
+    available_room_days = 0
+    has_room_charges = False
+    reporting_missing_days = []
+    pay = _mv_zero()
+    exp = _mv_zero(with_category=True)
+    rest = _rest_zero()
+    sources = set()
+    days_missing_close = []
+
+    d = date_from
+    while d <= date_to:
+        if d > current_bd:
+            days_missing_close.append(str(d))
+            d += datetime.timedelta(days=1)
+            continue
+        block = _day_block(hotel, d, current_bd)
+        if block["source"] == "not_closed":
+            days_missing_close.append(str(d))
+            d += datetime.timedelta(days=1)
+            continue
+        sources.add(block["source"])
+        if not block["reporting_available"]:
+            reporting_missing_days.append(str(d))
+        pr = _parse_reporting(block["reporting"])
+        for k in rev:
+            rev[k] = money(rev[k] + pr["revenue"][k])
+        room_nights += pr["sold_rooms"]
+        available_room_days += pr["available_rooms"]
+        has_room_charges = has_room_charges or pr["has_room_charges"]
+        _mv_add(pay, block["payments"])
+        _mv_add(exp, block["expenses"], with_category=True)
+        _rest_add(rest, block["restaurant"])
+        d += datetime.timedelta(days=1)
+
+    source_status = (
+        "mixed" if len(sources) > 1 else (next(iter(sources)) if sources else "none")
+    )
+    return {
+        "date_from": str(date_from),
+        "date_to": str(date_to),
+        "source_status": source_status,
+        "days_missing_close": days_missing_close,
+        "reporting_missing_days": reporting_missing_days,
+        "revenue": rev,
+        "room_revenue": rev["room"],
+        "room_nights": room_nights,
+        "available_room_days": available_room_days,
+        "has_room_charges": has_room_charges,
+        "payments": pay,
+        "expenses": exp,
+        "restaurant": rest,
+    }
+
+
+def _mv_zero(*, with_category=False):
+    z = {
+        "cash_total": ZERO, "non_cash_total": ZERO, "gross_total": ZERO,
+        "voided_count": 0, "voided_total": ZERO,
+        "reversals_count": 0, "reversals_total": ZERO,
+        "cash_reversals_total": ZERO, "non_cash_reversals_total": ZERO,
+        "by_method": {},
+    }
+    if with_category:
+        z["by_category"] = {}
+    return z
+
+
+def _rest_zero():
+    return {
+        "restaurant_sales": ZERO, "cafe_sales": ZERO,
+        "direct_count": 0, "direct_total": ZERO,
+        "folio_count": 0, "folio_total": ZERO,
+        "open_orders": 0, "cancelled_orders": 0,
+    }
+
+
+def _mv_add(acc, block, *, with_category=False):
+    for k in ("cash_total", "non_cash_total", "gross_total", "voided_total",
+              "reversals_total", "cash_reversals_total", "non_cash_reversals_total"):
+        acc[k] = money(acc[k] + block[k])
+    for k in ("voided_count", "reversals_count"):
+        acc[k] += block[k]
+    for m, v in block["by_method"].items():
+        acc["by_method"][m] = money(acc["by_method"].get(m, ZERO) + v)
+    if with_category:
+        for cat, v in block.get("by_category", {}).items():
+            acc["by_category"][cat] = money(acc["by_category"].get(cat, ZERO) + v)
+
+
+def _rest_add(acc, block):
+    for k in ("restaurant_sales", "cafe_sales", "direct_total", "folio_total"):
+        acc[k] = money(acc[k] + block[k])
+    for k in ("direct_count", "folio_count", "open_orders", "cancelled_orders"):
+        acc[k] += block[k]
+
+
+# --- KPIs (single central definition, used by overview and period) ----------
+
+
+def _kpis(agg):
+    room_rev = agg["room_revenue"]
+    sold = agg["room_nights"]
+    avail = agg["available_room_days"]
+    adr = money(room_rev / Decimal(sold)) if sold else ZERO
+    revpar = money(room_rev / Decimal(avail)) if avail else ZERO
+    occ = money(Decimal(sold) / Decimal(avail) * Decimal("100")) if avail else ZERO
+    net_pay = agg["payments"]["net"] if "net" in agg["payments"] else money(
+        agg["payments"]["gross_total"] + agg["payments"]["reversals_total"]
+    )
+    net_exp = money(agg["expenses"]["gross_total"] + agg["expenses"]["reversals_total"])
+    return {
+        "occupancy_rate": str(occ),
+        "adr": str(adr),
+        "revpar": str(revpar),
+        "total_revenue": str(agg["revenue"]["total"]),
+        "room_revenue": str(room_rev),
+        "restaurant_revenue": str(agg["revenue"]["restaurant"]),
+        "cafe_revenue": str(agg["revenue"]["cafe"]),
+        "expenses": str(net_exp),
+        "net_cashflow": str(money(net_pay - net_exp)),
+        "open_folio_balance": None,  # filled by the caller from folio_balances_now
+    }
+
+
+def _mv_out(mv):
+    net = money(mv["gross_total"] + mv["reversals_total"])
+    return {
+        "gross": str(mv["gross_total"]),
+        "cash": str(mv["cash_total"]),
+        "non_cash": str(mv["non_cash_total"]),
+        "by_method": {m: str(v) for m, v in sorted(mv["by_method"].items())},
+        "reversals": {
+            "count": mv["reversals_count"],
+            "amount": str(mv["reversals_total"]),
+            "cash": str(mv["cash_reversals_total"]),
+            "non_cash": str(mv["non_cash_reversals_total"]),
+        },
+        "voided": {"count": mv["voided_count"], "amount": str(mv["voided_total"])},
+        "net": str(net),
+        "by_category": {c: str(v) for c, v in sorted(mv.get("by_category", {}).items())} if "by_category" in mv else None,
+    }
+
+
+def _revenue_out(rev):
+    return {k: str(v) for k, v in rev.items()}
+
+
+# --- Public report shapers ---------------------------------------------------
+
+
+def finance_overview(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    fol = folio_balances_now(hotel, date_from, date_to)
+    kpis = _kpis(agg)
+    kpis["open_folio_balance"] = fol["total_balance"]
+    pay, exp = agg["payments"], agg["expenses"]
+    return {
+        "current_business_date": str(get_business_date(hotel)),
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "days_missing_close": agg["days_missing_close"],
+        "reporting_missing_days": agg["reporting_missing_days"],
+        "revenue": _revenue_out(agg["revenue"]),
+        "taxes": str(agg["revenue"]["taxes"]),
+        "gross_payments": str(pay["gross_total"]),
+        "payment_reversals": str(pay["reversals_total"]),
+        "net_payments": str(money(pay["gross_total"] + pay["reversals_total"])),
+        "gross_expenses": str(exp["gross_total"]),
+        "expense_reversals": str(exp["reversals_total"]),
+        "net_expenses": str(money(exp["gross_total"] + exp["reversals_total"])),
+        "net_cashflow": kpis["net_cashflow"],
+        "open_folio_balance": fol["total_balance"],
+        "occupancy": kpis["occupancy_rate"],
+        "adr": kpis["adr"],
+        "revpar": kpis["revpar"],
+        "kpis": kpis,
+        "data_quality": {
+            "has_room_charges": agg["has_room_charges"],
+            "room_revenue_source": "manual_charges_only",
+        },
+    }
+
+
+def revenue_report(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    rev = agg["revenue"]
+    net_revenue = money(rev["total"])  # net of tax; service counted once
+    return {
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "days_missing_close": agg["days_missing_close"],
+        "reporting_missing_days": agg["reporting_missing_days"],
+        "by_category": _revenue_out(rev),
+        "gross_revenue": str(net_revenue),
+        "adjustments": str(rev["adjustments"]),
+        "discounts": str(rev["discounts"]),
+        "taxes": str(rev["taxes"]),
+        "net_revenue": str(net_revenue),
+        "data_quality": {
+            "has_room_charges": agg["has_room_charges"],
+            "room_revenue_source": "manual_charges_only",
+        },
+    }
+
+
+def payments_report(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    unassigned = unassigned_movements(hotel, get_business_date(hotel))
+    return {
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "payments": _mv_out(agg["payments"]),
+        "unassigned_movements": unassigned,
+    }
+
+
+def expenses_report(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    return {
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "expenses": _mv_out(agg["expenses"]),
+    }
+
+
+def tax_report(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    rev = agg["revenue"]
+    return {
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "reporting_missing_days": agg["reporting_missing_days"],
+        "total_tax": str(rev["taxes"]),
+        "net_revenue_ex_tax": str(rev["total"]),
+        "by_category_revenue": _revenue_out(rev),
+    }
+
+
+def restaurant_cafe_report(hotel, date_from, date_to) -> dict:
+    agg = period_financials(hotel, date_from, date_to)
+    r = agg["restaurant"]
+    return {
+        "date_from": agg["date_from"], "date_to": agg["date_to"],
+        "source_status": agg["source_status"],
+        "restaurant_sales": str(r["restaurant_sales"]),
+        "cafe_sales": str(r["cafe_sales"]),
+        "direct_settlements": {"count": r["direct_count"], "total": str(r["direct_total"])},
+        "folio_postings": {"count": r["folio_count"], "total": str(r["folio_total"])},
+        "open_orders_count": r["open_orders"],
+        "cancelled_orders_count": r["cancelled_orders"],
+    }
+
+
+def folio_balances_report(hotel, date_from, date_to) -> dict:
+    return folio_balances_now(hotel, date_from, date_to)
+
+
+def _compare_range(hotel, cur_from, cur_to, prev_from, prev_to):
+    cur = period_financials(hotel, cur_from, cur_to)
+    prev = period_financials(hotel, prev_from, prev_to)
+
+    def delta(a, b):
+        a, b = money(a), money(b)
+        d = money(a - b)
+        pct = str(money(d / b * Decimal("100"))) if b != ZERO else None
+        return {"current": str(a), "previous": str(b), "delta": str(d), "delta_pct": pct}
+
+    return {
+        "revenue_total": delta(cur["revenue"]["total"], prev["revenue"]["total"]),
+        "net_payments": delta(
+            money(cur["payments"]["gross_total"] + cur["payments"]["reversals_total"]),
+            money(prev["payments"]["gross_total"] + prev["payments"]["reversals_total"]),
+        ),
+        "net_expenses": delta(
+            money(cur["expenses"]["gross_total"] + cur["expenses"]["reversals_total"]),
+            money(prev["expenses"]["gross_total"] + prev["expenses"]["reversals_total"]),
+        ),
+        "taxes": delta(cur["revenue"]["taxes"], prev["revenue"]["taxes"]),
+    }
+
+
+def comparisons_report(hotel) -> dict:
+    """The minimal approved comparisons: current business day vs the previous
+    day, and current MTD vs the same elapsed range of the previous month."""
+    today = get_business_date(hotel)
+    yday = today - datetime.timedelta(days=1)
+    day_cmp = _compare_range(hotel, today, today, yday, yday)
+
+    mtd_from = today.replace(day=1)
+    if mtd_from.month == 1:
+        prev_first = mtd_from.replace(year=mtd_from.year - 1, month=12)
+    else:
+        prev_first = mtd_from.replace(month=mtd_from.month - 1)
+    elapsed = (today - mtd_from).days
+    prev_to = prev_first + datetime.timedelta(days=elapsed)
+    mtd_cmp = _compare_range(hotel, mtd_from, today, prev_first, prev_to)
+    return {
+        "current_business_date": str(today),
+        "day_vs_previous": {"current_date": str(today), "previous_date": str(yday), **day_cmp},
+        "mtd_vs_previous_month": {
+            "current_range": [str(mtd_from), str(today)],
+            "previous_range": [str(prev_first), str(prev_to)],
+            **mtd_cmp,
+        },
+    }

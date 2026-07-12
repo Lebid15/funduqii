@@ -986,6 +986,12 @@ def build_daily_snapshot(hotel, business_date):
         },
         "business_date": str(business_date),
     }
+    # Finance & Reports final closure: freeze the reporting block (revenue by
+    # category, taxes, occupancy, room revenue) so closed days are reportable
+    # without recomputing from live tables. Lazy import avoids an app cycle.
+    from apps.reports.services import compute_day_reporting
+
+    snapshot["reporting"] = compute_day_reporting(hotel, business_date)
     return snapshot, _totals_from(sections)
 
 

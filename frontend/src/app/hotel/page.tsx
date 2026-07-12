@@ -12,7 +12,6 @@ import {
   Sparkles,
   Users,
   UtensilsCrossed,
-  Wallet,
   Wrench,
 } from "lucide-react";
 
@@ -145,18 +144,6 @@ export default function HotelDashboardPage() {
                 value={report.departures_count}
                 icon={LogOut}
                 tone="neutral"
-              />
-              <StatCard
-                label={d.cards.todayPayments}
-                value={report.total_payments}
-                icon={Wallet}
-                tone="success"
-              />
-              <StatCard
-                label={d.cards.todayExpenses}
-                value={report.total_expenses}
-                icon={Wallet}
-                tone="warning"
               />
               <StatCard
                 label={d.cards.todayOrders}

@@ -1486,6 +1486,23 @@
 
 ---
 
+## Task — Finance & Reports Final Closure: جولة الإغلاق النهائية لقسم المالية والتقارير (السابع والأخير)
+- الحالة: **بانتظار الاعتماد 🔎** (جولة إغلاق متوسطة — ليست مرحلة)
+- التاريخ: 2026-07-12 · الأساس: `origin/main@a89670d` · الفرع: `claude/finance-reports-final-closure` · منفذة بأمر المالك بعد اعتماد البحث المرجعي والـ Audit والخطة — **صفر Migrations، صفر صلاحيات جديدة**؛ `reports` طبقة قراءة/تجميع بلا نماذج، لا تكتب أي سجل.
+- **1) محرك موحّد بمفتاح business_date:** `compute_day_reporting(hotel, business_date)` (قراءة فقط) يُنتج كتلة اليوم (إيراد بالفئة/ضرائب/إشغال/room_revenue)؛ **اليوم المفتوح حيّ، الأيام المغلقة من `DailyClose.snapshot_json` فقط، الفترة = Σ(المغلقة) + المفتوح مرة واحدة** — لا إعادة حساب يوم مغلق، لا خلط، لا مخزن ثالث. `days_missing_close`/`reporting_missing_days` مُعلَنان صراحةً.
+- **2) توسيع Snapshot قسم 6:** أُضيفت كتلة `reporting` إلى `build_daily_snapshot` (‏revenue-by-category/taxes/occupancy/room_revenue) عبر استيراد كسول — JSON فقط، **بلا Migration**؛ إغلاقات المستقبل تصبح قابلة للتقرير تاريخيًا، والقديمة تُعلَن `reporting_missing_days`.
+- **3) مواءمة business_date:** كل التجميع المالي (‏finance_report + المحرك) صار بمفتاح `business_date` (`_pay_bd`/`_pay_bd_range`) لا `paid_at`؛ fallback موثّق للسجلات Legacy فقط؛ رسوم الفوليو بـ`charge_date`، الطلب المباشر بـ`settlement_payment.business_date`، المُرحَّل بـ`posted_charge.charge_date`.
+- **4) سدّ تسريب Overview:** الحقول المالية أُزيلت من `overview` (تحت `reports.view`) ونُقلت إلى **`FinanceOverview` تحت `reports.finance`** — بلا صلاحية جديدة.
+- **5) تقارير جديدة/موسّعة تحت `reports.finance`:** Revenue (بالفئة من `FolioCharge` posted فقط: room/restaurant/cafe/services/other/adjustments/discounts + taxes منفصلة، voided مستبعَد، **FolioCharge مصدر الإيراد الوحيد ⇒ لا ازدواج مطعم**)؛ Payments (‏gross/reversals/voided/net منفصلة، بالطريقة، نقدي/غير نقدي، غير مسندة)؛ Expenses (بالفئة والطريقة، عكوسات/voided منفصلة، net)؛ Tax (من `tax_amount` المخزَّن، بلا إعادة حساب)؛ Folio Balances (موجب/سالب/صفري + **عملات أجنبية منفصلة بلا خلط**)؛ Restaurant/Café (بالمنفذ + direct/folio + open/cancelled من ServiceOrder تشغيليًا)؛ Comparisons (اليوم مقابل السابق + MTD مقابل الشهر السابق، delta وdelta% بحارس صفر).
+- **6) KPIs مركزية:** Occupancy/ADR/RevPAR/Total-Room-Restaurant-Café Revenue/Expenses/NetCashflow/OpenFolioBalance؛ **الغرف المتاحة = التوفّر المركزي** (استبعاد archived+inactive+maintenance+out_of_service — أُصلح `_capacity_rooms`)؛ ADR/RevPAR من رسوم الغرفة الفعلية فقط + **حارس قسمة-صفر + `data_quality` (has_room_charges/manual_charges_only)** بلا base_rate.
+- **7) التصدير والتسجيل:** CSV بـ**UTF-8 BOM** (العربية في Excel) + أسماء ملفات بالفندق والمدى؛ `reports.export` + الصلاحية الأساسية إلزاميتان؛ **تسجيل `report.exported`** للتصديرات المالية عبر `record_activity` (لا تسجيل قراءات GET التشغيلية).
+- **صفر:** GL/قيد مزدوج/USALI/AR-aging/City-Ledger/FX/Tax-engine/e-invoicing/Forecast/BI/بريد مجدول؛ لا كتابة من أي تقرير (مثبت).
+- ‏Migrations: **صفر** (`makemigrations --check` = No changes). صلاحيات جديدة: **صفر**.
+- اختبارات: ‏backend من 1002 إلى **1024** (‏+22: leak/business_date/revenue-by-category/reversals-منفصلة/tax/folio-buckets/ADR-RevPAR/data_quality/closed-day-snapshot+ثبات/days-missing-close/comparisons/BOM/export-log/isolation/no-write)؛ الواجهة تبويبات مالية وظيفية محجوبة بـ`reports.finance`/`reports.export` + مؤشّرات source/data-quality + نطاق بـbusiness_date، مع تكافؤ i18n ×3.
+- سبر حي معزول بفندقين مؤقتين (HTTP): **‏18/18** — تنظيف اعتمادي كامل مثبت بتطابق العدّ قبل/بعد.
+
+---
+
 ## Task — Daily Closing Final Closure: جولة الإغلاق النهائية لقسم الإغلاق اليومي
 - الحالة: **مكتملة ✅ ومعتمدة ومدموجة** (جولة إغلاق صغيرة–متوسطة — ليست مرحلة)
 - الدمج: PR #34 · squash · merge commit `5032170` · اعتماد المالك النهائي — الفرع محذوف محليًا وبعيدًا
