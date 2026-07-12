@@ -1786,11 +1786,10 @@ export interface OverviewReport {
   rooms_available: number;
   rooms_dirty: number;
   rooms_maintenance: number;
-  total_payments: string;
-  total_expenses: string;
-  net_cashflow_simple: string;
+  // Financial totals were REMOVED from the operational overview (final
+  // closure): money now lives behind `reports.finance` in the finance
+  // reports below. Do not re-add money fields to this operational shape.
   service_orders_total: number;
-  service_orders_posted_total: string;
   open_housekeeping_tasks: number;
   open_maintenance_requests: number;
   open_lost_found_items: number;
@@ -1917,6 +1916,185 @@ export interface DailyCloseReportRow {
   closed_by: string;
   closed_at: string | null;
   totals: DailyCloseTotals;
+}
+
+/* ==========================================================================
+ * Finance & Reports final closure — business-date-keyed finance reports
+ * (mirror /api/v1/hotel/reports/finance/*). Gated by `reports.finance`.
+ * EVERY money value is a decimal STRING: render as-is, never parseFloat.
+ * ======================================================================== */
+
+export type FinanceSourceStatus = "live" | "snapshot" | "mixed" | "none";
+
+/** Revenue split by category — net of tax; `taxes` is the stored tax amount.
+ * A `type` (not `interface`) so it stays assignable to `Record<string, string>`
+ * for the shared amount tables. */
+export type FinanceRevenueByCategory = {
+  room: string;
+  restaurant: string;
+  cafe: string;
+  services: string;
+  other: string;
+  adjustments: string;
+  discounts: string;
+  taxes: string;
+  total: string;
+};
+
+export interface FinanceDataQuality {
+  has_room_charges: boolean;
+  room_revenue_source: string;
+}
+
+export interface FinanceKpis {
+  occupancy_rate: string;
+  adr: string;
+  revpar: string;
+  total_revenue: string;
+  room_revenue: string;
+  restaurant_revenue: string;
+  cafe_revenue: string;
+  expenses: string;
+  net_cashflow: string;
+  open_folio_balance: string | null;
+}
+
+export interface FinanceOverviewReport {
+  current_business_date: string;
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  days_missing_close: string[];
+  reporting_missing_days: string[];
+  revenue: FinanceRevenueByCategory;
+  taxes: string;
+  gross_payments: string;
+  payment_reversals: string;
+  net_payments: string;
+  gross_expenses: string;
+  expense_reversals: string;
+  net_expenses: string;
+  net_cashflow: string;
+  open_folio_balance: string;
+  occupancy: string;
+  adr: string;
+  revpar: string;
+  kpis: FinanceKpis;
+  data_quality: FinanceDataQuality;
+}
+
+export interface RevenueReport {
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  days_missing_close: string[];
+  reporting_missing_days: string[];
+  by_category: FinanceRevenueByCategory;
+  gross_revenue: string;
+  adjustments: string;
+  discounts: string;
+  taxes: string;
+  net_revenue: string;
+  data_quality: FinanceDataQuality;
+}
+
+/** A posted movement block (payments OR expenses): gross, reversals and
+ * voided are reported SEPARATELY, never pre-netted into one figure. */
+export interface FinanceMovement {
+  gross: string;
+  cash: string;
+  non_cash: string;
+  by_method: Record<string, string>;
+  reversals: { count: number; amount: string; cash: string; non_cash: string };
+  voided: { count: number; amount: string };
+  net: string;
+  /** Populated for expenses; null for payments. */
+  by_category: Record<string, string> | null;
+}
+
+export interface PaymentsReport {
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  payments: FinanceMovement;
+  unassigned_movements: UnassignedMovements;
+}
+
+export interface ExpensesReport {
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  expenses: FinanceMovement;
+}
+
+export interface TaxReport {
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  reporting_missing_days: string[];
+  total_tax: string;
+  net_revenue_ex_tax: string;
+  by_category_revenue: FinanceRevenueByCategory;
+}
+
+export interface ForeignCurrencyFolio {
+  currency: string;
+  count: number;
+  balance: string;
+}
+
+/** Point-in-time open-folio balances; foreign-currency folios are reported
+ * separately and NEVER mixed into the hotel-currency totals. */
+export interface FolioBalancesReport {
+  currency: string;
+  open_folios_count: number;
+  total_balance: string;
+  positive_balance_count: number;
+  positive_balance_amount: string;
+  negative_balance_count: number;
+  negative_balance_amount: string;
+  zero_balance_count: number;
+  closed_in_range: number;
+  foreign_currency_folios: ForeignCurrencyFolio[];
+}
+
+export interface RestaurantCafeReport {
+  date_from: string;
+  date_to: string;
+  source_status: FinanceSourceStatus;
+  restaurant_sales: string;
+  cafe_sales: string;
+  direct_settlements: { count: number; total: string };
+  folio_postings: { count: number; total: string };
+  open_orders_count: number;
+  cancelled_orders_count: number;
+}
+
+/** `delta_pct` is null when the previous value is 0 (zero-guard) → render "—". */
+export interface ComparisonMetric {
+  current: string;
+  previous: string;
+  delta: string;
+  delta_pct: string | null;
+}
+
+export interface ComparisonMetrics {
+  revenue_total: ComparisonMetric;
+  net_payments: ComparisonMetric;
+  net_expenses: ComparisonMetric;
+  taxes: ComparisonMetric;
+}
+
+export interface ComparisonsReport {
+  current_business_date: string;
+  day_vs_previous: ComparisonMetrics & {
+    current_date: string;
+    previous_date: string;
+  };
+  mtd_vs_previous_month: ComparisonMetrics & {
+    current_range: [string, string];
+    previous_range: [string, string];
+  };
 }
 
 /* ==========================================================================

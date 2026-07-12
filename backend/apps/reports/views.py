@@ -174,17 +174,101 @@ class DailyCloseReportDetailView(APIView):
         )
 
 
+# --- Finance reports (business_date-keyed, under reports.finance) ---------------
+
+
+class FinanceOverviewView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.finance_overview(request.hotel, date_from, date_to))
+
+
+class RevenueReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.revenue_report(request.hotel, date_from, date_to))
+
+
+class PaymentsReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.payments_report(request.hotel, date_from, date_to))
+
+
+class ExpensesReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.expenses_report(request.hotel, date_from, date_to))
+
+
+class TaxReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.tax_report(request.hotel, date_from, date_to))
+
+
+class FolioBalancesReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.folio_balances_report(request.hotel, date_from, date_to))
+
+
+class RestaurantCafeReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        date_from, date_to, _ = _range(request)
+        return Response(services.restaurant_cafe_report(request.hotel, date_from, date_to))
+
+
+class ComparisonsReportView(APIView):
+    permission_classes = [ReportsFinance]
+
+    def get(self, request: Request) -> Response:
+        return Response(services.comparisons_report(request.hotel))
+
+
 # --- CSV export (simple, read-only, capped) -------------------------------------
 
 
 def _csv_response(filename: str, header: list[str], rows) -> HttpResponse:
-    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    # UTF-8 BOM so Excel renders Arabic correctly.
+    response = HttpResponse("﻿", content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     writer = csv.writer(response)
     writer.writerow(header)
     for row in rows:
         writer.writerow(row)
     return response
+
+
+def _log_financial_export(request: Request, report_id: str, date_from, date_to, row_count: int) -> None:
+    """Audit trail for sensitive financial exports (owner decision). Only the
+    export ACTION is logged — never the exported figures."""
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        request.hotel,
+        event_type="report.exported",
+        category="finance",
+        severity="info",
+        title=f"Financial report exported: {report_id}",
+        message=f"{date_from} → {date_to} · csv · {row_count} rows",
+        actor=request.user,
+        related_url="/hotel/reports",
+    )
 
 
 class ReservationsExportView(APIView):
@@ -212,17 +296,21 @@ class PaymentsExportView(APIView):
 
     def get(self, request: Request) -> HttpResponse:
         date_from, date_to, _ = _range(request)
-        qs = Payment.objects.filter(
-            hotel=request.hotel, paid_at__date__range=(date_from, date_to)
-        ).select_related("folio").order_by("-paid_at")[:EXPORT_ROW_CAP]
+        rows = list(
+            Payment.objects.filter(
+                services._pay_bd_range(date_from, date_to), hotel=request.hotel
+            ).select_related("folio").order_by("-paid_at")[:EXPORT_ROW_CAP]
+        )
+        _log_financial_export(request, "payments", date_from, date_to, len(rows))
         return _csv_response(
-            f"payments_{date_from}_{date_to}.csv",
-            ["receipt_number", "folio_number", "paid_at", "method", "status",
-             "amount", "currency"],
+            f"payments_{request.hotel.id}_{date_from}_{date_to}.csv",
+            ["receipt_number", "folio_number", "business_date", "paid_at",
+             "method", "status", "amount", "currency"],
             (
-                [p.receipt_number, p.folio.folio_number, p.paid_at.isoformat(),
-                 p.method, p.status, str(p.amount), p.currency]
-                for p in qs
+                [p.receipt_number, p.folio.folio_number,
+                 (str(p.business_date) if p.business_date else ""),
+                 p.paid_at.isoformat(), p.method, p.status, str(p.amount), p.currency]
+                for p in rows
             ),
         )
 
@@ -232,11 +320,14 @@ class ShiftsExportView(APIView):
 
     def get(self, request: Request) -> HttpResponse:
         date_from, date_to, _ = _range(request)
-        qs = Shift.objects.filter(
-            hotel=request.hotel, business_date__range=(date_from, date_to)
-        ).select_related("responsible_user").order_by("-opened_at")[:EXPORT_ROW_CAP]
+        rows = list(
+            Shift.objects.filter(
+                hotel=request.hotel, business_date__range=(date_from, date_to)
+            ).select_related("responsible_user").order_by("-opened_at")[:EXPORT_ROW_CAP]
+        )
+        _log_financial_export(request, "shifts", date_from, date_to, len(rows))
         return _csv_response(
-            f"shifts_{date_from}_{date_to}.csv",
+            f"shifts_{request.hotel.id}_{date_from}_{date_to}.csv",
             ["shift_number", "business_date", "status", "responsible",
              "opening_cash", "expected_cash", "actual_cash", "cash_difference",
              "difference_reason"],
@@ -246,6 +337,6 @@ class ShiftsExportView(APIView):
                  str(s.expected_cash_amount),
                  str(s.actual_cash_amount) if s.actual_cash_amount is not None else "",
                  str(s.cash_difference), s.difference_reason]
-                for s in qs
+                for s in rows
             ),
         )

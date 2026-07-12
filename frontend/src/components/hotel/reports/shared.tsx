@@ -6,16 +6,23 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import {
+  Alert,
+  Badge,
   Card,
   DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
   SectionHeader,
+  type BadgeTone,
   type Column,
 } from "@/components/ui";
 import { messageForError } from "@/lib/api/errors";
-import type { ReportBucket, ReportDayRow } from "@/lib/api/types";
+import type {
+  FinanceSourceStatus,
+  ReportBucket,
+  ReportDayRow,
+} from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { ReportRange } from "@/lib/api/reports";
 
@@ -150,6 +157,121 @@ export function CountsByDayTable({
         <EmptyState title={r.empty} hint={r.emptyHint} />
       ) : (
         <DataTable caption={title} columns={columns} rows={rows} rowKey={(row) => row.date} />
+      )}
+    </Card>
+  );
+}
+
+const SOURCE_TONE: Record<FinanceSourceStatus, BadgeTone> = {
+  live: "success",
+  snapshot: "info",
+  mixed: "warning",
+  none: "neutral",
+};
+
+/** Source-of-truth badge + data-completeness notes shared by every finance
+ * view. `daysMissingClose` = days in range not yet closed; `reportingMissing`
+ * = closed days that predate the historical finance block. `manualRoomOnly`
+ * surfaces the ADR/RevPAR data-quality caveat. */
+export function FinanceMeta({
+  sourceStatus,
+  daysMissingClose,
+  reportingMissing,
+  manualRoomOnly,
+}: {
+  sourceStatus?: FinanceSourceStatus;
+  daysMissingClose?: string[];
+  reportingMissing?: string[];
+  manualRoomOnly?: boolean;
+}) {
+  const { t } = useI18n();
+  const f = t.reports.fin;
+  const statusLabel: Record<FinanceSourceStatus, string> = {
+    live: f.sourceLive,
+    snapshot: f.sourceSnapshot,
+    mixed: f.sourceMixed,
+    none: f.sourceNone,
+  };
+  return (
+    <>
+      {sourceStatus ? (
+        <div className="cluster">
+          <Badge tone={SOURCE_TONE[sourceStatus]}>
+            {`${f.sourceStatus}: ${statusLabel[sourceStatus]}`}
+          </Badge>
+        </div>
+      ) : null}
+      {daysMissingClose && daysMissingClose.length > 0 ? (
+        <Alert tone="warning">
+          {`${f.missingClose} (${daysMissingClose.join(", ")})`}
+        </Alert>
+      ) : null}
+      {reportingMissing && reportingMissing.length > 0 ? (
+        <Alert tone="info">
+          {`${f.missingReporting} (${reportingMissing.join(", ")})`}
+        </Alert>
+      ) : null}
+      {manualRoomOnly ? <Alert tone="info">{f.dataQualityRoom}</Alert> : null}
+    </>
+  );
+}
+
+/** Translate a revenue-category key (room/restaurant/.../total). */
+export function useRevenueLabel(): (key: string) => string {
+  const { t } = useI18n();
+  const f = t.reports.fin;
+  const map: Record<string, string> = {
+    room: f.catRoom,
+    restaurant: f.catRestaurant,
+    cafe: f.catCafe,
+    services: f.catServices,
+    other: f.catOther,
+    adjustments: f.catAdjustments,
+    discounts: f.catDiscounts,
+    taxes: f.catTaxes,
+    total: f.catTotal,
+  };
+  return (key: string) => map[key] ?? key;
+}
+
+/** A key → amount table (payments by_method, expenses by_category, revenue by
+ * category). Amounts are decimal strings, rendered verbatim, aligned to end. */
+export function AmountTable({
+  title,
+  data,
+  keyHeader,
+  valueHeader,
+  labelFor,
+}: {
+  title: string;
+  data: Record<string, string>;
+  keyHeader: string;
+  valueHeader: string;
+  labelFor?: (key: string) => string;
+}) {
+  const { t } = useI18n();
+  const r = t.reports.common;
+  const rows = Object.entries(data).map(([key, value]) => ({ key, value }));
+  const columns: Column<{ key: string; value: string }>[] = [
+    {
+      key: "key",
+      header: keyHeader,
+      render: (row) => (labelFor ? labelFor(row.key) : row.key),
+    },
+    { key: "value", header: valueHeader, align: "end" },
+  ];
+  return (
+    <Card>
+      <SectionHeader title={title} />
+      {rows.length === 0 ? (
+        <EmptyState title={r.empty} hint={r.emptyHint} />
+      ) : (
+        <DataTable
+          caption={title}
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.key}
+        />
       )}
     </Card>
   );

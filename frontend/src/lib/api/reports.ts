@@ -6,16 +6,24 @@
  */
 import { hotelJson } from "./hotelFetch";
 import type {
+  ComparisonsReport,
+  ExpensesReport,
+  FinanceOverviewReport,
   FinanceReport,
+  FolioBalancesReport,
   GuestsReport,
   OccupancyReport,
   OperationsReport,
   OverviewReport,
+  PaymentsReport,
   ReportPage,
   DailyCloseReportRow,
   ReservationsReport,
+  RestaurantCafeReport,
+  RevenueReport,
   ServicesReport,
   ShiftsReport,
+  TaxReport,
 } from "./types";
 
 export interface ReportRange {
@@ -58,6 +66,51 @@ export function getGuestsReport(range?: ReportRange): Promise<GuestsReport> {
 
 export function getFinanceReport(range?: ReportRange): Promise<FinanceReport> {
   return hotelJson<FinanceReport>(`${B}/finance${toQuery(range)}`);
+}
+
+/* --- Finance & Reports final closure — business-date-keyed finance reports.
+ * All gated by `reports.finance`; accept ?date_from&date_to (default = the
+ * current month by hotel business date). Every money value is a string. */
+
+export function getFinanceOverview(
+  range?: ReportRange,
+): Promise<FinanceOverviewReport> {
+  return hotelJson<FinanceOverviewReport>(`${B}/finance/overview${toQuery(range)}`);
+}
+
+export function getRevenueReport(range?: ReportRange): Promise<RevenueReport> {
+  return hotelJson<RevenueReport>(`${B}/finance/revenue${toQuery(range)}`);
+}
+
+export function getPaymentsReport(range?: ReportRange): Promise<PaymentsReport> {
+  return hotelJson<PaymentsReport>(`${B}/finance/payments${toQuery(range)}`);
+}
+
+export function getExpensesReport(range?: ReportRange): Promise<ExpensesReport> {
+  return hotelJson<ExpensesReport>(`${B}/finance/expenses${toQuery(range)}`);
+}
+
+export function getTaxReport(range?: ReportRange): Promise<TaxReport> {
+  return hotelJson<TaxReport>(`${B}/finance/taxes${toQuery(range)}`);
+}
+
+export function getFolioBalancesReport(
+  range?: ReportRange,
+): Promise<FolioBalancesReport> {
+  return hotelJson<FolioBalancesReport>(`${B}/finance/folios${toQuery(range)}`);
+}
+
+export function getRestaurantCafeReport(
+  range?: ReportRange,
+): Promise<RestaurantCafeReport> {
+  return hotelJson<RestaurantCafeReport>(
+    `${B}/finance/restaurant-cafe${toQuery(range)}`,
+  );
+}
+
+/** Comparisons are anchored to the hotel business date; range is ignored. */
+export function getComparisonsReport(): Promise<ComparisonsReport> {
+  return hotelJson<ComparisonsReport>(`${B}/finance/comparisons`);
 }
 
 export function getServicesReport(range?: ReportRange): Promise<ServicesReport> {
