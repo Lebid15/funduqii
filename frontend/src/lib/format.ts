@@ -3,6 +3,7 @@ import type { BadgeTone } from "@/components/ui";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Locale } from "@/lib/i18n/config";
 import type {
+  EntitlementState,
   FolioStatus,
   HandoverStatus,
   HotelStatus,
@@ -315,6 +316,35 @@ export function operationPriorityTone(priority: OperationPriority): BadgeTone {
       return "neutral";
     default:
       return "info";
+  }
+}
+
+export function entitlementStateTone(state: EntitlementState): BadgeTone {
+  switch (state) {
+    case "over_limit":
+      return "danger";
+    case "limit_reached":
+      return "warning";
+    case "nearing_limit":
+      return "warning";
+    default:
+      return "success";
+  }
+}
+
+export function entitlementStateLabel(
+  state: EntitlementState,
+  t: Dictionary,
+): string {
+  switch (state) {
+    case "over_limit":
+      return t.entitlements.stateOver;
+    case "limit_reached":
+      return t.entitlements.stateReached;
+    case "nearing_limit":
+      return t.entitlements.stateNearing;
+    default:
+      return t.entitlements.stateNormal;
   }
 }
 

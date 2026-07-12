@@ -21,7 +21,10 @@ from rest_framework.views import APIView
 from apps.common.exceptions import PlanInUse
 from apps.rbac.permissions import IsPlatformOwner
 from apps.subscriptions import services as sub_services
+from apps.subscriptions.enforcement import effectively_live_q
+from apps.subscriptions.entitlements import effective_subscription_state
 from apps.subscriptions.models import (
+    LIVE_STATUSES,
     HotelSubscription,
     PlatformSubscriptionPayment,
     SubscriptionPlan,
@@ -33,6 +36,7 @@ from .models import PlatformPublicSettings, PlatformSettings
 from .serializers import (
     ActivatePaidSerializer,
     CancelSubscriptionSerializer,
+    ChangePlanSerializer,
     HotelCreateSerializer,
     HotelSerializer,
     HotelSubscriptionSerializer,
@@ -42,6 +46,7 @@ from .serializers import (
     PlatformPaymentSerializer,
     PlatformPublicSettingsSerializer,
     PlatformSettingsSerializer,
+    ReactivateSerializer,
     RenewSerializer,
     StartTrialSerializer,
     SubscriptionCreateSerializer,
@@ -78,6 +83,9 @@ class OverviewView(PlatformOwnerMixin, APIView):
     def get(self, request: Request) -> Response:
         now = timezone.now()
         soon = now + timedelta(days=EXPIRING_SOON_DAYS)
+        # Counters use the EFFECTIVE (date-derived) status, never the stored
+        # column alone: a trial/active whose end has passed counts as expired.
+        live_q = effectively_live_q(now)
 
         hotels = Hotel.objects.all()
         subs = HotelSubscription.objects.all()
@@ -96,18 +104,23 @@ class OverviewView(PlatformOwnerMixin, APIView):
             },
             "subscriptions": {
                 "active_trials": subs.filter(
-                    status=SubscriptionStatus.TRIAL
+                    live_q, status=SubscriptionStatus.TRIAL
                 ).count(),
-                "active": subs.filter(status=SubscriptionStatus.ACTIVE).count(),
+                "active": subs.filter(
+                    live_q, status=SubscriptionStatus.ACTIVE
+                ).count(),
                 "expiring_soon": subs.filter(
+                    live_q,
                     status=SubscriptionStatus.ACTIVE,
                     ends_at__isnull=False,
-                    ends_at__gte=now,
                     ends_at__lte=soon,
                 ).count(),
-                "expired": subs.filter(
-                    status=SubscriptionStatus.EXPIRED
-                ).count(),
+                "expired": (
+                    subs.filter(status=SubscriptionStatus.EXPIRED).count()
+                    + subs.filter(status__in=list(LIVE_STATUSES))
+                    .exclude(live_q)
+                    .count()
+                ),
             },
             "recent_hotels": HotelSerializer(recent_hotels, many=True).data,
             "recent_subscriptions": HotelSubscriptionSerializer(
@@ -168,9 +181,12 @@ class DashboardView(PlatformOwnerMixin, APIView):
             "suspended_hotels": hotels.filter(status=HotelStatus.SUSPENDED).count(),
             "trial_hotels": trial_subs.values("hotel").distinct().count(),
             "paid_hotels": active_subs.values("hotel").distinct().count(),
-            "expired_subscriptions": subs.filter(
-                status=SubscriptionStatus.EXPIRED
-            ).count(),
+            "expired_subscriptions": (
+                subs.filter(status=SubscriptionStatus.EXPIRED).count()
+                + subs.filter(status__in=list(LIVE_STATUSES))
+                .exclude(effectively_live_q(now))
+                .count()
+            ),
             "expiring_soon_subscriptions": subs.filter(
                 status__in=(SubscriptionStatus.TRIAL, SubscriptionStatus.ACTIVE)
             )
@@ -477,6 +493,58 @@ class HotelExpireSubscriptionView(PlatformOwnerMixin, APIView):
             raise InvalidSubscriptionTransition()
         sub = sub_services.expire_subscription(sub)
         return Response(HotelSubscriptionSerializer(sub).data)
+
+
+class HotelChangePlanView(PlatformOwnerMixin, APIView):
+    """Explicitly move the hotel's live subscription to a different plan.
+
+    Immediate for upgrade and downgrade (no proration); existing resources are
+    grandfathered and only NEW ones above the new limits are blocked.
+    """
+
+    def post(self, request: Request, pk: int) -> Response:
+        hotel = generics.get_object_or_404(Hotel, pk=pk)
+        serializer = ChangePlanSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        sub = sub_services.change_subscription_plan(
+            hotel,
+            data["plan"],
+            actor=request.user,
+            reason=data.get("reason", ""),
+            notes=data.get("notes", ""),
+        )
+        _maybe_record_payment(request, hotel, sub, data)
+        return Response(HotelSubscriptionSerializer(sub).data)
+
+
+class HotelReactivateView(PlatformOwnerMixin, APIView):
+    """Revive billing for a hotel whose subscription has ended (a NEW one)."""
+
+    def post(self, request: Request, pk: int) -> Response:
+        hotel = generics.get_object_or_404(Hotel, pk=pk)
+        serializer = ReactivateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        sub = sub_services.reactivate_subscription(
+            hotel,
+            data["plan"],
+            starts_at=data.get("starts_at"),
+            ends_at=data.get("ends_at"),
+            notes=data.get("notes", ""),
+        )
+        _maybe_record_payment(request, hotel, sub, data)
+        return Response(
+            HotelSubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED
+        )
+
+
+class HotelSubscriptionStateView(PlatformOwnerMixin, APIView):
+    """The hotel's effective subscription state + entitlement usage (owner)."""
+
+    def get(self, request: Request, pk: int) -> Response:
+        hotel = generics.get_object_or_404(Hotel, pk=pk)
+        return Response(effective_subscription_state(hotel))
 
 
 class HotelSubscriptionHistoryView(PlatformOwnerMixin, APIView):

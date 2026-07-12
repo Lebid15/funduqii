@@ -43,6 +43,40 @@ def _effective_end(sub: HotelSubscription):
     return sub.ends_at
 
 
+def effective_status(sub: HotelSubscription, now=None) -> str:
+    """The DATE-DERIVED status of a subscription.
+
+    A stored ``trial``/``active``/``past_due`` whose effective end has passed is
+    reported as ``expired`` even though no background job rewrote the column.
+    Terminal stored statuses (expired/cancelled) are returned as-is. This is the
+    single truth every list, counter and banner should display — never the raw
+    ``status`` column alone.
+    """
+    now = now or timezone.now()
+    if sub.status in LIVE_STATUSES:
+        end = _effective_end(sub)
+        if end is not None and end <= now:
+            return SubscriptionStatus.EXPIRED
+    return sub.status
+
+
+def effectively_live_q(now=None):
+    """A ``Q`` matching subscriptions that are live AND unexpired (time-aware).
+
+    The queryset form of :func:`effective_subscription`, shared by the batch
+    block check and the platform counters so "effective" means one thing.
+    """
+    now = now or timezone.now()
+    open_ended = Q(ends_at__isnull=True) | Q(ends_at__gt=now)
+    return (
+        Q(status=SubscriptionStatus.TRIAL)
+        & (Q(trial_ends_at__gt=now) | (Q(trial_ends_at__isnull=True) & open_ended))
+    ) | (
+        Q(status__in=(SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE))
+        & open_ended
+    )
+
+
 def effective_subscription(hotel) -> HotelSubscription | None:
     """The hotel's live AND unexpired subscription, if any (time-aware)."""
     now = timezone.now()
@@ -83,22 +117,9 @@ def subscription_blocked_hotel_ids(hotel_ids) -> set[int]:
         .values_list("hotel_id", flat=True)
         .distinct()
     )
-    open_ended = Q(ends_at__isnull=True) | Q(ends_at__gt=now)
-    effectively_live = (
-        Q(status=SubscriptionStatus.TRIAL)
-        & (Q(trial_ends_at__gt=now) | (Q(trial_ends_at__isnull=True) & open_ended))
-    ) | (
-        Q(
-            status__in=(
-                SubscriptionStatus.ACTIVE,
-                SubscriptionStatus.PAST_DUE,
-            )
-        )
-        & open_ended
-    )
     live = set(
         HotelSubscription.objects.filter(hotel_id__in=hotel_ids)
-        .filter(effectively_live)
+        .filter(effectively_live_q(now))
         .values_list("hotel_id", flat=True)
         .distinct()
     )
@@ -132,6 +153,11 @@ def subscription_state(hotel) -> dict:
     state = {
         "has_subscription": has_history,
         "status": live.status if live else None,
+        "effective_status": (
+            effective_status(live, now)
+            if live is not None
+            else (SubscriptionStatus.EXPIRED if has_history else None)
+        ),
         "plan_name": live.plan.name if live else None,
         "ends_at": None,
         "days_left": None,

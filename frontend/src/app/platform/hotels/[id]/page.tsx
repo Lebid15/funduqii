@@ -24,26 +24,35 @@ import {
   activateHotel,
   activatePaid,
   cancelHotelSubscription,
+  changePlan,
   expireHotelSubscription,
   fetchSubscriptionHistory,
   getHotel,
+  getSubscriptionState,
   listPlans,
   listPlatformPayments,
+  reactivateSubscription,
   renewSubscription,
   setHotelManager,
   startTrial,
   suspendHotel,
   unsuspendHotel,
   updateHotel,
+  voidPlatformPayment,
 } from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
 import type {
   Hotel,
   HotelSubscription,
+  HotelSubscriptionState,
   PlatformPayment,
+  PlatformPaymentMethod,
   SubscriptionPlan,
 } from "@/lib/api/types";
 import {
+  billingCycleLabel,
+  entitlementStateLabel,
+  entitlementStateTone,
   formatDate,
   hotelStatusLabel,
   hotelStatusTone,
@@ -396,6 +405,13 @@ function InlineSuspendForm({
 
 /** Current subscription + lifecycle actions + preserved history + manual
  * platform payments (never a gateway). */
+const PAYMENT_METHODS: PlatformPaymentMethod[] = [
+  "cash",
+  "bank_transfer",
+  "manual",
+  "other",
+];
+
 function SubscriptionCard({
   hotel,
   onChanged,
@@ -409,22 +425,32 @@ function SubscriptionCard({
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [history, setHistory] = useState<HotelSubscription[]>([]);
   const [payments, setPayments] = useState<PlatformPayment[]>([]);
+  const [subState, setSubState] = useState<HotelSubscriptionState | null>(null);
   const [planId, setPlanId] = useState("");
+  const [changePlanId, setChangePlanId] = useState("");
+  const [changeReason, setChangeReason] = useState("");
+  // Optional manual payment recorded alongside activate/renew/change/reactivate.
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState<PlatformPaymentMethod>("cash");
+  const [payReference, setPayReference] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadExtras = useCallback(async () => {
     try {
-      const [planData, historyData, paymentData] = await Promise.all([
+      const [planData, historyData, paymentData, stateData] = await Promise.all([
         listPlans({ is_active: "true", page_size: 100 }),
         fetchSubscriptionHistory(hotel.id),
         listPlatformPayments(hotel.id),
+        getSubscriptionState(hotel.id),
       ]);
       setPlans(planData.results);
       setHistory(historyData);
       setPayments(paymentData);
+      setSubState(stateData);
       if (planData.results.length > 0) {
         setPlanId((prev) => prev || String(planData.results[0].id));
+        setChangePlanId((prev) => prev || String(planData.results[0].id));
       }
     } catch {
       // Non-blocking: the page still shows the hotel itself.
@@ -441,6 +467,8 @@ function SubscriptionCard({
     try {
       await action();
       onNotify(t.settings.saved);
+      setPayAmount("");
+      setPayReference("");
       onChanged();
       loadExtras();
     } catch (err) {
@@ -450,11 +478,50 @@ function SubscriptionCard({
     }
   }
 
+  // The optional payment fields, only when an amount was entered.
+  function paymentBody() {
+    if (!payAmount.trim()) return {};
+    return {
+      payment_amount: payAmount.trim(),
+      payment_method: payMethod,
+      payment_reference: payReference.trim() || undefined,
+    };
+  }
+
+  function voidPayment(id: number) {
+    const reason = window.prompt(t.subscriptions.voidReason) ?? "";
+    if (!reason.trim()) return;
+    run(() => voidPlatformPayment(id, reason.trim()));
+  }
+
   const sub = hotel.current_subscription;
+  const effective = subState?.effective_status ?? sub?.status ?? null;
+  const ent = subState?.entitlements;
   const planOptions = plans.map((plan) => ({
     value: String(plan.id),
     label: `${plan.name} — ${plan.price} ${plan.currency}`,
   }));
+  const methodOptions = PAYMENT_METHODS.map((m) => ({
+    value: m,
+    label: t.subscriptions.methods[m],
+  }));
+
+  const dimRow = (label: string, dim: EntitlementLike) => (
+    <div className="detail-item">
+      <span className="detail-item__label">{label}</span>
+      <span className="detail-item__value">
+        {dim.usage} / {dim.limit ?? t.entitlements.unlimited}
+        {dim.limit !== null ? (
+          <>
+            {" "}
+            <Badge tone={entitlementStateTone(dim.state)}>
+              {entitlementStateLabel(dim.state, t)}
+            </Badge>
+          </>
+        ) : null}
+      </span>
+    </div>
+  );
 
   return (
     <Card>
@@ -471,13 +538,30 @@ function SubscriptionCard({
             <span className="detail-item__value">{sub.plan_name}</span>
           </div>
           <div className="detail-item">
-            <span className="detail-item__label">{t.common.status}</span>
+            <span className="detail-item__label">
+              {t.subscriptions.effectiveStatus}
+            </span>
             <span>
-              <Badge tone={subscriptionStatusTone(sub.status)}>
-                {subscriptionStatusLabel(sub.status, t)}
-              </Badge>
+              {effective ? (
+                <Badge tone={subscriptionStatusTone(effective)}>
+                  {subscriptionStatusLabel(effective, t)}
+                </Badge>
+              ) : (
+                "—"
+              )}
             </span>
           </div>
+          {subState?.terms ? (
+            <div className="detail-item">
+              <span className="detail-item__label">
+                {t.subscriptions.price}
+              </span>
+              <span className="detail-item__value">
+                {subState.terms.price} {subState.terms.currency} ·{" "}
+                {billingCycleLabel(subState.terms.billing_cycle, t)}
+              </span>
+            </div>
+          ) : null}
           <div className="detail-item">
             <span className="detail-item__label">{t.subscriptions.endsAt}</span>
             <span className="detail-item__value">
@@ -488,6 +572,43 @@ function SubscriptionCard({
       ) : (
         <p className="muted">{t.hotels.noSubscription}</p>
       )}
+
+      {sub && ent ? (
+        <div className="detail-grid">
+          {dimRow(t.entitlements.rooms, ent.rooms)}
+          {dimRow(t.entitlements.staff, ent.staff)}
+          {dimRow(t.entitlements.publicBookings, ent.public_bookings)}
+        </div>
+      ) : null}
+
+      {/* Optional manual payment recorded with the next action. */}
+      <div className="cluster">
+        <FormField label={t.subscriptions.paymentAmount} htmlFor="pay-amount">
+          <Input
+            id="pay-amount"
+            value={payAmount}
+            inputMode="decimal"
+            placeholder={t.subscriptions.recordPaymentOptional}
+            onChange={(e) => setPayAmount(e.target.value)}
+          />
+        </FormField>
+        <FormField label={t.subscriptions.paymentMethod} htmlFor="pay-method">
+          <Select
+            id="pay-method"
+            value={payMethod}
+            options={methodOptions}
+            onChange={(e) => setPayMethod(e.target.value as PlatformPaymentMethod)}
+          />
+        </FormField>
+        <FormField label={t.subscriptions.paymentReference} htmlFor="pay-ref">
+          <Input
+            id="pay-ref"
+            value={payReference}
+            placeholder={t.subscriptions.paymentReferenceHint}
+            onChange={(e) => setPayReference(e.target.value)}
+          />
+        </FormField>
+      </div>
 
       <div className="cluster">
         {!sub ? (
@@ -511,10 +632,32 @@ function SubscriptionCard({
             <Button
               size="sm"
               disabled={busy || !planId}
-              onClick={() => run(() => activatePaid(hotel.id, { plan: Number(planId) }))}
+              onClick={() =>
+                run(() =>
+                  activatePaid(hotel.id, { plan: Number(planId), ...paymentBody() }),
+                )
+              }
             >
               {t.subscriptions.activatePaid}
             </Button>
+            {/* Reactivation is only meaningful when there is ended history. */}
+            {history.length > 0 ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || !planId}
+                onClick={() =>
+                  run(() =>
+                    reactivateSubscription(hotel.id, {
+                      plan: Number(planId),
+                      ...paymentBody(),
+                    }),
+                  )
+                }
+              >
+                {t.subscriptions.reactivate}
+              </Button>
+            ) : null}
           </>
         ) : (
           <>
@@ -525,7 +668,9 @@ function SubscriptionCard({
               <Button
                 size="sm"
                 disabled={busy}
-                onClick={() => run(() => renewSubscription(hotel.id, {}))}
+                onClick={() =>
+                  run(() => renewSubscription(hotel.id, { ...paymentBody() }))
+                }
               >
                 {t.subscriptions.renew}
               </Button>
@@ -549,6 +694,45 @@ function SubscriptionCard({
           </>
         )}
       </div>
+
+      {/* Explicit plan change for a LIVE subscription. */}
+      {sub ? (
+        <div className="cluster">
+          <FormField label={t.subscriptions.changePlan} htmlFor="change-plan">
+            <Select
+              id="change-plan"
+              value={changePlanId}
+              options={planOptions}
+              onChange={(e) => setChangePlanId(e.target.value)}
+            />
+          </FormField>
+          <FormField label={t.subscriptions.reason} htmlFor="change-reason">
+            <Input
+              id="change-reason"
+              value={changeReason}
+              onChange={(e) => setChangeReason(e.target.value)}
+            />
+          </FormField>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy || !changePlanId}
+            title={t.subscriptions.changePlanConfirm}
+            onClick={() =>
+              run(() =>
+                changePlan(hotel.id, {
+                  plan: Number(changePlanId),
+                  reason: changeReason || undefined,
+                  ...paymentBody(),
+                }),
+              )
+            }
+          >
+            {t.subscriptions.changePlan}
+          </Button>
+        </div>
+      ) : null}
+
       {!sub && hotel.trial_used ? (
         <p className="muted">{t.subscriptions.trialAlreadyUsedHint}</p>
       ) : null}
@@ -560,8 +744,8 @@ function SubscriptionCard({
             {history.map((row) => (
               <li key={row.id} className="mini-list__row">
                 <span>{row.plan_name}</span>
-                <Badge tone={subscriptionStatusTone(row.status)}>
-                  {subscriptionStatusLabel(row.status, t)}
+                <Badge tone={subscriptionStatusTone(row.effective_status ?? row.status)}>
+                  {subscriptionStatusLabel(row.effective_status ?? row.status, t)}
                 </Badge>
                 <span className="muted">
                   {formatDate(row.starts_at, locale)} →{" "}
@@ -588,7 +772,16 @@ function SubscriptionCard({
                 <span className="muted">{formatDate(payment.received_at, locale)}</span>
                 {payment.is_voided ? (
                   <Badge tone="danger">{t.subscriptions.voided}</Badge>
-                ) : null}
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => voidPayment(payment.id)}
+                  >
+                    {t.subscriptions.voidAction}
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
@@ -597,6 +790,14 @@ function SubscriptionCard({
     </Card>
   );
 }
+
+/** Minimal shape for the usage rows — matches EntitlementDimension. */
+type EntitlementLike = {
+  usage: number;
+  limit: number | null;
+  remaining: number | null;
+  state: "normal" | "nearing_limit" | "limit_reached" | "over_limit";
+};
 
 function ManagerCard({
   hotel,

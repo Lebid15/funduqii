@@ -106,6 +106,12 @@ class HotelSubscription(models.Model):
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
+    # Grandfathering (subscriptions final closure): the plan's terms captured
+    # at the moment this subscription began. A running subscription reads its
+    # price/limits/features from HERE, never from the live plan, so editing a
+    # plan never changes an existing subscriber retroactively. Nullable for
+    # legacy rows, which migration 0004 backfills from the live plan.
+    plan_snapshot = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

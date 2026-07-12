@@ -79,6 +79,9 @@ function HomeContent() {
               t.public.nav.manageBooking,
             )}
           </Link>
+          <Link href="/pricing" className="btn btn--secondary">
+            {t.pricing.nav}
+          </Link>
         </div>
         <ul className="public-hero__features">
           {features.map((f) => (

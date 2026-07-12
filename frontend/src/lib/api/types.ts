@@ -155,6 +155,10 @@ export interface HotelSubscription {
   plan: number;
   plan_name: string;
   status: SubscriptionStatus;
+  /** Date-derived status — PREFER this over `status` for display. */
+  effective_status: SubscriptionStatus;
+  /** Frozen copy of the plan's terms at activation time (null on legacy rows). */
+  plan_snapshot: Record<string, unknown> | null;
   starts_at: string | null;
   ends_at: string | null;
   trial_ends_at: string | null;
@@ -269,9 +273,57 @@ export interface PlatformPublicSettings {
   updated_at: string;
 }
 
+/** Snapshot terms carried by a subscription (all values frozen at activation);
+ * `price`/`price_yearly` are decimal strings — render as-is, never parseFloat. */
+export interface SubscriptionTerms {
+  plan_name: string;
+  billing_cycle: BillingCycle;
+  price: string;
+  price_yearly: string | null;
+  currency: string;
+  room_limit: number | null;
+  user_limit: number | null;
+  feature_codes: string[];
+  max_public_bookings_per_month: number | null;
+  trial_days: number;
+}
+
+export type EntitlementState =
+  | "normal"
+  | "nearing_limit"
+  | "limit_reached"
+  | "over_limit";
+
+/** One measured dimension (rooms/staff/public bookings): current usage against
+ * the plan limit. `limit`/`remaining` are null when the dimension is unlimited. */
+export interface EntitlementDimension {
+  usage: number;
+  limit: number | null;
+  remaining: number | null;
+  state: EntitlementState;
+}
+
+export interface EntitlementSummary {
+  rooms: EntitlementDimension;
+  staff: EntitlementDimension;
+  public_bookings: EntitlementDimension;
+  features: string[];
+}
+
+/** One row of the hotel's own billing history — safe fields only (no ids). */
+export interface SubscriptionStatePayment {
+  amount: string;
+  currency: string;
+  method: PlatformPaymentMethod;
+  received_at: string;
+  is_voided: boolean;
+}
+
 export interface HotelSubscriptionState {
   has_subscription: boolean;
   status: SubscriptionStatus | null;
+  /** Date-derived status — PREFER this over `status` for display. */
+  effective_status: SubscriptionStatus | null;
   plan_name: string | null;
   ends_at: string | null;
   days_left: number | null;
@@ -280,6 +332,25 @@ export interface HotelSubscriptionState {
   suspended: boolean;
   write_blocked: boolean;
   blocked_reason: "hotel_suspended" | "subscription_inactive" | null;
+  terms: SubscriptionTerms | null;
+  entitlements: EntitlementSummary;
+  payments: SubscriptionStatePayment[];
+}
+
+/** GET /api/v1/public/plans/ → one public (active + public) plan card. */
+export interface PublicPlan {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  price: string;
+  price_yearly: string | null;
+  currency: string;
+  billing_cycle: BillingCycle;
+  trial_days: number;
+  room_limit: number | null;
+  user_limit: number | null;
+  feature_codes: string[];
 }
 
 /* ==========================================================================

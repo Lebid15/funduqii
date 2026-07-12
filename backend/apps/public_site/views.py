@@ -85,6 +85,44 @@ class PublicSiteSettingsView(PublicAPIView):
         )
 
 
+class PublicPlansView(PublicAPIView):
+    """The public subscription-plans catalog (subscriptions closure).
+
+    Reads the SAME ``SubscriptionPlan`` catalog the owner panel manages — never
+    a duplicated frontend constant. Only ACTIVE and PUBLIC plans are exposed, in
+    sort order; hidden or inactive plans never appear. No checkout, no gateway,
+    no tenant data.
+    """
+
+    def get(self, request: Request) -> Response:
+        from apps.subscriptions.entitlements import normalize_feature_codes
+        from apps.subscriptions.models import SubscriptionPlan
+
+        plans = SubscriptionPlan.objects.filter(
+            is_active=True, is_public=True
+        ).order_by("sort_order", "name")
+        data = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "slug": p.slug,
+                "description": p.description,
+                "price": str(p.price),
+                "price_yearly": (
+                    str(p.price_yearly) if p.price_yearly is not None else None
+                ),
+                "currency": p.currency,
+                "billing_cycle": p.billing_cycle,
+                "trial_days": p.trial_days,
+                "room_limit": p.room_limit,
+                "user_limit": p.user_limit,
+                "feature_codes": normalize_feature_codes(p.feature_codes),
+            }
+            for p in plans
+        ]
+        return Response({"plans": data})
+
+
 def _hotel_card(settings_obj, *, subscription_blocked: bool | None = None) -> dict:
     media = services.hotel_media_payload(settings_obj.hotel)
     return {

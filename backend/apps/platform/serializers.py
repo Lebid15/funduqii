@@ -240,15 +240,24 @@ class HotelSubscriptionSerializer(serializers.ModelSerializer):
             "plan",
             "plan_name",
             "status",
+            "effective_status",
             "starts_at",
             "ends_at",
             "trial_ends_at",
             "cancelled_at",
             "notes",
+            "plan_snapshot",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    effective_status = serializers.SerializerMethodField()
+
+    def get_effective_status(self, sub):
+        from apps.subscriptions.enforcement import effective_status
+
+        return effective_status(sub)
 
 
 class SubscriptionCreateSerializer(serializers.Serializer):
@@ -366,6 +375,63 @@ class RenewSerializer(serializers.Serializer):
 
 class CancelSubscriptionSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class ChangePlanSerializer(serializers.Serializer):
+    """Explicitly move the hotel's live subscription to a different plan."""
+
+    plan = serializers.PrimaryKeyRelatedField(queryset=SubscriptionPlan.objects.all())
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    payment_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False
+    )
+    payment_method = serializers.ChoiceField(
+        choices=["cash", "bank_transfer", "manual", "other"], required=False
+    )
+    payment_reference = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+    def validate(self, attrs):
+        if not attrs["plan"].is_active:
+            raise serializers.ValidationError(
+                {"plan": "Cannot change to an inactive plan."}
+            )
+        if "payment_amount" in attrs and "payment_method" not in attrs:
+            raise serializers.ValidationError(
+                {"payment_method": "A method is required to record a payment."}
+            )
+        return attrs
+
+
+class ReactivateSerializer(serializers.Serializer):
+    """Revive billing for a hotel whose subscription has ended (a NEW one)."""
+
+    plan = serializers.PrimaryKeyRelatedField(queryset=SubscriptionPlan.objects.all())
+    starts_at = serializers.DateTimeField(required=False)
+    ends_at = serializers.DateTimeField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    payment_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False
+    )
+    payment_method = serializers.ChoiceField(
+        choices=["cash", "bank_transfer", "manual", "other"], required=False
+    )
+    payment_reference = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+    def validate(self, attrs):
+        if not attrs["plan"].is_active:
+            raise serializers.ValidationError(
+                {"plan": "Cannot reactivate on an inactive plan."}
+            )
+        if "payment_amount" in attrs and "payment_method" not in attrs:
+            raise serializers.ValidationError(
+                {"payment_method": "A method is required to record a payment."}
+            )
+        return attrs
 
 
 class SuspendHotelSerializer(serializers.Serializer):

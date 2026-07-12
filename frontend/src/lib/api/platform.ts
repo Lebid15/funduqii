@@ -9,6 +9,7 @@ import type { ApiError } from "./client";
 import type {
   Hotel,
   HotelSubscription,
+  HotelSubscriptionState,
   PaginatedResponse,
   PlatformDashboard,
   PlatformOverview,
@@ -196,6 +197,53 @@ export function renewSubscription(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export interface ChangePlanBody extends ManualPaymentInput {
+  plan: number;
+  reason?: string;
+  notes?: string;
+}
+
+/** Switch a LIVE subscription to a different plan (optionally recording a
+ * manual payment). Used only when there is an active/trial subscription. */
+export function changePlan(
+  hotelId: number,
+  body: ChangePlanBody,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(
+    `/hotels/${hotelId}/subscriptions/change-plan`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export interface ReactivateBody extends ManualPaymentInput {
+  plan: number;
+  starts_at?: string;
+  ends_at?: string;
+  notes?: string;
+}
+
+/** Reactivate a hotel whose subscription has ENDED (no live sub, history
+ * exists). Returns the new subscription (201). */
+export function reactivateSubscription(
+  hotelId: number,
+  body: ReactivateBody,
+): Promise<HotelSubscription> {
+  return request<HotelSubscription>(
+    `/hotels/${hotelId}/subscriptions/reactivate`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/** Rich subscription state for one hotel (same shape as the hotel profile's
+ * `subscription_state`): effective status, snapshot terms, entitlements. */
+export function getSubscriptionState(
+  hotelId: number,
+): Promise<HotelSubscriptionState> {
+  return request<HotelSubscriptionState>(
+    `/hotels/${hotelId}/subscriptions/state`,
+  );
 }
 
 export function cancelHotelSubscription(
