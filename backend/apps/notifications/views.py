@@ -18,6 +18,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.db.models import Case, IntegerField, Value, When
+
 from apps.rbac.permissions import HasHotelPermission
 from apps.rbac.services import get_hotel_permissions
 from apps.tenancy.models import MembershipType
@@ -28,6 +30,7 @@ from .models import (
     ActivityEvent,
     ActivitySeverity,
     Notification,
+    NotificationScope,
 )
 from .serializers import ActivityEventSerializer, NotificationSerializer
 
@@ -35,16 +38,33 @@ NotifView = HasHotelPermission("notifications.view")
 NotifUpdate = HasHotelPermission("notifications.update")
 ActivityView = HasHotelPermission("activity.view")
 
+#: Priority ordering: danger, then warning, success, info (then recency).
+SEVERITY_RANK = Case(
+    When(severity=ActivitySeverity.DANGER, then=Value(0)),
+    When(severity=ActivitySeverity.WARNING, then=Value(1)),
+    When(severity=ActivitySeverity.SUCCESS, then=Value(2)),
+    default=Value(3),
+    output_field=IntegerField(),
+)
+
 
 def _my_notifications(request: Request):
-    return Notification.objects.filter(hotel=request.hotel, recipient=request.user)
+    # Hotel console only ever sees HOTEL-scoped notifications; platform-scoped
+    # rows belong to the platform owner's own centre.
+    return Notification.objects.filter(
+        hotel=request.hotel,
+        recipient=request.user,
+        scope=NotificationScope.HOTEL,
+    )
 
 
 def _visible_activity(request: Request):
     """Everything for managers / `activity.view_all`; otherwise the categories
     the user's own view permissions cover, plus events they acted in or were
     targeted by (documented rule)."""
-    qs = ActivityEvent.objects.filter(hotel=request.hotel)
+    qs = ActivityEvent.objects.filter(
+        hotel=request.hotel, scope=NotificationScope.HOTEL
+    )
     membership = request.hotel_membership
     if membership and membership.membership_type == MembershipType.MANAGER:
         return qs
@@ -126,9 +146,11 @@ class NotificationListView(generics.ListAPIView):
         if p.get("date"):
             qs = qs.filter(created_at__date=p["date"])
         ordering = p.get("ordering")
-        if ordering not in ("created_at", "-created_at"):
-            ordering = "-created_at"
-        return qs.order_by(ordering)
+        if ordering in ("created_at", "-created_at"):
+            return qs.order_by(ordering, "-id")
+        # Default: highest priority first (danger→warning→success→info), then
+        # newest. Stable tiebreak on -id keeps pagination consistent.
+        return qs.annotate(_sev=SEVERITY_RANK).order_by("_sev", "-created_at", "-id")
 
 
 class NotificationDetailView(APIView):

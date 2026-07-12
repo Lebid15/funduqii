@@ -8,6 +8,7 @@
 import type { ApiError } from "./client";
 import type {
   Hotel,
+  HotelNotification,
   HotelSubscription,
   HotelSubscriptionState,
   PaginatedResponse,
@@ -432,5 +433,63 @@ export function updateSettings(
   return request<PlatformSettings>("/settings", {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+// --- Platform-owner notification centre (notifications closure) --------------
+
+export interface PlatformNotificationsOverview {
+  unread_count: number;
+  warning_count: number;
+  danger_count: number;
+  archived_count: number;
+}
+
+export interface PlatformNotificationListParams {
+  unread?: string;
+  archived?: string;
+  category?: string;
+  severity?: string;
+  page?: number;
+}
+
+export function getPlatformNotificationsOverview(): Promise<PlatformNotificationsOverview> {
+  return request<PlatformNotificationsOverview>("/notifications/overview");
+}
+
+export function getPlatformUnreadCount(): Promise<{ unread: number }> {
+  return request<{ unread: number }>("/notifications/unread-count");
+}
+
+export function listPlatformNotifications(
+  params?: PlatformNotificationListParams,
+): Promise<PaginatedResponse<HotelNotification>> {
+  return request<PaginatedResponse<HotelNotification>>(
+    `/notifications${toQuery(params)}`,
+  );
+}
+
+export function markPlatformNotificationRead(
+  id: number,
+): Promise<HotelNotification> {
+  return request<HotelNotification>(`/notifications/${id}/mark-read`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function markAllPlatformNotificationsRead(): Promise<{ updated: number }> {
+  return request<{ updated: number }>("/notifications/mark-all-read", {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function archivePlatformNotification(
+  id: number,
+): Promise<HotelNotification> {
+  return request<HotelNotification>(`/notifications/${id}/archive`, {
+    method: "POST",
+    body: "{}",
   });
 }

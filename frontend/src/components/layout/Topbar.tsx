@@ -13,6 +13,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { LogoutButton } from "./LogoutButton";
 import { NotificationBell } from "./NotificationBell";
+import { PlatformNotificationBell } from "./PlatformNotificationBell";
 
 interface TopbarProps {
   variant?: "platform" | "hotel";
@@ -85,7 +86,7 @@ export function Topbar({
           icon={RefreshCw}
           onClick={triggerGlobalRefresh}
         />
-        {variant === "hotel" ? <NotificationBell /> : null}
+        {variant === "hotel" ? <NotificationBell /> : <PlatformNotificationBell />}
         <LanguageSwitcher />
         {/* Name only — no email. The avatar span is the future
             profile-picture slot; no upload exists today. */}

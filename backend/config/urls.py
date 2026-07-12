@@ -25,6 +25,12 @@ urlpatterns = [
     path("api/auth/", include("apps.accounts.urls")),
     path("api/platform/ping/", PlatformPingView.as_view(), name="platform-ping"),
     path("api/foundation/", include("apps.rbac.urls")),
+    # Platform-owner notification centre — MUST precede the broader
+    # ``api/v1/platform/`` include so this more specific prefix resolves first.
+    path(
+        "api/v1/platform/notifications/",
+        include("apps.notifications.platform_urls"),
+    ),
     path("api/v1/platform/", include("apps.platform.urls")),
     path("api/v1/hotel/", include("apps.hotels.urls")),
     path("api/v1/hotel/", include("apps.rooms.urls")),

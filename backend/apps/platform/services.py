@@ -33,7 +33,21 @@ def create_hotel(*, name: str, slug: str, status: str | None = None) -> Hotel:
     fields = {"name": name, "slug": slug}
     if status:
         fields["status"] = status
-    return Hotel.objects.create(**fields)
+    hotel = Hotel.objects.create(**fields)
+    # Notifications closure: the platform owner is notified of a new hotel. Kept
+    # to the platform scope only (hotel staff — who may not exist yet — are not
+    # notified); dedup_key prevents a duplicate registration notification.
+    from apps.notifications.services import notify_platform_owners
+
+    notify_platform_owners(
+        event_type="platform.hotel_registered",
+        title=f"New hotel registered: {hotel.name}",
+        message=f"Hotel '{hotel.name}' was created.",
+        hotel=hotel,
+        related_url=f"/platform/hotels/{hotel.id}",
+        dedup_key=f"platform.hotel_registered:platform:{hotel.id}",
+    )
+    return hotel
 
 
 # --- Hotel status lifecycle (Phase 16) ---------------------------------------

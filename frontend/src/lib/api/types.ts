@@ -2187,9 +2187,13 @@ export type ActivityCategory =
 
 export type ActivitySeverity = "info" | "success" | "warning" | "danger";
 
+export type NotificationScope = "hotel" | "platform";
+
 export interface HotelNotification {
   id: number;
   notification_number: string;
+  scope: NotificationScope;
+  hotel: number;
   category: ActivityCategory;
   severity: ActivitySeverity;
   title: string;

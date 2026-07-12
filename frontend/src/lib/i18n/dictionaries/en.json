@@ -2929,5 +2929,9 @@
     "ctaRegister": "Register your hotel",
     "empty": "No plans are available right now.",
     "nav": "Pricing"
+  },
+  "platformNotifications": {
+    "title": "Notifications",
+    "subtitle": "New hotels, subscriptions and platform activity"
   }
 }
