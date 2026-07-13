@@ -453,6 +453,7 @@ export function RoomOperationalBoard() {
         <RoomFloorGrid
           floors={floorsToShow}
           rooms={filteredRooms}
+          currency={board.currency}
           canCreate={canCreate}
           hasFilters={hasFilters}
           onDetails={setDetails}
@@ -465,6 +466,7 @@ export function RoomOperationalBoard() {
 
       <RoomDetailsDrawer
         room={details}
+        currency={board.currency}
         onClose={() => setDetails(null)}
         onChangeStatus={(room) => {
           setDetails(null);
@@ -582,7 +584,7 @@ export function RoomOperationalBoard() {
         closeLabel={t.common.close}
         size="xl"
       >
-        <RoomTypesTab embedded />
+        <RoomTypesTab embedded currency={board.currency} />
       </Modal>
     </div>
   );

@@ -1808,21 +1808,10 @@ a {
 .room-op-card__open:focus-visible .room-op-card__number {
   color: var(--color-primary-active);
 }
-.room-op-card__open:hover .room-op-card__type,
-.room-op-card__open:focus-visible .room-op-card__type {
-  color: var(--color-primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 .room-op-card__open:hover .room-op-card__open-cue,
 .room-op-card__open:focus-visible .room-op-card__open-cue {
   color: var(--color-primary-active);
   opacity: 1;
-}
-.room-op-card__type {
-  font-size: var(--font-size-sm);
-  color: var(--color-fg-muted);
-  transition: color var(--transition-fast);
 }
 /* Quick type rows inside the room-types manager modal. */
 .type-row {
@@ -1861,7 +1850,14 @@ a {
   min-width: 0;
 }
 .room-op-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.room-op-card__fact dt .icon {
+  flex: none;
   color: var(--color-fg-muted);
 }
 .room-op-card__fact dd {
@@ -1888,6 +1884,60 @@ a {
   gap: var(--space-2);
   margin-top: auto;
   padding-top: var(--space-1);
+}
+
+/* 1) Header — the number/details affordance on the start, the two badges on
+ * the end; both wrap onto their own line on very narrow cards. */
+.room-op-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.room-op-card__header .room-op-card__badges {
+  margin-inline-start: auto;
+}
+
+/* 3) Room-type amenity chips — a quiet, calm set (icon + label) framed by a
+ * subtle "features" caption. Reused by the card, the details drawer and the
+ * room-type cards; never implies per-room data. */
+.amenities {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.amenities__label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+}
+.amenities__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.amenity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.amenity-chip__icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.amenity-chip--more {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
 }
 
 .room-op-details {

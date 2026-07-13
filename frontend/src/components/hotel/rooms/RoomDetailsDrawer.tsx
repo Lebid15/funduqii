@@ -5,10 +5,11 @@ import { RefreshCw } from "lucide-react";
 
 import { Badge, Button, Icon, Modal } from "@/components/ui";
 import type { RoomBoardRoom } from "@/lib/api/types";
-import { formatDate, roomStatusLabel } from "@/lib/format";
+import { formatCapacity, formatDate, formatMoney, roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
+import { AmenityChips } from "./AmenityChips";
 import {
   buildRoomLinks,
   occupancyIcon,
@@ -22,10 +23,13 @@ import {
  * reservation, and the COMPLETE permission-aware action set. */
 export function RoomDetailsDrawer({
   room,
+  currency,
   onClose,
   onChangeStatus,
 }: {
   room: RoomBoardRoom | null;
+  /** Hotel currency from the board response — the single price source. */
+  currency: string;
   onClose: () => void;
   onChangeStatus: (room: RoomBoardRoom) => void;
 }) {
@@ -42,10 +46,14 @@ export function RoomDetailsDrawer({
   const rows: Array<[string, string]> = [
     [b.detailFloor, room.floor_name],
     [b.detailType, room.room_type_name],
-    [b.capacity, `${room.base_capacity}–${room.max_capacity}`],
+    // Capacity is shown as two explicit rows (never a raw "1–1" range).
+    [b.detailBaseCapacity, formatCapacity(room.base_capacity, room.base_capacity, t, locale)],
+    [b.detailMaxCapacity, formatCapacity(room.max_capacity, room.max_capacity, t, locale)],
     [b.operationalStatus, roomStatusLabel(room.operational_status, t)],
   ];
-  if (room.base_rate) rows.push([b.pricePerNight, room.base_rate]);
+  if (room.base_rate) {
+    rows.push([b.pricePerNight, formatMoney(room.base_rate, currency, locale)]);
+  }
   if (room.status_note) rows.push([b.statusNote, room.status_note]);
   if (room.status_changed_at) {
     rows.push([b.lastStatusChange, formatDate(room.status_changed_at, locale)]);
@@ -99,6 +107,8 @@ export function RoomDetailsDrawer({
             </div>
           ))}
         </dl>
+        {/* Full room-type amenity list (the card shows only the top few). */}
+        <AmenityChips amenities={room.amenities} label={b.roomTypeFeatures} />
         <div className="cluster">
           {links.map((link) => (
             <Link key={link.key} href={link.href} className="btn btn--secondary btn--sm">

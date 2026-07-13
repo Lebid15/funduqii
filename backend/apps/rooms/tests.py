@@ -1438,3 +1438,60 @@ class BoardReservedByBusinessDateTests(APITestCase):
         self.assertEqual(summary["total"], 2)
         self.assertEqual(summary["reserved"], 1)  # only the covering reservation
         self.assertEqual(summary["available"], 1)  # the future-only room is bookable now
+
+
+# --- Board additive fields (ROOMS-POLISH-BE) ---------------------------------
+# Two PURELY ADDITIVE operational-board DTO fields (no migration, no model
+# change): a top-level `currency` (hotel default, USD fallback) and a per-row
+# `amenities` list mirrored from the room's room_type.
+
+
+class BoardCurrencyFieldTests(APITestCase):
+    """Top-level `currency` on the operational board (additive)."""
+
+    def _board(self, hotel):
+        from apps.rooms.services import operational_board
+
+        return operational_board(hotel)
+
+    def test_currency_from_hotel_settings_when_set(self):
+        from apps.hotels.models import HotelSettings
+
+        hotel = make_hotel(slug="cur-eur")
+        HotelSettings.objects.create(hotel=hotel, default_currency="EUR")
+        self.assertEqual(self._board(hotel)["currency"], "EUR")
+
+    def test_currency_falls_back_to_usd_without_settings(self):
+        # No HotelSettings row at all -> USD fallback.
+        hotel = make_hotel(slug="cur-none")
+        self.assertEqual(self._board(hotel)["currency"], "USD")
+
+    def test_currency_falls_back_to_usd_when_blank(self):
+        from apps.hotels.models import HotelSettings
+
+        hotel = make_hotel(slug="cur-blank")
+        HotelSettings.objects.create(hotel=hotel, default_currency="")
+        self.assertEqual(self._board(hotel)["currency"], "USD")
+
+
+class BoardAmenitiesFieldTests(APITestCase):
+    """Per-row `amenities` on the operational board (additive)."""
+
+    def _rows_by_number(self, hotel):
+        from apps.rooms.services import operational_board
+
+        return {r["number"]: r for r in operational_board(hotel)["rooms"]}
+
+    def test_amenities_mirror_room_type_and_default_empty(self):
+        hotel = make_hotel(slug="amn")
+        floor = make_floor(hotel, name="G", number="0")
+        with_amn = make_type(hotel, code="AMN", amenities=["wifi", "tv", "ac"])
+        bare = make_type(hotel, code="BARE")  # amenities JSONField defaults to []
+        make_room(hotel, floor, with_amn, "201")
+        make_room(hotel, floor, bare, "202")
+
+        rows = self._rows_by_number(hotel)
+        self.assertEqual(rows["201"]["amenities"], ["wifi", "tv", "ac"])
+        self.assertIsInstance(rows["201"]["amenities"], list)
+        self.assertEqual(rows["202"]["amenities"], [])
+        self.assertIsInstance(rows["202"]["amenities"], list)

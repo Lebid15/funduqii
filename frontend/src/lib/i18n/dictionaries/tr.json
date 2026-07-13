@@ -446,6 +446,21 @@
       "typeInUseMessage": "Kullanılan oda türü silinemez",
       "floorCount": "Kat Sayısı",
       "saveFloorCount": "Kat Sayısını Kaydet",
+      "capacityGuests": {
+        "one": "1 misafir",
+        "two": "2 misafir",
+        "few": "{n} misafir",
+        "upTo": "En fazla {n} misafir"
+      },
+      "roomTypeFeatures": "Oda türü özellikleri",
+      "amenitiesMore": "+{count} daha",
+      "detailBaseCapacity": "Temel kapasite",
+      "detailMaxCapacity": "Azami kapasite",
+      "capacityHint": "Bu oda türünün kaç misafir ağırladığı.",
+      "amenityConflict": "«Sigara içilir» ve «Sigara içilmez» birlikte seçilemez.",
+      "nameRequired": "Oda türü adı gereklidir.",
+      "capacityInvalid": "En az 1 kapasite girin.",
+      "rateInvalid": "0 veya daha fazla bir fiyat girin.",
       "amenity": {
         "ac": "Klima",
         "wifi": "Wi-Fi",

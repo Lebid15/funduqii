@@ -18,6 +18,7 @@ import { RoomOperationalCard } from "./RoomOperationalCard";
 export function RoomFloorGrid({
   floors,
   rooms,
+  currency,
   canCreate,
   hasFilters,
   onDetails,
@@ -28,6 +29,8 @@ export function RoomFloorGrid({
 }: {
   floors: RoomBoardFloor[];
   rooms: RoomBoardRoom[];
+  /** Hotel currency from the board response — forwarded to each card. */
+  currency: string;
   canCreate: boolean;
   /** When filters are active, empty floors are hidden (their add-prompt is noise). */
   hasFilters: boolean;
@@ -127,6 +130,7 @@ export function RoomFloorGrid({
                     <RoomOperationalCard
                       key={room.id}
                       room={room}
+                      currency={currency}
                       onDetails={onDetails}
                       onEdit={onEdit}
                       onArchive={onArchive}

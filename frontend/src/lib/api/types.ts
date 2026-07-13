@@ -539,6 +539,9 @@ export interface RoomBoardRoom {
   base_capacity: number;
   max_capacity: number;
   base_rate: string | null;
+  /** Stable amenity-key strings from the room's RoomType (room-type features,
+   * not per-room data). Empty when the type has no amenities. */
+  amenities: string[];
   is_active: boolean;
   operational_status: RoomStatus;
   /** Independent occupancy axis (free / occupied / reserved). */
@@ -580,6 +583,9 @@ export interface RoomBoardFloor extends RoomBoardCounts {
 }
 
 export interface RoomOperationalBoard {
+  /** The hotel's currency (e.g. "USD"/"SAR"/"TRY") — the single source for
+   * every price rendered across the rooms section and the room-type form. */
+  currency: string;
   summary: RoomBoardCounts;
   floors: RoomBoardFloor[];
   rooms: RoomBoardRoom[];

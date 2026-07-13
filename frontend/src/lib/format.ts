@@ -117,6 +117,27 @@ export function roomStatusLabel(status: RoomStatus, t: Dictionary): string {
   return t.rooms.status[status];
 }
 
+/**
+ * Localised guest-capacity phrase (never a raw "1–1" / "2–4" range).
+ * - `base === max` → a properly-pluralised phrase (Arabic singular/dual/plural,
+ *   English 1 vs N, Turkish invariant noun).
+ * - `base !== max` → an "up to N guests" phrase keyed off `max`.
+ * The count is rendered with the locale's own numerals (matches formatMoney).
+ */
+export function formatCapacity(
+  base: number,
+  max: number,
+  t: Dictionary,
+  locale: Locale,
+): string {
+  const c = t.rooms.board.capacityGuests;
+  const num = (n: number) => new Intl.NumberFormat(locale).format(n);
+  if (base !== max) return c.upTo.replace("{n}", num(max));
+  if (base <= 1) return c.one;
+  if (base === 2) return c.two;
+  return c.few.replace("{n}", num(base));
+}
+
 export function reservationStatusTone(status: ReservationStatus): BadgeTone {
   switch (status) {
     case "confirmed":

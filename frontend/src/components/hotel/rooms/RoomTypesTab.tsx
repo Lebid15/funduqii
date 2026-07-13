@@ -29,7 +29,10 @@ import {
 } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type { RoomType } from "@/lib/api/types";
+import { formatCapacity, formatMoney } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+
+import { AmenityChips } from "./AmenityChips";
 
 /** The curated amenity catalog (owner spec) — stored as stable keys in the
  * EXISTING RoomType.amenities JSON field, displayed via i18n. */
@@ -60,6 +63,14 @@ export const AMENITY_KEYS = [
   "accessible",
 ] as const;
 
+/** Mutually-exclusive amenity pairs (owner spec): a room type cannot be both
+ * smoking and non-smoking. Selecting one auto-deselects the other and hides it
+ * from the picker; a leftover conflict (e.g. legacy data) is flagged inline. */
+const AMENITY_CONFLICTS: Record<string, string> = {
+  smoking: "no_smoking",
+  no_smoking: "smoking",
+};
+
 /** Auto-generate the next free short code — the backend requires a unique
  * per-hotel code but the owner wants it OFF the form. */
 function nextCode(types: RoomType[]): string {
@@ -77,8 +88,11 @@ function nextCode(types: RoomType[]): string {
  * and show-on-public-site defaulting to ON. Code / bed type / public
  * name-price-description are hidden and preserved server-side.
  */
-export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) {
-  const { t } = useI18n();
+export function RoomTypesTab({
+  embedded = false,
+  currency = "",
+}: { embedded?: boolean; currency?: string } = {}) {
+  const { t, locale } = useI18n();
   const b = t.rooms.board;
   const { notify } = useToast();
   const [rows, setRows] = useState<RoomType[]>([]);
@@ -155,15 +169,23 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
           {row.description ? (
             <span className="rt-card__desc">{row.description}</span>
           ) : null}
+          {/* Full amenity list: the wide (xl) management modal has no per-item
+           * drawer, so a "+N" here would be a dead end — the chips wrap
+           * cleanly (flex-wrap) with no horizontal scroll at any breakpoint. */}
+          <AmenityChips amenities={row.amenities} />
         </div>
         <div className="rt-card__stats">
           <div className="rt-stat">
             <span className="rt-stat__label">{b.capacity}</span>
-            <span className="rt-stat__value">{row.base_capacity}</span>
+            <span className="rt-stat__value">
+              {formatCapacity(row.base_capacity, row.max_capacity, t, locale)}
+            </span>
           </div>
           <div className="rt-stat">
             <span className="rt-stat__label">{b.pricePerNight}</span>
-            <span className="rt-stat__value">{row.base_rate ?? "—"}</span>
+            <span className="rt-stat__value">
+              {row.base_rate ? formatMoney(row.base_rate, currency, locale) : "—"}
+            </span>
           </div>
           <div className="rt-stat">
             <span className="rt-stat__label">{t.rooms.types.roomCount}</span>
@@ -231,6 +253,7 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
       <RoomTypeModal
         open={creating}
         types={rows}
+        currency={currency}
         onClose={() => setCreating(false)}
         onSaved={() => { setCreating(false); notify(t.rooms.saved); load(); }}
       />
@@ -238,6 +261,7 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
         open={editing !== null}
         roomType={editing ?? undefined}
         types={rows}
+        currency={currency}
         onClose={() => setEditing(null)}
         onSaved={() => { setEditing(null); notify(t.rooms.saved); load(); }}
       />
@@ -257,16 +281,25 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
   );
 }
 
+interface TypeFieldErrors {
+  name?: string;
+  capacity?: string;
+  rate?: string;
+  amenities?: string;
+}
+
 function RoomTypeModal({
   open,
   roomType,
   types,
+  currency,
   onClose,
   onSaved,
 }: {
   open: boolean;
   roomType?: RoomType;
   types: RoomType[];
+  currency: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -281,6 +314,7 @@ function RoomTypeModal({
   const [isActive, setIsActive] = useState(true);
   const [publicVisible, setPublicVisible] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<TypeFieldErrors>({});
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -294,23 +328,41 @@ function RoomTypeModal({
     // Owner default: new types are publicly visible unless switched off.
     setPublicVisible(roomType ? roomType.public_is_visible : true);
     setError(null);
+    setFieldErrors({});
   }, [open, roomType]);
 
   function addAmenity(key: string) {
     if (!key || amenities.includes(key)) return;
-    setAmenities((prev) => [...prev, key]);
+    // Selecting one side of a mutually-exclusive pair deselects the other so
+    // the two can never coexist (smoking vs non-smoking).
+    const conflict = AMENITY_CONFLICTS[key];
+    setAmenities((prev) => [...prev.filter((a) => a !== conflict), key]);
+    setFieldErrors((prev) => ({ ...prev, amenities: undefined }));
   }
   function removeAmenity(key: string) {
     setAmenities((prev) => prev.filter((a) => a !== key));
+    setFieldErrors((prev) => ({ ...prev, amenities: undefined }));
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!name.trim()) {
-      setError(t.errors.validation);
+    // Per-field validation — each message is tied to its own control.
+    const errs: TypeFieldErrors = {};
+    if (!name.trim()) errs.name = b.nameRequired;
+    const capNum = Number(capacity);
+    if (!Number.isFinite(capNum) || capNum < 1) errs.capacity = b.capacityInvalid;
+    if (rate.trim() && (!Number.isFinite(Number(rate)) || Number(rate) < 0)) {
+      errs.rate = b.rateInvalid;
+    }
+    if (amenities.includes("smoking") && amenities.includes("no_smoking")) {
+      errs.amenities = b.amenityConflict;
+    }
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
       return;
     }
+    setFieldErrors({});
     const cap = Math.max(1, Number(capacity) || 1);
     const body: RoomTypeWriteBody = {
       name: name.trim(),
@@ -338,7 +390,14 @@ function RoomTypeModal({
     }
   }
 
-  const available = AMENITY_KEYS.filter((key) => !amenities.includes(key));
+  // Hide already-chosen amenities AND any option that conflicts with a chosen
+  // one, so the picker can never offer a contradictory pair.
+  const available = AMENITY_KEYS.filter(
+    (key) =>
+      !amenities.includes(key) &&
+      !(AMENITY_CONFLICTS[key] && amenities.includes(AMENITY_CONFLICTS[key])),
+  );
+  const priceLabel = currency ? `${b.pricePerNight} — ${currency}` : b.pricePerNight;
 
   return (
     <Modal
@@ -356,35 +415,61 @@ function RoomTypeModal({
       <form id="type-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
         <div className="form-grid">
-          <FormField label={b.roomTypeName} htmlFor="type-name">
+          <FormField label={b.roomTypeName} htmlFor="type-name" error={fieldErrors.name}>
             <Input
               id="type-name"
               value={name}
               placeholder={b.typeNamePlaceholder}
               required
-              onChange={(e) => setName(e.target.value)}
+              invalid={!!fieldErrors.name}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: undefined }));
+              }}
             />
           </FormField>
-          <FormField label={b.capacity} htmlFor="type-capacity">
+          <FormField
+            label={b.capacity}
+            htmlFor="type-capacity"
+            hint={b.capacityHint}
+            error={fieldErrors.capacity}
+          >
             <Input
               id="type-capacity"
               type="number"
               min="1"
+              step="1"
+              inputMode="numeric"
               value={capacity}
-              onChange={(e) => setCapacity(e.target.value)}
+              invalid={!!fieldErrors.capacity}
+              onChange={(e) => {
+                setCapacity(e.target.value);
+                if (fieldErrors.capacity) {
+                  setFieldErrors((p) => ({ ...p, capacity: undefined }));
+                }
+              }}
             />
           </FormField>
-          <FormField label={b.pricePerNight} htmlFor="type-rate">
+          <FormField label={priceLabel} htmlFor="type-rate" error={fieldErrors.rate}>
             <Input
               id="type-rate"
               type="number"
               min="0"
               step="0.01"
+              inputMode="decimal"
               value={rate}
-              onChange={(e) => setRate(e.target.value)}
+              invalid={!!fieldErrors.rate}
+              onChange={(e) => {
+                setRate(e.target.value);
+                if (fieldErrors.rate) setFieldErrors((p) => ({ ...p, rate: undefined }));
+              }}
             />
           </FormField>
-          <FormField label={b.amenitiesLabel} htmlFor="type-amenity-picker">
+          <FormField
+            label={b.amenitiesLabel}
+            htmlFor="type-amenity-picker"
+            error={fieldErrors.amenities}
+          >
             <Select
               id="type-amenity-picker"
               value=""
