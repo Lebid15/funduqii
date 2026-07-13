@@ -11,6 +11,11 @@ import {
 } from "lucide-react";
 
 import type { BadgeTone } from "@/components/ui";
+import type {
+  OccupantRelationship,
+  ReservationDocumentType,
+  ReservationOccupant,
+} from "@/lib/api/types";
 import type { ReservationSource } from "@/lib/api/types";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 
@@ -83,4 +88,55 @@ export function arrivalFlag(
     return { kind: "tomorrow", label: c.arrivesTomorrow, icon: CalendarClock, tone: "neutral" };
   }
   return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Structured-snapshot display helpers (RESERVATIONS-FORM-REWORK, Wave 3)     */
+/* -------------------------------------------------------------------------- */
+
+/** Sensitive ids come back masked from the server as bullet characters (the
+ * guests-panel convention). Mirrored here so the read UI can style/label a
+ * masked value without importing the wizard. */
+export function isMaskedValue(value: string | null | undefined): boolean {
+  return Boolean(value && value.includes("•"));
+}
+
+/** Localized label for an adult companion's relationship. The read DTO widens
+ * the enum with "" (a stored occupant may carry no relationship) — that falls
+ * back to the neutral "Other" label so a row never renders a raw code. */
+export function relationshipLabel(
+  value: OccupantRelationship | "",
+  t: Dictionary,
+): string {
+  const labels = t.reservations.wizard.relationship;
+  if (value && value in labels) {
+    return labels[value as OccupantRelationship];
+  }
+  return labels.other;
+}
+
+/** Localized label for a reservation document type (reuses the wizard's
+ * doc-type dictionary; "" and unknown codes degrade to the raw value). */
+export function documentTypeLabel(
+  value: ReservationDocumentType,
+  t: Dictionary,
+): string {
+  const labels = t.reservations.wizard.documents.types as Record<string, string>;
+  return labels[value] ?? value;
+}
+
+/** Compose a companion's display name from the structured snapshot parts,
+ * falling back to the localized generic row label when no name is stored. */
+export function occupantDisplayName(
+  occupant: Pick<
+    ReservationOccupant,
+    "first_name" | "father_name" | "last_name"
+  >,
+  t: Dictionary,
+): string {
+  const name = [occupant.first_name, occupant.father_name, occupant.last_name]
+    .map((part) => (part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return name || t.reservations.wizard.companions.adultRow;
 }

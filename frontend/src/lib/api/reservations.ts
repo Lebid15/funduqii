@@ -6,14 +6,24 @@
  * backend is the source of truth for availability and overbooking — these
  * helpers never decide bookability on their own.
  */
-import { hotelJson } from "./hotelFetch";
+import type { ApiError } from "./client";
+import { hotelFetch, hotelJson } from "./hotelFetch";
 import type {
+  ImmediateCheckInResult,
+  OccupantRelationship,
   PaginatedResponse,
   Reservation,
+  ReservationDepositBody,
+  ReservationDocument,
   ReservationOverview,
   ReservationStatusLogEntry,
+  RoomAvailabilityRow,
   TypeAvailability,
 } from "./types";
+
+/** Same-origin BFF prefix (mirrors `hotelFetch`). Used only for the document
+ * blob fetch, which reads raw bytes rather than JSON. */
+const PROXY_BASE = "/api/hotel";
 
 function toQuery(params?: object): string {
   if (!params) return "";
@@ -76,6 +86,22 @@ export interface ReservationLineBody {
   notes?: string;
 }
 
+/** One adult companion on a reservation write (RESERVATIONS-FORM-REWORK).
+ * `guest` optionally links to a central Guest (resolved + hotel-scoped
+ * server-side); when omitted the structured identity is stored inline. Children
+ * remain a plain count on `ReservationCreateBody.children`. */
+export interface ReservationOccupantBody {
+  guest?: number | null;
+  first_name?: string;
+  last_name?: string;
+  father_name?: string;
+  mother_name?: string;
+  national_id?: string;
+  nationality?: string;
+  date_of_birth?: string | null;
+  relationship: OccupantRelationship;
+}
+
 export interface ReservationCreateBody {
   status: "held" | "confirmed";
   source?: string;
@@ -83,12 +109,24 @@ export interface ReservationCreateBody {
   check_in_date: string;
   check_out_date: string;
   expected_arrival_time?: string | null;
+  /** Optional link to the central guest directory (set when the primary guest
+   * was matched via lookup). The structured snapshot below is frozen at booking
+   * time and is never auto-rewritten by later guest edits. */
+  primary_guest?: number | null;
   primary_guest_name: string;
   primary_guest_phone?: string;
   primary_guest_email?: string;
   primary_guest_nationality?: string;
   primary_guest_document_type?: string;
   primary_guest_document_number?: string;
+  primary_guest_first_name?: string;
+  primary_guest_last_name?: string;
+  primary_guest_father_name?: string;
+  primary_guest_mother_name?: string;
+  primary_guest_national_id?: string;
+  primary_guest_date_of_birth?: string | null;
+  /** Derived server-side from `occupants` (1 primary + named adult companions);
+   * send it or omit it — the server reconciles. */
   adults: number;
   children: number;
   notes?: string;
@@ -96,6 +134,8 @@ export interface ReservationCreateBody {
   booking_channel_name?: string;
   expected_payment_method?: string;
   hold_expires_at?: string | null;
+  /** Named adult companions. Total persons = 1 + occupants + children. */
+  occupants?: ReservationOccupantBody[];
   lines: ReservationLineBody[];
 }
 
@@ -161,4 +201,116 @@ export function checkAvailability(
   return hotelJson<{ results: TypeAvailability[] }>(
     `/availability${toQuery(params)}`,
   );
+}
+
+// --- Per-room availability (RESERVATIONS-FORM-REWORK) -----------------------
+
+export interface RoomAvailabilityParams {
+  check_in: string;
+  check_out: string;
+  floor?: number;
+  room_type?: number;
+}
+
+/** Candidate rooms for a period with a per-room `available` flag. The backend
+ * wraps the rows in `{ results }`; this unwraps to the array. Availability and
+ * pricing are backend-authoritative — never decide bookability client-side. */
+export function getRoomAvailability(
+  params: RoomAvailabilityParams,
+): Promise<RoomAvailabilityRow[]> {
+  return hotelJson<{ results: RoomAvailabilityRow[] }>(
+    `/reservations/room-availability${toQuery(params)}`,
+  ).then((data) => data.results);
+}
+
+// --- Reservation guest documents (RESERVATIONS-FORM-REWORK) -----------------
+
+/** List a reservation's documents (metadata only). Behind
+ * `reservation_documents.view`. */
+export function listReservationDocuments(
+  reservationId: number,
+): Promise<ReservationDocument[]> {
+  return hotelJson<ReservationDocument[]>(
+    `/reservations/${reservationId}/documents`,
+  );
+}
+
+/** Upload a document (multipart: `doc_type`, `number?`, `occupant?`, and at
+ * least one of `front_file`/`back_file`). Behind `reservation_documents.upload`.
+ * No Content-Type header — the browser sets the multipart boundary. */
+export function uploadReservationDocument(
+  reservationId: number,
+  formData: FormData,
+): Promise<ReservationDocument> {
+  return hotelFetch<ReservationDocument>(
+    `/reservations/${reservationId}/documents`,
+    { method: "POST", body: formData },
+  );
+}
+
+/** Replace a document's file(s) and/or metadata (multipart). Behind
+ * `reservation_documents.replace`. */
+export function replaceReservationDocument(
+  docId: number,
+  formData: FormData,
+): Promise<ReservationDocument> {
+  return hotelFetch<ReservationDocument>(
+    `/reservations/documents/${docId}`,
+    { method: "PATCH", body: formData },
+  );
+}
+
+/**
+ * Fetch a document side's raw bytes through the authenticated BFF and return an
+ * object URL for an `<img>`/PDF viewer. The CALLER owns the URL and MUST call
+ * `URL.revokeObjectURL` when done (e.g. on unmount). Reads bytes directly
+ * (not via `hotelFetch`, which parses JSON); a 401 still bounces to /login.
+ */
+export async function getReservationDocumentBlobUrl(
+  docId: number,
+  side: "front" | "back",
+): Promise<string> {
+  const response = await fetch(
+    `${PROXY_BASE}/reservations/documents/${docId}/${side}`,
+  );
+  if (response.status === 401 && typeof window !== "undefined") {
+    window.location.href = "/login";
+    throw { status: 401, code: "session_expired", message: "" } as ApiError;
+  }
+  if (!response.ok) {
+    throw {
+      status: response.status,
+      code: "error",
+      message: response.statusText,
+    } as ApiError;
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+// --- Immediate atomic check-in (RESERVATIONS-FORM-REWORK) -------------------
+
+/** Body for `POST /stays/immediate-check-in/`. The reservation fields reuse the
+ * normal create body (lines / primary guest / occupants resolved identically);
+ * `room` is the physical room to admit into, `line_index` picks the line when a
+ * reservation has more than one, and `deposit` is an optional real payment. */
+export interface ImmediateCheckInBody {
+  reservation: ReservationCreateBody;
+  room?: number | null;
+  line_index?: number | null;
+  check_in_notes?: string;
+  deposit?: ReservationDepositBody | null;
+}
+
+/** Create a reservation AND check the guest in atomically (optionally taking a
+ * deposit). Requires `reservations.create` + `stays.check_in` (+
+ * `finance.payment_create` for a deposit, + `exchange_rate.override` for a
+ * manual foreign-currency rate) — the backend enforces all of it. */
+export function immediateCheckIn(
+  body: ImmediateCheckInBody,
+): Promise<ImmediateCheckInResult> {
+  return hotelJson<ImmediateCheckInResult>("/stays/immediate-check-in", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

@@ -7,6 +7,7 @@ import {
   CalendarRange,
   CheckCircle2,
   Eye,
+  FileText,
   Moon,
   Pencil,
   Printer,
@@ -71,6 +72,9 @@ export function ReservationCard({
 
   // View + Print are READS, gated by reservations.view; writes never use view.
   const canView = can("reservations.view");
+  // A quiet "documents" affordance opens the details modal (whose Documents
+  // section hosts the secure viewer); gated by the documents-view grant only.
+  const canViewDocs = can("reservation_documents.view");
   const canConfirm = r.status === "held" && can("reservations.confirm");
   const canEdit = editable && !inHouse && can("reservations.update");
   const canCancel = editable && !inHouse && can("reservations.cancel");
@@ -234,6 +238,11 @@ export function ReservationCard({
         {canView ? (
           <Button variant="ghost" size="sm" icon={Printer} onClick={() => onPrint(r)}>
             {c.print}
+          </Button>
+        ) : null}
+        {canViewDocs ? (
+          <Button variant="ghost" size="sm" icon={FileText} onClick={() => onView(r)}>
+            {c.documents}
           </Button>
         ) : null}
         {canConfirm ? (

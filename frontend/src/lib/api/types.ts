@@ -367,6 +367,11 @@ export interface HotelSettings {
   star_rating: number | null;
   default_language: "ar" | "en" | "tr";
   default_currency: string;
+  /** Accepted PAYMENT currencies (RESERVATIONS-FORM-REWORK). Multi-currency
+   * lives at the payment layer only; the reservation/folio currency stays
+   * `default_currency`. An EMPTY list means only `default_currency` is accepted
+   * (which is always implicitly accepted). Each entry is a 3-letter ISO code. */
+  accepted_currencies: string[];
   timezone: string;
   phone: string;
   whatsapp_number: string;
@@ -655,12 +660,24 @@ export interface Reservation {
   check_out_date: string;
   expected_arrival_time: string | null;
   nights: number;
+  /** Optional link to the central guest directory (id only). */
+  primary_guest: number | null;
   primary_guest_name: string;
   primary_guest_phone: string;
   primary_guest_email: string;
   primary_guest_nationality: string;
   primary_guest_document_type: string;
   primary_guest_document_number: string;
+  /** RESERVATIONS-FORM-REWORK — the frozen, structured identity snapshot the
+   * read serializer returns alongside the legacy fields. `primary_guest_national_id`
+   * is masked server-side for callers without `guests.view_sensitive_data`
+   * (bullet characters), exactly like `primary_guest_document_number`. */
+  primary_guest_first_name: string;
+  primary_guest_last_name: string;
+  primary_guest_father_name: string;
+  primary_guest_mother_name: string;
+  primary_guest_national_id: string;
+  primary_guest_date_of_birth: string | null;
   adults: number;
   children: number;
   total_guests: number;
@@ -682,6 +699,11 @@ export interface Reservation {
   created_at: string;
   updated_at: string;
   lines: ReservationLine[];
+  /** Named adult companions (RESERVATIONS-FORM-REWORK). Optional so existing
+   * callers never break; the reservation serializer returns them in creation
+   * order, which the wizard uses to attach staged documents to the right
+   * occupant after create. */
+  occupants?: ReservationOccupant[];
 }
 
 export interface TypeAvailability {
@@ -738,9 +760,20 @@ export type Gender = "" | "male" | "female" | "other" | "unspecified";
 export interface Guest {
   id: number;
   full_name: string;
+  /** Structured identity (RESERVATIONS-FORM-REWORK). Optional here so existing
+   * callers never break; the backend GuestSerializer always returns them. */
+  first_name?: string;
+  last_name?: string;
+  father_name?: string;
+  mother_name?: string;
   phone: string;
   email: string;
+  /** True when the guest explicitly has no email (skips the email requirement). */
+  no_email?: boolean;
   nationality: string;
+  /** Structured national ID — masked for callers without
+   * `guests.view_sensitive_data` (like `document_number`). */
+  national_id?: string;
   document_type: DocumentType;
   document_number: string;
   date_of_birth: string | null;
@@ -894,6 +927,136 @@ export interface StayStatusLogEntry {
   note: string;
   changed_by: string | null;
   created_at: string;
+}
+
+/* ==========================================================================
+ * RESERVATIONS-FORM-REWORK — occupants, guest documents, per-room availability,
+ * guest lookup, and the immediate atomic check-in (deposit/FX). These mirror the
+ * additive backend endpoints under /api/v1/hotel/. Money values are decimal
+ * STRINGS — render as-is, never parseFloat.
+ * ======================================================================== */
+
+/** How an ADULT companion relates to the primary guest (write set). The read
+ * DTO widens this with "" because a stored occupant may have no relationship. */
+export type OccupantRelationship =
+  | "spouse"
+  | "child_adult"
+  | "parent"
+  | "sibling"
+  | "relative"
+  | "other";
+
+/** GET reservation → `occupants[]`. One adult companion (structured snapshot,
+ * optionally linked to a central Guest). `national_id` is masked for callers
+ * without `guests.view_sensitive_data`. Children stay a count on the reservation. */
+export interface ReservationOccupant {
+  id: number;
+  guest: number | null;
+  first_name: string;
+  last_name: string;
+  father_name: string;
+  mother_name: string;
+  national_id: string;
+  nationality: string;
+  date_of_birth: string | null;
+  relationship: OccupantRelationship | "";
+  created_at: string;
+}
+
+export type ReservationDocumentType =
+  | ""
+  | "national_id"
+  | "passport"
+  | "residence"
+  | "visa"
+  | "marriage_contract"
+  | "family_book"
+  | "family_statement"
+  | "other";
+
+/** GET reservations/<id>/documents/ → metadata ONLY (the raw files are never
+ * exposed here — only `has_front`/`has_back`). `number` is masked for callers
+ * without `guests.view_sensitive_data`. Behind `reservation_documents.view`. */
+export interface ReservationDocument {
+  id: number;
+  reservation: number;
+  occupant: number | null;
+  doc_type: ReservationDocumentType;
+  number: string;
+  has_front: boolean;
+  has_back: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET reservations/room-availability/ → one candidate room for the period.
+ * `available` is backend-authoritative (the UI never decides bookability
+ * itself); `base_rate` is a decimal string (or null) — render as-is. */
+export interface RoomAvailabilityRow {
+  id: number;
+  number: string;
+  floor_name: string | null;
+  floor_number: string | null;
+  room_type_id: number;
+  room_type_name: string;
+  base_capacity: number;
+  max_capacity: number;
+  amenities: string[];
+  base_rate: string | null;
+  currency: string;
+  available: boolean;
+}
+
+/** GET guests/lookup/ → exact-match candidates for the reservation form. Each
+ * `Guest` may be blocked/VIP and has its `national_id` masked per permission. */
+export interface GuestLookupResult {
+  results: Guest[];
+}
+
+/** Deposit payment method for an immediate check-in — validated against the
+ * finance payment methods server-side (a separate union from the folio
+ * `PaymentMethod` so adding it here never widens existing finance switches). */
+export type ReservationDepositMethod =
+  | "cash"
+  | "card"
+  | "bank_transfer"
+  | "electronic"
+  | "internal_electronic"
+  | "other";
+
+/** Optional pre-arrival deposit on an immediate check-in. A base-currency
+ * deposit sends `amount`; a foreign-currency deposit instead sends
+ * `original_amount` + `exchange_rate` (+ optional `rate_basis`) and the backend
+ * DERIVES the base amount (single ledger — nothing stored twice). Money fields
+ * are decimal strings. A manual FX rate requires `exchange_rate.override`. */
+export interface ReservationDepositBody {
+  amount?: string | null;
+  method: ReservationDepositMethod;
+  currency?: string;
+  original_amount?: string | null;
+  exchange_rate?: string | null;
+  rate_basis?: string;
+  payer_name?: string;
+  reference?: string;
+  notes?: string;
+}
+
+/** The folio subset returned by an immediate check-in (null when no folio was
+ * opened, e.g. no deposit). `balance` is a DERIVED decimal string. */
+export interface ImmediateCheckInFolio {
+  id: number;
+  folio_number: string;
+  status: FolioStatus;
+  currency: string;
+  balance: string;
+}
+
+/** POST stays/immediate-check-in/ → the composed atomic result (reservation +
+ * stay + optional folio). */
+export interface ImmediateCheckInResult {
+  reservation: Reservation;
+  stay: Stay;
+  folio: ImmediateCheckInFolio | null;
 }
 
 /* ==========================================================================

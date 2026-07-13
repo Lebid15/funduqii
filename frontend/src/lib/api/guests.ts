@@ -7,6 +7,7 @@ import type {
   Guest,
   GuestDeleteResult,
   GuestDirectoryRow,
+  GuestLookupResult,
   GuestProfile,
   PaginatedResponse,
 } from "./types";
@@ -40,9 +41,15 @@ export type GuestWriteBody = Partial<
   Pick<
     Guest,
     | "full_name"
+    | "first_name"
+    | "last_name"
+    | "father_name"
+    | "mother_name"
     | "phone"
     | "email"
+    | "no_email"
     | "nationality"
+    | "national_id"
     | "document_type"
     | "document_number"
     | "date_of_birth"
@@ -105,4 +112,20 @@ export function unblockGuest(id: number, note = ""): Promise<Guest> {
     method: "POST",
     body: JSON.stringify({ note }),
   });
+}
+
+/** Smart lookup for the reservation form (RESERVATIONS-FORM-REWORK).
+ * Exact-match, hotel-scoped, behind `guests.view`. Pass `national_id` and/or
+ * `phone`; with neither the backend returns an empty result rather than
+ * scanning. Callers should DEBOUNCE input. `national_id` is masked per
+ * `guests.view_sensitive_data`. */
+export interface GuestLookupParams {
+  national_id?: string;
+  phone?: string;
+}
+
+export function lookupGuest(
+  params: GuestLookupParams,
+): Promise<GuestLookupResult> {
+  return hotelJson<GuestLookupResult>(`/guests/lookup${toQuery(params)}`);
 }

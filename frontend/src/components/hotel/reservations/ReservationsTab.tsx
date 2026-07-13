@@ -75,11 +75,14 @@ import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 
 import { ReservationCard } from "./ReservationCard";
 import { ReservationDetailsModal } from "./ReservationDetailsModal";
+import { occupantDisplayName, relationshipLabel } from "./reservationShared";
 import {
   ReservationSummaryCards,
   type ReservationCounts,
   type SummaryCardKey,
 } from "./ReservationSummaryCards";
+import { ReservationWizard } from "./wizard/ReservationWizard";
+import { createInitialDraft } from "./wizard/useReservationDraft";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["held", "confirmed", "cancelled", "expired"] as const;
@@ -285,6 +288,18 @@ export function ReservationsTab({
     loadOverview();
     onChanged?.();
   }, [load, loadOverview, onChanged]);
+
+  // A room pinned from the rooms board (?action=new&room=&room_type=) seeds the
+  // wizard's first booking line so the picker shows it selected once dates load.
+  const createDraft = useMemo(() => {
+    if (!quickLine) return undefined;
+    const seed = createInitialDraft();
+    seed.booking.lines = [
+      { room_type: quickLine.room_type, room: quickLine.room, quantity: "1" },
+    ];
+    seed.booking.selected_room_id = quickLine.room ? Number(quickLine.room) : null;
+    return seed;
+  }, [quickLine]);
 
   async function confirm(r: Reservation) {
     try {
@@ -517,12 +532,11 @@ export function ReservationsTab({
         )
       ) : null}
 
-      {/* One unified create path — no instant/future chooser. The booking kind
-          is DERIVED from the arrival date inside the form. */}
-      <ReservationModal
+      {/* Unified create path — the 4-step wizard (guest → companions →
+          documents → booking). Editing keeps the existing modal below. */}
+      <ReservationWizard
         open={creating}
-        types={types}
-        initialLine={quickLine}
+        initialDraft={createDraft}
         onClose={() => {
           setCreating(false);
           setQuickLine(null);
@@ -534,14 +548,13 @@ export function ReservationsTab({
           setPage(1);
           refresh();
         }}
-        onView={(r) => {
+        onCheckedIn={() => {
           setCreating(false);
           setQuickLine(null);
+          notify(t.reservations.wizard.booking.checkInSuccess);
           setPage(1);
           refresh();
-          setDetails(r);
         }}
-        onRefresh={refresh}
       />
       <ReservationModal
         open={editing !== null}
@@ -1342,6 +1355,10 @@ function ReservationPrintModal({
   const r = reservation;
   const d = t.reservations.details;
   const p = t.reservations.print;
+  const g = t.reservations.wizard.guest;
+  const companions = r.occupants ?? [];
+  const docLabel = (v: string) =>
+    (t.guests.documentTypes as Record<string, string>)[v] ?? v;
 
   const roomLabels = r.lines.map((l) =>
     l.room_number ? `${d.room} ${l.room_number}` : `${l.room_type_name} ×${l.quantity}`,
@@ -1357,7 +1374,29 @@ function ReservationPrintModal({
     { label: t.reservations.views.sourceLabel, value: t.reservations.source[r.source] ?? r.source },
     { label: t.reservations.form.bookingKind, value: t.reservations.kind[r.booking_kind] },
     { label: d.guest, value: r.primary_guest_name || "—" },
+    ...(r.primary_guest_father_name
+      ? [{ label: g.fatherName, value: r.primary_guest_father_name }]
+      : []),
+    ...(r.primary_guest_mother_name
+      ? [{ label: g.motherName, value: r.primary_guest_mother_name }]
+      : []),
+    ...(r.primary_guest_national_id
+      ? [{ label: g.nationalId, value: r.primary_guest_national_id }]
+      : []),
+    ...(r.primary_guest_date_of_birth
+      ? [{ label: g.dateOfBirth, value: formatDate(r.primary_guest_date_of_birth, locale) }]
+      : []),
+    ...(r.primary_guest_nationality
+      ? [{ label: t.reservations.form.nationality, value: r.primary_guest_nationality }]
+      : []),
     ...(r.primary_guest_phone ? [{ label: d.phone, value: r.primary_guest_phone }] : []),
+    ...(r.primary_guest_email ? [{ label: d.email, value: r.primary_guest_email }] : []),
+    ...(r.primary_guest_document_type
+      ? [{ label: t.reservations.form.documentType, value: docLabel(r.primary_guest_document_type) }]
+      : []),
+    ...(r.primary_guest_document_number
+      ? [{ label: t.reservations.form.documentNumber, value: r.primary_guest_document_number }]
+      : []),
     ...(roomLabels.length ? [{ label: d.rooms, value: roomLabels.join(" · ") }] : []),
     ...(floorNames.length ? [{ label: t.reservations.card.floor, value: floorNames.join(" · ") }] : []),
     ...(typeNames.length ? [{ label: t.reservations.form.roomType, value: typeNames.join(" · ") }] : []),
@@ -1407,7 +1446,31 @@ function ReservationPrintModal({
           notes={note || undefined}
           notesLabel={d.notes}
           footer={p.footer}
-        />
+        >
+          {companions.length > 0 ? (
+            <div className="print-companions">
+              <p className="muted">
+                <strong>{d.sectionCompanions}</strong>
+              </p>
+              <table className="print-table">
+                <thead>
+                  <tr>
+                    <th>{t.reservations.form.name}</th>
+                    <th>{t.reservations.wizard.companions.relationship}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {companions.map((occ) => (
+                    <tr key={occ.id}>
+                      <td>{occupantDisplayName(occ, t)}</td>
+                      <td>{relationshipLabel(occ.relationship, t)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </PrintDocumentLayout>
       </div>
     </Modal>
   );
