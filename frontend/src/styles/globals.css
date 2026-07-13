@@ -2666,6 +2666,128 @@ a {
   border-end-start-radius: var(--radius-2xl);
   border-end-end-radius: var(--radius-2xl);
 }
+/* Optional width presets (opt-in via the Modal `size` prop). The base `.modal`
+ * above is the `md` default and is intentionally untouched. */
+.modal--lg {
+  max-width: 48rem;
+}
+.modal--xl {
+  max-width: 64rem;
+}
+.modal--full {
+  max-width: 80rem;
+}
+
+/* --- Room-types management surface (wide modal) --------------------------- */
+/* Toolbar: helper text on the start, prominent Add action on the end. */
+.rt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.rt-toolbar__hint {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-normal);
+  color: var(--color-fg-muted);
+}
+/* Responsive row-cards replace the cramped 6-column table: they reflow with
+ * flex-wrap so there is never horizontal scroll at any width. */
+.rt-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.rt-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--transition-base),
+    box-shadow var(--transition-base);
+}
+.rt-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.rt-card--inactive {
+  background: var(--color-surface-muted);
+}
+.rt-card__main {
+  flex: 1 1 12rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.rt-card__name {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+.rt-card__desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rt-card__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+}
+.rt-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rt-stat__label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-muted);
+}
+.rt-stat__value {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-fg);
+}
+.rt-card__aside {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-inline-start: auto;
+}
+.rt-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+@media (max-width: 640px) {
+  /* Single-column stack inside the full-screen mobile sheet — no overflow. */
+  .rt-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .rt-card__aside {
+    margin-inline-start: 0;
+    justify-content: space-between;
+  }
+}
 
 /* --- Alert / toast -------------------------------------------------------- */
 .alert {
@@ -3806,6 +3928,21 @@ a {
   .modal {
     max-height: 96dvh;
     border-radius: var(--radius-xl);
+  }
+  /* Large management modals become an edge-to-edge full-screen sheet on
+   * phones — never a tiny box squeezing wide content. */
+  .modal--lg,
+  .modal--xl,
+  .modal--full {
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .modal-overlay:has(.modal--lg),
+  .modal-overlay:has(.modal--xl),
+  .modal-overlay:has(.modal--full) {
+    padding: 0;
   }
   .modal__header,
   .modal__body {

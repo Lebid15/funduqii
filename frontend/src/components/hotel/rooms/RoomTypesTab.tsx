@@ -8,7 +8,6 @@ import {
   Badge,
   Button,
   ConfirmDialog,
-  DataTable,
   EmptyState,
   ErrorState,
   FormField,
@@ -20,7 +19,6 @@ import {
   Switch,
   Textarea,
   useToast,
-  type Column,
 } from "@/components/ui";
 import {
   createRoomType,
@@ -139,68 +137,76 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
     }
   }
 
-  const columns: Column<RoomType>[] = [
-    { key: "name", header: b.roomTypeName },
-    {
-      key: "capacity",
-      header: b.capacity,
-      render: (row) => String(row.base_capacity),
-    },
-    {
-      key: "base_rate",
-      header: b.pricePerNight,
-      render: (row) => row.base_rate ?? "—",
-    },
-    { key: "room_count", header: t.rooms.types.roomCount },
-    {
-      key: "is_active",
-      header: t.common.status,
-      render: (row) => (
-        <Badge tone={row.is_active ? "success" : "neutral"}>
-          {row.is_active ? t.plans.active : t.plans.inactive}
-        </Badge>
-      ),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (row) => (
-        <div className="table__actions">
-          <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(row)}>
-            {t.common.edit}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={Power}
-            disabled={rowBusy === row.id}
-            onClick={() => toggleActive(row)}
-          >
-            {row.is_active ? b.disableType : b.enableType}
-          </Button>
-          {row.room_count === 0 ? (
-            <Button variant="danger" size="sm" icon={Trash2} onClick={() => setDeleteTarget(row)}>
-              {t.common.delete}
-            </Button>
+  const addButton = (
+    <Button icon={Plus} onClick={() => setCreating(true)}>
+      {b.addRoomType}
+    </Button>
+  );
+
+  function renderCard(row: RoomType) {
+    return (
+      <div
+        key={row.id}
+        role="listitem"
+        className={`rt-card${row.is_active ? "" : " rt-card--inactive"}`}
+      >
+        <div className="rt-card__main">
+          <span className="rt-card__name">{row.name}</span>
+          {row.description ? (
+            <span className="rt-card__desc">{row.description}</span>
           ) : null}
         </div>
-      ),
-    },
-  ];
+        <div className="rt-card__stats">
+          <div className="rt-stat">
+            <span className="rt-stat__label">{b.capacity}</span>
+            <span className="rt-stat__value">{row.base_capacity}</span>
+          </div>
+          <div className="rt-stat">
+            <span className="rt-stat__label">{b.pricePerNight}</span>
+            <span className="rt-stat__value">{row.base_rate ?? "—"}</span>
+          </div>
+          <div className="rt-stat">
+            <span className="rt-stat__label">{t.rooms.types.roomCount}</span>
+            <span className="rt-stat__value">{row.room_count}</span>
+          </div>
+        </div>
+        <div className="rt-card__aside">
+          <Badge tone={row.is_active ? "success" : "neutral"}>
+            {row.is_active ? t.plans.active : t.plans.inactive}
+          </Badge>
+          <div className="rt-card__actions">
+            <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(row)}>
+              {t.common.edit}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={Power}
+              disabled={rowBusy === row.id}
+              onClick={() => toggleActive(row)}
+            >
+              {row.is_active ? b.disableType : b.enableType}
+            </Button>
+            {row.room_count === 0 ? (
+              <Button variant="danger" size="sm" icon={Trash2} onClick={() => setDeleteTarget(row)}>
+                {t.common.delete}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
       {embedded ? (
-        <div className="cluster cluster--end">
-          <Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>
+        <div className="rt-toolbar">
+          <p className="rt-toolbar__hint">{b.roomTypesHint}</p>
+          {addButton}
         </div>
       ) : (
-        <SectionHeader
-          title={t.rooms.tabs.types}
-          icon={Package}
-          actions={<Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>}
-        />
+        <SectionHeader title={t.rooms.tabs.types} icon={Package} actions={addButton} />
       )}
 
       {loading ? <LoadingState label={t.common.loading} /> : null}
@@ -213,10 +219,12 @@ export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) 
             title={t.rooms.types.empty}
             hint={t.rooms.types.emptyHint}
             icon={Package}
-            action={<Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>}
+            action={addButton}
           />
         ) : (
-          <DataTable caption={t.rooms.tabs.types} columns={columns} rows={rows} rowKey={(r) => r.id} />
+          <div role="list" aria-label={t.rooms.tabs.types} className="rt-list">
+            {rows.map(renderCard)}
+          </div>
         )
       ) : null}
 

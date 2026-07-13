@@ -580,6 +580,7 @@ export function RoomOperationalBoard() {
         }}
         title={p.roomTypes}
         closeLabel={t.common.close}
+        size="xl"
       >
         <RoomTypesTab embedded />
       </Modal>
