@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge, Button, Icon, Modal } from "@/components/ui";
 import type { RoomBoardRoom } from "@/lib/api/types";
@@ -9,7 +9,13 @@ import { formatDate, roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
-import { buildRoomLinks, displayStatusTone } from "./boardShared";
+import {
+  buildRoomLinks,
+  occupancyIcon,
+  occupancyTone,
+  operationalIcon,
+  operationalTone,
+} from "./boardShared";
 
 /** Full room details (owner spec) as a central Modal — identity, capacity,
  * operational + computed status, note, last change, current guest, upcoming
@@ -18,10 +24,12 @@ export function RoomDetailsDrawer({
   room,
   onClose,
   onChangeStatus,
+  onDelete,
 }: {
   room: RoomBoardRoom | null;
   onClose: () => void;
   onChangeStatus: (room: RoomBoardRoom) => void;
+  onDelete: (room: RoomBoardRoom) => void;
 }) {
   const { t, locale } = useI18n();
   const access = useHotelAccess();
@@ -32,6 +40,7 @@ export function RoomDetailsDrawer({
   if (!room) return null;
   const links = buildRoomLinks(room, t, can);
   const canStatus = can("rooms.status_update");
+  const canDelete = can("rooms.delete");
 
   const rows: Array<[string, string]> = [
     [b.detailFloor, room.floor_name],
@@ -58,7 +67,7 @@ export function RoomDetailsDrawer({
   if (room.next_reservation) {
     rows.push([
       b.upcomingReservation,
-      `${room.next_reservation.guest_name} · ${formatDate(room.next_reservation.check_in_date, locale)} ← ${formatDate(room.next_reservation.check_out_date, locale)} · ${room.next_reservation.reservation_number}`,
+      `${room.next_reservation.guest_name} · ${formatDate(room.next_reservation.check_in_date, locale)} – ${formatDate(room.next_reservation.check_out_date, locale)} · ${room.next_reservation.reservation_number}`,
     ]);
   }
 
@@ -76,8 +85,13 @@ export function RoomDetailsDrawer({
     >
       <div className="stack">
         <div className="cluster">
-          <Badge tone={displayStatusTone(room.display_status)}>
-            {b.status[room.display_status]}
+          <Badge tone={occupancyTone(room.occupancy_status)}>
+            <Icon icon={occupancyIcon(room.occupancy_status)} size="sm" />
+            {t.rooms.occupancy[room.occupancy_status]}
+          </Badge>
+          <Badge tone={operationalTone(room.operational_status)}>
+            <Icon icon={operationalIcon(room.operational_status)} size="sm" />
+            {b.status[room.operational_status]}
           </Badge>
         </div>
         <dl className="room-op-details">
@@ -103,6 +117,16 @@ export function RoomDetailsDrawer({
               onClick={() => onChangeStatus(room)}
             >
               {b.changeStatus}
+            </Button>
+          ) : null}
+          {canDelete ? (
+            <Button
+              variant="danger"
+              size="sm"
+              icon={Trash2}
+              onClick={() => onDelete(room)}
+            >
+              {t.rooms.page.deleteRoom}
             </Button>
           ) : null}
         </div>

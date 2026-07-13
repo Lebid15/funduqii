@@ -305,7 +305,13 @@
     "errors": {
       "inUse": "Bu öğe kullanımda ve silinemez; bunun yerine devre dışı bırakın.",
       "crossTenant": "Seçilen kat veya oda türü başka bir otele ait.",
-      "noteRequired": "Bu durum değişikliği için bir not gereklidir."
+      "noteRequired": "Bu durum değişikliği için bir not gereklidir.",
+      "duplicateRoomNumber": "Bir veya daha fazla oda numarası zaten kullanımda veya yinelenmiş.",
+      "bulkTooLarge": "Bir seferde çok fazla oda istendi.",
+      "roomLimitReached": "Planınızın oda sınırına ulaşıldı.",
+      "roomInUse": "Bu oda kullanımda ve silinemez.",
+      "roomTypeInUse": "Bu oda türü kullanımda ve silinemez.",
+      "archiveInstead": "Bunun yerine arşivleyin (durumunu Arşivlendi olarak değiştirin)."
     },
     "board": {
       "tabTitle": "Operasyon Özeti",
@@ -468,6 +474,48 @@
         "family_friendly": "Aileye Uygun",
         "accessible": "Engelli Dostu"
       }
+    },
+    "occupancy": {
+      "free": "Boş",
+      "occupied": "Dolu",
+      "reserved": "Rezerve"
+    },
+    "cards": {
+      "groupLabel": "Oda özeti",
+      "total": "Toplam oda",
+      "totalCaption": "Tüm otel odaları",
+      "availableNow": "Şu an uygun",
+      "availableNowCaption": "Hemen rezervasyona hazır",
+      "occupiedNow": "Şu an dolu",
+      "occupiedNowCaption": "Şu an konaklayan misafirler",
+      "needsAction": "İşlem gerekli",
+      "needsActionCaption": "Temizlik, bakım veya hizmet dışı"
+    },
+    "page": {
+      "addRoom": "Oda ekle",
+      "addMultiple": "Toplu ekle",
+      "manageFloors": "Katları yönet",
+      "roomTypes": "Oda türleri",
+      "settings": "Ayarlar",
+      "floorEmpty": "Bu katta henüz oda yok",
+      "addRoomToFloor": "Buraya oda ekle",
+      "showArchived": "Arşivlenenleri göster",
+      "filters": "Filtreler",
+      "filterOccupancy": "Doluluk",
+      "availableNowShort": "Uygun",
+      "deleteRoom": "Odayı sil",
+      "deleteRoomTitle": "Oda silinsin mi?",
+      "deleteRoomBody": "{number} numaralı oda kalıcı olarak silinecek. Bu geri alınamaz.",
+      "roomLabel": "Oda",
+      "inventoryError": "Katlar ve oda türleri yüklenemedi. Bazı seçenekler kullanılamayabilir."
+    },
+    "bulk": {
+      "initialStatus": "Başlangıç durumu",
+      "createdCount": "{count} oda oluşturuldu.",
+      "duplicateInRequest": "Listenizde yinelenen numaralar: {numbers}",
+      "duplicateExisting": "Bu numaralar zaten mevcut: {numbers}",
+      "tooLarge": "Aynı anda en fazla {limit} oda oluşturabilirsiniz.",
+      "limitReached": "Oda sınırına ulaşıldı ({usage}/{limit})."
     }
   },
   "reservations": {

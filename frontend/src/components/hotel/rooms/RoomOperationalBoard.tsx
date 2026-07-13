@@ -1,25 +1,40 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { BedDouble, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { BedDouble, Building2, Package, Plus, Rows3, Settings, X } from "lucide-react";
 
 import {
   Alert,
   Button,
   Card,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   FilterBar,
   FormField,
+  Icon,
   Input,
   LoadingState,
-  SectionHeader,
+  Modal,
   Select,
   Switch,
   useToast,
 } from "@/components/ui";
-import { getOperationalBoard, listFloors, listRoomTypes } from "@/lib/api/rooms";
-import { messageForError } from "@/lib/api/errors";
+import {
+  deleteRoom,
+  getOperationalBoard,
+  listFloors,
+  listRoomTypes,
+} from "@/lib/api/rooms";
+import { isApiError, messageForError } from "@/lib/api/errors";
 import type {
   Floor,
   RoomBoardRoom,
@@ -27,36 +42,59 @@ import type {
   RoomType,
 } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
-import { FloorSummaryCards } from "./FloorSummaryCards";
+import { BulkRoomCreateModal } from "./BulkRoomCreateModal";
+import { FloorsTab } from "./FloorsTab";
 import { RoomDetailsDrawer } from "./RoomDetailsDrawer";
 import { RoomFloorGrid } from "./RoomFloorGrid";
 import { RoomFormModal } from "./RoomFormModal";
 import { RoomStatusModal } from "./RoomStatusModal";
-import { RoomSummaryCards, type BoardStatusFilter } from "./RoomSummaryCards";
+import { RoomSummaryCards, type BoardCardKey } from "./RoomSummaryCards";
+import { RoomTypesTab } from "./RoomTypesTab";
 
 const ATTENTION = new Set(["dirty", "cleaning", "maintenance", "out_of_service"]);
-const MAINT_OOS = new Set(["maintenance", "out_of_service"]);
+const OPERATIONAL_OPTIONS = [
+  "available",
+  "dirty",
+  "cleaning",
+  "maintenance",
+  "out_of_service",
+  "archived",
+] as const;
+const OCCUPANCY_OPTIONS = ["free", "occupied", "reserved"] as const;
 
 /**
- * The rooms OPERATIONAL board (owner task): one read-only call feeds the
- * clickable summary cards, the clickable floor cards, the filter bar, and
- * the rooms grouped by floor — every displayed status is computed server-
- * side (occupied/reserved never stored). Filters combine: floor × status ×
- * type × text search × show-archived.
+ * The unified /hotel/rooms workspace (owner rework): ONE page, no tabs. A
+ * header action bar (add room / add multiple / a Settings menu for floors +
+ * room types), exactly four summary cards, a search + filter row (floor ×
+ * room_type × operational status × occupancy × show-archived), and the rooms
+ * grouped into collapsible floor sections. Occupancy and operational status
+ * are INDEPENDENT axes — every displayed value comes from the server.
  */
 export function RoomOperationalBoard() {
   const { t } = useI18n();
   const { notify } = useToast();
   const b = t.rooms.board;
+  const p = t.rooms.page;
+
+  const access = useHotelAccess();
+  const can = (...codes: string[]) =>
+    access === null || (!access.loading && access.can(...codes));
+  const canCreate = can("rooms.create");
+  const canManageInventory = can("rooms.create", "rooms.update", "rooms.delete");
 
   const [board, setBoard] = useState<BoardData | null>(null);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [types, setTypes] = useState<RoomType[]>([]);
+  const [inventoryError, setInventoryError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [statusFilter, setStatusFilter] = useState<BoardStatusFilter | null>(null);
+  // Filters — two independent status axes plus the structural ones.
+  const [operationalFilter, setOperationalFilter] = useState("");
+  const [occupancyFilter, setOccupancyFilter] = useState("");
+  const [availableNowOnly, setAvailableNowOnly] = useState(false);
   const [floorFilter, setFloorFilter] = useState<number | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -66,6 +104,13 @@ export function RoomOperationalBoard() {
   const [details, setDetails] = useState<RoomBoardRoom | null>(null);
   const [statusTarget, setStatusTarget] = useState<RoomBoardRoom | null>(null);
   const [editTarget, setEditTarget] = useState<RoomBoardRoom | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createFloorId, setCreateFloorId] = useState<number | undefined>(undefined);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [manageFloorsOpen, setManageFloorsOpen] = useState(false);
+  const [roomTypesOpen, setRoomTypesOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<RoomBoardRoom | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,28 +126,43 @@ export function RoomOperationalBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable per locale
   }, []);
 
-  useEffect(() => {
-    load();
-    // The floor/type lists feed the bulk modal + the type filter.
+  const loadInventory = useCallback(() => {
     Promise.all([listFloors(), listRoomTypes()])
       .then(([f, ty]) => {
         setFloors(f.results);
         setTypes(ty.results);
+        setInventoryError(false);
       })
       .catch(() => {
-        // The board itself surfaces errors; these lists degrade gracefully.
+        // The board still renders from its own call; flag a soft error so the
+        // create/bulk forms' empty option lists are explained, not silent.
+        setInventoryError(true);
       });
-  }, [load]);
+  }, []);
+
+  useEffect(() => {
+    load();
+    loadInventory();
+  }, [load, loadInventory]);
+
+  const refreshAll = useCallback(() => {
+    load();
+    loadInventory();
+  }, [load, loadInventory]);
 
   const hasFilters =
-    statusFilter !== null ||
+    operationalFilter !== "" ||
+    occupancyFilter !== "" ||
+    availableNowOnly ||
     floorFilter !== null ||
     typeFilter !== "" ||
     query !== "" ||
     showArchived;
 
   function clearFilters() {
-    setStatusFilter(null);
+    setOperationalFilter("");
+    setOccupancyFilter("");
+    setAvailableNowOnly(false);
     setFloorFilter(null);
     setTypeFilter("");
     setSearch("");
@@ -110,18 +170,57 @@ export function RoomOperationalBoard() {
     setShowArchived(false);
   }
 
+  // The four cards drive the underlying (mutually exclusive) quick filters.
+  const activeCard: BoardCardKey | null = availableNowOnly
+    ? "available"
+    : occupancyFilter === "occupied"
+      ? "occupied"
+      : operationalFilter === "attention"
+        ? "attention"
+        : null;
+
+  function onCard(key: BoardCardKey | "total") {
+    if (key === "total") {
+      setAvailableNowOnly(false);
+      setOccupancyFilter("");
+      setOperationalFilter("");
+      return;
+    }
+    if (key === "available") {
+      const next = !availableNowOnly;
+      setAvailableNowOnly(next);
+      if (next) {
+        setOccupancyFilter("");
+        setOperationalFilter("");
+      }
+      return;
+    }
+    if (key === "occupied") {
+      setOccupancyFilter(occupancyFilter === "occupied" ? "" : "occupied");
+      setAvailableNowOnly(false);
+      setOperationalFilter("");
+      return;
+    }
+    // attention
+    setOperationalFilter(operationalFilter === "attention" ? "" : "attention");
+    setAvailableNowOnly(false);
+    setOccupancyFilter("");
+  }
+
   const filteredRooms = useMemo(() => {
     if (!board) return [];
     const needle = query.trim().toLowerCase();
+    const includeArchived = showArchived || operationalFilter === "archived";
     return board.rooms.filter((room) => {
-      if (room.display_status === "archived" && !showArchived) return false;
+      const archived = room.operational_status === "archived";
+      if (archived && !includeArchived) return false;
       if (floorFilter !== null && room.floor !== floorFilter) return false;
       if (typeFilter && String(room.room_type) !== typeFilter) return false;
-      if (statusFilter === "attention") {
-        if (!ATTENTION.has(room.display_status)) return false;
-      } else if (statusFilter === "maintenance_oos") {
-        if (!MAINT_OOS.has(room.display_status)) return false;
-      } else if (statusFilter && room.display_status !== statusFilter) {
+      if (availableNowOnly && !room.available_now) return false;
+      if (occupancyFilter && room.occupancy_status !== occupancyFilter) return false;
+      if (operationalFilter === "attention") {
+        if (!ATTENTION.has(room.operational_status)) return false;
+      } else if (operationalFilter && room.operational_status !== operationalFilter) {
         return false;
       }
       if (needle) {
@@ -139,11 +238,51 @@ export function RoomOperationalBoard() {
       }
       return true;
     });
-  }, [board, statusFilter, floorFilter, typeFilter, query, showArchived]);
+  }, [
+    board,
+    operationalFilter,
+    occupancyFilter,
+    availableNowOnly,
+    floorFilter,
+    typeFilter,
+    query,
+    showArchived,
+  ]);
 
   function applySearch(event: FormEvent) {
     event.preventDefault();
     setQuery(search);
+  }
+
+  function openCreate(floorId?: number) {
+    setCreateFloorId(floorId);
+    setCreating(true);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await deleteRoom(deleteTarget.id);
+      notify(t.rooms.saved);
+      setDeleteTarget(null);
+      refreshAll();
+    } catch (err) {
+      // Backend guards delete with a 409 resource_in_use (room_has_stays /
+      // room_has_reservations) — tell the user to ARCHIVE it instead and
+      // reopen the drawer so the status/archive action stays reachable.
+      if (isApiError(err) && err.code === "resource_in_use") {
+        notify(`${t.rooms.errors.roomInUse} ${t.rooms.errors.archiveInstead}`, "error");
+        const room = deleteTarget;
+        setDeleteTarget(null);
+        setDetails(room);
+      } else {
+        notify(messageForError(err, t), "error");
+        setDeleteTarget(null);
+      }
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   if (loading) return <LoadingState label={t.common.loading} />;
@@ -158,30 +297,81 @@ export function RoomOperationalBoard() {
     );
   }
 
-  const activeFloor = board.floors.find((f) => f.id === floorFilter) ?? null;
-  const noInventory = board.floors.length === 0 || types.length === 0;
+  // The setup hint is ONLY about having zero floors — the room-type list can
+  // fail to load (soft error) without meaning the hotel has no inventory.
+  const noInventory = board.floors.length === 0;
+  const floorsToShow =
+    floorFilter === null
+      ? board.floors
+      : board.floors.filter((f) => f.id === floorFilter);
+  const showFilteredEmpty = hasFilters && filteredRooms.length === 0;
+
+  const operationalOptions = [
+    ...OPERATIONAL_OPTIONS.map((s) => ({ value: s, label: b.status[s] })),
+    { value: "attention", label: b.status.attention },
+  ];
+  const occupancyOptions = OCCUPANCY_OPTIONS.map((s) => ({
+    value: s,
+    label: t.rooms.occupancy[s],
+  }));
+  // Room-type filter options are derived from the BOARD (rooms carry
+  // room_type + room_type_name), so the filter still works even when the
+  // inventory call failed.
+  const typeFilterOptions = (() => {
+    const seen = new Map<number, string>();
+    for (const room of board.rooms) {
+      if (!seen.has(room.room_type)) seen.set(room.room_type, room.room_type_name);
+    }
+    return [...seen.entries()].map(([id, name]) => ({
+      value: String(id),
+      label: name,
+    }));
+  })();
 
   return (
     <div className="stack">
+      {/* Header action bar (the page H1 lives in the PageHeader above). */}
+      <div className="rooms-toolbar">
+        <div className="rooms-toolbar__actions cluster">
+          {canCreate ? (
+            <>
+              <Button icon={Plus} onClick={() => openCreate()}>
+                {p.addRoom}
+              </Button>
+              <Button variant="secondary" icon={Rows3} onClick={() => setBulkOpen(true)}>
+                {p.addMultiple}
+              </Button>
+            </>
+          ) : null}
+          {canManageInventory ? (
+            <SettingsMenu
+              label={p.settings}
+              items={[
+                {
+                  key: "floors",
+                  label: p.manageFloors,
+                  icon: Building2,
+                  onSelect: () => setManageFloorsOpen(true),
+                },
+                {
+                  key: "types",
+                  label: p.roomTypes,
+                  icon: Package,
+                  onSelect: () => setRoomTypesOpen(true),
+                },
+              ]}
+            />
+          ) : null}
+        </div>
+      </div>
+
       {noInventory ? <Alert tone="warning">{b.setupHint}</Alert> : null}
+      {inventoryError ? <Alert tone="warning">{p.inventoryError}</Alert> : null}
 
-      <RoomSummaryCards
-        summary={board.summary}
-        active={statusFilter}
-        onToggle={setStatusFilter}
-      />
-
-      <section className="stack" aria-label={b.floorsOverview}>
-        <SectionHeader title={b.floorsOverview} />
-        <FloorSummaryCards
-          floors={board.floors}
-          active={floorFilter}
-          onToggle={setFloorFilter}
-        />
-      </section>
+      <RoomSummaryCards summary={board.summary} active={activeCard} onSelect={onCard} />
 
       <Card>
-        <form onSubmit={applySearch}>
+        <form onSubmit={applySearch} aria-label={p.filters}>
           <FilterBar>
             <FormField label={t.common.search} htmlFor="board-search">
               <Input
@@ -208,39 +398,38 @@ export function RoomOperationalBoard() {
                 id="board-type"
                 value={typeFilter}
                 placeholder={t.common.all}
-                options={types.map((ty) => ({ value: String(ty.id), label: ty.name }))}
+                options={typeFilterOptions}
                 onChange={(e) => setTypeFilter(e.target.value)}
               />
             </FormField>
             <FormField label={t.rooms.list.filterStatus} htmlFor="board-status">
               <Select
                 id="board-status"
-                value={statusFilter ?? ""}
+                value={operationalFilter}
                 placeholder={t.common.all}
-                options={[
-                  ...(
-                    [
-                      "available",
-                      "occupied",
-                      "reserved",
-                      "dirty",
-                      "cleaning",
-                      "maintenance",
-                      "out_of_service",
-                      "attention",
-                    ] as const
-                  ).map((s) => ({ value: s, label: b.status[s] })),
-                  { value: "maintenance_oos", label: b.maintOos },
-                ]}
-                onChange={(e) =>
-                  setStatusFilter((e.target.value || null) as BoardStatusFilter | null)
-                }
+                options={operationalOptions}
+                onChange={(e) => {
+                  setOperationalFilter(e.target.value);
+                  setAvailableNowOnly(false);
+                }}
+              />
+            </FormField>
+            <FormField label={p.filterOccupancy} htmlFor="board-occupancy">
+              <Select
+                id="board-occupancy"
+                value={occupancyFilter}
+                placeholder={t.common.all}
+                options={occupancyOptions}
+                onChange={(e) => {
+                  setOccupancyFilter(e.target.value);
+                  setAvailableNowOnly(false);
+                }}
               />
             </FormField>
             <div className="filter-bar__actions cluster">
               <Switch
                 id="board-archived"
-                label={t.rooms.list.includeArchived}
+                label={p.showArchived}
                 checked={showArchived}
                 onChange={setShowArchived}
               />
@@ -252,45 +441,29 @@ export function RoomOperationalBoard() {
             </div>
           </FilterBar>
         </form>
-        {activeFloor || statusFilter ? (
-          <div className="cluster board-active-filters">
-            {activeFloor ? (
-              <span className="chip">
-                {b.floorFilterChip.replace("{floor}", activeFloor.name)}
-              </span>
-            ) : null}
-            {statusFilter ? (
-              <span className="chip">
-                {statusFilter === "maintenance_oos"
-                  ? b.maintOos
-                  : b.status[statusFilter]}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
       </Card>
 
-      {filteredRooms.length === 0 ? (
+      {board.floors.length === 0 ? (
+        <EmptyState title={t.rooms.list.empty} hint={t.rooms.list.emptyHint} icon={BedDouble} />
+      ) : showFilteredEmpty ? (
         <EmptyState
-          title={hasFilters ? b.emptyFiltered : t.rooms.list.empty}
-          hint={hasFilters ? undefined : t.rooms.list.emptyHint}
+          title={b.emptyFiltered}
           icon={BedDouble}
           action={
-            hasFilters ? (
-              <Button variant="secondary" icon={X} onClick={clearFilters}>
-                {b.clearFilters}
-              </Button>
-            ) : undefined
+            <Button variant="secondary" icon={X} onClick={clearFilters}>
+              {b.clearFilters}
+            </Button>
           }
         />
       ) : (
         <RoomFloorGrid
-          floors={board.floors.filter(
-            (f) => floorFilter === null || f.id === floorFilter,
-          )}
+          floors={floorsToShow}
           rooms={filteredRooms}
+          canCreate={canCreate}
+          hasFilters={hasFilters}
           onDetails={setDetails}
           onEdit={(room) => setEditTarget(room)}
+          onAddRoomToFloor={(floorId) => openCreate(floorId)}
         />
       )}
 
@@ -301,6 +474,26 @@ export function RoomOperationalBoard() {
           setDetails(null);
           setStatusTarget(room);
         }}
+        onDelete={(room) => {
+          setDetails(null);
+          setDeleteTarget(room);
+        }}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={p.deleteRoomTitle}
+        body={
+          deleteTarget
+            ? p.deleteRoomBody.replace("{number}", deleteTarget.number)
+            : ""
+        }
+        confirmLabel={t.common.delete}
+        cancelLabel={t.common.cancel}
+        closeLabel={t.common.close}
+        tone="danger"
+        busy={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => setDeleteTarget(null)}
       />
       <RoomStatusModal
         open={statusTarget !== null}
@@ -318,6 +511,22 @@ export function RoomOperationalBoard() {
           setStatusTarget(null);
           notify(t.rooms.saved);
           load();
+        }}
+      />
+      <RoomFormModal
+        open={creating}
+        floors={floors}
+        types={types}
+        initialFloor={createFloorId}
+        onClose={() => {
+          setCreating(false);
+          setCreateFloorId(undefined);
+        }}
+        onSaved={() => {
+          setCreating(false);
+          setCreateFloorId(undefined);
+          notify(t.rooms.saved);
+          refreshAll();
         }}
       />
       <RoomFormModal
@@ -351,9 +560,154 @@ export function RoomOperationalBoard() {
         onSaved={() => {
           setEditTarget(null);
           notify(t.rooms.saved);
-          load();
+          refreshAll();
         }}
       />
+      <BulkRoomCreateModal
+        open={bulkOpen}
+        floors={floors}
+        types={types}
+        onClose={() => setBulkOpen(false)}
+        onCreated={refreshAll}
+      />
+      <Modal
+        open={manageFloorsOpen}
+        onClose={() => {
+          setManageFloorsOpen(false);
+          refreshAll();
+        }}
+        title={p.manageFloors}
+        closeLabel={t.common.close}
+      >
+        <FloorsTab embedded />
+      </Modal>
+      <Modal
+        open={roomTypesOpen}
+        onClose={() => {
+          setRoomTypesOpen(false);
+          refreshAll();
+        }}
+        title={p.roomTypes}
+        closeLabel={t.common.close}
+      >
+        <RoomTypesTab embedded />
+      </Modal>
+    </div>
+  );
+}
+
+/** A quiet Settings disclosure menu (owner spec): the two admin entries live
+ * here so they stay discoverable but never crowd the action bar — identical on
+ * desktop and mobile. Closes on outside click / Escape. */
+function SettingsMenu({
+  label,
+  items,
+}: {
+  label: string;
+  items: Array<{
+    key: string;
+    label: string;
+    icon: typeof Building2;
+    onSelect: () => void;
+  }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  // Focus the first item when the menu opens (keyboard-first).
+  useEffect(() => {
+    if (open) itemRefs.current[0]?.focus();
+  }, [open]);
+
+  function focusItem(index: number) {
+    const count = items.length;
+    const next = ((index % count) + count) % count;
+    itemRefs.current[next]?.focus();
+  }
+
+  function closeAndReturnFocus() {
+    setOpen(false);
+    buttonRef.current?.focus();
+  }
+
+  function onListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const current = itemRefs.current.findIndex(
+      (el) => el === document.activeElement,
+    );
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusItem(current + 1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusItem(current - 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusItem(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusItem(items.length - 1);
+    } else if (event.key === "Escape" || event.key === "Tab") {
+      closeAndReturnFocus();
+    }
+  }
+
+  return (
+    <div className="settings-menu" ref={rootRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="btn btn--secondary settings-menu__button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        <Icon icon={Settings} size="sm" />
+        <span>{label}</span>
+      </button>
+      {open ? (
+        <div
+          className="settings-menu__list"
+          role="menu"
+          aria-label={label}
+          onKeyDown={onListKeyDown}
+        >
+          {items.map((item, index) => (
+            <button
+              key={item.key}
+              ref={(el) => {
+                itemRefs.current[index] = el;
+              }}
+              type="button"
+              role="menuitem"
+              className="settings-menu__item"
+              onClick={() => {
+                item.onSelect();
+                closeAndReturnFocus();
+              }}
+            >
+              <Icon icon={item.icon} size="sm" />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

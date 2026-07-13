@@ -28,7 +28,7 @@ import { useHotelAccess } from "@/lib/session/HotelAccessContext";
  * floors and is blocked below the highest floor that has rooms. The
  * detailed add-floor form is gone — nobody needs it day to day.
  */
-export function FloorsTab() {
+export function FloorsTab({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n();
   const b = t.rooms.board;
   const { notify } = useToast();
@@ -131,7 +131,7 @@ export function FloorsTab() {
 
   return (
     <div className="stack">
-      <SectionHeader title={t.rooms.tabs.floors} icon={Building2} />
+      {embedded ? null : <SectionHeader title={t.rooms.tabs.floors} icon={Building2} />}
       <Card>
         <div className="stack">
           {error ? <Alert tone="error">{error}</Alert> : null}

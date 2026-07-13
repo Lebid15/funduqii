@@ -135,6 +135,29 @@ class StatusNoteRequired(FunduqiiAPIException):
     default_code = "status_note_required"
 
 
+# --- Rooms bulk / central create (ROOMS-REWORK-01) --------------------------
+
+
+class DuplicateRoomNumber(FunduqiiAPIException):
+    """One or more room numbers collide. ``details`` carries ``source`` —
+    ``"request"`` (duplicated within the same bulk request) or ``"existing"``
+    (already used in the hotel, including a concurrent-insert race) — and the
+    list of offending ``numbers``."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "One or more room numbers are already in use or duplicated."
+    default_code = "duplicate_room_number"
+
+
+class BulkRequestTooLarge(FunduqiiAPIException):
+    """A bulk room create exceeds the hard per-request cap (``MAX_BULK_ROOMS``).
+    ``details`` carries the ``limit`` and the ``requested`` count."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "Too many rooms were requested in a single bulk create."
+    default_code = "bulk_request_too_large"
+
+
 # --- Service orders (Phase 9) -----------------------------------------------
 
 

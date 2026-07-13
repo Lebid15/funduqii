@@ -305,7 +305,13 @@
     "errors": {
       "inUse": "This item is in use and cannot be deleted; deactivate it instead.",
       "crossTenant": "The selected floor or room type belongs to another hotel.",
-      "noteRequired": "A note is required for this status change."
+      "noteRequired": "A note is required for this status change.",
+      "duplicateRoomNumber": "One or more room numbers are already in use or duplicated.",
+      "bulkTooLarge": "Too many rooms were requested at once.",
+      "roomLimitReached": "Your plan's room limit has been reached.",
+      "roomInUse": "This room is in use and cannot be deleted.",
+      "roomTypeInUse": "This room type is in use and cannot be deleted.",
+      "archiveInstead": "Archive it instead (change its status to Archived)."
     },
     "board": {
       "tabTitle": "Operational Overview",
@@ -468,6 +474,48 @@
         "family_friendly": "Family Friendly",
         "accessible": "Accessible"
       }
+    },
+    "occupancy": {
+      "free": "Free",
+      "occupied": "Occupied",
+      "reserved": "Reserved"
+    },
+    "cards": {
+      "groupLabel": "Room summary",
+      "total": "Total rooms",
+      "totalCaption": "All hotel rooms",
+      "availableNow": "Available now",
+      "availableNowCaption": "Ready to book right now",
+      "occupiedNow": "Occupied now",
+      "occupiedNowCaption": "Guests in-house now",
+      "needsAction": "Needs action",
+      "needsActionCaption": "Cleaning, maintenance or out of service"
+    },
+    "page": {
+      "addRoom": "Add room",
+      "addMultiple": "Add multiple",
+      "manageFloors": "Manage floors",
+      "roomTypes": "Room types",
+      "settings": "Settings",
+      "floorEmpty": "No rooms on this floor yet",
+      "addRoomToFloor": "Add room here",
+      "showArchived": "Show archived",
+      "filters": "Filters",
+      "filterOccupancy": "Occupancy",
+      "availableNowShort": "Available",
+      "deleteRoom": "Delete room",
+      "deleteRoomTitle": "Delete room?",
+      "deleteRoomBody": "Room {number} will be permanently removed. This cannot be undone.",
+      "roomLabel": "Room",
+      "inventoryError": "Couldn't load floors and room types. Some options may be unavailable."
+    },
+    "bulk": {
+      "initialStatus": "Initial status",
+      "createdCount": "Created {count} rooms.",
+      "duplicateInRequest": "Duplicate numbers in your list: {numbers}",
+      "duplicateExisting": "These numbers already exist: {numbers}",
+      "tooLarge": "You can create at most {limit} rooms at once.",
+      "limitReached": "Room limit reached ({usage}/{limit})."
     }
   },
   "reservations": {

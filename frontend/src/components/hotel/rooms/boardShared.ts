@@ -1,36 +1,86 @@
 import {
+  Archive,
+  Ban,
   Brush,
+  CalendarClock,
   CalendarPlus,
+  CheckCircle2,
   DoorOpen,
   Eye,
   FileText,
   LogIn,
   LogOut,
+  Sparkles,
+  UserCheck,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 
 import type { BadgeTone } from "@/components/ui";
-import type { RoomBoardRoom, RoomDisplayStatus } from "@/lib/api/types";
+import type {
+  RoomBoardRoom,
+  RoomOccupancyStatus,
+  RoomStatus,
+} from "@/lib/api/types";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 
-/** Owner palette: calm, meaningful tones per DISPLAY status. */
-export function displayStatusTone(status: RoomDisplayStatus): BadgeTone {
+/** OCCUPANCY axis badge (free / occupied / reserved) — tone + icon, never
+ * colour alone (WCAG). Independent from the operational status. */
+export function occupancyTone(status: RoomOccupancyStatus): BadgeTone {
   switch (status) {
-    case "available":
-      return "success";
     case "occupied":
       return "info";
     case "reserved":
       return "warning";
+    default:
+      return "success"; // free
+  }
+}
+
+export function occupancyIcon(status: RoomOccupancyStatus): LucideIcon {
+  switch (status) {
+    case "occupied":
+      return UserCheck;
+    case "reserved":
+      return CalendarClock;
+    default:
+      return DoorOpen; // free
+  }
+}
+
+/** OPERATIONAL-status axis badge (available / dirty / cleaning / maintenance /
+ * out_of_service / archived) — tone + icon, never colour alone (WCAG). */
+export function operationalTone(status: RoomStatus): BadgeTone {
+  switch (status) {
+    case "available":
+      return "success";
     case "dirty":
       return "warning";
     case "cleaning":
       return "info";
     case "maintenance":
       return "danger";
+    case "out_of_service":
+      return "neutral";
     default:
-      return "neutral"; // out_of_service / archived
+      return "neutral"; // archived
+  }
+}
+
+export function operationalIcon(status: RoomStatus): LucideIcon {
+  switch (status) {
+    case "available":
+      return CheckCircle2;
+    case "dirty":
+      return Sparkles;
+    case "cleaning":
+      return Brush;
+    case "maintenance":
+      return Wrench;
+    case "out_of_service":
+      return Ban;
+    default:
+      return Archive; // archived
   }
 }
 

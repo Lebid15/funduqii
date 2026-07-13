@@ -8,9 +8,14 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from apps.common.exceptions import CrossTenantReference
+from apps.common.exceptions import (
+    BulkRequestTooLarge,
+    CrossTenantReference,
+    StatusNoteRequired,
+)
 
-from .models import Floor, Room, RoomStatus, RoomType
+from .models import NOTE_REQUIRED_STATUSES, Floor, Room, RoomStatus, RoomType
+from .services import MAX_BULK_ROOMS
 
 
 class FloorSerializer(serializers.ModelSerializer):
@@ -147,9 +152,32 @@ class RoomSerializer(serializers.ModelSerializer):
 
 
 class RoomWriteSerializer(serializers.ModelSerializer):
+    # Write-only, CREATE-only: the initial operational status of the new room.
+    # A room is never created as archived, and maintenance/out_of_service still
+    # require a note (same rule as change_room_status). On UPDATE these inputs
+    # are dropped — status changes go through the dedicated status endpoint, so
+    # an update can never rewrite `status` / `status_note` here.
+    initial_status = serializers.ChoiceField(
+        choices=RoomStatus.choices,
+        required=False,
+        default=RoomStatus.AVAILABLE,
+        write_only=True,
+    )
+    status_note = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default="", write_only=True
+    )
+
     class Meta:
         model = Room
-        fields = ["number", "display_name", "floor", "room_type", "is_active"]
+        fields = [
+            "number",
+            "display_name",
+            "floor",
+            "room_type",
+            "is_active",
+            "initial_status",
+            "status_note",
+        ]
 
     def validate_number(self, value):
         if not value.strip():
@@ -176,7 +204,26 @@ class RoomWriteSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"number": "This room number already exists in this hotel."}
                 )
+
+        # Initial-status rules apply on CREATE only.
+        if self.instance is None:
+            initial_status = attrs.get("initial_status") or RoomStatus.AVAILABLE
+            if initial_status == RoomStatus.ARCHIVED:
+                raise serializers.ValidationError(
+                    {"initial_status": "Rooms cannot be created as archived."}
+                )
+            if initial_status in NOTE_REQUIRED_STATUSES and not (
+                attrs.get("status_note") or ""
+            ).strip():
+                raise StatusNoteRequired({"status": initial_status})
         return attrs
+
+    def update(self, instance, validated_data):
+        # Status changes never flow through the write serializer; drop the
+        # create-only inputs so a PUT/PATCH can never wipe `status_note`.
+        validated_data.pop("initial_status", None)
+        validated_data.pop("status_note", None)
+        return super().update(instance, validated_data)
 
 
 class RoomStatusUpdateSerializer(serializers.Serializer):
@@ -184,3 +231,41 @@ class RoomStatusUpdateSerializer(serializers.Serializer):
     note = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""
     )
+
+
+class RoomBulkRowSerializer(serializers.Serializer):
+    """One room in a bulk-create request. Structural validation only — tenancy,
+    duplicate and quota checks run in :func:`services.bulk_create_rooms`."""
+
+    number = serializers.CharField(max_length=32)
+    display_name = serializers.CharField(
+        max_length=140, required=False, allow_blank=True, default=""
+    )
+    floor = serializers.IntegerField()
+    room_type = serializers.IntegerField()
+    is_active = serializers.BooleanField(required=False, default=True)
+    initial_status = serializers.ChoiceField(
+        choices=RoomStatus.choices, required=False, default=RoomStatus.AVAILABLE
+    )
+    status_note = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+    def validate_number(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("A room number is required.")
+        return value
+
+
+class RoomBulkCreateSerializer(serializers.Serializer):
+    rooms = serializers.ListField(child=RoomBulkRowSerializer(), min_length=1)
+
+    def validate_rooms(self, value):
+        # Over-max is a stable, typed error (not a generic list ValidationError)
+        # so the frontend can distinguish it. `MAX_BULK_ROOMS` has a single
+        # source of truth in services.
+        if len(value) > MAX_BULK_ROOMS:
+            raise BulkRequestTooLarge(
+                {"limit": MAX_BULK_ROOMS, "requested": len(value)}
+            )
+        return value

@@ -4,6 +4,7 @@ from django.urls import path
 from .views import (
     FloorDetailView,
     FloorListCreateView,
+    RoomBulkCreateView,
     RoomDetailView,
     RoomListCreateView,
     RoomOperationalBoardView,
@@ -29,6 +30,8 @@ urlpatterns = [
         name="room-operational-board",
     ),
     path("rooms/", RoomListCreateView.as_view(), name="room-list"),
+    # Registered BEFORE rooms/<int:pk>/ so "bulk" is never swallowed by the pk.
+    path("rooms/bulk/", RoomBulkCreateView.as_view(), name="room-bulk-create"),
     path("rooms/<int:pk>/", RoomDetailView.as_view(), name="room-detail"),
     path("rooms/<int:pk>/status/", RoomStatusView.as_view(), name="room-status"),
 ]

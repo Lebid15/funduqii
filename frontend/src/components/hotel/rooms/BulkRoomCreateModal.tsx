@@ -11,17 +11,14 @@ import {
   Select,
   Switch,
 } from "@/components/ui";
-import {
-  changeRoomStatus,
-  createRoom,
-  getOperationalBoard,
-} from "@/lib/api/rooms";
-import { messageForError } from "@/lib/api/errors";
-import type { Floor, RoomStatus, RoomType } from "@/lib/api/types";
+import { bulkCreateRooms, getOperationalBoard } from "@/lib/api/rooms";
+import { isApiError, messageForError } from "@/lib/api/errors";
+import type { Floor, RoomBulkRow, RoomStatus, RoomType } from "@/lib/api/types";
 import { roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
+/** Hard cap — mirrors the backend MAX_BULK_ROOMS (all-or-nothing batch). */
 const MAX_RANGE = 100;
 const SETTABLE_STATUSES: RoomStatus[] = [
   "available",
@@ -32,18 +29,12 @@ const SETTABLE_STATUSES: RoomStatus[] = [
 ];
 const NOTE_REQUIRED: RoomStatus[] = ["maintenance", "out_of_service"];
 
-interface BulkResult {
-  created: string[];
-  failed: Array<{ number: string; reason: string }>;
-}
-
 /**
  * Bulk room creation (owner spec): floor + type + a numeric range (optional
- * prefix / display-name base) with capacity & price shown from the type,
- * an optional initial status (controlled endpoint, note when required), an
- * explicit PREVIEW with duplicates called out and auto-skipped, a 100-room
- * cap, then sequential `createRoom` calls (no new backend) with live
- * progress and an honest created/failed summary.
+ * prefix) with an optional initial status, an explicit PREVIEW with existing
+ * numbers called out and auto-skipped, a 100-room client cap, then ONE
+ * all-or-nothing request to `POST /rooms/bulk/` (no per-room loop). The result
+ * reports created_count and maps the typed error codes to readable messages.
  */
 export function BulkRoomCreateModal({
   open,
@@ -60,6 +51,7 @@ export function BulkRoomCreateModal({
 }) {
   const { t } = useI18n();
   const b = t.rooms.board;
+  const bulk = t.rooms.bulk;
   const access = useHotelAccess();
   const canStatus =
     access === null || (!access.loading && access.can("rooms.status_update"));
@@ -75,8 +67,7 @@ export function BulkRoomCreateModal({
   const [isActive, setIsActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [result, setResult] = useState<BulkResult | null>(null);
+  const [createdCount, setCreatedCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -89,10 +80,9 @@ export function BulkRoomCreateModal({
     setStatusNote("");
     setIsActive(true);
     setError(null);
-    setProgress("");
-    setResult(null);
+    setCreatedCount(null);
     // Existing numbers (incl. archived) for the duplicate preview — one
-    // read-only call.
+    // read-only call so known collisions are auto-skipped before submit.
     getOperationalBoard()
       .then((board) => setExisting(new Set(board.rooms.map((r) => r.number))))
       .catch(() => setExisting(new Set()));
@@ -123,9 +113,40 @@ export function BulkRoomCreateModal({
     NOTE_REQUIRED.includes(status) &&
     !statusNote.trim();
 
+  /** Map the typed bulk error codes (with their details) to readable text. */
+  function describeError(err: unknown): string {
+    if (isApiError(err)) {
+      const details =
+        err.details && typeof err.details === "object"
+          ? (err.details as Record<string, unknown>)
+          : {};
+      if (err.code === "duplicate_room_number") {
+        const nums = Array.isArray(details.numbers)
+          ? (details.numbers as string[]).join("، ")
+          : "";
+        return details.source === "existing"
+          ? bulk.duplicateExisting.replace("{numbers}", nums)
+          : bulk.duplicateInRequest.replace("{numbers}", nums);
+      }
+      if (err.code === "bulk_request_too_large") {
+        return bulk.tooLarge.replace("{limit}", String(details.limit ?? MAX_RANGE));
+      }
+      if (err.code === "room_limit_reached") {
+        return bulk.limitReached
+          .replace("{usage}", String(details.usage ?? "—"))
+          .replace("{limit}", String(details.limit ?? "—"));
+      }
+    }
+    return messageForError(err, t);
+  }
+
   async function run() {
     if (!floor || !type || fresh.length === 0) {
       setError(t.errors.validation);
+      return;
+    }
+    if (fresh.length > MAX_RANGE) {
+      setError(bulk.tooLarge.replace("{limit}", String(MAX_RANGE)));
       return;
     }
     if (noteMissing) {
@@ -134,35 +155,25 @@ export function BulkRoomCreateModal({
     }
     setError(null);
     setBusy(true);
-    const created: string[] = [];
-    const failed: Array<{ number: string; reason: string }> = [];
-    for (let i = 0; i < fresh.length; i += 1) {
-      const number = fresh[i];
-      setProgress(
-        b.bulkProgress
-          .replace("{done}", String(i + 1))
-          .replace("{total}", String(fresh.length)),
-      );
-      try {
-        const room = await createRoom({
-          number,
-          floor: Number(floor),
-          room_type: Number(type),
-          is_active: isActive,
-        });
-        // Optional initial status through the CONTROLLED endpoint.
-        if (canStatus && status !== "available") {
-          await changeRoomStatus(room.id, status, statusNote);
-        }
-        created.push(number);
-      } catch (err) {
-        failed.push({ number, reason: messageForError(err, t) });
-      }
+    const withStatus = canStatus && status !== "available";
+    const rows: RoomBulkRow[] = fresh.map((number) => ({
+      number,
+      floor: Number(floor),
+      room_type: Number(type),
+      is_active: isActive,
+      ...(withStatus
+        ? { initial_status: status, status_note: statusNote.trim() }
+        : {}),
+    }));
+    try {
+      const res = await bulkCreateRooms(rows);
+      setCreatedCount(res.created_count);
+      onCreated();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
-    setProgress("");
-    setResult({ created, failed });
-    if (created.length > 0) onCreated();
   }
 
   const floorOptions = floors.map((f) => ({ value: String(f.id), label: f.name }));
@@ -175,6 +186,8 @@ export function BulkRoomCreateModal({
     label: roomStatusLabel(s, t),
   }));
 
+  const done = createdCount !== null;
+
   return (
     <Modal
       open={open}
@@ -182,7 +195,7 @@ export function BulkRoomCreateModal({
       title={b.addRoomRange}
       closeLabel={t.common.close}
       footer={
-        result ? (
+        done ? (
           <Button variant="secondary" onClick={onClose}>{t.common.close}</Button>
         ) : (
           <>
@@ -200,27 +213,11 @@ export function BulkRoomCreateModal({
         )
       }
     >
-      {result ? (
+      {done ? (
         <div className="stack">
-          {result.created.length > 0 ? (
-            <Alert tone="success">
-              {b.bulkCreated.replace("{count}", String(result.created.length))}
-            </Alert>
-          ) : null}
-          {result.failed.length > 0 ? (
-            <Alert tone="error">
-              {b.bulkFailed.replace("{count}", String(result.failed.length))}
-            </Alert>
-          ) : null}
-          {result.failed.length > 0 ? (
-            <ul className="room-op-bulk-list">
-              {result.failed.map((f) => (
-                <li key={f.number}>
-                  <strong>{f.number}</strong> — {f.reason}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <Alert tone="success">
+            {bulk.createdCount.replace("{count}", String(createdCount))}
+          </Alert>
         </div>
       ) : (
         <div className="stack">
@@ -270,7 +267,7 @@ export function BulkRoomCreateModal({
               />
             </FormField>
             {canStatus ? (
-              <FormField label={b.roomStatus} htmlFor="bulk-status">
+              <FormField label={bulk.initialStatus} htmlFor="bulk-status">
                 <Select
                   id="bulk-status"
                   value={status}
@@ -320,7 +317,6 @@ export function BulkRoomCreateModal({
               ) : null}
             </div>
           ) : null}
-          {progress ? <p className="muted">{progress}</p> : null}
         </div>
       )}
     </Modal>

@@ -9,6 +9,8 @@ import type {
   Floor,
   PaginatedResponse,
   Room,
+  RoomBulkCreateResponse,
+  RoomBulkRow,
   RoomOperationalBoard,
   RoomStatus,
   RoomType,
@@ -126,12 +128,28 @@ export interface RoomWriteBody {
   floor: number;
   room_type: number;
   is_active?: boolean;
+  /** Write-only on CREATE only (default "available"). A non-"available"
+   * value additionally requires rooms.status_update server-side. */
+  initial_status?: RoomStatus;
+  /** Required by the backend for maintenance / out_of_service initial status. */
+  status_note?: string;
 }
 
 export function createRoom(body: RoomWriteBody): Promise<Room> {
   return hotelJson<Room>("/rooms", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/** Create up to 100 rooms in ONE all-or-nothing request (POST /rooms/bulk/).
+ * The whole batch fails atomically on any duplicate / quota / tenancy error. */
+export function bulkCreateRooms(
+  rooms: RoomBulkRow[],
+): Promise<RoomBulkCreateResponse> {
+  return hotelJson<RoomBulkCreateResponse>("/rooms/bulk", {
+    method: "POST",
+    body: JSON.stringify({ rooms }),
   });
 }
 

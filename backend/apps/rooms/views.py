@@ -6,20 +6,26 @@ inventory only: no reservations, availability, guests or money.
 """
 from __future__ import annotations
 
-from django.db import transaction
+from django.db.models import ProtectedError
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.exceptions import (
+    BulkRequestTooLarge,
+    PermissionDenied,
+    ResourceInUse,
+)
 from apps.rbac.permissions import HasHotelPermission
+from apps.rbac.services import has_hotel_permission
 from apps.subscriptions.enforcement import ensure_hotel_operational
-from apps.subscriptions.entitlements import check_room_quota
 
 from . import services
 from .models import Floor, Room, RoomStatus, RoomType
 from .serializers import (
     FloorSerializer,
+    RoomBulkCreateSerializer,
     RoomSerializer,
     RoomStatusUpdateSerializer,
     RoomTypeSerializer,
@@ -38,6 +44,32 @@ def _guard_write(request: Request) -> None:
     # hotels AND hotels without an active subscription are refused here
     # (hotel_suspended / subscription_inactive). Reads are never blocked.
     ensure_hotel_operational(request.hotel)
+
+
+def _require_status_update_for(request: Request, initial_statuses) -> None:
+    """H1: creating a room in a NON-available initial status is a status change,
+    so it also requires ``rooms.status_update`` (in addition to ``rooms.create``)
+    — checked BEFORE any write, for both single and bulk create. ``rooms.create``
+    alone covers a plain available room. ``initial_statuses`` is the iterable of
+    requested initial statuses."""
+    needs_status = any(
+        st and st != RoomStatus.AVAILABLE for st in initial_statuses
+    )
+    if needs_status and not has_hotel_permission(
+        request.user, request.hotel, "rooms.status_update"
+    ):
+        raise PermissionDenied()
+
+
+def _safe_delete(instance, reason: str) -> None:
+    """Delete ``instance``, converting any residual PROTECT violation into a
+    409 ``ResourceInUse`` instead of an unhandled 500. The explicit
+    ``ensure_deletable_*`` guards already cover the enumerated relations; this
+    is the safety net for any unenumerated PROTECT foreign key."""
+    try:
+        instance.delete()
+    except ProtectedError as exc:
+        raise ResourceInUse({"reason": reason}) from exc
 
 
 class _HotelScopedMixin:
@@ -90,7 +122,7 @@ class FloorDetailView(_HotelScopedMixin, generics.RetrieveUpdateDestroyAPIView):
     def perform_destroy(self, instance):
         _guard_write(self.request)
         services.ensure_deletable_floor(instance)
-        instance.delete()
+        _safe_delete(instance, "floor_protected")
 
 
 # --- Room types -------------------------------------------------------------
@@ -124,7 +156,7 @@ class RoomTypeDetailView(_HotelScopedMixin, generics.RetrieveUpdateDestroyAPIVie
     def perform_destroy(self, instance):
         _guard_write(self.request)
         services.ensure_deletable_room_type(instance)
-        instance.delete()
+        _safe_delete(instance, "room_type_protected")
 
 
 # --- Rooms ------------------------------------------------------------------
@@ -169,14 +201,79 @@ class RoomListCreateView(_HotelScopedMixin, generics.ListCreateAPIView):
         _guard_write(request)
         serializer = RoomWriteSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        # Entitlement gate (subscriptions closure): the plan's room_limit is
-        # enforced under a row lock so a concurrent create cannot exceed it.
-        # Existing rooms are grandfathered — only NEW rooms are blocked.
-        with transaction.atomic():
-            check_room_quota(request.hotel)
-            room = serializer.save(hotel=request.hotel)
+        data = serializer.validated_data
+        initial_status = data.get("initial_status", RoomStatus.AVAILABLE)
+        # H1: a non-available initial status also requires rooms.status_update.
+        _require_status_update_for(request, [initial_status])
+        # H2: single create shares the central path with bulk — quota check,
+        # room creation and the initial-status move (RoomStatusLog) all inside
+        # ONE atomic transaction. A single create is not batch noise, so its
+        # status move notifies normally (notify=True).
+        room = services.create_room(
+            request.hotel,
+            number=data["number"],
+            display_name=data.get("display_name", ""),
+            floor=data["floor"],
+            room_type=data["room_type"],
+            is_active=data.get("is_active", True),
+            initial_status=initial_status,
+            status_note=data.get("status_note", ""),
+            user=request.user,
+            notify=True,
+        )
         return Response(
             RoomSerializer(room).data, status=status.HTTP_201_CREATED
+        )
+
+
+class RoomBulkCreateView(APIView):
+    """Create many rooms in one all-or-nothing request (thin view — the batch
+    validation, quota check and transaction live in ``services``). Same
+    ``rooms.create`` permission and operational gate as the single create; a
+    non-available initial status on any row also requires ``rooms.status_update``
+    (H1), enforced before any write."""
+
+    def get_permissions(self):
+        return [CanCreate()]
+
+    def post(self, request: Request) -> Response:
+        _guard_write(request)
+        # L1 hardening: reject an oversized batch BEFORE DRF child-validates
+        # every element. The list is already parsed, so this is a cheap length
+        # check; without it a huge payload (up to the body limit) would be fully
+        # per-row validated before rejection. The serializer's validate_rooms
+        # and the service keep the same cap as defense-in-depth.
+        #
+        # A malformed TOP-LEVEL array body (e.g. `[{...}]`) makes request.data a
+        # list, not a dict — guard with isinstance so `.get` is never called on
+        # it (that would raise AttributeError -> unhandled 500). A non-dict body
+        # falls through to the serializer, which returns a clean 400 for the
+        # wrong shape.
+        raw_rooms = (
+            request.data.get("rooms") if isinstance(request.data, dict) else None
+        )
+        if isinstance(raw_rooms, list) and len(raw_rooms) > services.MAX_BULK_ROOMS:
+            raise BulkRequestTooLarge(
+                {"limit": services.MAX_BULK_ROOMS, "requested": len(raw_rooms)}
+            )
+        serializer = RoomBulkCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        rows = serializer.validated_data["rooms"]
+        # H1: any row with a non-available initial status also requires
+        # rooms.status_update — enforced BEFORE any write (all-or-nothing).
+        _require_status_update_for(
+            request,
+            [r.get("initial_status", RoomStatus.AVAILABLE) for r in rows],
+        )
+        rooms = services.bulk_create_rooms(request.hotel, rows, request.user)
+        return Response(
+            {
+                "created_count": len(rooms),
+                "rooms": RoomSerializer(rooms, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -207,7 +304,8 @@ class RoomDetailView(_HotelScopedMixin, generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         _guard_write(self.request)
-        instance.delete()
+        services.ensure_deletable_room(instance)
+        _safe_delete(instance, "room_protected")
 
 
 class RoomOperationalBoardView(APIView):
