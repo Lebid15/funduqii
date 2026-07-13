@@ -13,11 +13,12 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import PermissionDenied
+from apps.common.exceptions import PermissionDenied, ReservationHasActiveStay
 from apps.rbac.permissions import HasHotelPermission
 from apps.rbac.services import has_hotel_permission
 from apps.subscriptions.enforcement import ensure_hotel_operational
@@ -33,6 +34,7 @@ from .models import (
 from .serializers import (
     AvailabilityQuerySerializer,
     CancelReservationSerializer,
+    ReservationDepositSerializer,
     ReservationSerializer,
     ReservationStatusLogSerializer,
     ReservationWriteSerializer,
@@ -46,6 +48,10 @@ CanUpdate = HasHotelPermission("reservations.update")
 CanConfirm = HasHotelPermission("reservations.confirm")
 CanCancel = HasHotelPermission("reservations.cancel")
 CanAvailability = HasHotelPermission("availability.view")
+# §27 deposit-for-future — recording money requires the payment permission
+# (a foreign-currency manual FX rate additionally requires exchange_rate.override,
+# enforced in the view). NEVER a reservations.* write permission for money (§42).
+CanPaymentCreate = HasHotelPermission("finance.payment_create")
 
 
 def _guard_write(request: Request) -> None:
@@ -87,6 +93,72 @@ def _business_day_range(hotel) -> tuple[datetime.datetime, datetime.datetime]:
     return start, start + datetime.timedelta(days=1)
 
 
+def _collect_reservation_payments(request: Request, reservation) -> list:
+    """Every Payment on the reservation's folio(s), oldest first, with FX.
+
+    Includes voided/reversed rows for an honest ledger in the details/edit view;
+    the derived ``paid`` total counts only POSTED amounts (see
+    ``reservation_financials``). Uses the prefetched ``folios__payments`` cache
+    when present, so no N+1 on the list path.
+    """
+    from apps.finance.serializers import PaymentSerializer
+
+    payments = []
+    for folio in reservation.folios.all():
+        payments.extend(folio.payments.all())
+    payments.sort(key=lambda p: (p.paid_at, p.id))
+    return PaymentSerializer(payments, many=True, context={"request": request}).data
+
+
+def _financial_summary_payload(request: Request, reservation) -> dict:
+    """Build the reservation financial-summary response (§26/§31/§35/§39).
+
+    Money is gated by ``finance.view``: an unauthorized caller still sees the
+    non-sensitive shape (currency / nights / is_priced / payment count) but all
+    money fields are null and the payments list is empty — masked SERVER-SIDE,
+    fail-closed. All amounts are Decimal-as-string (money() upstream)."""
+    from .services import reservation_financials
+
+    hotel = request.hotel
+    can_money = has_hotel_permission(request.user, hotel, "finance.view")
+    fin = reservation_financials(reservation, hotel=hotel)
+
+    def s(value):
+        return str(value) if value is not None else None
+
+    payload = {
+        "reservation": reservation.id,
+        "reservation_number": reservation.reservation_number,
+        "currency": fin["currency"],
+        "nights": fin["nights"],
+        "is_priced": fin["is_priced"],
+        "can_view_money": can_money,
+    }
+    if can_money:
+        payload.update(
+            {
+                "nightly_rate": s(fin["nightly_rate"]),
+                "reservation_total": s(fin["reservation_total"]),
+                "paid": s(fin["paid"]),
+                "remaining": s(fin["remaining"]),
+                "payment_status": fin["payment_status"],
+                "payments": _collect_reservation_payments(request, reservation),
+            }
+        )
+    else:
+        payload.update(
+            {
+                "nightly_rate": None,
+                "reservation_total": None,
+                "paid": None,
+                "remaining": None,
+                "payment_status": None,
+                "payments": [],
+            }
+        )
+    return payload
+
+
 # --- Reservations -----------------------------------------------------------
 
 
@@ -101,7 +173,12 @@ class ReservationListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         qs = (
             Reservation.objects.filter(hotel=self.request.hotel)
-            .prefetch_related("lines__room_type", "occupants")
+            # ``folios__payments`` + ``stays`` feed the derived financial summary
+            # (paid/remaining/status) and ``stay_status`` on the read serializer
+            # without an N+1 (RESERVATIONS-FORM-UX-CORRECTION §25/§35).
+            .prefetch_related(
+                "lines__room_type", "occupants", "folios__payments", "stays"
+            )
         )
         params = self.request.query_params
 
@@ -218,7 +295,7 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
 
     def get_queryset(self):
         return Reservation.objects.filter(hotel=self.request.hotel).prefetch_related(
-            "lines__room_type", "occupants"
+            "lines__room_type", "occupants", "folios__payments", "stays"
         )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
@@ -297,6 +374,122 @@ class ReservationHoldView(APIView):
         )
 
 
+class ReservationPaymentCreateView(APIView):
+    """Record a pre-arrival DEPOSIT on a future/held/confirmed reservation that
+    has NO stay yet (RESERVATIONS-FORM-UX-CORRECTION §27).
+
+    ``POST /api/v1/hotel/reservations/<pk>/payments/`` reuses the sanctioned
+    finance money path ``record_reservation_payment`` — which gets/creates the
+    reservation's ONE open pre-arrival folio (``ensure_reservation_folio``) and is
+    the SAME folio reused at check-in — so no duplicate ledger is created and the
+    balance stays derived (invariant #1). Requires ``finance.payment_create``; a
+    foreign-currency deposit with a manual FX rate additionally requires
+    ``exchange_rate.override`` (mirrors ``stays.ImmediateCheckInView._authorize_deposit``).
+    A deposit is refused once the reservation has an in-house stay (that money goes
+    through the stay/folio path) and on a cancelled/expired reservation. A zero
+    tender is rejected by the serializer. Returns the created payment + the updated
+    derived financial summary.
+    """
+
+    def get_permissions(self):
+        return [CanPaymentCreate()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        reservation = _get_reservation(request, pk)
+
+        # A started stay's money goes through the stay/folio path — never a
+        # pre-arrival deposit here (§27, invariant #5).
+        if services.has_in_house_stay(reservation):
+            raise ReservationHasActiveStay(
+                {"reservation": reservation.id, "reason": "deposit_via_stay_folio"}
+            )
+        # Only a live booking may take a deposit — a cancelled/expired one cannot
+        # grow new money.
+        if reservation.status not in (
+            ReservationStatus.HELD,
+            ReservationStatus.CONFIRMED,
+        ):
+            raise DRFValidationError(
+                {
+                    "reservation": (
+                        "A deposit can only be recorded on a held or confirmed "
+                        "reservation."
+                    )
+                }
+            )
+
+        serializer = ReservationDepositSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        deposit = dict(serializer.validated_data)
+        self._authorize_deposit(request, request.hotel, deposit)
+
+        from apps.finance.serializers import PaymentSerializer
+        from apps.finance.services import record_reservation_payment
+
+        payment = record_reservation_payment(
+            reservation,
+            amount=deposit.get("amount"),
+            method=deposit["method"],
+            currency=(deposit.get("currency") or None),
+            original_amount=deposit.get("original_amount"),
+            exchange_rate=deposit.get("exchange_rate"),
+            rate_basis=(deposit.get("rate_basis") or ""),
+            payer_name=(deposit.get("payer_name") or ""),
+            reference=(deposit.get("reference") or ""),
+            notes=(deposit.get("notes") or ""),
+            user=request.user,
+        )
+        return Response(
+            {
+                "payment": PaymentSerializer(
+                    payment, context={"request": request}
+                ).data,
+                "financial_summary": _financial_summary_payload(request, reservation),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _authorize_deposit(self, request: Request, hotel, deposit) -> None:
+        # Recording money requires the payment permission (also the view perm); a
+        # manual FX rate on a foreign-currency deposit additionally requires the
+        # override permission — identical to the immediate-check-in deposit rule.
+        if not has_hotel_permission(request.user, hotel, "finance.payment_create"):
+            raise PermissionDenied()
+        currency = (deposit.get("currency") or "").strip().upper()
+        base = (
+            getattr(getattr(hotel, "settings", None), "default_currency", "")
+            or "USD"
+        ).upper()
+        if currency and currency != base and deposit.get("exchange_rate") is not None:
+            if not has_hotel_permission(request.user, hotel, "exchange_rate.override"):
+                raise PermissionDenied()
+
+
+class ReservationFinancialSummaryView(APIView):
+    """Full DERIVED financial summary for the details/edit screen (§26/§31/§35/§39).
+
+    ``GET /api/v1/hotel/reservations/<pk>/financial-summary/`` — permission
+    ``reservations.view`` to reach the reservation; the MONEY block (rate, total,
+    paid, remaining, status, payments+FX) is additionally gated by ``finance.view``
+    and masked server-side otherwise. Read-only; nothing is created; the balance is
+    re-derived, never stored."""
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request, pk: int) -> Response:
+        reservation = generics.get_object_or_404(
+            Reservation.objects.filter(hotel=request.hotel).prefetch_related(
+                "lines__room_type", "folios__payments"
+            ),
+            pk=pk,
+        )
+        return Response(_financial_summary_payload(request, reservation))
+
+
 class ReservationLogsView(APIView):
     def get_permissions(self):
         return [CanView()]
@@ -323,7 +516,11 @@ class ReservationOverviewView(APIView):
         for row in base.values("status"):
             counts[row["status"]] = counts.get(row["status"], 0) + 1
 
-        blocking = base.filter(blocking_q())
+        # Prefetch what the read serializer's derived fields need so the two
+        # small (<=10) lists do not N+1 on lines/folios/payments/stays.
+        blocking = base.filter(blocking_q()).prefetch_related(
+            "lines__room_type", "occupants", "folios__payments", "stays"
+        )
         arrivals = (
             blocking.filter(check_in_date__gte=today)
             .order_by("check_in_date")[:10]

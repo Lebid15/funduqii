@@ -4366,6 +4366,70 @@ a {
   padding-block-start: var(--space-1);
 }
 
+/* 5) Financial summary well (§35) — a sunken, permission-gated money block of
+ * separate mini-fields. Additive + token-only; distinct from the fact rows so
+ * money never reads as just another line. */
+.res-card__money {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.res-card__money-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.res-card__money-item > dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.res-card__money-item > dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+.res-card__money-item--total > dd {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+.res-card__money-status {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+.res-card__money-status > dd {
+  margin: 0;
+}
+.res-card__money-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+
+/* 7) Smart action grid (§38) — a tidy grid (no overflow menu) that starts at
+ * two columns in the narrow 4-up card and widens as the card grows, so a state
+ * with the most actions still resolves to one or two clean rows. Full-width
+ * cells with wrapping labels keep it free of overlap and horizontal scroll. */
+.res-card__actions--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  align-items: stretch;
+}
+.res-card__actions--grid > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
 /* Detail modal section sub-headings. */
 .res-detail__subhead {
   display: inline-flex;
@@ -4379,6 +4443,277 @@ a {
 
 @media (max-width: 640px) {
   .res-card__badges {
+    margin-inline-start: 0;
+  }
+}
+
+/* --- Reservation form shell (RESERVATIONS-FORM-UX-CORRECTION · F1) --------- */
+/* The reservation wizard is now a full-screen PAGE, not a modal. A fixed
+   header + stepper + footer frame ONE scroll owner (`.resform-main`), so the
+   app shell underneath never double-scrolls. Everything is additive, token-only
+   and RTL/LTR-safe via logical properties — no palette, no literals. */
+.resform-shell {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--color-bg);
+  animation: fade-in var(--transition-base);
+}
+
+/* Band 1 — fixed header: back/close + title + reservation-number slot. */
+.resform-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.resform-header__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.resform-header__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resform-header__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.resform-header__slot {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+.resform-header__number {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
+}
+
+/* Band 3 — the ONLY scroller. `min-height: 0` is the linchpin: it overrides the
+   default `min-height: auto` on a flex child (which refuses to shrink below its
+   content) so this band is bounded to the leftover height between the fixed
+   header/stepper and footer — making ITS `overflow-y` the single scrollbar. No
+   descendant may set its own overflow/height. */
+.resform-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.resform-content {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding: var(--space-6) var(--space-6) var(--space-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Band 4 — fixed footer: Cancel/Back on the start, primary on the end. */
+.resform-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  border-block-start: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.resform-footer__primary {
+  margin-inline-start: auto;
+}
+
+/* Band 2 — the stepper. A full rail on wider screens; a compact
+   "step n of N — label" + dot rail on phones (dual-rendered, toggled by media
+   query so there is no viewport JS / hydration mismatch). */
+.resform-stepper {
+  flex: none;
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-6);
+}
+.resform-stepper__rail {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 72rem;
+  margin-inline: auto;
+}
+.resform-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  text-align: center;
+}
+.resform-step:disabled {
+  cursor: default;
+}
+.resform-step:focus-visible {
+  outline: none;
+}
+.resform-step:focus-visible .resform-step__num {
+  box-shadow: var(--focus-ring);
+}
+/* Exactly ONE number per step lives here — the label carries no digit, which
+   kills the old duplicated "1. 1" numbering. */
+.resform-step__num {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-full);
+  font-weight: var(--font-weight-extrabold);
+  font-size: var(--font-size-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-muted);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.resform-step__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+  max-width: 14ch;
+}
+/* Connector between steps — grows to fill and sits level with the numbers. */
+.resform-step__bar {
+  flex: 1 1 auto;
+  height: 2px;
+  min-width: var(--space-4);
+  margin-block-start: 1.05rem;
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+.resform-step__bar--done {
+  background: var(--color-success);
+}
+/* current */
+.resform-step--current .resform-step__num {
+  background: var(--gradient-brand);
+  border-color: transparent;
+  color: var(--color-primary-contrast);
+  box-shadow: var(--shadow-brand);
+}
+.resform-step--current .resform-step__label {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-bold);
+}
+/* done */
+.resform-step--done .resform-step__num {
+  background: var(--color-success-soft);
+  border-color: transparent;
+  color: var(--color-success);
+}
+.resform-step--done .resform-step__label {
+  color: var(--color-fg);
+}
+/* error */
+.resform-step--error .resform-step__num {
+  background: var(--color-danger-soft);
+  border-color: transparent;
+  color: var(--color-danger);
+}
+.resform-step--error .resform-step__label {
+  color: var(--color-danger);
+}
+
+/* Compact mobile stepper — hidden until ≤560px. */
+.resform-stepper__compact {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.resform-stepper__compact-line {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.resform-stepper__dots {
+  display: flex;
+  gap: var(--space-2);
+}
+.resform-step__dot {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+}
+.resform-step__dot--current {
+  background: var(--color-primary);
+}
+.resform-step__dot--done {
+  background: var(--color-success);
+}
+.resform-step__dot--error {
+  background: var(--color-danger);
+}
+
+/* A 3-up field grid for short-field rows (consumed by later step packages):
+   3 → 2 at 900px → 1 at 560px. Token-based gap inherited from `.form-grid`. */
+.form-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 900px) {
+  .form-grid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .form-grid--3 {
+    grid-template-columns: 1fr;
+  }
+  /* Mobile: hide the full rail, show the compact stepper, wrap the footer into
+     thumb-reachable block buttons (primary full-width on its own row). */
+  .resform-stepper__rail {
+    display: none;
+  }
+  .resform-stepper__compact {
+    display: flex;
+  }
+  .resform-header {
+    padding-inline: var(--space-4);
+  }
+  .resform-content {
+    padding-inline: var(--space-4);
+  }
+  .resform-footer {
+    flex-wrap: wrap;
+    padding-inline: var(--space-4);
+  }
+  .resform-footer > .btn {
+    flex: 1 1 auto;
+  }
+  .resform-footer__primary {
+    flex-basis: 100%;
     margin-inline-start: 0;
   }
 }

@@ -1,13 +1,14 @@
 "use client";
 
-import { CheckCircle2, Link2Off, ShieldAlert, UserRound } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link2Off, UserRound } from "lucide-react";
 
 import {
   Alert,
   Badge,
   Button,
+  ConfirmDialog,
   FormField,
-  Icon,
   Input,
   SectionCard,
   Switch,
@@ -16,12 +17,19 @@ import type { Guest } from "@/lib/api/types";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 import { useGuestLookup } from "./useGuestLookup";
-import type { ReservationDraftActions, GuestDraft } from "./useReservationDraft";
+import {
+  composeFullName,
+  type ReservationDraftActions,
+  type GuestDraft,
+} from "./useReservationDraft";
 
-/** Step 1 — the primary guest. Structured identity fields, a "no email"
- * toggle, a composed (editable) full name, and the debounced smart lookup that
- * offers to link an existing guest. Blocking + masking are backend-driven and
- * only surfaced here. */
+/** Step 1 — the primary guest. The national id + phone lead the form because
+ * they drive the debounced smart lookup (§6/§7). The full name is NOT an input:
+ * it is composed, display-only, from the structured parts. A "no email" toggle
+ * disables the email field. On a single lookup match with no staff-entered data
+ * the guest is imported automatically; when data was already typed, a confirm
+ * guards the overwrite. An id↔phone conflict is surfaced, never merged. Blocking
+ * + masking stay backend-driven and are only surfaced here. */
 export function GuestStep({
   guest,
   actions,
@@ -40,22 +48,56 @@ export function GuestStep({
     enabled: !linked,
   });
 
-  function apply(match: Guest) {
+  // Any identity data the staff has already entered, beyond the lookup drivers
+  // (id/phone). Its presence flips a single match from "auto-import" to
+  // "confirm before overwrite".
+  const hasTypedData = Boolean(
+    guest.first_name.trim() ||
+      guest.last_name.trim() ||
+      guest.father_name.trim() ||
+      guest.mother_name.trim() ||
+      guest.nationality.trim() ||
+      guest.date_of_birth ||
+      guest.email.trim(),
+  );
+
+  // Pending overwrite confirmation (single match / manual pick over typed data).
+  const [confirmMatch, setConfirmMatch] = useState<Guest | null>(null);
+
+  // Auto-import a single match when nothing was typed yet — once per guest id.
+  const autoApplied = useRef<number | null>(null);
+  useEffect(() => {
+    if (linked) {
+      autoApplied.current = null;
+      return;
+    }
+    if (lookup.status !== "single") return;
+    const match = lookup.results[0];
+    if (!match || hasTypedData) return;
+    if (autoApplied.current === match.id) return;
+    autoApplied.current = match.id;
     actions.applyGuestMatch(match);
+  }, [linked, lookup.status, lookup.results, hasTypedData, actions]);
+
+  /** Route a chosen match: overwrite-typed-data goes through a confirm. */
+  function pick(match: Guest) {
+    if (hasTypedData) setConfirmMatch(match);
+    else actions.applyGuestMatch(match);
   }
+
+  const composedName = composeFullName(
+    guest.first_name,
+    guest.father_name,
+    guest.last_name,
+  );
 
   return (
     <SectionCard title={g.title} icon={UserRound} description={g.description}>
-      {/* Linked / blocked banners --------------------------------------- */}
+      {/* Linked / blocked banner. */}
       {linked ? (
         <Alert tone={guest.is_blocked ? "error" : "success"}>
           <span className="cluster">
-            {guest.is_blocked ? (
-              <Icon icon={ShieldAlert} size="sm" />
-            ) : (
-              <Icon icon={CheckCircle2} size="sm" />
-            )}
-            {guest.is_blocked ? g.blockedBody : g.lookupLinked}
+            {guest.is_blocked ? g.blockedBody : g.lookupReturning}
             <Button
               variant="ghost"
               size="sm"
@@ -68,6 +110,7 @@ export function GuestStep({
         </Alert>
       ) : null}
 
+      {/* Row A — id + phone FIRST (they drive the lookup). */}
       <div className="form-grid">
         <FormField
           label={g.nationalId}
@@ -93,10 +136,11 @@ export function GuestStep({
         </FormField>
       </div>
 
-      {/* Lookup feedback ------------------------------------------------- */}
-      <GuestLookupFeedback state={lookup} linked={linked} onApply={apply} />
+      {/* Lookup feedback. */}
+      <GuestLookupFeedback state={lookup} linked={linked} onPick={pick} />
 
-      <div className="form-grid">
+      {/* Row B — structured names (3-up: first · last · father · mother). */}
+      <div className="form-grid form-grid--3">
         <FormField label={g.firstName} htmlFor="wiz-guest-first">
           <Input
             id="wiz-guest-first"
@@ -104,18 +148,18 @@ export function GuestStep({
             onChange={(e) => actions.setGuestField("first_name", e.target.value)}
           />
         </FormField>
-        <FormField label={g.fatherName} htmlFor="wiz-guest-father">
-          <Input
-            id="wiz-guest-father"
-            value={guest.father_name}
-            onChange={(e) => actions.setGuestField("father_name", e.target.value)}
-          />
-        </FormField>
         <FormField label={g.lastName} htmlFor="wiz-guest-last">
           <Input
             id="wiz-guest-last"
             value={guest.last_name}
             onChange={(e) => actions.setGuestField("last_name", e.target.value)}
+          />
+        </FormField>
+        <FormField label={g.fatherName} htmlFor="wiz-guest-father">
+          <Input
+            id="wiz-guest-father"
+            value={guest.father_name}
+            onChange={(e) => actions.setGuestField("father_name", e.target.value)}
           />
         </FormField>
         <FormField label={g.motherName} htmlFor="wiz-guest-mother">
@@ -127,15 +171,15 @@ export function GuestStep({
         </FormField>
       </div>
 
-      <FormField label={g.fullName} htmlFor="wiz-guest-full" hint={g.fullNameHint}>
-        <Input
-          id="wiz-guest-full"
-          value={guest.full_name}
-          onChange={(e) => actions.setFullName(e.target.value)}
-        />
-      </FormField>
+      {/* Display-only composed full name (never an input). */}
+      {composedName ? (
+        <p className="muted small">
+          {g.composedName}: <strong>{composedName}</strong>
+        </p>
+      ) : null}
 
-      <div className="form-grid">
+      {/* Row C — nationality · date of birth · email. */}
+      <div className="form-grid form-grid--3">
         <FormField label={g.nationality} htmlFor="wiz-guest-nat">
           <Input
             id="wiz-guest-nat"
@@ -155,8 +199,9 @@ export function GuestStep({
           <Input
             id="wiz-guest-email"
             type="email"
-            value={guest.email}
+            value={guest.no_email ? "" : guest.email}
             disabled={guest.no_email}
+            placeholder={guest.no_email ? g.noEmailPlaceholder : undefined}
             autoComplete="off"
             onChange={(e) => actions.setGuestField("email", e.target.value)}
           />
@@ -169,22 +214,37 @@ export function GuestStep({
         onChange={actions.setNoEmail}
         label={g.noEmail}
       />
+
+      {/* Overwrite guard — importing a match would replace typed-in data. */}
+      <ConfirmDialog
+        open={confirmMatch !== null}
+        title={g.lookupOverwriteTitle}
+        body={g.lookupOverwriteBody}
+        confirmLabel={g.lookupOverwriteConfirm}
+        cancelLabel={w.cancel}
+        closeLabel={w.cancel}
+        onConfirm={() => {
+          if (confirmMatch) actions.applyGuestMatch(confirmMatch);
+          setConfirmMatch(null);
+        }}
+        onClose={() => setConfirmMatch(null)}
+      />
     </SectionCard>
   );
 }
 
-/** The lookup outcome UI: single (offer autofill), multiple (pick list),
- * none (a discreet "new guest" hint) or searching. Blocked candidates are
- * flagged and their "use" action still links them (the wizard then gates
- * proceeding). */
+/** The lookup outcome UI: searching (spinner), none (a discreet "new guest"
+ * hint), conflict (a clear warning — never merged), or single/multiple (a small
+ * pick list). Blocked candidates are flagged; picking still links them and the
+ * shell then gates proceeding. */
 function GuestLookupFeedback({
   state,
   linked,
-  onApply,
+  onPick,
 }: {
   state: ReturnType<typeof useGuestLookup>;
   linked: boolean;
-  onApply: (guest: Guest) => void;
+  onPick: (guest: Guest) => void;
 }) {
   const { t } = useI18n();
   const g = t.reservations.wizard.guest;
@@ -192,7 +252,12 @@ function GuestLookupFeedback({
   if (linked) return null;
   if (state.status === "idle") return null;
   if (state.status === "searching") {
-    return <p className="muted small">{g.lookupSearching}</p>;
+    return (
+      <p className="cluster muted small" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        {g.lookupSearching}
+      </p>
+    );
   }
   if (state.status === "error") {
     return <p className="muted small">{g.lookupError}</p>;
@@ -200,8 +265,12 @@ function GuestLookupFeedback({
   if (state.status === "none") {
     return <p className="muted small">{g.lookupNone}</p>;
   }
+  if (state.status === "conflict") {
+    return <Alert tone="warning">{g.lookupConflict}</Alert>;
+  }
 
-  const heading = state.status === "single" ? g.lookupSingleTitle : g.lookupMultipleTitle;
+  const heading =
+    state.status === "single" ? g.lookupSingleTitle : g.lookupMultipleTitle;
   return (
     <div className="stack-tight" role="group" aria-label={heading}>
       <p className="muted small">{heading}</p>
@@ -210,10 +279,14 @@ function GuestLookupFeedback({
           <span className="cluster">
             <strong>{match.full_name || "—"}</strong>
             {match.is_vip ? <Badge tone="info">{g.vip}</Badge> : null}
-            {match.is_blocked ? <Badge tone="danger">{g.blockedBadge}</Badge> : null}
-            {match.phone ? <span className="muted small">{match.phone}</span> : null}
+            {match.is_blocked ? (
+              <Badge tone="danger">{g.blockedBadge}</Badge>
+            ) : null}
+            {match.phone ? (
+              <span className="muted small">{match.phone}</span>
+            ) : null}
           </span>
-          <Button variant="secondary" size="sm" onClick={() => onApply(match)}>
+          <Button variant="secondary" size="sm" onClick={() => onPick(match)}>
             {g.lookupUse}
           </Button>
         </div>

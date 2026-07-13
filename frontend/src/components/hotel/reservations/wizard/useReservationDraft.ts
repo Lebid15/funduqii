@@ -19,12 +19,16 @@ import type {
   ReservationCreateBody,
   ReservationLineBody,
   ReservationOccupantBody,
+  ReservationUpdateBody,
 } from "@/lib/api/reservations";
 import type {
   ExpectedPaymentMethod,
   Guest,
   OccupantRelationship,
+  Reservation,
+  ReservationDepositBody,
   ReservationDepositMethod,
+  ReservationDocument,
   ReservationDocumentType,
   ReservationSource,
 } from "@/lib/api/types";
@@ -73,24 +77,51 @@ export interface OccupantDraft {
   relationship: OccupantRelationship | "";
 }
 
+/** How the companions relate to the primary guest. CLIENT-ONLY for now: the
+ * backend has no `group_type` field, so it is never sent in the create body
+ * (see `toCreateBody`). It drives the family relationship-proof section of the
+ * documents step (`my_family`). */
+export type CompanionGroupType = "companions" | "my_family";
+
 export interface CompanionsDraft {
   has_companions: boolean;
+  /** Companions vs. one family unit — client-only, gates family-proof docs. */
+  group_type: CompanionGroupType;
   occupants: OccupantDraft[];
   /** Count only — no per-child fields are collected. */
   children: number;
 }
 
-/** Step 3 (Wave 2b) — a document staged in the UI. Files upload AFTER the
- * reservation is created (the upload needs the reservation id). Defined now;
- * the upload handling lands in Wave 2b. `occupantKey` links to an
- * `OccupantDraft.key` (or null for the primary guest). */
+/** Which subject a staged document belongs to. The `occupant` variant carries
+ * the STABLE `OccupantDraft.key` (never an array index) so removing or reordering
+ * companions can never swap a document onto the wrong person. `relationship_proof`
+ * documents (marriage contract / family record) attach at the RESERVATION level
+ * (occupant = null) — never to an individual child. */
+export type DocumentTarget =
+  | { kind: "primary" }
+  | { kind: "occupant"; occupantKey: string }
+  | { kind: "relationship_proof" };
+
+/** Step 3 — a document staged in the UI and uploaded as PART of Save (the create
+ * flow returns the reservation id the upload needs; there is no separate
+ * "upload later" step). The owner (§12) forbids FORCING a front/back requirement,
+ * and the backend `ReservationDocument` exposes exactly TWO file slots — so each
+ * document models ONE required `file` plus ONE OPTIONAL `additionalFile` under
+ * neutral labels. At submit `file` maps to `front_file` and `additionalFile` to
+ * `back_file` (see `useReservationSubmit`). */
 export interface PendingDocument {
   key: string;
+  target: DocumentTarget;
   doc_type: ReservationDocumentType;
   number: string;
-  occupantKey: string | null;
-  front_file: File | null;
-  back_file: File | null;
+  file: File | null;
+  additionalFile: File | null;
+  /** EDIT prefill (§33) — the SAVED server document this card represents. When
+   * set, the card shows an "on file" state with View/Replace and is NOT
+   * re-staged as a new upload: on save it goes through the REPLACE endpoint only
+   * if a new file or changed metadata was staged (see `useReservationEditSubmit`).
+   * `null`/absent means a brand-new document staged in the create/edit form. */
+  existing?: ReservationDocument | null;
 }
 
 /** Step 4 (Wave 2b) — the payment/deposit sub-draft. Money fields are decimal
@@ -118,6 +149,9 @@ export interface BookingDraft {
   check_out_date: string;
   expected_arrival_time: string;
   lines: BookingLineDraft[];
+  /** The floor chosen in the SEPARATE floor picker (§23) — gates the room list.
+   * Client-only (never sent): the room line carries the actual room + type. */
+  selected_floor_id: number | null;
   /** The physical room chosen from the availability picker (immediate flow). */
   selected_room_id: number | null;
   source: ReservationSource;
@@ -128,6 +162,8 @@ export interface BookingDraft {
    * "not specified" and is omitted from the create body. */
   expected_payment_method: ExpectedPaymentMethod;
   payment: PaymentDraft;
+  /** Free-text internal notes for the reservation (§19 section 6). */
+  notes: string;
   /** When on, submit atomically creates + checks in via `immediateCheckIn`. */
   immediate_check_in: boolean;
 }
@@ -206,6 +242,7 @@ export function createInitialDraft(
     },
     companions: {
       has_companions: false,
+      group_type: "companions",
       occupants: [],
       children: 0,
     },
@@ -215,6 +252,7 @@ export function createInitialDraft(
       check_out_date: "",
       expected_arrival_time: "",
       lines: [{ room_type: "", room: "", quantity: "1" }],
+      selected_floor_id: null,
       selected_room_id: null,
       source: "direct",
       status: "confirmed",
@@ -227,6 +265,7 @@ export function createInitialDraft(
         exchange_rate: "",
         rate_basis: "",
       },
+      notes: "",
       immediate_check_in: false,
     },
     ...overrides,
@@ -271,11 +310,11 @@ type OccupantTextField =
 type Action =
   | { type: "reset"; draft: ReservationDraft }
   | { type: "guest/set"; field: GuestTextField; value: string }
-  | { type: "guest/setFullName"; value: string }
   | { type: "guest/setNoEmail"; value: boolean }
   | { type: "guest/applyMatch"; guest: Guest }
   | { type: "guest/unlink" }
   | { type: "companions/setHas"; value: boolean }
+  | { type: "companions/setGroupType"; value: CompanionGroupType }
   | { type: "companions/addOccupant" }
   | { type: "companions/removeOccupant"; key: string }
   | {
@@ -302,8 +341,10 @@ const NAME_FIELDS: ReadonlySet<GuestTextField> = new Set([
   "last_name",
 ]);
 
+/** The display full name is ALWAYS derived from the structured parts — staff
+ * never type it (RESERVATIONS-FORM-UX-CORRECTION §6). `full_name_touched` stays
+ * on the shape for older callers but no longer gates composition. */
 function recomposeGuest(guest: GuestDraft): GuestDraft {
-  if (guest.full_name_touched) return guest;
   return {
     ...guest,
     full_name: composeFullName(
@@ -338,16 +379,6 @@ function reducer(state: ReservationDraft, action: Action): ReservationDraft {
       return { ...state, guest: next };
     }
 
-    case "guest/setFullName":
-      return {
-        ...state,
-        guest: {
-          ...state.guest,
-          full_name: action.value,
-          full_name_touched: true,
-        },
-      };
-
     case "guest/setNoEmail":
       return {
         ...state,
@@ -378,7 +409,13 @@ function reducer(state: ReservationDraft, action: Action): ReservationDraft {
         national_id_masked: masked,
         is_blocked: Boolean(g.is_blocked),
         full_name_touched: true,
-        full_name: g.full_name || state.guest.full_name,
+        // Derived, never the raw stored name — keeps the snapshot consistent
+        // with the (display-only) structured parts shown to staff.
+        full_name: composeFullName(
+          g.first_name ?? "",
+          g.father_name ?? "",
+          g.last_name ?? "",
+        ),
       };
       return { ...state, guest: next };
     }
@@ -406,6 +443,12 @@ function reducer(state: ReservationDraft, action: Action): ReservationDraft {
               ? [createEmptyOccupant()]
               : state.companions.occupants,
         },
+      };
+
+    case "companions/setGroupType":
+      return {
+        ...state,
+        companions: { ...state.companions, group_type: action.value },
       };
 
     case "companions/addOccupant":
@@ -615,6 +658,9 @@ export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
     children,
     lines: buildLines(draft),
   };
+  // Free-text internal notes (§19 section 6); omitted when empty.
+  const notes = booking.notes.trim();
+  if (notes) body.notes = notes;
   // Informational-only expected method (future reservations); omitted when unset
   // so nothing invalid is ever sent. Constrained to the backend enum by its type.
   if (booking.expected_payment_method) {
@@ -622,6 +668,35 @@ export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
   }
   if (occupants.length > 0) body.occupants = occupants;
   return body;
+}
+
+/**
+ * Build the FX-aware deposit body from the payment sub-draft, or `null` when no
+ * real payment was entered. A deposit exists only when a method is chosen AND a
+ * positive amount (base OR foreign original) is present — a zero/blank amount
+ * records nothing (§28). Shared by BOTH money paths: the immediate atomic
+ * check-in (embedded in `toImmediateCheckInBody`) and the deferred
+ * deposit-for-future (`POST /reservations/<id>/payments/`, §27). Money fields
+ * stay decimal STRINGS — never parsed to Float here. `on_room_account` clears
+ * the method to "", so it correctly yields no deposit.
+ */
+export function buildDepositBody(
+  draft: ReservationDraft,
+): ReservationDepositBody | null {
+  const p = draft.booking.payment;
+  const hasDeposit =
+    p.method !== "" &&
+    ((p.amount.trim() !== "" && Number(p.amount) > 0) ||
+      (p.original_amount.trim() !== "" && Number(p.original_amount) > 0));
+  if (!hasDeposit) return null;
+  return {
+    method: p.method as ReservationDepositMethod,
+    currency: p.currency || undefined,
+    amount: p.amount.trim() || null,
+    original_amount: p.original_amount.trim() || null,
+    exchange_rate: p.exchange_rate.trim() || null,
+    rate_basis: p.rate_basis.trim() || undefined,
+  };
 }
 
 /**
@@ -633,26 +708,203 @@ export function toImmediateCheckInBody(
   draft: ReservationDraft,
 ): ImmediateCheckInBody {
   const { booking } = draft;
-  const p = booking.payment;
-  const hasDeposit =
-    p.method !== "" &&
-    ((p.amount.trim() !== "" && Number(p.amount) > 0) ||
-      (p.original_amount.trim() !== "" && Number(p.original_amount) > 0));
-
   return {
     reservation: toCreateBody(draft),
     room: booking.selected_room_id,
-    deposit: hasDeposit
-      ? {
-          method: p.method as ReservationDepositMethod,
-          currency: p.currency || undefined,
-          amount: p.amount.trim() || null,
-          original_amount: p.original_amount.trim() || null,
-          exchange_rate: p.exchange_rate.trim() || null,
-          rate_basis: p.rate_basis.trim() || undefined,
-        }
-      : null,
+    deposit: buildDepositBody(draft),
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Edit prefill + update body (RESERVATIONS-FORM-UX-CORRECTION §33)           */
+/* -------------------------------------------------------------------------- */
+
+/** Companion relationships that mark the group as ONE family unit — used to
+ * infer `group_type` when prefilling an edit (the backend stores no group flag,
+ * §33: spouse / adult child / parent → "my_family"). Everything else (sibling /
+ * relative / other / none) stays plain "companions". */
+const FAMILY_RELATIONSHIPS: ReadonlySet<OccupantRelationship> = new Set([
+  "spouse",
+  "child_adult",
+  "parent",
+]);
+
+/** Reservation-level document types that attach as relationship / family proof
+ * (occupant = null) rather than to the primary guest. */
+const RELATIONSHIP_DOC_TYPES: ReadonlySet<ReservationDocumentType> = new Set([
+  "marriage_contract",
+  "family_book",
+  "family_statement",
+]);
+
+/** Read-only server data that seeds an EDIT draft alongside the reservation:
+ * existing documents (shown "on file", never re-staged) drive the documents step.
+ * The financial summary is DISPLAY-only and never enters the mutable draft (§31 —
+ * an old transaction is never editable as a form field); it is threaded to the
+ * booking step as a separate read-only prop, so it is intentionally absent here. */
+export interface ReservationToDraftExtras {
+  documents?: ReservationDocument[];
+}
+
+/**
+ * §33 — build a full `ReservationDraft` from a SAVED reservation so EDIT uses the
+ * exact same wizard as CREATE. Maps the primary guest's structured snapshot (+
+ * central-guest link, masked national id never round-tripped), each
+ * `ReservationOccupant` → an `OccupantDraft` with a STABLE local key (so a doc's
+ * occupant linkage survives), the children count, dates/times, the booked
+ * room/line, notes and source. Existing documents are attached as `existing`
+ * refs — shown on file with View/Replace, never re-uploaded. The financial
+ * summary is DISPLAY-only and is passed to the booking step separately, never
+ * folded into this editable draft.
+ */
+export function reservationToDraft(
+  reservation: Reservation,
+  extras?: ReservationToDraftExtras,
+): ReservationDraft {
+  const draft = createInitialDraft();
+
+  // --- Primary guest (structured snapshot + link) ---
+  const guestMasked = isMaskedValue(reservation.primary_guest_national_id);
+  const guestEmail = reservation.primary_guest_email ?? "";
+  draft.guest = {
+    ...draft.guest,
+    primary_guest_id: reservation.primary_guest,
+    national_id: guestMasked ? "" : reservation.primary_guest_national_id ?? "",
+    national_id_masked: guestMasked,
+    first_name: reservation.primary_guest_first_name ?? "",
+    last_name: reservation.primary_guest_last_name ?? "",
+    father_name: reservation.primary_guest_father_name ?? "",
+    mother_name: reservation.primary_guest_mother_name ?? "",
+    nationality: reservation.primary_guest_nationality ?? "",
+    date_of_birth: reservation.primary_guest_date_of_birth ?? "",
+    phone: reservation.primary_guest_phone ?? "",
+    email: guestEmail,
+    // §33 — the create form's "no email" toggle clears the address; a saved
+    // reservation with an empty email is hydrated back into that state so an
+    // edit shows the toggle ON instead of a seemingly-missing required field.
+    no_email: guestEmail.trim() === "",
+    full_name: reservation.primary_guest_name ?? "",
+    full_name_touched: true,
+    is_blocked: false,
+  };
+
+  // --- Adult companions (+ a server-id → local-key map for document linkage) ---
+  const serverOccupants = reservation.occupants ?? [];
+  const occupantIdToKey = new Map<number, string>();
+  const occupants: OccupantDraft[] = serverOccupants.map((occ) => {
+    const key = uid("occ");
+    occupantIdToKey.set(occ.id, key);
+    const occMasked = isMaskedValue(occ.national_id);
+    return {
+      key,
+      guest_id: occ.guest,
+      first_name: occ.first_name ?? "",
+      last_name: occ.last_name ?? "",
+      father_name: occ.father_name ?? "",
+      mother_name: occ.mother_name ?? "",
+      national_id: occMasked ? "" : occ.national_id ?? "",
+      national_id_masked: occMasked,
+      nationality: occ.nationality ?? "",
+      date_of_birth: occ.date_of_birth ?? "",
+      relationship: occ.relationship ?? "",
+    };
+  });
+  const children = Math.max(0, reservation.children ?? 0);
+  const groupType: CompanionGroupType = occupants.some(
+    (occupant) =>
+      occupant.relationship !== "" &&
+      FAMILY_RELATIONSHIPS.has(occupant.relationship),
+  )
+    ? "my_family"
+    : "companions";
+  draft.companions = {
+    has_companions: occupants.length > 0 || children > 0,
+    group_type: groupType,
+    occupants,
+    children,
+  };
+
+  // --- Existing documents (metadata only — shown on file, never re-staged) ---
+  const documents = extras?.documents ?? [];
+  draft.pendingDocuments = documents.map((serverDoc) => {
+    let target: DocumentTarget;
+    if (serverDoc.occupant != null) {
+      // Linked to a companion by STABLE key (falls back to a fresh key so an
+      // orphaned link never collides with the primary/proof cards).
+      target = {
+        kind: "occupant",
+        occupantKey: occupantIdToKey.get(serverDoc.occupant) ?? uid("occ-orphan"),
+      };
+    } else if (RELATIONSHIP_DOC_TYPES.has(serverDoc.doc_type)) {
+      target = { kind: "relationship_proof" };
+    } else {
+      target = { kind: "primary" };
+    }
+    return {
+      key: uid("doc"),
+      target,
+      doc_type: serverDoc.doc_type,
+      number: serverDoc.number ?? "",
+      file: null,
+      additionalFile: null,
+      existing: serverDoc,
+    };
+  });
+
+  // --- Booking (dates / times / booked line / source / notes) ---
+  draft.booking = {
+    ...draft.booking,
+    check_in_date: reservation.check_in_date,
+    check_out_date: reservation.check_out_date,
+    expected_arrival_time: reservation.expected_arrival_time ?? "",
+    lines:
+      reservation.lines.length > 0
+        ? reservation.lines.map((line) => ({
+            room_type: String(line.room_type),
+            room: line.room ? String(line.room) : "",
+            quantity: String(line.quantity),
+          }))
+        : draft.booking.lines,
+    selected_room_id: reservation.lines.find((line) => line.room)?.room ?? null,
+    source: reservation.source,
+    status: reservation.status === "held" ? "held" : "confirmed",
+    expected_payment_method: reservation.expected_payment_method,
+    notes: reservation.notes ?? "",
+    immediate_check_in: false,
+  };
+
+  return draft;
+}
+
+/** How the reservation PATCH treats stay-owned fields (§25/§33). */
+export interface ReservationUpdateOptions {
+  /** When the reservation has a real stay (in-house / checked-out), dates, rooms
+   * and arrival time are owned by the stay service — they are OMITTED from the
+   * PATCH so an edit can never silently re-book a started stay. */
+  lockStayFields: boolean;
+}
+
+/**
+ * §33 — build the reservation PATCH body from the draft. Reuses the create
+ * builder (guest snapshot + occupants + children + dates + lines + notes), then
+ * drops `status` (backend-owned, never a free selector on edit — §25) and, when
+ * a real stay exists, the stay-owned dates/rooms. Documents and a NEW deposit are
+ * NOT part of this body — they go through their own endpoints in the edit submit.
+ */
+export function toUpdateBody(
+  draft: ReservationDraft,
+  options: ReservationUpdateOptions,
+): ReservationUpdateBody {
+  const { status, ...rest } = toCreateBody(draft);
+  void status; // backend-owned on edit (§25)
+  const body: ReservationUpdateBody = { ...rest };
+  if (options.lockStayFields) {
+    delete body.check_in_date;
+    delete body.check_out_date;
+    delete body.expected_arrival_time;
+    delete body.lines;
+  }
+  return body;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -662,11 +914,11 @@ export function toImmediateCheckInBody(
 export interface ReservationDraftActions {
   reset: (draft?: ReservationDraft) => void;
   setGuestField: (field: GuestTextField, value: string) => void;
-  setFullName: (value: string) => void;
   setNoEmail: (value: boolean) => void;
   applyGuestMatch: (guest: Guest) => void;
   unlinkGuest: () => void;
   setHasCompanions: (value: boolean) => void;
+  setGroupType: (value: CompanionGroupType) => void;
   addOccupant: () => void;
   removeOccupant: (key: string) => void;
   setOccupantField: (
@@ -708,12 +960,13 @@ export function useReservationDraft(
         dispatch({ type: "reset", draft: next ?? createInitialDraft() }),
       setGuestField: (field, value) =>
         dispatch({ type: "guest/set", field, value }),
-      setFullName: (value) => dispatch({ type: "guest/setFullName", value }),
       setNoEmail: (value) => dispatch({ type: "guest/setNoEmail", value }),
       applyGuestMatch: (guest) => dispatch({ type: "guest/applyMatch", guest }),
       unlinkGuest: () => dispatch({ type: "guest/unlink" }),
       setHasCompanions: (value) =>
         dispatch({ type: "companions/setHas", value }),
+      setGroupType: (value) =>
+        dispatch({ type: "companions/setGroupType", value }),
       addOccupant: () => dispatch({ type: "companions/addOccupant" }),
       removeOccupant: (key) =>
         dispatch({ type: "companions/removeOccupant", key }),

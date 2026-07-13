@@ -13,10 +13,12 @@ from .views import (
     ReservationCancelView,
     ReservationConfirmView,
     ReservationDetailView,
+    ReservationFinancialSummaryView,
     ReservationHoldView,
     ReservationListCreateView,
     ReservationLogsView,
     ReservationOverviewView,
+    ReservationPaymentCreateView,
     RoomAvailabilityView,
 )
 
@@ -57,6 +59,18 @@ urlpatterns = [
         "reservations/<int:pk>/hold/",
         ReservationHoldView.as_view(),
         name="reservation-hold",
+    ),
+    # §27 pre-arrival deposit on a future/held/confirmed reservation (no stay yet).
+    path(
+        "reservations/<int:pk>/payments/",
+        ReservationPaymentCreateView.as_view(),
+        name="reservation-payments",
+    ),
+    # §26/§31/§35/§39 derived financial summary for the details/edit screen.
+    path(
+        "reservations/<int:pk>/financial-summary/",
+        ReservationFinancialSummaryView.as_view(),
+        name="reservation-financial-summary",
     ),
     path(
         "reservations/<int:pk>/logs/",

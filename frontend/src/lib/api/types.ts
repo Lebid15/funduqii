@@ -621,6 +621,9 @@ export interface RoomBulkCreateResponse {
  * ======================================================================== */
 
 export type ReservationStatus = "held" | "confirmed" | "cancelled" | "expired";
+/** Derived reservation payment state (§31/§35): unpaid / partial / paid. Null
+ * when the caller may not see money (masked server-side by finance.view). */
+export type ReservationPaymentStatus = "unpaid" | "partial" | "paid";
 export type ReservationSource =
   | "direct"
   | "phone"
@@ -693,6 +696,24 @@ export interface Reservation {
   /** Post-check-in guard: the guest is in-house — dates/rooms frozen and
    * cancel refused (the stay is the source of truth). */
   has_in_house_stay: boolean;
+  /** §25 — the LATEST related stay's status (in_house / checked_out /
+   * cancelled) or null when the booking never checked in. Distinguishes a
+   * departed guest from one who never arrived; complements `has_in_house_stay`. */
+  stay_status: StayStatus | null;
+  stay_id: number | null;
+  /** §26/§31/§35 — DERIVED financial read (never stored). The money fields are
+   * gated by `finance.view` and come back null when the caller may not see
+   * money; `currency`/`nights` are always present. Money values are decimal
+   * strings — render as-is, never parseFloat. */
+  nightly_rate: string | null;
+  reservation_total: string | null;
+  currency: string;
+  paid: string | null;
+  remaining: string | null;
+  payment_status: ReservationPaymentStatus | null;
+  /** False when a selected room type has no `base_rate` (unpriced); null when
+   * money is hidden. */
+  is_priced: boolean | null;
   created_by: string | null;
   /** Creator display name (full_name, else email, else null). */
   created_by_name: string | null;
@@ -1041,6 +1062,32 @@ export interface ReservationDepositBody {
   notes?: string;
 }
 
+/** GET reservations/<id>/financial-summary/ (§26/§31/§35/§39). A DERIVED read,
+ * never stored. The money block is gated by `finance.view`: when
+ * `can_view_money` is false every money field is null and `payments` is empty
+ * (masked server-side). All money values are decimal strings — render as-is. */
+export interface ReservationFinancialSummary {
+  reservation: number;
+  reservation_number: string;
+  currency: string;
+  nights: number;
+  is_priced: boolean | null;
+  can_view_money: boolean;
+  nightly_rate: string | null;
+  reservation_total: string | null;
+  paid: string | null;
+  remaining: string | null;
+  payment_status: ReservationPaymentStatus | null;
+  payments: Payment[];
+}
+
+/** POST reservations/<id>/payments/ (§27) → the recorded pre-arrival deposit
+ * plus the refreshed derived financial summary. */
+export interface ReservationDepositResult {
+  payment: Payment;
+  financial_summary: ReservationFinancialSummary;
+}
+
 /** The folio subset returned by an immediate check-in (null when no folio was
  * opened, e.g. no deposit). `balance` is a DERIVED decimal string. */
 export interface ImmediateCheckInFolio {
@@ -1128,6 +1175,15 @@ export interface Payment {
   status: PostingStatus;
   paid_at: string;
   business_date: string | null;
+  /** Multi-currency FX snapshot (§29), surfaced read-only. An empty
+   * `payment_currency` means the tender was in the folio/base currency (legacy).
+   * `amount`/`currency` above stay the base equivalent. `exchange_rate` is a
+   * high-precision decimal string; all money values render as-is. */
+  payment_currency: string;
+  original_amount: string | null;
+  exchange_rate: string | null;
+  rate_basis: string;
+  rate_captured_at: string | null;
   reverses: number | null;
   reverses_receipt: string | null;
   payer_name: string;

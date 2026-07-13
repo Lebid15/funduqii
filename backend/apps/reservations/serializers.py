@@ -34,6 +34,23 @@ from .models import (
 
 _PHONE_RE = re.compile(r"^[0-9+\-\s()]{4,32}$")
 _WRITE_STATUSES = (ReservationStatus.HELD, ReservationStatus.CONFIRMED)
+
+
+def can_view_finance(request) -> bool:
+    """True when the caller may see reservation money (``finance.view``).
+
+    Mirrors :func:`apps.guests.serializers.can_view_sensitive`: fail-closed when
+    no request/user/hotel context is present. Used to gate the derived financial
+    read fields (§35 — the card's financial block is permission-scoped) so the
+    money is masked SERVER-SIDE, not merely hidden in the UI.
+    """
+    from apps.rbac.services import has_hotel_permission
+
+    user = getattr(request, "user", None)
+    hotel = getattr(request, "hotel", None)
+    if user is None or hotel is None:
+        return False
+    return has_hotel_permission(user, hotel, "finance.view")
 # Room statuses that cannot receive a specific assignment (Phase 6.1).
 _NON_ASSIGNABLE_ROOM_STATUSES = (
     RoomStatus.MAINTENANCE,
@@ -115,7 +132,14 @@ class ReservationOccupantReadSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         request = self.context.get("request")
         if request is None or not can_view_sensitive(request):
+            # ``national_id`` is bullet-masked (identity number); the remaining
+            # sensitive identity fields (§36/§39, sec-F2) are REDACTED to null —
+            # bullet-masking a name/DoB is meaningless. Fail-closed when there is
+            # no request context, exactly like the national_id rule.
             data["national_id"] = mask_document(instance.national_id)
+            data["father_name"] = None
+            data["mother_name"] = None
+            data["date_of_birth"] = None
         return data
 
 
@@ -243,6 +267,22 @@ class ReservationSerializer(serializers.ModelSerializer):
     # Post-check-in guard (final closure): the UI freezes dates/rooms and
     # hides cancel when the guest is in-house — the backend enforces it too.
     has_in_house_stay = serializers.SerializerMethodField()
+    # RESERVATIONS-FORM-UX-CORRECTION §25 — the LATEST related stay's status
+    # (in_house / checked_out / cancelled) or null when the booking never checked
+    # in. Distinguishes a departed guest from one who never arrived; complements
+    # ``has_in_house_stay``. Read-only, prefetched (no N+1).
+    stay_status = serializers.SerializerMethodField()
+    stay_id = serializers.SerializerMethodField()
+    # RESERVATIONS-FORM-UX-CORRECTION §26/§31/§35 — compact DERIVED financial read
+    # (never stored). Money fields are gated by ``finance.view`` (masked to null
+    # otherwise); ``currency``/``nights`` are not sensitive.
+    nightly_rate = serializers.SerializerMethodField()
+    reservation_total = serializers.SerializerMethodField()
+    currency = serializers.SerializerMethodField()
+    paid = serializers.SerializerMethodField()
+    remaining = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
+    is_priced = serializers.SerializerMethodField()
 
     class Meta:
         model = Reservation
@@ -287,6 +327,15 @@ class ReservationSerializer(serializers.ModelSerializer):
             "public_cancel_requested_at",
             "public_cancel_reason",
             "has_in_house_stay",
+            "stay_status",
+            "stay_id",
+            "nightly_rate",
+            "reservation_total",
+            "currency",
+            "paid",
+            "remaining",
+            "payment_status",
+            "is_priced",
             "created_by",
             "created_by_name",
             "created_at",
@@ -309,6 +358,84 @@ class ReservationSerializer(serializers.ModelSerializer):
 
         return has_in_house_stay(obj)
 
+    def get_stay_status(self, obj):
+        from .services import latest_stay
+
+        stay = latest_stay(obj)
+        return stay.status if stay is not None else None
+
+    def get_stay_id(self, obj):
+        from .services import latest_stay
+
+        stay = latest_stay(obj)
+        return stay.id if stay is not None else None
+
+    # --- Derived financial summary (permission-gated, no stored balance) ------
+
+    def _can_finance(self) -> bool:
+        """Cache the ``finance.view`` decision on the (shared, per-response) child
+        serializer so a list render evaluates the permission once, not per row."""
+        cached = getattr(self, "_can_finance_cache", None)
+        if cached is None:
+            cached = (bool(can_view_finance(self.context.get("request"))),)
+            self._can_finance_cache = cached
+        return cached[0]
+
+    def _financials(self, obj) -> dict:
+        """Compute (and memoize on the instance) the derived money summary — only
+        when the caller may see money, so unauthorized reads skip the folio/payment
+        work entirely (fail-closed + cheaper)."""
+        cache = getattr(obj, "_res_financials_cache", None)
+        if cache is None:
+            from .services import reservation_financials
+
+            request = self.context.get("request")
+            hotel = getattr(request, "hotel", None)
+            if self._can_finance():
+                cache = reservation_financials(obj, hotel=hotel)
+                cache["_visible"] = True
+            else:
+                settings_obj = getattr(hotel, "settings", None)
+                currency = (getattr(settings_obj, "default_currency", "") or "") or "USD"
+                cache = {
+                    "currency": currency,
+                    "nights": obj.nights,
+                    "nightly_rate": None,
+                    "reservation_total": None,
+                    "paid": None,
+                    "remaining": None,
+                    "payment_status": None,
+                    "is_priced": None,
+                    "_visible": False,
+                }
+            obj._res_financials_cache = cache
+        return cache
+
+    @staticmethod
+    def _money_str(value):
+        return str(value) if value is not None else None
+
+    def get_currency(self, obj):
+        return self._financials(obj)["currency"]
+
+    def get_nightly_rate(self, obj):
+        return self._money_str(self._financials(obj)["nightly_rate"])
+
+    def get_reservation_total(self, obj):
+        return self._money_str(self._financials(obj)["reservation_total"])
+
+    def get_paid(self, obj):
+        return self._money_str(self._financials(obj)["paid"])
+
+    def get_remaining(self, obj):
+        return self._money_str(self._financials(obj)["remaining"])
+
+    def get_payment_status(self, obj):
+        return self._financials(obj)["payment_status"]
+
+    def get_is_priced(self, obj):
+        return self._financials(obj)["is_priced"]
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         # The primary guest's structured national ID AND the legacy document
@@ -324,6 +451,12 @@ class ReservationSerializer(serializers.ModelSerializer):
             data["primary_guest_document_number"] = mask_document(
                 instance.primary_guest_document_number
             )
+            # §36/§39 (sec-F2): the parent guest names + DoB are sensitive and
+            # must not appear on the card. REDACT to null for callers without
+            # ``guests.view_sensitive_data`` (fail-closed when no request).
+            data["primary_guest_father_name"] = None
+            data["primary_guest_mother_name"] = None
+            data["primary_guest_date_of_birth"] = None
         return data
 
 
@@ -651,3 +784,65 @@ class ReservationStatusLogSerializer(serializers.Serializer):
 
     def get_changed_by(self, obj):
         return obj.changed_by.email if obj.changed_by_id else None
+
+
+class ReservationDepositSerializer(serializers.Serializer):
+    """Pre-arrival DEPOSIT payload for a future/held/confirmed reservation (§27).
+
+    Mirrors ``stays.ImmediateDepositSerializer`` exactly (same fields + FX rules):
+    the base ``amount`` is in the reservation/base currency; a foreign-currency
+    deposit instead supplies ``original_amount`` + ``exchange_rate`` (+ optional
+    ``rate_basis``) and the finance service DERIVES the base amount (single ledger).
+    A zero/negative tender is rejected (no zero payment). The recorded Payment goes
+    through ``record_reservation_payment`` onto the reservation's ONE folio, which
+    is reused at check-in — no duplicate ledger.
+    """
+
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    method = serializers.CharField(max_length=32)
+    currency = serializers.CharField(
+        max_length=3, required=False, allow_blank=True, default=""
+    )
+    original_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    exchange_rate = serializers.DecimalField(
+        max_digits=18, decimal_places=8, required=False, allow_null=True
+    )
+    rate_basis = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+    payer_name = serializers.CharField(
+        max_length=180, required=False, allow_blank=True, default=""
+    )
+    reference = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_method(self, value):
+        from apps.finance.models import PaymentMethod
+
+        if value not in {code for code, _ in PaymentMethod.choices}:
+            raise serializers.ValidationError("Unsupported payment method.")
+        return value
+
+    def validate_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("Amount must be positive.")
+        return value
+
+    def validate_original_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("Amount must be positive.")
+        return value
+
+    def validate(self, attrs):
+        if attrs.get("amount") is None and attrs.get("original_amount") is None:
+            raise serializers.ValidationError(
+                "Provide an amount (or original_amount for a foreign-currency "
+                "deposit)."
+            )
+        return attrs

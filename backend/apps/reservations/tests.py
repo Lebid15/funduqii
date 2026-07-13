@@ -8,22 +8,26 @@ no hard delete, status logs, overbooking prevention), and regressions.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User
+from apps.guests.models import Guest
 from apps.rbac.services import grant_permission
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
     Reservation,
+    ReservationOccupant,
     ReservationRoomLine,
     ReservationSource,
     ReservationStatus,
     ReservationStatusLog,
 )
 from apps.rooms.models import Floor, Room, RoomStatus, RoomType
+from apps.stays.models import Stay, StayStatus
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
 
 HDR = lambda h: {"HTTP_X_HOTEL_ID": str(h.id)}  # noqa: E731

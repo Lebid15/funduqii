@@ -7,6 +7,7 @@ import {
   BedDouble,
   CalendarRange,
   ClipboardList,
+  CreditCard,
   DoorOpen,
   Eye,
   FileText,
@@ -31,6 +32,7 @@ import {
   useToast,
 } from "@/components/ui";
 import {
+  getReservationFinancialSummary,
   getReservationLogs,
   listReservationDocuments,
   replaceReservationDocument,
@@ -41,14 +43,18 @@ import type {
   Reservation,
   ReservationDocument,
   ReservationDocumentType,
+  ReservationFinancialSummary,
   ReservationOccupant,
   ReservationStatusLogEntry,
 } from "@/lib/api/types";
 import {
   formatDate,
   formatDateTime,
+  formatMoney,
   reservationStatusLabel,
   reservationStatusTone,
+  stayStatusLabel,
+  stayStatusTone,
 } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
@@ -56,8 +62,12 @@ import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { DocumentViewer } from "./DocumentViewer";
 import {
   documentTypeLabel,
+  fxDirectionLabel,
+  isForeignPayment,
   isMaskedValue,
+  isRelationshipProofDoc,
   occupantDisplayName,
+  paymentStatusTone,
   relationshipLabel,
   sourceIcon,
   sourceTone,
@@ -70,6 +80,7 @@ import {
 export function ReservationDetailsModal({
   open,
   reservation,
+  checkoutTime = null,
   onClose,
   onEdit,
   onConfirm,
@@ -77,6 +88,10 @@ export function ReservationDetailsModal({
 }: {
   open: boolean;
   reservation?: Reservation;
+  /** Hotel-wide expected checkout time ("HH:MM[:SS]") from settings — one shared
+   * value passed from the list so the stay block can show a departure time
+   * (§39), null when unknown. */
+  checkoutTime?: string | null;
   onClose: () => void;
   onEdit: (r: Reservation) => void;
   onConfirm: (r: Reservation) => void;
@@ -99,6 +114,14 @@ export function ReservationDetailsModal({
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState(false);
   const [viewerDoc, setViewerDoc] = useState<ReservationDocument | null>(null);
+
+  // DERIVED financial summary (§26/§31/§35/§39) — fetched only when the caller
+  // can see money; the backend re-derives it and masks the money block for
+  // callers without finance.view. Never stored, never computed with Float.
+  const canMoney = can("finance.view");
+  const [summary, setSummary] = useState<ReservationFinancialSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(false);
 
   // Re-fetch the (view-gated) document list after an upload/replace succeeds.
   const reservationId = reservation?.id ?? null;
@@ -130,6 +153,19 @@ export function ReservationDetailsModal({
     refreshDocs();
   }, [open, reservationId, canViewDocs, refreshDocs]);
 
+  useEffect(() => {
+    if (!open || reservationId === null || !canMoney) {
+      setSummary(null);
+      return;
+    }
+    setSummaryLoading(true);
+    setSummaryError(false);
+    getReservationFinancialSummary(reservationId)
+      .then(setSummary)
+      .catch(() => setSummaryError(true))
+      .finally(() => setSummaryLoading(false));
+  }, [open, reservationId, canMoney]);
+
   if (!reservation) return null;
   const r = reservation;
   const d = t.reservations.details;
@@ -139,14 +175,80 @@ export function ReservationDetailsModal({
     (t.guests.documentTypes as Record<string, string>)[v] ?? v;
   const creator = r.created_by_name ?? r.created_by;
   const g = t.reservations.wizard.guest;
+  const b = t.reservations.wizard.booking;
+  const cc = t.reservations.wizard.companions;
+  const card = t.reservations.card;
   const companions = r.occupants ?? [];
+  // §39 — the companions block is shown when there are named adult companions OR
+  // a count of children (children are a count only, never per-child cards).
+  const showCompanions = companions.length > 0 || r.children > 0;
   const hasSnapshotDoc =
     r.primary_guest_document_type || r.primary_guest_document_number;
   // The documents section appears when there is a frozen snapshot OR the viewer
   // is available (which may surface uploaded files even without a snapshot) OR
   // the staff member can upload new documents.
   const showDocsSection = Boolean(hasSnapshotDoc) || canViewDocs || canUploadDocs;
+  // §39 — split the uploaded list into identity documents and family/relationship
+  // proofs so a marriage contract is never shown as the guest's own ID.
+  const identityDocs = docs.filter((doc) => !isRelationshipProofDoc(doc.doc_type));
+  const proofDocs = docs.filter((doc) => isRelationshipProofDoc(doc.doc_type));
   const hasNotes = r.notes || r.special_requests;
+  // Expected checkout time from hotel settings — "HH:MM" for display (§39).
+  const departureTime = checkoutTime ? checkoutTime.slice(0, 5) : null;
+  // The reservation's ONE folio reference, taken from any recorded payment (§39
+  // stay/folio link). Empty when no payment carries a folio number yet.
+  const folioNumber =
+    summary?.payments.find((p) => p.folio_number)?.folio_number ?? null;
+
+  // One uploaded-document row (metadata only) — reused for the identity group
+  // and the relationship-proof group so both render identically.
+  const renderDoc = (doc: ReservationDocument) => {
+    const owner =
+      doc.occupant === null
+        ? t.reservations.wizard.documents.primaryHeading
+        : (() => {
+            const occ = companions.find((c) => c.id === doc.occupant);
+            return occ
+              ? occupantDisplayName(occ, t)
+              : t.reservations.wizard.documents.companionHeading;
+          })();
+    const canOpen = doc.has_front || doc.has_back;
+    return (
+      <li key={doc.id} className="mini-list__row">
+        <span>
+          {documentTypeLabel(doc.doc_type, t)}
+          <span className="muted"> · {owner}</span>
+          {doc.number ? (
+            <span className={isMaskedValue(doc.number) ? "muted" : undefined}>
+              {" "}
+              · {doc.number}
+            </span>
+          ) : null}
+        </span>
+        <span className="cluster">
+          {doc.has_front ? (
+            <Badge tone="neutral">{t.reservations.wizard.documents.front}</Badge>
+          ) : null}
+          {doc.has_back ? (
+            <Badge tone="neutral">{t.reservations.wizard.documents.back}</Badge>
+          ) : null}
+          {canOpen ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={Eye}
+              onClick={() => setViewerDoc(doc)}
+            >
+              {d.documentsView}
+            </Button>
+          ) : null}
+          {canReplaceDocs ? (
+            <DocReplaceControl docId={doc.id} onReplaced={refreshDocs} />
+          ) : null}
+        </span>
+      </li>
+    );
+  };
 
   return (
     <Modal
@@ -198,6 +300,15 @@ export function ReservationDetailsModal({
             <Badge tone={reservationStatusTone(r.status)}>
               {reservationStatusLabel(r.status, t)}
             </Badge>
+            {/* §25 — the STAY status is a SEPARATE badge (never conflated with
+                the reservation status): a guest may be in-house while the
+                booking still reads "confirmed". */}
+            {r.stay_status ? (
+              <Badge tone={stayStatusTone(r.stay_status)}>
+                <Icon icon={BedDouble} size="sm" />
+                {stayStatusLabel(r.stay_status, t)}
+              </Badge>
+            ) : null}
             <Badge tone={r.booking_kind === "instant" ? "success" : "info"}>
               {t.reservations.kind[r.booking_kind]}
             </Badge>
@@ -239,6 +350,12 @@ export function ReservationDetailsModal({
                 <dd>{r.expected_arrival_time}</dd>
               </div>
             ) : null}
+            {departureTime ? (
+              <div className="room-op-details__row">
+                <dt>{t.reservations.card.departureTime}</dt>
+                <dd>{departureTime}</dd>
+              </div>
+            ) : null}
             <div className="room-op-details__row">
               <dt>{d.nights}</dt>
               <dd>{r.nights}</dd>
@@ -247,12 +364,6 @@ export function ReservationDetailsModal({
               <dt>{d.guests}</dt>
               <dd>{r.total_guests}</dd>
             </div>
-            {r.expected_payment_method ? (
-              <div className="room-op-details__row">
-                <dt>{t.reservations.form.expectedPayment}</dt>
-                <dd>{t.reservations.expectedPayment[r.expected_payment_method]}</dd>
-              </div>
-            ) : null}
             {r.hold_expires_at ? (
               <div className="room-op-details__row">
                 <dt>{d.holdExpires}</dt>
@@ -358,29 +469,40 @@ export function ReservationDetailsModal({
           </dl>
         </SectionCard>
 
-        {/* Companions — named adult occupants from the reservation snapshot. */}
-        {companions.length > 0 ? (
+        {/* Companions — named adult occupants (national_id masked per permission)
+            plus the children COUNT (§39: no per-child data). */}
+        {showCompanions ? (
           <SectionCard title={d.sectionCompanions} icon={Users}>
-            <ul className="mini-list">
-              {companions.map((occ) => (
-                <li key={occ.id} className="mini-list__row">
-                  <span>
-                    {occupantDisplayName(occ, t)}
-                    <span className="muted">
-                      {" "}
-                      · {relationshipLabel(occ.relationship, t)}
+            {companions.length > 0 ? (
+              <ul className="mini-list">
+                {companions.map((occ) => (
+                  <li key={occ.id} className="mini-list__row">
+                    <span>
+                      {occupantDisplayName(occ, t)}
+                      <span className="muted">
+                        {" "}
+                        · {relationshipLabel(occ.relationship, t)}
+                      </span>
                     </span>
-                  </span>
-                  {occ.national_id ? (
-                    <span
-                      className={isMaskedValue(occ.national_id) ? "muted" : undefined}
-                    >
-                      {occ.national_id}
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+                    {occ.national_id ? (
+                      <span
+                        className={isMaskedValue(occ.national_id) ? "muted" : undefined}
+                      >
+                        {occ.national_id}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {r.children > 0 ? (
+              <dl className="room-op-details">
+                <div className="room-op-details__row">
+                  <dt>{cc.childrenShort}</dt>
+                  <dd>{r.children}</dd>
+                </div>
+              </dl>
+            ) : null}
           </SectionCard>
         ) : null}
 
@@ -421,65 +543,21 @@ export function ReservationDetailsModal({
               ) : docs.length === 0 ? (
                 <p className="muted">{d.documentsEmpty}</p>
               ) : (
-                <ul className="mini-list">
-                  {docs.map((doc) => {
-                    const owner =
-                      doc.occupant === null
-                        ? t.reservations.wizard.documents.primaryHeading
-                        : (() => {
-                            const occ = companions.find(
-                              (c) => c.id === doc.occupant,
-                            );
-                            return occ
-                              ? occupantDisplayName(occ, t)
-                              : t.reservations.wizard.documents.companionHeading;
-                          })();
-                    const canOpen = doc.has_front || doc.has_back;
-                    return (
-                      <li key={doc.id} className="mini-list__row">
-                        <span>
-                          {documentTypeLabel(doc.doc_type, t)}
-                          <span className="muted"> · {owner}</span>
-                          {doc.number ? (
-                            <span
-                              className={
-                                isMaskedValue(doc.number) ? "muted" : undefined
-                              }
-                            >
-                              {" "}
-                              · {doc.number}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="cluster">
-                          {doc.has_front ? (
-                            <Badge tone="neutral">
-                              {t.reservations.wizard.documents.front}
-                            </Badge>
-                          ) : null}
-                          {doc.has_back ? (
-                            <Badge tone="neutral">
-                              {t.reservations.wizard.documents.back}
-                            </Badge>
-                          ) : null}
-                          {canOpen ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              icon={Eye}
-                              onClick={() => setViewerDoc(doc)}
-                            >
-                              {d.documentsView}
-                            </Button>
-                          ) : null}
-                          {canReplaceDocs ? (
-                            <DocReplaceControl docId={doc.id} onReplaced={refreshDocs} />
-                          ) : null}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <>
+                  {identityDocs.length > 0 ? (
+                    <ul className="mini-list">{identityDocs.map(renderDoc)}</ul>
+                  ) : null}
+                  {/* §16/§39 — relationship / family proof in its own group. */}
+                  {proofDocs.length > 0 ? (
+                    <div>
+                      <span className="res-detail__subhead">
+                        <Icon icon={FileText} size="sm" />{" "}
+                        {t.reservations.wizard.documents.familyHeading}
+                      </span>
+                      <ul className="mini-list">{proofDocs.map(renderDoc)}</ul>
+                    </div>
+                  ) : null}
+                </>
               )
             ) : null}
 
@@ -490,6 +568,138 @@ export function ReservationDetailsModal({
                 onUploaded={refreshDocs}
               />
             ) : null}
+          </SectionCard>
+        ) : null}
+
+        {/* Financial — DERIVED read (§26/§31/§35/§39), gated by finance.view.
+            Money is rendered from backend Decimal strings via formatMoney (never
+            Float). The whole section is absent for callers without finance.view. */}
+        {canMoney ? (
+          <SectionCard title={d.sectionFinancial} icon={CreditCard}>
+            {summaryLoading ? (
+              <p className="muted">{t.common.loading}</p>
+            ) : summaryError || summary === null ? (
+              <p className="muted">{d.financialError}</p>
+            ) : !summary.can_view_money ? (
+              <p className="muted">{b.financialHidden}</p>
+            ) : summary.is_priced === false ? (
+              <p className="muted">{card.notPriced}</p>
+            ) : (
+              <>
+                <dl className="room-op-details">
+                  {summary.nightly_rate ? (
+                    <div className="room-op-details__row">
+                      <dt>{card.nightly}</dt>
+                      <dd>{formatMoney(summary.nightly_rate, summary.currency, locale)}</dd>
+                    </div>
+                  ) : null}
+                  <div className="room-op-details__row">
+                    <dt>{card.total}</dt>
+                    <dd>
+                      {summary.reservation_total !== null
+                        ? formatMoney(summary.reservation_total, summary.currency, locale)
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div className="room-op-details__row">
+                    <dt>{card.paid}</dt>
+                    <dd>
+                      {summary.paid !== null
+                        ? formatMoney(summary.paid, summary.currency, locale)
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div className="room-op-details__row">
+                    <dt>{card.remaining}</dt>
+                    <dd>
+                      {summary.remaining !== null
+                        ? formatMoney(summary.remaining, summary.currency, locale)
+                        : "—"}
+                    </dd>
+                  </div>
+                  {summary.payment_status ? (
+                    <div className="room-op-details__row">
+                      <dt>{card.paymentLabel}</dt>
+                      <dd>
+                        <Badge tone={paymentStatusTone(summary.payment_status)}>
+                          {card.paymentStatus[summary.payment_status]}
+                        </Badge>
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+
+                {/* §39 — link to the stay and its folio reference when present. */}
+                {r.stay_id !== null ? (
+                  <div className="cluster">
+                    {can("stays.view") ? (
+                      <Link
+                        href="/hotel/front-desk?tab=current"
+                        className="btn btn--ghost btn--sm"
+                      >
+                        <Icon icon={DoorOpen} size="sm" />
+                        {d.stayLink}
+                      </Link>
+                    ) : null}
+                    {folioNumber ? (
+                      <span className="muted small">
+                        {t.finance.print.folio}: {folioNumber}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* Payments with FX (§29): base equivalent + method, plus the
+                    original tender, rate and direction when foreign. */}
+                <div>
+                  <span className="res-detail__subhead">
+                    <Icon icon={CreditCard} size="sm" /> {b.recordedPaymentsSection}
+                  </span>
+                  {summary.payments.length === 0 ? (
+                    <p className="muted">{b.noPaymentsYet}</p>
+                  ) : (
+                    <ul className="mini-list">
+                      {summary.payments.map((payment) => (
+                        <li key={payment.id} className="mini-list__row">
+                          <span className="cluster">
+                            <strong>
+                              {formatMoney(
+                                payment.amount,
+                                payment.currency || summary.currency,
+                                locale,
+                              )}
+                            </strong>
+                            <span className="muted small">
+                              {t.finance.methods[payment.method]}
+                            </span>
+                            {isForeignPayment(payment, summary.currency) ? (
+                              <span className="muted small">
+                                {formatMoney(
+                                  payment.original_amount as string,
+                                  payment.payment_currency,
+                                  locale,
+                                )}
+                                {" · "}
+                                {b.exchangeRate}: {payment.exchange_rate}
+                                {fxDirectionLabel(payment.rate_basis, b) ? (
+                                  <>
+                                    {" · "}
+                                    {fxDirectionLabel(payment.rate_basis, b)}
+                                  </>
+                                ) : null}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="muted small">
+                            {formatDate(payment.paid_at, locale)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            )}
           </SectionCard>
         ) : null}
 

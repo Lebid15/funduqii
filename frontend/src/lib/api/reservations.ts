@@ -14,7 +14,9 @@ import type {
   PaginatedResponse,
   Reservation,
   ReservationDepositBody,
+  ReservationDepositResult,
   ReservationDocument,
+  ReservationFinancialSummary,
   ReservationOverview,
   ReservationStatusLogEntry,
   RoomAvailabilityRow,
@@ -183,6 +185,38 @@ export function getReservationLogs(
   id: number,
 ): Promise<ReservationStatusLogEntry[]> {
   return hotelJson<ReservationStatusLogEntry[]>(`/reservations/${id}/logs`);
+}
+
+// --- Reservation money (RESERVATIONS-FORM-UX-CORRECTION §27/§31) -------------
+
+/** Record a pre-arrival DEPOSIT on a future/held/confirmed reservation that has
+ * NO stay yet (§27). `POST /reservations/<id>/payments/` mirrors the immediate
+ * check-in deposit shape: a base-currency deposit sends `amount`; a foreign one
+ * sends `original_amount` + `exchange_rate` (+ optional `rate_basis`) and the
+ * backend DERIVES the base amount onto the reservation's ONE folio (reused at
+ * check-in — no duplicate ledger). Requires `finance.payment_create`
+ * (+ `exchange_rate.override` for a manual foreign rate); the backend enforces
+ * it. Returns the created payment and the refreshed derived financial summary. */
+export function createReservationDeposit(
+  reservationId: number,
+  body: ReservationDepositBody,
+): Promise<ReservationDepositResult> {
+  return hotelJson<ReservationDepositResult>(
+    `/reservations/${reservationId}/payments`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/** The DERIVED financial summary for a saved reservation (§26/§31/§35/§39):
+ * total, paid, remaining, currency and the payments list (with FX). The money
+ * block is masked server-side for callers without `finance.view`. Read-only —
+ * nothing is created and the balance is re-derived, never stored. */
+export function getReservationFinancialSummary(
+  id: number,
+): Promise<ReservationFinancialSummary> {
+  return hotelJson<ReservationFinancialSummary>(
+    `/reservations/${id}/financial-summary`,
+  );
 }
 
 // --- Availability -----------------------------------------------------------

@@ -6,13 +6,14 @@ import {
   Building2,
   CalendarRange,
   CheckCircle2,
+  Clock,
   Eye,
   FileText,
   Moon,
   Pencil,
   Printer,
+  Tag,
   Users,
-  Wallet,
   XCircle,
 } from "lucide-react";
 
@@ -20,6 +21,7 @@ import { Badge, Button, Icon } from "@/components/ui";
 import type { Reservation } from "@/lib/api/types";
 import {
   formatDate,
+  formatMoney,
   initials,
   reservationStatusLabel,
   reservationStatusTone,
@@ -27,25 +29,33 @@ import {
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
-import { arrivalFlag, sourceIcon, sourceTone } from "./reservationShared";
+import { arrivalFlag, paymentStatusTone, sourceIcon, sourceTone } from "./reservationShared";
 
 /**
- * One reservation as an equal-height grid card (reservations rework) —
- * cards-first, mirroring the rooms operational card regions:
- *   (1) header: reservation number (focal, opens details) + status / source /
- *       arrival-flag / public-cancel badges;
- *   (2) guest: initials avatar + name + phone;
- *   (3) stay facts: room(s) + floor + type · dates + arrival time · nights ·
- *       guests, each with a unified icon accompanying the text;
- *   (4) an optional "expected payment" info chip (label only — NEVER an amount);
- *   (5) an optional truncated note;
- *   (6) actions: view / print / confirm / edit / cancel — shown DIRECTLY on the
- *       card (no overflow menu), permission- and state-aware. Reservations are
- *       BOOKINGS only: there is NO money on a card. Empty regions are hidden.
+ * One reservation as a VERTICAL, premium, equal-height grid card (§34–§38),
+ * suited to 4-per-row on wide screens. It is split into clear BLOCKS of
+ * separate mini-fields (never cramped touching lines):
+ *   (1) Header — reservation number (focal, opens details) + reservation status,
+ *       source, a SEPARATE "Resident" stay badge (§25 — never conflated with the
+ *       reservation status) and the arrives-today/tomorrow/overdue flag.
+ *   (2) Guest — initials avatar + name + phone.
+ *   (3) Room — SEPARATE fields: floor · room number · room type.
+ *   (4) Stay — SEPARATE fields: check-in · arrival time · check-out · departure
+ *       time · nights · persons.
+ *   (5) Financial summary — permission-gated (finance.view); honest when
+ *       unpriced or when money is hidden. Money is rendered via formatMoney from
+ *       the reservation's DERIVED decimal-string fields (never parseFloat/Float).
+ *   (6) Notes — one truncated line, only when present.
+ *   (7) Smart status-aware action grid (no "more" menu), each gated by its own
+ *       permission; a real "View documents" button.
+ * §36 sensitive fields (national id, father/mother names, DoB, document images,
+ * full companion data, long FX detail, file paths) live in details only — never
+ * on the card.
  */
 export function ReservationCard({
   reservation: r,
   businessDate,
+  checkoutTime = null,
   onView,
   onPrint,
   onConfirm,
@@ -54,6 +64,9 @@ export function ReservationCard({
 }: {
   reservation: Reservation;
   businessDate: string | null;
+  /** Hotel-wide expected checkout time ("HH:MM[:SS]") from settings — one
+   * list-level value shared by every card; null when unknown. */
+  checkoutTime?: string | null;
   onView: (r: Reservation) => void;
   onPrint: (r: Reservation) => void;
   onConfirm: (r: Reservation) => void;
@@ -67,26 +80,43 @@ export function ReservationCard({
   const c = t.reservations.card;
 
   const flag = arrivalFlag(r.check_in_date, businessDate, r.status, r.has_in_house_stay, t);
+  // A reservation that has STARTED as a stay is "resident" — a SEPARATE state
+  // from the reservation status (§25). No write operations belong to it here.
+  const inHouse = r.stay_status === "in_house" || r.has_in_house_stay;
   const editable = r.status === "held" || r.status === "confirmed";
-  const inHouse = r.has_in_house_stay;
 
-  // View + Print are READS, gated by reservations.view; writes never use view.
+  // View + Print + Documents are READS (never a write permission for a write).
   const canView = can("reservations.view");
-  // A quiet "documents" affordance opens the details modal (whose Documents
-  // section hosts the secure viewer); gated by the documents-view grant only.
   const canViewDocs = can("reservation_documents.view");
-  const canConfirm = r.status === "held" && can("reservations.confirm");
+  // Writes are suppressed once the guest is in-house (front-desk owns the stay).
+  const canConfirm = r.status === "held" && !inHouse && can("reservations.confirm");
   const canEdit = editable && !inHouse && can("reservations.update");
   const canCancel = editable && !inHouse && can("reservations.cancel");
 
-  // Room + floor summary from the read lines (may carry a specific room/floor).
-  const roomLabels = r.lines.map((l) =>
-    l.room_number ? `${t.reservations.details.room} ${l.room_number}` : `${l.room_type_name} ×${l.quantity}`,
+  // Financial summary (§35) — gated by finance.view; the money fields come back
+  // null when the caller may not see money, so hide the block honestly. When
+  // priced money exists OR the room type is explicitly unpriced, show the well.
+  const canMoney = can("finance.view");
+  const hasMoney =
+    r.reservation_total !== null ||
+    r.paid !== null ||
+    r.remaining !== null ||
+    r.nightly_rate !== null;
+  const showMoney = canMoney && (hasMoney || r.is_priced === false);
+  // Render a DERIVED decimal-string as money; a null/unpriced field degrades to a
+  // neutral placeholder rather than a fabricated zero.
+  const money = (value: string | null) =>
+    value !== null ? formatMoney(value, r.currency, locale) : "—";
+
+  // Room facts from the read lines — each its own separate field (§35).
+  const roomNumbers = Array.from(
+    new Set(r.lines.map((l) => l.room_number).filter((n): n is string => Boolean(n))),
   );
   const floorNames = Array.from(
     new Set(r.lines.map((l) => l.floor_name).filter((f): f is string => Boolean(f))),
   );
   const typeNames = Array.from(new Set(r.lines.map((l) => l.room_type_name)));
+  const departureTime = checkoutTime ? checkoutTime.slice(0, 5) : null;
   const note = r.notes || r.special_requests;
 
   return (
@@ -94,7 +124,7 @@ export function ReservationCard({
       className={`res-card res-card--${r.status}`}
       aria-label={`${t.reservations.details.title} ${r.reservation_number}`}
     >
-      {/* 1) Header — number (focal, opens details) + badges. */}
+      {/* 1) Header — number (focal, opens details) + status/source/stay/flag. */}
       <div className="res-card__header">
         <button
           type="button"
@@ -113,6 +143,12 @@ export function ReservationCard({
             <Icon icon={sourceIcon(r.source)} size="sm" />
             {t.reservations.source[r.source] ?? r.source}
           </Badge>
+          {inHouse ? (
+            <Badge tone="info">
+              <Icon icon={BedDouble} size="sm" />
+              {c.resident}
+            </Badge>
+          ) : null}
           {flag ? (
             <Badge tone={flag.tone}>
               <Icon icon={flag.icon} size="sm" />
@@ -138,46 +174,61 @@ export function ReservationCard({
         </span>
       </div>
 
-      {/* 3) Stay facts — each with a unified accompanying icon. */}
+      {/* 3) Room — SEPARATE fields: floor · room number · room type. */}
       <dl className="res-card__facts">
-        {roomLabels.length > 0 ? (
-          <div className="res-card__fact">
-            <dt>
-              <Icon icon={BedDouble} size="sm" />
-              {t.reservations.details.rooms}
-            </dt>
-            <dd>{roomLabels.join(" · ")}</dd>
-          </div>
-        ) : null}
-        {floorNames.length > 0 ? (
-          <div className="res-card__fact">
-            <dt>
-              <Icon icon={Building2} size="sm" />
-              {c.floor}
-            </dt>
-            <dd>{floorNames.join(" · ")}</dd>
-          </div>
-        ) : null}
-        {typeNames.length > 0 ? (
-          <div className="res-card__fact">
-            <dt>
-              <Icon icon={BedDouble} size="sm" />
-              {t.reservations.form.roomType}
-            </dt>
-            <dd>{typeNames.join(" · ")}</dd>
-          </div>
-        ) : null}
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={Building2} size="sm" />
+            {c.floor}
+          </dt>
+          <dd>{floorNames.length > 0 ? floorNames.join(" · ") : "—"}</dd>
+        </div>
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={BedDouble} size="sm" />
+            {t.reservations.details.room}
+          </dt>
+          <dd>{roomNumbers.length > 0 ? roomNumbers.join(" · ") : "—"}</dd>
+        </div>
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={Tag} size="sm" />
+            {t.reservations.form.roomType}
+          </dt>
+          <dd>{typeNames.length > 0 ? typeNames.join(" · ") : "—"}</dd>
+        </div>
+      </dl>
+
+      {/* 4) Stay — SEPARATE fields: check-in · arrival · check-out · departure ·
+          nights · persons. */}
+      <dl className="res-card__facts">
         <div className="res-card__fact">
           <dt>
             <Icon icon={CalendarRange} size="sm" />
-            {t.reservations.details.dates}
+            {c.checkIn}
           </dt>
-          <dd>
-            {formatDate(r.check_in_date, locale)} → {formatDate(r.check_out_date, locale)}
-            {r.expected_arrival_time ? (
-              <span className="muted"> · {r.expected_arrival_time}</span>
-            ) : null}
-          </dd>
+          <dd>{formatDate(r.check_in_date, locale)}</dd>
+        </div>
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={Clock} size="sm" />
+            {c.arrivalTime}
+          </dt>
+          <dd>{r.expected_arrival_time ?? "—"}</dd>
+        </div>
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={CalendarRange} size="sm" />
+            {c.checkOut}
+          </dt>
+          <dd>{formatDate(r.check_out_date, locale)}</dd>
+        </div>
+        <div className="res-card__fact">
+          <dt>
+            <Icon icon={Clock} size="sm" />
+            {c.departureTime}
+          </dt>
+          <dd>{departureTime ?? "—"}</dd>
         </div>
         <div className="res-card__fact">
           <dt>
@@ -189,7 +240,7 @@ export function ReservationCard({
         <div className="res-card__fact">
           <dt>
             <Icon icon={Users} size="sm" />
-            {t.reservations.views.guestsCount}
+            {c.persons}
           </dt>
           <dd>
             {r.total_guests}
@@ -206,15 +257,46 @@ export function ReservationCard({
         </div>
       </dl>
 
-      {/* 4) Expected payment — an INFO label only (no amount, no currency). */}
-      {r.expected_payment_method ? (
-        <span className="res-card__chip">
-          <Icon icon={Wallet} size="sm" />
-          {c.expected}: {t.reservations.expectedPayment[r.expected_payment_method]}
-        </span>
+      {/* 5) Financial summary — permission-gated; honest when unpriced/hidden.
+          Money values are DERIVED decimal strings rendered via formatMoney. */}
+      {showMoney ? (
+        <dl className="res-card__money">
+          {r.is_priced === false ? (
+            <div className="res-card__money-empty">{c.notPriced}</div>
+          ) : (
+            <>
+              <div className="res-card__money-item">
+                <dt>{c.nightly}</dt>
+                <dd>{money(r.nightly_rate)}</dd>
+              </div>
+              <div className="res-card__money-item res-card__money-item--total">
+                <dt>{c.total}</dt>
+                <dd>{money(r.reservation_total)}</dd>
+              </div>
+              <div className="res-card__money-item">
+                <dt>{c.paid}</dt>
+                <dd>{money(r.paid)}</dd>
+              </div>
+              <div className="res-card__money-item">
+                <dt>{c.remaining}</dt>
+                <dd>{money(r.remaining)}</dd>
+              </div>
+              {r.payment_status ? (
+                <div className="res-card__money-item res-card__money-status">
+                  <dt>{c.paymentLabel}</dt>
+                  <dd>
+                    <Badge tone={paymentStatusTone(r.payment_status)}>
+                      {c.paymentStatus[r.payment_status]}
+                    </Badge>
+                  </dd>
+                </div>
+              ) : null}
+            </>
+          )}
+        </dl>
       ) : null}
 
-      {/* 5) Note summary — truncated, only when present. */}
+      {/* 6) Note summary — truncated, only when present. */}
       {note ? <p className="res-card__note">{note}</p> : null}
 
       {/* Checked-in guard: dates/rooms are managed at the front desk. */}
@@ -227,22 +309,23 @@ export function ReservationCard({
         </p>
       ) : null}
 
-      {/* 6) Actions — shown directly, permission- and state-aware; they wrap into
-          a tidy row and start at a consistent position (margin-block-start:auto). */}
-      <div className="res-card__actions">
+      {/* 7) Smart status-aware action grid (§38, no overflow menu). Reads for
+          everyone permitted; writes disappear for closed / in-house bookings.
+          "View documents" is a real, prominent secondary button (§37). */}
+      <div className="res-card__actions res-card__actions--grid">
         {canView ? (
           <Button variant="secondary" size="sm" icon={Eye} onClick={() => onView(r)}>
             {t.reservations.list.view}
           </Button>
         ) : null}
+        {canViewDocs ? (
+          <Button variant="secondary" size="sm" icon={FileText} onClick={() => onView(r)}>
+            {c.documents}
+          </Button>
+        ) : null}
         {canView ? (
           <Button variant="ghost" size="sm" icon={Printer} onClick={() => onPrint(r)}>
             {c.print}
-          </Button>
-        ) : null}
-        {canViewDocs ? (
-          <Button variant="ghost" size="sm" icon={FileText} onClick={() => onView(r)}>
-            {c.documents}
           </Button>
         ) : null}
         {canConfirm ? (

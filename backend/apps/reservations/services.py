@@ -554,3 +554,100 @@ def has_in_house_stay(reservation) -> bool:
     return Stay.objects.filter(
         reservation=reservation, status=StayStatus.IN_HOUSE
     ).exists()
+
+
+def latest_stay(reservation):
+    """The most recent Stay derived from this reservation, or ``None``.
+
+    Uses the reverse ``stays`` relation (prefetched by the reservation list/detail
+    querysets, so this adds no query there). "Most recent" = highest pk, i.e. the
+    last stay row created for the booking — this lets a read serializer expose a
+    single ``stay_status`` (in_house / checked_out / cancelled) that distinguishes
+    an in-house guest, a departed guest, and a booking that never checked in
+    (``None``), which the boolean ``has_in_house_stay`` alone cannot.
+    """
+    stays = list(reservation.stays.all())
+    if not stays:
+        return None
+    return max(stays, key=lambda s: s.id)
+
+
+def reservation_financials(reservation, *, hotel=None) -> dict:
+    """Derive a reservation's money summary — a READ-ONLY view, never stored.
+
+    Design (RESERVATIONS-FORM-UX-CORRECTION §26/§31/§35, office decision — there
+    is NO pricing/tax engine in this repo, so none is invented):
+
+    - ``reservation_total`` = ``Σ money(room_type.base_rate × nights × quantity)``
+      over the reservation's room lines. ``base_rate`` is a reference value that
+      may be ``NULL``; a line without one is UNPRICED — it contributes nothing and
+      flags the whole reservation as not fully priced (``is_priced=False``), so the
+      UI can honestly show "not priced" rather than a fabricated total.
+    - ``nightly_rate`` = ``Σ money(base_rate × quantity)`` over priced lines.
+    - ``paid`` = ``Σ`` POSTED ``Payment.amount`` (already the base/reservation
+      currency equivalent — §29) across the reservation's folio(s). Deposits taken
+      before check-in AND payments on the reused stay folio are all counted, since
+      they hang off the same reservation-linked folio ledger (invariant #1).
+    - ``remaining`` = ``money(total − paid)`` — DERIVED, never a stored second
+      balance (§31).
+    - ``payment_status`` ∈ {unpaid, partial, paid}, derived from paid vs total.
+
+    ``currency`` is the reservation/base currency (the hotel default), matching the
+    folio currency. Pass ``hotel`` to avoid an FK hit per row in list rendering.
+    All money is :class:`~decimal.Decimal` via ``money()``. Returns a plain dict of
+    Decimals/None (+ metadata); serialization to strings is the caller's job.
+    """
+    from apps.finance.models import PostingStatus
+    from apps.finance.services import ZERO, money
+
+    hotel = hotel or reservation.hotel
+    settings_obj = getattr(hotel, "settings", None)
+    currency = (getattr(settings_obj, "default_currency", "") or "") or "USD"
+
+    nights = reservation.nights
+    unpriced = False
+    priced_present = False
+    nightly = ZERO
+    total = ZERO
+    for line in reservation.lines.all():
+        rate = line.room_type.base_rate
+        qty = int(line.quantity or 0)
+        if rate is None:
+            unpriced = True
+            continue
+        priced_present = True
+        rate = money(rate)
+        nightly += rate * qty
+        total += rate * qty * nights
+    is_priced = priced_present and not unpriced
+    nightly = money(nightly) if is_priced else None
+    total = money(total) if is_priced else None
+
+    paid = ZERO
+    for folio in reservation.folios.all():
+        for payment in folio.payments.all():
+            if payment.status == PostingStatus.POSTED:
+                paid += payment.amount
+    paid = money(paid)
+
+    remaining = money(total - paid) if total is not None else None
+    if paid <= ZERO:
+        payment_status = "unpaid"
+    elif total is None:
+        # Money received but the total is unknown (unpriced) — honestly partial.
+        payment_status = "partial"
+    elif paid >= total:
+        payment_status = "paid"
+    else:
+        payment_status = "partial"
+
+    return {
+        "currency": currency,
+        "nights": nights,
+        "nightly_rate": nightly,
+        "reservation_total": total,
+        "paid": paid,
+        "remaining": remaining,
+        "payment_status": payment_status,
+        "is_priced": is_priced,
+    }

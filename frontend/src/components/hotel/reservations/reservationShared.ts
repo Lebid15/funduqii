@@ -13,8 +13,10 @@ import {
 import type { BadgeTone } from "@/components/ui";
 import type {
   OccupantRelationship,
+  Payment,
   ReservationDocumentType,
   ReservationOccupant,
+  ReservationPaymentStatus,
 } from "@/lib/api/types";
 import type { ReservationSource } from "@/lib/api/types";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
@@ -24,6 +26,20 @@ import type { Dictionary } from "@/lib/i18n/dictionaries";
  * source; everything else is neutral. */
 export function sourceTone(source: ReservationSource): BadgeTone {
   return source === "public_website" ? "info" : "neutral";
+}
+
+/** PAYMENT-STATUS badge tone for the card's financial summary (§35): paid →
+ * success, partially paid → warning, unpaid → neutral (an unpaid FUTURE booking
+ * is normal, never an error). Colour is always paired with a text label. */
+export function paymentStatusTone(status: ReservationPaymentStatus): BadgeTone {
+  switch (status) {
+    case "paid":
+      return "success";
+    case "partial":
+      return "warning";
+    default:
+      return "neutral"; // unpaid
+  }
 }
 
 export function sourceIcon(source: ReservationSource): LucideIcon {
@@ -123,6 +139,57 @@ export function documentTypeLabel(
 ): string {
   const labels = t.reservations.wizard.documents.types as Record<string, string>;
   return labels[value] ?? value;
+}
+
+/** Document types that evidence a family / marital relationship (§16/§39). The
+ * reservation details group these apart from identity documents so a marriage
+ * contract or family record is never mistaken for the guest's own ID. */
+export const RELATIONSHIP_PROOF_DOC_TYPES: ReservationDocumentType[] = [
+  "marriage_contract",
+  "family_book",
+  "family_statement",
+];
+
+/** True when a document is a relationship / family proof rather than an
+ * identity document (used to split the details documents list into groups). */
+export function isRelationshipProofDoc(docType: ReservationDocumentType): boolean {
+  return RELATIONSHIP_PROOF_DOC_TYPES.includes(docType);
+}
+
+/** A payment tendered in a currency OTHER than the reservation/base currency —
+ * i.e. it carries a real FX snapshot (original amount + rate + direction) worth
+ * displaying (§29). Mirrors the wizard's recorded-payments check so the read UI
+ * and the print slip stay consistent. Money values are decimal strings — never
+ * parseFloat; this only compares currency codes and null. */
+export function isForeignPayment(
+  payment: Pick<Payment, "payment_currency" | "currency" | "original_amount">,
+  baseCurrency: string,
+): boolean {
+  const payCurrency = payment.currency || baseCurrency;
+  return (
+    payment.payment_currency !== "" &&
+    payment.payment_currency !== payCurrency &&
+    payment.original_amount !== null
+  );
+}
+
+/** Human label for a foreign payment's FX rate direction (§29). `rate_basis` is
+ * a plain backend string — canonically `"base_per_payment"` (base = payment ×
+ * rate) or `"payment_per_base"` (base = payment ÷ rate). Reuses the wizard's FX
+ * selector labels so the read UI and the print slip stay consistent with the
+ * BookingStep dropdown; an empty/unknown basis returns "" so the caller can skip
+ * the separator honestly. */
+export function fxDirectionLabel(
+  rateBasis: string,
+  booking: Pick<
+    Dictionary["reservations"]["wizard"]["booking"],
+    "rateBasisOptions"
+  >,
+): string {
+  const options = booking.rateBasisOptions;
+  if (rateBasis === "base_per_payment") return options.base_per_payment;
+  if (rateBasis === "payment_per_base") return options.payment_per_base;
+  return "";
 }
 
 /** Compose a companion's display name from the structured snapshot parts,
