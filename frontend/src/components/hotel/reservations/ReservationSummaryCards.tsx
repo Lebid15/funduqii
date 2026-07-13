@@ -1,102 +1,109 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   CalendarCheck,
-  CalendarPlus,
   CalendarX2,
   CheckCircle2,
   Clock3,
-  Globe,
-  CalendarRange,
   type LucideIcon,
 } from "lucide-react";
 
 import { Icon } from "@/components/ui";
-import { listReservations } from "@/lib/api/reservations";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { cx } from "@/lib/utils";
 
-import {
-  RESERVATION_VIEWS,
-  VIEW_PARAMS,
-  type ReservationView,
-} from "./reservationViews";
+/** The status a summary card maps onto — "" is the Total card (clears status). */
+export type StatusCard = "" | "confirmed" | "held" | "cancelled";
 
-const ICONS: Record<ReservationView, LucideIcon> = {
-  all: CalendarCheck,
-  today: CalendarPlus,
-  website: Globe,
-  future: CalendarRange,
-  pending: Clock3,
-  confirmed: CheckCircle2,
-  closed: CalendarX2,
-};
+export interface ReservationCounts {
+  total?: number;
+  confirmed?: number;
+  held?: number;
+  cancelled?: number;
+}
 
-const TONES: Record<ReservationView, string> = {
-  all: "primary",
-  today: "info",
-  website: "info",
-  future: "neutral",
-  pending: "warning",
-  confirmed: "success",
-  closed: "danger",
-};
+const CARDS: Array<{
+  key: StatusCard;
+  countKey: keyof ReservationCounts;
+  labelKey: "total" | "confirmed" | "pending" | "cancelled";
+  captionKey: "totalCaption" | "confirmedCaption" | "pendingCaption" | "cancelledCaption";
+  icon: LucideIcon;
+  tone: string;
+}> = [
+  {
+    key: "",
+    countKey: "total",
+    labelKey: "total",
+    captionKey: "totalCaption",
+    icon: CalendarCheck,
+    tone: "primary",
+  },
+  {
+    key: "confirmed",
+    countKey: "confirmed",
+    labelKey: "confirmed",
+    captionKey: "confirmedCaption",
+    icon: CheckCircle2,
+    tone: "success",
+  },
+  {
+    key: "held",
+    countKey: "held",
+    labelKey: "pending",
+    captionKey: "pendingCaption",
+    icon: Clock3,
+    tone: "warning",
+  },
+  {
+    key: "cancelled",
+    countKey: "cancelled",
+    labelKey: "cancelled",
+    captionKey: "cancelledCaption",
+    icon: CalendarX2,
+    tone: "danger",
+  },
+];
 
-/** Clickable counters over the seven reservation views (owner reorg) —
- * clicking a card activates its tab. Counts come from seven page_size=1
- * list queries (the paginator count), so they always match the tabs. */
+/** EXACTLY four clickable summary cards (reservations rework): Total /
+ * Confirmed / Pending / Cancelled, driven by the real hotel-scoped overview
+ * counts. Each card is a status quick-filter; the active card highlights the
+ * active filter, and clicking Total (or the active card) clears it. */
 export function ReservationSummaryCards({
+  counts,
   active,
   onSelect,
-  reloadKey,
 }: {
-  active: ReservationView;
-  onSelect: (view: ReservationView) => void;
-  reloadKey: number;
+  counts: ReservationCounts;
+  /** The active status filter, or null when a non-card status (e.g. expired)
+   * is applied — then no card (not even Total) is highlighted. */
+  active: StatusCard | null;
+  onSelect: (status: StatusCard) => void;
 }) {
   const { t } = useI18n();
-  const v = t.reservations.views;
-  const [counts, setCounts] = useState<Partial<Record<ReservationView, number>>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all(
-      RESERVATION_VIEWS.map((view) =>
-        listReservations({ ...VIEW_PARAMS[view], page_size: 1 })
-          .then((data) => [view, data.count] as const)
-          .catch(() => [view, undefined] as const),
-      ),
-    ).then((entries) => {
-      if (cancelled) return;
-      const next: Partial<Record<ReservationView, number>> = {};
-      for (const [view, count] of entries) {
-        if (count !== undefined) next[view] = count;
-      }
-      setCounts(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  const c = t.reservations.cards;
 
   return (
-    <div className="board-stats" role="group" aria-label={t.reservations.title}>
-      {RESERVATION_VIEWS.map((view) => (
-        <button
-          key={view}
-          type="button"
-          className={cx("board-stat", active === view && "board-stat--active")}
-          aria-pressed={active === view}
-          onClick={() => onSelect(view)}
-        >
-          <span className={cx("board-stat__icon", `board-stat__icon--${TONES[view]}`)}>
-            <Icon icon={ICONS[view]} size="md" />
-          </span>
-          <span className="board-stat__value">{counts[view] ?? "…"}</span>
-          <span className="board-stat__label">{v.tabs[view]}</span>
-        </button>
-      ))}
+    <div className="board-stats board-stats--4" role="group" aria-label={c.groupLabel}>
+      {CARDS.map((card) => {
+        const isActive = active === card.key;
+        const value = counts[card.countKey];
+        return (
+          <button
+            key={card.labelKey}
+            type="button"
+            className={cx("board-stat", isActive && "board-stat--active")}
+            aria-pressed={isActive}
+            onClick={() => onSelect(card.key)}
+          >
+            <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
+              <Icon icon={card.icon} size="md" />
+            </span>
+            <span className="board-stat__value">{value ?? "…"}</span>
+            <span className="board-stat__label">{c[card.labelKey]}</span>
+            <span className="board-stat__caption">{c[card.captionKey]}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -4069,3 +4069,288 @@ a {
     position: static;
   }
 }
+
+/* --- Reservations rework: cards-first list, card menu, detail sections ----- */
+.res-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+.res-list__order {
+  font-size: var(--font-size-xs);
+}
+.reservation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The row card mirrors the rooms operational card: a calm surface with a
+ * status accent bar and quietly-divided regions. Full-width on desktop and a
+ * clean single-column stack on mobile — flex-wrap + min-width:0 keep it free of
+ * horizontal scroll at any breakpoint. */
+.res-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--res-accent, var(--color-border-strong));
+  border-radius: var(--radius-xl);
+  padding: var(--space-5) var(--space-6);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.res-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.res-card--held {
+  --res-accent: var(--color-warning);
+}
+.res-card--confirmed {
+  --res-accent: var(--color-success);
+}
+.res-card--cancelled {
+  --res-accent: var(--color-danger);
+}
+.res-card--expired {
+  --res-accent: var(--color-fg-muted);
+}
+
+/* 1) Header — number (focal, opens details) on the start, badges on the end. */
+.res-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.res-card__open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1);
+  margin: calc(-1 * var(--space-1));
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.res-card__number {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+  transition: color var(--transition-fast);
+}
+.res-card__open-cue {
+  flex: none;
+  color: var(--color-fg-muted);
+  opacity: 0.6;
+  transition: color var(--transition-fast), opacity var(--transition-fast);
+}
+.res-card__open:hover .res-card__number,
+.res-card__open:focus-visible .res-card__number {
+  color: var(--color-primary-active);
+}
+.res-card__open:hover .res-card__open-cue,
+.res-card__open:focus-visible .res-card__open-cue {
+  color: var(--color-primary-active);
+  opacity: 1;
+}
+.res-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+/* 2) Guest — initials avatar + name + phone. */
+.res-card__guest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.res-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+.res-card__guest-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+.res-card__guest-name {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 3) Stay facts — labelled row framed by subtle top/bottom dividers. */
+.res-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--color-border);
+}
+.res-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.res-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.res-card__fact dt .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.res-card__fact dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 4) Expected-payment info chip (label only — never an amount). */
+.res-card__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  align-self: flex-start;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.res-card__chip .icon {
+  flex: none;
+}
+
+/* 5) Truncated note + in-house guard note. */
+.res-card__note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.res-card__inhouse {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* 6) Actions — wrap gracefully; the overflow menu sits on the end. */
+.res-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-1);
+}
+.res-card__actions-end {
+  margin-inline-start: auto;
+}
+
+/* Per-card overflow menu — mirrors the rooms settings-menu a11y and look. */
+.card-menu {
+  position: relative;
+  display: inline-flex;
+}
+.card-menu__list {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + var(--space-1));
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-modal);
+  animation: pop-in var(--transition-fast);
+}
+.card-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.card-menu__item:hover {
+  background: var(--color-surface-sunken);
+}
+.card-menu__item .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.card-menu__item--danger {
+  color: var(--color-danger);
+}
+.card-menu__item--danger .icon {
+  color: var(--color-danger);
+}
+
+/* Detail modal section sub-headings. */
+.res-detail__subhead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+}
+
+@media (max-width: 640px) {
+  .res-card__badges {
+    margin-inline-start: 0;
+  }
+  .res-card__actions-end {
+    margin-inline-start: 0;
+  }
+}

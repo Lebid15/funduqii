@@ -43,6 +43,10 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
         source="room_type.max_capacity", read_only=True
     )
     room_number = serializers.SerializerMethodField()
+    # Additive read-only fields for the reworked reservations UI: the floor of
+    # the SPECIFIC assigned room (a line may have no room -> both are null).
+    floor_name = serializers.SerializerMethodField()
+    floor_number = serializers.SerializerMethodField()
 
     class Meta:
         model = ReservationRoomLine
@@ -54,6 +58,8 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
             "max_capacity",
             "room",
             "room_number",
+            "floor_name",
+            "floor_number",
             "quantity",
             "adults",
             "children",
@@ -64,6 +70,16 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
     def get_room_number(self, obj):
         return obj.room.number if obj.room_id else None
 
+    def get_floor_name(self, obj):
+        if obj.room_id and obj.room.floor_id:
+            return obj.room.floor.name
+        return None
+
+    def get_floor_number(self, obj):
+        if obj.room_id and obj.room.floor_id:
+            return obj.room.floor.number
+        return None
+
 
 class ReservationSerializer(serializers.ModelSerializer):
     """Read representation with nested lines and computed fields."""
@@ -72,6 +88,9 @@ class ReservationSerializer(serializers.ModelSerializer):
     nights = serializers.IntegerField(read_only=True)
     total_guests = serializers.IntegerField(read_only=True)
     created_by = serializers.SerializerMethodField()
+    # Additive read-only display name for the creator (full_name, else email,
+    # else null when created_by is unset). Existing created_by (email) is kept.
+    created_by_name = serializers.SerializerMethodField()
     # Post-check-in guard (final closure): the UI freezes dates/rooms and
     # hides cancel when the guest is in-house — the backend enforces it too.
     has_in_house_stay = serializers.SerializerMethodField()
@@ -111,6 +130,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             "public_cancel_reason",
             "has_in_house_stay",
             "created_by",
+            "created_by_name",
             "created_at",
             "updated_at",
             "lines",
@@ -119,6 +139,11 @@ class ReservationSerializer(serializers.ModelSerializer):
 
     def get_created_by(self, obj):
         return obj.created_by.email if obj.created_by_id else None
+
+    def get_created_by_name(self, obj):
+        if obj.created_by_id is None:
+            return None
+        return obj.created_by.full_name or obj.created_by.email
 
     def get_has_in_house_stay(self, obj) -> bool:
         from .services import has_in_house_stay

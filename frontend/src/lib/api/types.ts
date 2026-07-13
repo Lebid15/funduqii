@@ -631,6 +631,10 @@ export interface ReservationLine {
   max_capacity: number;
   room: number | null;
   room_number: string | null;
+  /** Floor of the SPECIFIC assigned room (null when the line has no room).
+   * `floor_number` mirrors Floor.number (a CharField), so it is a string. */
+  floor_name: string | null;
+  floor_number: string | null;
   quantity: number;
   adults: number | null;
   children: number | null;
@@ -673,6 +677,8 @@ export interface Reservation {
    * cancel refused (the stay is the source of truth). */
   has_in_house_stay: boolean;
   created_by: string | null;
+  /** Creator display name (full_name, else email, else null). */
+  created_by_name: string | null;
   created_at: string;
   updated_at: string;
   lines: ReservationLine[];

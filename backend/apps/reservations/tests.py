@@ -1194,3 +1194,86 @@ class PublicCancelVisibilityTests(APITestCase):
             for r in self.client.get(url, **HDR(self.hotel)).data["results"]
         }
         self.assertEqual(numbers, set())
+
+
+# --- Reservations UI rework: additive read-only display fields ------------- #
+
+
+class DisplayFieldTests(APITestCase):
+    """Purely additive read fields for the reworked reservations UI:
+    ``created_by_name`` on the reservation, and ``floor_name``/``floor_number``
+    on each room line (sourced from the SPECIFIC assigned room's floor)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        # A floor with an explicit name AND number, to prove both are surfaced.
+        self.floor = Floor.objects.create(
+            hotel=self.hotel, name="First Floor", number="1"
+        )
+        self.rooms = make_rooms(self.hotel, self.rtype, 1, floor=self.floor)
+
+    def _res(self, *, created_by, number="R-DISP"):
+        return Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Guest",
+            created_by=created_by,
+        )
+
+    def _detail(self, res):
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_created_by_name_uses_full_name(self):
+        # add_member sets full_name="Member".
+        data = self._detail(self._res(created_by=self.manager))
+        self.assertEqual(data["created_by_name"], "Member")
+        # The existing email field is unchanged (purely additive).
+        self.assertEqual(data["created_by"], self.manager.email)
+
+    def test_created_by_name_falls_back_to_email(self):
+        no_name = User.objects.create_user(
+            email="noname@x.com", password="StrongPass!234", full_name=""
+        )
+        data = self._detail(self._res(created_by=no_name, number="R-NONAME"))
+        self.assertEqual(data["created_by_name"], "noname@x.com")
+
+    def test_created_by_name_null_without_creator(self):
+        data = self._detail(self._res(created_by=None, number="R-NOCREATOR"))
+        self.assertIsNone(data["created_by_name"])
+
+    def test_line_floor_fields_from_assigned_room_and_null_when_unassigned(self):
+        res = self._res(created_by=self.manager)
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=None,
+            quantity=1,
+        )
+        lines = {line["room"]: line for line in self._detail(res)["lines"]}
+
+        assigned = lines[self.rooms[0].id]
+        self.assertEqual(assigned["floor_name"], "First Floor")
+        self.assertEqual(assigned["floor_number"], "1")
+
+        unassigned = lines[None]
+        self.assertIsNone(unassigned["floor_name"])
+        self.assertIsNone(unassigned["floor_number"])
