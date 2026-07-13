@@ -2,3 +2,7 @@
 -r base.txt
 
 gunicorn>=23.0,<24.0
+# Serve Django admin / DRF static assets from the app process (no separate web
+# server or CDN on the free single-process demo). Wired conditionally in
+# config/settings/base.py so dev/tests (base.txt, no WhiteNoise) are unchanged.
+whitenoise>=6.7,<7.0

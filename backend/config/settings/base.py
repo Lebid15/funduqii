@@ -137,6 +137,37 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# --- WhiteNoise (app-served static) -----------------------------------------
+# The free single-process Render demo has no separate web server or CDN, so
+# gunicorn serves the Django admin / DRF static assets itself through
+# WhiteNoise. WhiteNoise is declared in ``requirements/production.txt`` only;
+# when it is not installed (local dev / tests / CI running base.txt) this
+# whole block is skipped, so Django's default static storage and the dev/test
+# behaviour are left untouched — no manifest is ever required locally.
+try:  # pragma: no cover - depends on the installed requirement set
+    import whitenoise  # noqa: F401
+except ModuleNotFoundError:
+    _WHITENOISE_ENABLED = False
+else:
+    _WHITENOISE_ENABLED = True
+
+if _WHITENOISE_ENABLED:
+    _security_mw = "django.middleware.security.SecurityMiddleware"
+    _whitenoise_mw = "whitenoise.middleware.WhiteNoiseMiddleware"
+    # WhiteNoise must sit directly after SecurityMiddleware.
+    if _whitenoise_mw not in MIDDLEWARE:
+        MIDDLEWARE.insert(MIDDLEWARE.index(_security_mw) + 1, _whitenoise_mw)
+    # Compress collected static; no hashed-manifest names so no environment
+    # ever needs a staticfiles manifest just to resolve ``{% static %}``.
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- CORS -------------------------------------------------------------------
@@ -216,6 +247,14 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
+# Eager mode runs any ``.delay()`` inline in the calling process — no broker
+# and no worker. OFF by default so development, production and the test suite
+# keep their current behaviour; the free single-process Render demo turns it
+# ON via ``CELERY_TASK_ALWAYS_EAGER=true`` (there is no free worker there).
+# These are standard Celery settings read through the ``CELERY`` namespace by
+# ``config/celery.py`` (``config_from_object(..., namespace="CELERY")``).
+CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
+CELERY_TASK_EAGER_PROPAGATES = env.bool("CELERY_TASK_EAGER_PROPAGATES", default=True)
 
 # --- Channels (realtime foundation) -----------------------------------------
 # Realtime uses Django Channels + a Redis channel layer. Without Redis, an
