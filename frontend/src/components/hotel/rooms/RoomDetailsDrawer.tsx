@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { Badge, Button, Icon, Modal } from "@/components/ui";
 import type { RoomBoardRoom } from "@/lib/api/types";
@@ -24,12 +24,10 @@ export function RoomDetailsDrawer({
   room,
   onClose,
   onChangeStatus,
-  onDelete,
 }: {
   room: RoomBoardRoom | null;
   onClose: () => void;
   onChangeStatus: (room: RoomBoardRoom) => void;
-  onDelete: (room: RoomBoardRoom) => void;
 }) {
   const { t, locale } = useI18n();
   const access = useHotelAccess();
@@ -40,7 +38,6 @@ export function RoomDetailsDrawer({
   if (!room) return null;
   const links = buildRoomLinks(room, t, can);
   const canStatus = can("rooms.status_update");
-  const canDelete = can("rooms.delete");
 
   const rows: Array<[string, string]> = [
     [b.detailFloor, room.floor_name],
@@ -117,16 +114,6 @@ export function RoomDetailsDrawer({
               onClick={() => onChangeStatus(room)}
             >
               {b.changeStatus}
-            </Button>
-          ) : null}
-          {canDelete ? (
-            <Button
-              variant="danger"
-              size="sm"
-              icon={Trash2}
-              onClick={() => onDelete(room)}
-            >
-              {t.rooms.page.deleteRoom}
             </Button>
           ) : null}
         </div>

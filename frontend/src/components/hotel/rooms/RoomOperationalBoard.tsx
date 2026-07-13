@@ -29,12 +29,12 @@ import {
   useToast,
 } from "@/components/ui";
 import {
-  deleteRoom,
+  changeRoomStatus,
   getOperationalBoard,
   listFloors,
   listRoomTypes,
 } from "@/lib/api/rooms";
-import { isApiError, messageForError } from "@/lib/api/errors";
+import { messageForError } from "@/lib/api/errors";
 import type {
   Floor,
   RoomBoardRoom,
@@ -109,8 +109,8 @@ export function RoomOperationalBoard() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [manageFloorsOpen, setManageFloorsOpen] = useState(false);
   const [roomTypesOpen, setRoomTypesOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<RoomBoardRoom | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<RoomBoardRoom | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -259,29 +259,23 @@ export function RoomOperationalBoard() {
     setCreating(true);
   }
 
-  async function confirmDelete() {
-    if (!deleteTarget) return;
-    setDeleteBusy(true);
+  async function confirmArchive() {
+    if (!archiveTarget) return;
+    setArchiveBusy(true);
     try {
-      await deleteRoom(deleteTarget.id);
+      // Archive = a plain status change to "archived" (gated by
+      // rooms.status_update, no note required). Records, stays, reservations
+      // and history are preserved — the room is only hidden from active
+      // operations and can be restored anytime via Change status.
+      await changeRoomStatus(archiveTarget.id, "archived", "");
       notify(t.rooms.saved);
-      setDeleteTarget(null);
+      setArchiveTarget(null);
       refreshAll();
     } catch (err) {
-      // Backend guards delete with a 409 resource_in_use (room_has_stays /
-      // room_has_reservations) — tell the user to ARCHIVE it instead and
-      // reopen the drawer so the status/archive action stays reachable.
-      if (isApiError(err) && err.code === "resource_in_use") {
-        notify(`${t.rooms.errors.roomInUse} ${t.rooms.errors.archiveInstead}`, "error");
-        const room = deleteTarget;
-        setDeleteTarget(null);
-        setDetails(room);
-      } else {
-        notify(messageForError(err, t), "error");
-        setDeleteTarget(null);
-      }
+      notify(messageForError(err, t), "error");
+      setArchiveTarget(null);
     } finally {
-      setDeleteBusy(false);
+      setArchiveBusy(false);
     }
   }
 
@@ -463,6 +457,8 @@ export function RoomOperationalBoard() {
           hasFilters={hasFilters}
           onDetails={setDetails}
           onEdit={(room) => setEditTarget(room)}
+          onArchive={(room) => setArchiveTarget(room)}
+          onChangeStatus={(room) => setStatusTarget(room)}
           onAddRoomToFloor={(floorId) => openCreate(floorId)}
         />
       )}
@@ -474,26 +470,21 @@ export function RoomOperationalBoard() {
           setDetails(null);
           setStatusTarget(room);
         }}
-        onDelete={(room) => {
-          setDetails(null);
-          setDeleteTarget(room);
-        }}
       />
       <ConfirmDialog
-        open={deleteTarget !== null}
-        title={p.deleteRoomTitle}
+        open={archiveTarget !== null}
+        title={p.archiveRoomTitle}
         body={
-          deleteTarget
-            ? p.deleteRoomBody.replace("{number}", deleteTarget.number)
+          archiveTarget
+            ? p.archiveRoomBody.replace("{number}", archiveTarget.number)
             : ""
         }
-        confirmLabel={t.common.delete}
+        confirmLabel={p.archiveRoom}
         cancelLabel={t.common.cancel}
         closeLabel={t.common.close}
-        tone="danger"
-        busy={deleteBusy}
-        onConfirm={confirmDelete}
-        onClose={() => setDeleteTarget(null)}
+        busy={archiveBusy}
+        onConfirm={confirmArchive}
+        onClose={() => setArchiveTarget(null)}
       />
       <RoomStatusModal
         open={statusTarget !== null}

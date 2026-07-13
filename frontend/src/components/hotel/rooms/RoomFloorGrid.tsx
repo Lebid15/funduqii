@@ -22,6 +22,8 @@ export function RoomFloorGrid({
   hasFilters,
   onDetails,
   onEdit,
+  onArchive,
+  onChangeStatus,
   onAddRoomToFloor,
 }: {
   floors: RoomBoardFloor[];
@@ -31,6 +33,8 @@ export function RoomFloorGrid({
   hasFilters: boolean;
   onDetails: (room: RoomBoardRoom) => void;
   onEdit: (room: RoomBoardRoom) => void;
+  onArchive: (room: RoomBoardRoom) => void;
+  onChangeStatus: (room: RoomBoardRoom) => void;
   onAddRoomToFloor: (floorId: number) => void;
 }) {
   const { t } = useI18n();
@@ -125,6 +129,8 @@ export function RoomFloorGrid({
                       room={room}
                       onDetails={onDetails}
                       onEdit={onEdit}
+                      onArchive={onArchive}
+                      onChangeStatus={onChangeStatus}
                     />
                   ))}
                 </div>
