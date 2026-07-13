@@ -309,9 +309,7 @@
       "duplicateRoomNumber": "One or more room numbers are already in use or duplicated.",
       "bulkTooLarge": "Too many rooms were requested at once.",
       "roomLimitReached": "Your plan's room limit has been reached.",
-      "roomInUse": "This room is in use and cannot be deleted.",
-      "roomTypeInUse": "This room type is in use and cannot be deleted.",
-      "archiveInstead": "Archive it instead (change its status to Archived)."
+      "roomTypeInUse": "This room type is in use and cannot be deleted."
     },
     "board": {
       "tabTitle": "Operational Overview",
@@ -503,9 +501,9 @@
       "filters": "Filters",
       "filterOccupancy": "Occupancy",
       "availableNowShort": "Available",
-      "deleteRoom": "Delete room",
-      "deleteRoomTitle": "Delete room?",
-      "deleteRoomBody": "Room {number} will be permanently removed. This cannot be undone.",
+      "archiveRoom": "Archive",
+      "archiveRoomTitle": "Archive room?",
+      "archiveRoomBody": "Room {number} will be hidden from active operations. You can restore it anytime via Change status — its records and history are preserved.",
       "roomLabel": "Room",
       "inventoryError": "Couldn't load floors and room types. Some options may be unavailable."
     },

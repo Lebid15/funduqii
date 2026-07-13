@@ -309,9 +309,7 @@
       "duplicateRoomNumber": "Bir veya daha fazla oda numarası zaten kullanımda veya yinelenmiş.",
       "bulkTooLarge": "Bir seferde çok fazla oda istendi.",
       "roomLimitReached": "Planınızın oda sınırına ulaşıldı.",
-      "roomInUse": "Bu oda kullanımda ve silinemez.",
-      "roomTypeInUse": "Bu oda türü kullanımda ve silinemez.",
-      "archiveInstead": "Bunun yerine arşivleyin (durumunu Arşivlendi olarak değiştirin)."
+      "roomTypeInUse": "Bu oda türü kullanımda ve silinemez."
     },
     "board": {
       "tabTitle": "Operasyon Özeti",
@@ -503,9 +501,9 @@
       "filters": "Filtreler",
       "filterOccupancy": "Doluluk",
       "availableNowShort": "Uygun",
-      "deleteRoom": "Odayı sil",
-      "deleteRoomTitle": "Oda silinsin mi?",
-      "deleteRoomBody": "{number} numaralı oda kalıcı olarak silinecek. Bu geri alınamaz.",
+      "archiveRoom": "Arşivle",
+      "archiveRoomTitle": "Oda arşivlensin mi?",
+      "archiveRoomBody": "{number} numaralı oda etkin işlemlerden gizlenecek. İstediğiniz zaman «Durumu değiştir» ile geri yükleyebilirsiniz; kayıtları ve geçmişi korunur.",
       "roomLabel": "Oda",
       "inventoryError": "Katlar ve oda türleri yüklenemedi. Bazı seçenekler kullanılamayabilir."
     },
