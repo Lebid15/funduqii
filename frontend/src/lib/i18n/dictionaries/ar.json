@@ -305,7 +305,13 @@
     "errors": {
       "inUse": "هذا العنصر مستخدَم ولا يمكن حذفه؛ عطّله بدلًا من ذلك.",
       "crossTenant": "الطابق أو نوع الغرفة المختار يخصّ فندقًا آخر.",
-      "noteRequired": "ملاحظة مطلوبة لتغيير الحالة هذا."
+      "noteRequired": "ملاحظة مطلوبة لتغيير الحالة هذا.",
+      "duplicateRoomNumber": "رقم غرفة واحد أو أكثر مستخدَم بالفعل أو مكرّر.",
+      "bulkTooLarge": "طُلب عدد كبير جدًا من الغرف دفعة واحدة.",
+      "roomLimitReached": "تم بلوغ حدّ الغرف في باقتك.",
+      "roomInUse": "هذه الغرفة مستخدَمة ولا يمكن حذفها.",
+      "roomTypeInUse": "نوع الغرفة هذا مستخدَم ولا يمكن حذفه.",
+      "archiveInstead": "أرشِفها بدلًا من ذلك (غيّر حالتها إلى مؤرشفة)."
     },
     "board": {
       "tabTitle": "نظرة تشغيلية",
@@ -468,6 +474,48 @@
         "family_friendly": "مناسبة للعائلات",
         "accessible": "مناسبة لذوي الاحتياجات"
       }
+    },
+    "occupancy": {
+      "free": "شاغرة",
+      "occupied": "مشغولة",
+      "reserved": "محجوزة"
+    },
+    "cards": {
+      "groupLabel": "ملخّص الغرف",
+      "total": "إجمالي الغرف",
+      "totalCaption": "كل غرف الفندق",
+      "availableNow": "متاحة الآن",
+      "availableNowCaption": "جاهزة للحجز الآن",
+      "occupiedNow": "مشغولة الآن",
+      "occupiedNowCaption": "نزلاء داخل الفندق الآن",
+      "needsAction": "تحتاج إجراء",
+      "needsActionCaption": "تنظيف أو صيانة أو خارج الخدمة"
+    },
+    "page": {
+      "addRoom": "إضافة غرفة",
+      "addMultiple": "إضافة عدة غرف",
+      "manageFloors": "إدارة الطوابق",
+      "roomTypes": "أنواع الغرف",
+      "settings": "الإعدادات",
+      "floorEmpty": "لا توجد غرف في هذا الطابق بعد",
+      "addRoomToFloor": "أضف غرفة هنا",
+      "showArchived": "إظهار المؤرشفة",
+      "filters": "عوامل التصفية",
+      "filterOccupancy": "الإشغال",
+      "availableNowShort": "متاحة",
+      "deleteRoom": "حذف الغرفة",
+      "deleteRoomTitle": "حذف الغرفة؟",
+      "deleteRoomBody": "سيتم حذف الغرفة {number} نهائيًا. لا يمكن التراجع عن ذلك.",
+      "roomLabel": "غرفة",
+      "inventoryError": "تعذّر تحميل الطوابق وأنواع الغرف. قد لا تتوفّر بعض الخيارات."
+    },
+    "bulk": {
+      "initialStatus": "الحالة الابتدائية",
+      "createdCount": "تم إنشاء {count} غرفة.",
+      "duplicateInRequest": "أرقام مكرّرة في قائمتك: {numbers}",
+      "duplicateExisting": "هذه الأرقام موجودة بالفعل: {numbers}",
+      "tooLarge": "يمكنك إنشاء {limit} غرفة كحد أقصى دفعة واحدة.",
+      "limitReached": "تم بلوغ حدّ الغرف ({usage}/{limit})."
     }
   },
   "reservations": {

@@ -79,7 +79,7 @@ function nextCode(types: RoomType[]): string {
  * and show-on-public-site defaulting to ON. Code / bed type / public
  * name-price-description are hidden and preserved server-side.
  */
-export function RoomTypesTab() {
+export function RoomTypesTab({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n();
   const b = t.rooms.board;
   const { notify } = useToast();
@@ -191,11 +191,17 @@ export function RoomTypesTab() {
 
   return (
     <>
-      <SectionHeader
-        title={t.rooms.tabs.types}
-        icon={Package}
-        actions={<Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>}
-      />
+      {embedded ? (
+        <div className="cluster cluster--end">
+          <Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>
+        </div>
+      ) : (
+        <SectionHeader
+          title={t.rooms.tabs.types}
+          icon={Package}
+          actions={<Button icon={Plus} onClick={() => setCreating(true)}>{b.addRoomType}</Button>}
+        />
+      )}
 
       {loading ? <LoadingState label={t.common.loading} /> : null}
       {!loading && error ? (

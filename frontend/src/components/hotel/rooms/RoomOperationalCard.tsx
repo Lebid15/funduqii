@@ -10,7 +10,13 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { cx } from "@/lib/utils";
 
-import { buildRoomLinks, displayStatusTone } from "./boardShared";
+import {
+  buildRoomLinks,
+  occupancyIcon,
+  occupancyTone,
+  operationalIcon,
+  operationalTone,
+} from "./boardShared";
 
 /** One room on the operational board (owner UX round): number in a clear
  * pill + status badge, the type right under it, the essentials, the
@@ -28,6 +34,7 @@ export function RoomOperationalCard({
   const { t, locale } = useI18n();
   const access = useHotelAccess();
   const b = t.rooms.board;
+  const p = t.rooms.page;
   const can = (...codes: string[]) =>
     access === null || (!access.loading && access.can(...codes));
 
@@ -35,15 +42,25 @@ export function RoomOperationalCard({
   const canEdit = can("rooms.update");
 
   return (
-    <article className={cx("room-op-card", `room-op-card--${room.display_status}`)}>
+    <article
+      className={cx("room-op-card", `room-op-card--${room.display_status}`)}
+      aria-label={`${p.roomLabel} ${room.number}`}
+    >
       <div className="room-op-card__head">
         <span className="room-op-card__id">
           <span className="room-op-card__number-badge">{room.number}</span>
           <span className="room-op-card__type">{room.room_type_name}</span>
         </span>
-        <Badge tone={displayStatusTone(room.display_status)}>
-          {b.status[room.display_status]}
-        </Badge>
+        <div className="room-op-card__badges">
+          <Badge tone={occupancyTone(room.occupancy_status)}>
+            <Icon icon={occupancyIcon(room.occupancy_status)} size="sm" />
+            {t.rooms.occupancy[room.occupancy_status]}
+          </Badge>
+          <Badge tone={operationalTone(room.operational_status)}>
+            <Icon icon={operationalIcon(room.operational_status)} size="sm" />
+            {b.status[room.operational_status]}
+          </Badge>
+        </div>
       </div>
 
       <div className="room-op-card__meta">
@@ -108,7 +125,7 @@ function OperationalLine({
           {b.upcomingLabel}: {room.next_reservation.guest_name}
         </strong>
         <span className="muted">
-          {formatDate(room.next_reservation.check_in_date, locale)} ←{" "}
+          {formatDate(room.next_reservation.check_in_date, locale)} –{" "}
           {formatDate(room.next_reservation.check_out_date, locale)} ·{" "}
           {room.next_reservation.reservation_number}
         </span>

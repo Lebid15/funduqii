@@ -398,6 +398,7 @@ class OperationalBoardTests(APITestCase):
 
         from apps.guests.models import Guest
         from apps.reservations.models import Reservation, ReservationRoomLine
+        from apps.shifts.services import get_business_date
         from apps.stays.models import Stay
 
         self.hotel = make_hotel()
@@ -405,7 +406,9 @@ class OperationalBoardTests(APITestCase):
         self.floor = make_floor(self.hotel, name="First", number="1")
         self.rtype = make_type(self.hotel)
 
-        today = datetime.date.today()
+        # Anchor on the board's business date (not the naive system clock) so the
+        # future-only reservation (room 103) is deterministically future.
+        today = get_business_date(self.hotel)
         self.r_available = make_room(self.hotel, self.floor, self.rtype, "101")
         self.r_occupied = make_room(self.hotel, self.floor, self.rtype, "102")
         self.r_reserved = make_room(self.hotel, self.floor, self.rtype, "103")
@@ -501,14 +504,30 @@ class OperationalBoardTests(APITestCase):
     def test_display_statuses_and_priority(self):
         self.client.force_authenticate(self.manager)
         rooms = {r["number"]: r for r in self._get().data["rooms"]}
+        # Frontend-compat display_status (collapsed single value) unchanged.
         self.assertEqual(rooms["101"]["display_status"], "available")
         self.assertEqual(rooms["102"]["display_status"], "occupied")
-        self.assertEqual(rooms["103"]["display_status"], "reserved")
+        # H3: 103's only reservation (R-003) starts TOMORROW — a purely future
+        # booking no longer reserves the room today, so it reads free/available.
+        self.assertEqual(rooms["103"]["display_status"], "available")
         # Manual dirty beats the in-house stay (owner priority).
         self.assertEqual(rooms["104"]["display_status"], "dirty")
         self.assertEqual(rooms["199"]["display_status"], "archived")
         # Stored operational status is never rewritten.
         self.assertEqual(rooms["102"]["operational_status"], "available")
+        # NEW — occupancy and operational are reported on SEPARATE axes.
+        self.assertEqual(rooms["101"]["occupancy_status"], "free")
+        self.assertEqual(rooms["101"]["operational_status"], "available")
+        self.assertEqual(rooms["102"]["occupancy_status"], "occupied")
+        self.assertEqual(rooms["102"]["operational_status"], "available")
+        # H3: future-only reservation -> occupancy free (not reserved today).
+        self.assertEqual(rooms["103"]["occupancy_status"], "free")
+        self.assertEqual(rooms["103"]["operational_status"], "available")
+        # The occupied+dirty room: display collapses to "dirty", but occupancy
+        # is still reported as occupied and the manual state as dirty — the two
+        # axes no longer mask each other.
+        self.assertEqual(rooms["104"]["occupancy_status"], "occupied")
+        self.assertEqual(rooms["104"]["operational_status"], "dirty")
 
     def test_current_stay_and_next_reservation(self):
         self.client.force_authenticate(self.manager)
@@ -526,18 +545,36 @@ class OperationalBoardTests(APITestCase):
         self.assertIsNone(rooms["101"]["next_reservation"])
 
     def test_summary_and_floor_counts_exclude_archived(self):
+        from apps.stays.models import Stay, StayStatus
+
         self.client.force_authenticate(self.manager)
         data = self._get().data
         summary = data["summary"]
         self.assertEqual(summary["total"], 4)  # 199 archived is excluded
-        self.assertEqual(summary["available"], 1)
-        self.assertEqual(summary["occupied"], 1)
-        self.assertEqual(summary["reserved"], 1)
+        # H3: 101 AND 103 are available now (103's reservation is future-only).
+        self.assertEqual(summary["available"], 2)
+        self.assertEqual(summary["available_now"], 2)  # explicit alias key
+        # occupied MUST equal the real IN_HOUSE stays on non-archived rooms
+        # (102 + 104) — the occupied+dirty room no longer vanishes behind its
+        # manual state (the collapse bug).
+        real_in_house = (
+            Stay.objects.filter(hotel=self.hotel, status=StayStatus.IN_HOUSE)
+            .exclude(room__status="archived")
+            .count()
+        )
+        self.assertEqual(real_in_house, 2)
+        self.assertEqual(summary["occupied"], real_in_house)
+        # H3: the only reservation (103's R-003) is future-only -> reserves nothing today.
+        self.assertEqual(summary["reserved"], 0)
         self.assertEqual(summary["dirty"], 1)
         self.assertEqual(summary["attention"], 1)
+        # The occupied+dirty room (104) is counted in BOTH occupied and dirty.
+        rooms = {r["number"]: r for r in data["rooms"]}
+        self.assertEqual(rooms["104"]["occupancy_status"], "occupied")
+        self.assertEqual(rooms["104"]["operational_status"], "dirty")
         floor = data["floors"][0]
         self.assertEqual(floor["total"], 4)
-        self.assertEqual(floor["availability_rate"], 25)
+        self.assertEqual(floor["availability_rate"], 50)  # 2 of 4 available
 
     def test_tenant_isolation(self):
         other = make_hotel(slug="other")
@@ -547,3 +584,857 @@ class OperationalBoardTests(APITestCase):
         self.client.force_authenticate(self.manager)
         numbers = [r["number"] for r in self._get().data["rooms"]]
         self.assertNotIn("901", numbers)
+
+
+# --- Rooms rework (ROOMS-REWORK-01) ------------------------------------------
+# Extra fixtures for stays / reservation lines, reused by the new board,
+# delete-guard and bulk-create tests below.
+
+
+def make_stay(hotel, room, *, guest_name="Guest", days=2):
+    import datetime
+
+    from django.utils import timezone as dj_tz
+
+    from apps.guests.models import Guest
+    from apps.stays.models import Stay
+
+    today = datetime.date.today()
+    guest = Guest.objects.create(hotel=hotel, full_name=guest_name)
+    return Stay.objects.create(
+        hotel=hotel,
+        room=room,
+        primary_guest=guest,
+        planned_check_in_date=today,
+        planned_check_out_date=today + datetime.timedelta(days=days),
+        actual_check_in_at=dj_tz.now(),
+    )
+
+
+def make_reservation_line(hotel, *, rtype, room=None, number="RX", days=2):
+    import datetime
+
+    from apps.reservations.models import Reservation, ReservationRoomLine
+    from apps.shifts.services import get_business_date
+
+    # Anchor fixtures on the hotel's BUSINESS DATE — the exact date the board
+    # uses (get_business_date -> timezone.localdate()). Basing them on the naive
+    # system date.today() can be a day off from localdate() (server TZ vs. host
+    # clock), which the H3 covering check (check_in <= business_date < check_out)
+    # would then read as a future-only booking.
+    base = get_business_date(hotel)
+    res = Reservation.objects.create(
+        hotel=hotel,
+        reservation_number=number,
+        check_in_date=base,
+        check_out_date=base + datetime.timedelta(days=days),
+        primary_guest_name="G",
+    )
+    return ReservationRoomLine.objects.create(
+        hotel=hotel, reservation=res, room_type=rtype, room=room, quantity=1
+    )
+
+
+class BoardAxesTests(APITestCase):
+    """occupancy_status / operational_status / available_now on SEPARATE axes."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel, name="F1", number="1")
+        self.rtype = make_type(self.hotel)
+
+    def _rows(self):
+        res = self.client.get(
+            reverse("rooms:room-operational-board"), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        return {r["number"]: r for r in res.data["rooms"]}
+
+    def test_occupancy_free_occupied_reserved(self):
+        make_room(self.hotel, self.floor, self.rtype, "101")  # free
+        occ = make_room(self.hotel, self.floor, self.rtype, "102")
+        make_stay(self.hotel, occ)
+        rsv = make_room(self.hotel, self.floor, self.rtype, "103")
+        make_reservation_line(self.hotel, rtype=self.rtype, room=rsv, number="R-1")
+        rows = self._rows()
+        self.assertEqual(rows["101"]["occupancy_status"], "free")
+        self.assertEqual(rows["102"]["occupancy_status"], "occupied")
+        self.assertEqual(rows["103"]["occupancy_status"], "reserved")
+
+    def test_occupied_beats_reserved(self):
+        # A room with BOTH an in-house stay and a blocking reservation is
+        # occupied (occupancy priority), never reserved.
+        room = make_room(self.hotel, self.floor, self.rtype, "201")
+        make_stay(self.hotel, room)
+        make_reservation_line(self.hotel, rtype=self.rtype, room=room, number="R-2")
+        self.assertEqual(self._rows()["201"]["occupancy_status"], "occupied")
+
+    def test_occupied_room_stays_occupied_when_dirty(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "301", status="dirty")
+        make_stay(self.hotel, room)
+        row = self._rows()["301"]
+        # Occupancy is independent of the manual state — dirty does not hide it.
+        self.assertEqual(row["occupancy_status"], "occupied")
+        self.assertEqual(row["operational_status"], "dirty")
+        self.assertFalse(row["available_now"])
+
+    def test_operational_independent_of_occupancy(self):
+        room = make_room(
+            self.hotel, self.floor, self.rtype, "401",
+            status="maintenance", status_note="fix",
+        )
+        row = self._rows()["401"]
+        self.assertEqual(row["occupancy_status"], "free")
+        self.assertEqual(row["operational_status"], "maintenance")
+        self.assertFalse(row["available_now"])
+
+    def test_available_now_all_gates_open(self):
+        make_room(self.hotel, self.floor, self.rtype, "501")
+        row = self._rows()["501"]
+        self.assertTrue(row["available_now"])
+        self.assertEqual(row["occupancy_status"], "free")
+        self.assertEqual(row["operational_status"], "available")
+        self.assertTrue(row["floor_is_active"])
+        self.assertTrue(row["room_type_is_active"])
+
+    def test_available_now_false_on_inactive_room(self):
+        make_room(self.hotel, self.floor, self.rtype, "502", is_active=False)
+        self.assertFalse(self._rows()["502"]["available_now"])
+
+    def test_available_now_false_on_inactive_floor(self):
+        f2 = make_floor(self.hotel, name="F2", number="2", is_active=False)
+        make_room(self.hotel, f2, self.rtype, "601")
+        row = self._rows()["601"]
+        self.assertFalse(row["available_now"])
+        self.assertFalse(row["floor_is_active"])
+
+    def test_available_now_false_on_inactive_room_type(self):
+        t2 = make_type(self.hotel, code="INA", name="Inactive", is_active=False)
+        make_room(self.hotel, self.floor, t2, "701")
+        row = self._rows()["701"]
+        self.assertFalse(row["available_now"])
+        self.assertFalse(row["room_type_is_active"])
+
+    def test_available_now_false_when_dirty(self):
+        make_room(self.hotel, self.floor, self.rtype, "801", status="dirty")
+        self.assertFalse(self._rows()["801"]["available_now"])
+
+    def test_available_now_false_when_reserved(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "901")
+        make_reservation_line(self.hotel, rtype=self.rtype, room=room, number="R-9")
+        self.assertFalse(self._rows()["901"]["available_now"])
+
+    def test_available_now_false_when_occupied(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "111")
+        make_stay(self.hotel, room)
+        self.assertFalse(self._rows()["111"]["available_now"])
+
+    def test_summaries_two_axes(self):
+        make_room(self.hotel, self.floor, self.rtype, "101")  # free + available
+        occ = make_room(self.hotel, self.floor, self.rtype, "102")  # occupied clean
+        make_stay(self.hotel, occ, guest_name="A")
+        od = make_room(  # occupied + dirty (overlap on both axes)
+            self.hotel, self.floor, self.rtype, "103", status="dirty"
+        )
+        make_stay(self.hotel, od, guest_name="B")
+        rsv = make_room(self.hotel, self.floor, self.rtype, "104")  # reserved
+        make_reservation_line(self.hotel, rtype=self.rtype, room=rsv, number="R-1")
+        make_room(  # maintenance (attention, free)
+            self.hotel, self.floor, self.rtype, "105",
+            status="maintenance", status_note="x",
+        )
+        make_room(self.hotel, self.floor, self.rtype, "199", status="archived")
+
+        res = self.client.get(
+            reverse("rooms:room-operational-board"), **HDR(self.hotel)
+        )
+        summary = res.data["summary"]
+        self.assertEqual(summary["total"], 5)  # 199 archived excluded
+        self.assertEqual(summary["occupied"], 2)  # 102 + 103
+        self.assertEqual(summary["reserved"], 1)  # 104
+        self.assertEqual(summary["available"], 1)  # 101 only
+        self.assertEqual(summary["available_now"], 1)
+        self.assertEqual(summary["dirty"], 1)  # 103
+        self.assertEqual(summary["maintenance"], 1)  # 105
+        self.assertEqual(summary["cleaning"], 0)
+        self.assertEqual(summary["out_of_service"], 0)
+        # attention = dirty + cleaning + maintenance + out_of_service.
+        self.assertEqual(summary["attention"], 2)
+        floor = res.data["floors"][0]
+        self.assertEqual(floor["occupied"], 2)
+        self.assertEqual(floor["available"], 1)
+        self.assertEqual(floor["availability_rate"], round(1 * 100 / 5))
+
+
+class RoomDeleteGuardTests(APITestCase):
+    """R1: deleting a referenced room is a clean 409, never a 500."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+
+    def _delete(self, room):
+        return self.client.delete(
+            reverse("rooms:room-detail", args=[room.id]), **HDR(self.hotel)
+        )
+
+    def test_delete_free_room_succeeds(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "101")
+        self.assertEqual(self._delete(room).status_code, 204)
+        self.assertFalse(Room.objects.filter(id=room.id).exists())
+
+    def test_delete_room_with_stay_conflict(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "102")
+        make_stay(self.hotel, room)
+        res = self._delete(room)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "resource_in_use")
+        self.assertEqual(res.data["details"]["reason"], "room_has_stays")
+        self.assertTrue(Room.objects.filter(id=room.id).exists())
+
+    def test_delete_room_with_reservation_conflict(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "103")
+        make_reservation_line(self.hotel, rtype=self.rtype, room=room, number="R-1")
+        res = self._delete(room)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "resource_in_use")
+        self.assertEqual(res.data["details"]["reason"], "room_has_reservations")
+
+    def test_delete_room_never_returns_500(self):
+        # Both PROTECT relations present -> guard yields 409, not an unhandled
+        # ProtectedError 500.
+        room = make_room(self.hotel, self.floor, self.rtype, "104")
+        make_stay(self.hotel, room)
+        make_reservation_line(self.hotel, rtype=self.rtype, room=room, number="R-2")
+        res = self._delete(room)
+        self.assertNotEqual(res.status_code, 500)
+        self.assertEqual(res.status_code, 409)
+
+
+class RoomTypeDeleteGuardTests(APITestCase):
+    """R2: room type delete blocks on rooms AND on reservation lines."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel)
+
+    def _delete(self, rtype):
+        return self.client.delete(
+            reverse("rooms:room-type-detail", args=[rtype.id]), **HDR(self.hotel)
+        )
+
+    def test_delete_type_with_rooms_conflict(self):
+        rtype = make_type(self.hotel, code="A")
+        make_room(self.hotel, self.floor, rtype, "101")
+        res = self._delete(rtype)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["details"]["reason"], "room_type_has_rooms")
+
+    def test_delete_type_with_reservation_line_conflict(self):
+        # A reservation line references the type but NO room uses it (the R2
+        # gap: the old guard only checked .rooms).
+        rtype = make_type(self.hotel, code="B")
+        make_reservation_line(self.hotel, rtype=rtype, room=None, number="R-1")
+        res = self._delete(rtype)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "resource_in_use")
+        self.assertEqual(res.data["details"]["reason"], "room_type_has_reservations")
+
+    def test_delete_unused_type_succeeds(self):
+        rtype = make_type(self.hotel, code="C")
+        self.assertEqual(self._delete(rtype).status_code, 204)
+
+
+class FloorDeleteRegressionTests(APITestCase):
+    """The floor delete guard is unchanged by this rework."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+
+    def _delete(self, floor):
+        return self.client.delete(
+            reverse("rooms:floor-detail", args=[floor.id]), **HDR(self.hotel)
+        )
+
+    def test_delete_floor_with_rooms_still_conflicts(self):
+        floor = make_floor(self.hotel)
+        rtype = make_type(self.hotel)
+        make_room(self.hotel, floor, rtype, "101")
+        res = self._delete(floor)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["details"]["reason"], "floor_has_rooms")
+
+    def test_delete_empty_floor_succeeds(self):
+        floor = make_floor(self.hotel)
+        self.assertEqual(self._delete(floor).status_code, 204)
+
+
+class RoomBulkCreateTests(APITestCase):
+    """POST /rooms/bulk/ — all-or-nothing batch create."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+
+    def _bulk(self, rooms, hotel=None):
+        hotel = hotel or self.hotel
+        return self.client.post(
+            reverse("rooms:room-bulk-create"),
+            {"rooms": rooms},
+            format="json",
+            **HDR(hotel),
+        )
+
+    def _row(self, number, **kw):
+        row = {
+            "number": number,
+            "floor": self.floor.id,
+            "room_type": self.rtype.id,
+        }
+        row.update(kw)
+        return row
+
+    def test_success_returns_created_count_and_rooms(self):
+        res = self._bulk(
+            [
+                self._row("101"),
+                self._row("102", display_name="Sea", is_active=False),
+                self._row("103", initial_status="dirty"),
+            ]
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["created_count"], 3)
+        self.assertEqual(len(res.data["rooms"]), 3)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 3)
+        self.assertEqual(
+            {r["number"] for r in res.data["rooms"]}, {"101", "102", "103"}
+        )
+        dirty = Room.objects.get(hotel=self.hotel, number="103")
+        self.assertEqual(dirty.status, "dirty")
+        self.assertEqual(RoomStatusLog.objects.filter(room=dirty).count(), 1)
+
+    def test_all_or_nothing_rolls_back(self):
+        # The 2nd row is cross-tenant -> nothing is written.
+        other = make_hotel(slug="o")
+        of = make_floor(other)
+        res = self._bulk(
+            [self._row("101"), self._row("102", floor=of.id)]
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "cross_tenant_reference")
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_duplicate_within_request(self):
+        # M1: duplicate WITHIN the request -> typed duplicate_room_number,
+        # source "request", with the offending numbers.
+        res = self._bulk([self._row("101"), self._row("101")])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "duplicate_room_number")
+        self.assertEqual(res.data["details"]["source"], "request")
+        self.assertIn("101", res.data["details"]["numbers"])
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_duplicate_within_hotel(self):
+        # M1: collision with an EXISTING hotel number -> duplicate_room_number,
+        # source "existing".
+        make_room(self.hotel, self.floor, self.rtype, "101")
+        res = self._bulk([self._row("101")])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "duplicate_room_number")
+        self.assertEqual(res.data["details"]["source"], "existing")
+        self.assertIn("101", res.data["details"]["numbers"])
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_cross_tenant_floor(self):
+        other = make_hotel(slug="o")
+        of = make_floor(other)
+        res = self._bulk([self._row("201", floor=of.id)])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "cross_tenant_reference")
+        self.assertEqual(res.data["details"]["field"], "floor")
+
+    def test_cross_tenant_room_type(self):
+        other = make_hotel(slug="o")
+        ot = make_type(other, code="OT")
+        res = self._bulk([self._row("202", room_type=ot.id)])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "cross_tenant_reference")
+        self.assertEqual(res.data["details"]["field"], "room_type")
+
+    def test_note_required_for_maintenance(self):
+        res = self._bulk([self._row("301", initial_status="maintenance")])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "status_note_required")
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_maintenance_logs_but_does_not_notify(self):
+        from apps.notifications.models import Notification
+
+        # A second manager WOULD receive a maintenance notification if the
+        # fan-out fired (managers are always eligible, actor excluded) — so a
+        # non-zero delta here would prove the mute is broken.
+        add_member(self.hotel, "mgr2@x.com", kind=MembershipType.MANAGER)
+        before = Notification.objects.count()
+        res = self._bulk(
+            [self._row("301", initial_status="maintenance", status_note="AC broken")]
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["rooms"][0]["status"], "maintenance")
+        room_id = res.data["rooms"][0]["id"]
+        self.assertEqual(RoomStatusLog.objects.filter(room_id=room_id).count(), 1)
+        # decision 2: bulk mutes the per-room notification fan-out entirely.
+        self.assertEqual(Notification.objects.count(), before)
+
+    def test_archived_initial_status_rejected(self):
+        res = self._bulk([self._row("301", initial_status="archived")])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_over_max_rejected(self):
+        # M1: over the hard cap -> typed bulk_request_too_large with limit/requested.
+        rows = [self._row(str(1000 + i)) for i in range(101)]
+        res = self._bulk(rows)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "bulk_request_too_large")
+        self.assertEqual(int(res.data["details"]["limit"]), 100)
+        self.assertEqual(int(res.data["details"]["requested"]), 101)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_oversized_list_rejected_before_row_validation(self):
+        # L1 hardening: 101 structurally INVALID rows (empty dicts). If DRF ran
+        # per-row validation first we'd get field errors; the view's early size
+        # check makes it bulk_request_too_large instead — proving the rejection
+        # precedes (expensive) per-element validation.
+        res = self._bulk([{} for _ in range(101)])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "bulk_request_too_large")
+        self.assertEqual(int(res.data["details"]["requested"]), 101)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_malformed_top_level_array_body_clean_4xx(self):
+        # L1 edge case: a TOP-LEVEL JSON array body (instead of {"rooms": [...]})
+        # makes request.data a list. The early size check must guard against
+        # calling .get on a non-dict; the request falls through to the serializer
+        # which rejects the wrong shape with a clean 4xx — never a 500.
+        res = self.client.post(
+            reverse("rooms:room-bulk-create"),
+            [self._row("101")],
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertGreaterEqual(res.status_code, 400)
+        self.assertLess(res.status_code, 500)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_empty_rejected(self):
+        res = self._bulk([])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_requires_create_permission(self):
+        staff = add_member(self.hotel, "view@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        res = self._bulk([self._row("101")])
+        self.assertEqual(res.status_code, 403)
+
+    def test_suspended_hotel_blocked(self):
+        self.hotel.status = HotelStatus.SUSPENDED
+        self.hotel.save()
+        res = self._bulk([self._row("101")])
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "hotel_suspended")
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_tenant_isolation(self):
+        # The manager is not a member of `other` -> forbidden.
+        other = make_hotel(slug="o")
+        res = self._bulk([self._row("101")], hotel=other)
+        self.assertEqual(res.status_code, 403)
+
+
+class RoomBulkQuotaTests(APITestCase):
+    """Bulk create checks the plan's room_limit on the FULL batch count."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from apps.subscriptions import services as sub_services
+        from apps.subscriptions.models import SubscriptionPlan
+
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+        plan = SubscriptionPlan.objects.create(
+            name="Basic", slug="basic", price=Decimal("49.00"), currency="USD",
+            billing_cycle="monthly", trial_days=14, is_active=True,
+            is_public=True, room_limit=3,
+        )
+        sub_services.activate_subscription(self.hotel, plan)
+
+    def _bulk(self, rooms):
+        return self.client.post(
+            reverse("rooms:room-bulk-create"),
+            {"rooms": rooms},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _rows(self, n):
+        return [
+            {"number": str(100 + i), "floor": self.floor.id, "room_type": self.rtype.id}
+            for i in range(n)
+        ]
+
+    def test_over_room_limit_full_count_blocked(self):
+        res = self._bulk(self._rows(4))  # 4 > limit 3, checked as one unit
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "room_limit_reached")
+        # Detail values serialise as strings through the error envelope.
+        self.assertEqual(int(res.data["details"]["requested"]), 4)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_within_room_limit_ok(self):
+        res = self._bulk(self._rows(3))  # exactly at limit
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 3)
+
+
+class RoomQuotaBackCompatTests(APITestCase):
+    """check_room_quota(count=..) is backward compatible with the old count=1
+    gate (``usage + 1 > limit`` == old ``usage >= limit``)."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from apps.subscriptions import services as sub_services
+        from apps.subscriptions.models import SubscriptionPlan
+
+        self.hotel = make_hotel()
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+        plan = SubscriptionPlan.objects.create(
+            name="Basic", slug="basic", price=Decimal("49.00"), currency="USD",
+            billing_cycle="monthly", trial_days=14, is_active=True,
+            is_public=True, room_limit=2,
+        )
+        sub_services.activate_subscription(self.hotel, plan)
+
+    def test_count_default_matches_single_room_gate(self):
+        from apps.common.exceptions import RoomLimitReached
+        from apps.subscriptions.entitlements import check_room_quota
+
+        # usage 0, limit 2: default count and explicit count=1 both pass.
+        check_room_quota(self.hotel)
+        check_room_quota(self.hotel, count=1)
+        # Fill to the limit, then both forms must block identically.
+        make_room(self.hotel, self.floor, self.rtype, "101")
+        make_room(self.hotel, self.floor, self.rtype, "102")
+        with self.assertRaises(RoomLimitReached):
+            check_room_quota(self.hotel)
+        with self.assertRaises(RoomLimitReached):
+            check_room_quota(self.hotel, count=1)
+
+    def test_count_n_checks_full_batch(self):
+        from apps.common.exceptions import RoomLimitReached
+        from apps.subscriptions.entitlements import check_room_quota
+
+        # usage 0, limit 2: count=2 ok, count=3 blocked.
+        check_room_quota(self.hotel, count=2)
+        with self.assertRaises(RoomLimitReached):
+            check_room_quota(self.hotel, count=3)
+
+
+# --- ROOMS-REWORK-01 fix round (H1 / H2 / H3 / L2) --------------------------
+
+
+class RoomSingleCreateReworkTests(APITestCase):
+    """H2: single create funnels through the SHARED central service (quota +
+    room creation + initial-status RoomStatusLog in one atomic txn). H1: a
+    non-available initial status also requires rooms.status_update."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+
+    def _create(self, user=None, **body):
+        self.client.force_authenticate(user or self.manager)
+        body.setdefault("floor", self.floor.id)
+        body.setdefault("room_type", self.rtype.id)
+        return self.client.post(
+            reverse("rooms:room-list"), body, format="json", **HDR(self.hotel)
+        )
+
+    def test_default_available_create_writes_no_log(self):
+        res = self._create(number="101")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["status"], "available")
+        room = Room.objects.get(hotel=self.hotel, number="101")
+        self.assertEqual(RoomStatusLog.objects.filter(room=room).count(), 0)
+
+    def test_initial_status_writes_log_atomically(self):
+        res = self._create(number="102", initial_status="dirty")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["status"], "dirty")
+        room = Room.objects.get(hotel=self.hotel, number="102")
+        self.assertEqual(room.status, "dirty")
+        logs = RoomStatusLog.objects.filter(room=room)
+        self.assertEqual(logs.count(), 1)
+        self.assertEqual(logs.first().new_status, "dirty")
+
+    def test_maintenance_requires_note(self):
+        res = self._create(number="103", initial_status="maintenance")
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "status_note_required")
+        self.assertFalse(Room.objects.filter(hotel=self.hotel, number="103").exists())
+
+    def test_maintenance_with_note_ok(self):
+        res = self._create(
+            number="104", initial_status="maintenance", status_note="AC broken"
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["status"], "maintenance")
+        self.assertEqual(res.data["status_note"], "AC broken")
+        room = Room.objects.get(hotel=self.hotel, number="104")
+        self.assertEqual(RoomStatusLog.objects.filter(room=room).count(), 1)
+
+    def test_archived_initial_status_rejected(self):
+        res = self._create(number="105", initial_status="archived")
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(Room.objects.filter(hotel=self.hotel, number="105").exists())
+
+    def test_create_only_user_blocked_from_non_available(self):
+        staff = add_member(self.hotel, "c@x.com", perms=["rooms.create"])
+        res = self._create(user=staff, number="106", initial_status="dirty")
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "permission_denied")
+        # H1 is checked BEFORE any write -> nothing created.
+        self.assertFalse(Room.objects.filter(hotel=self.hotel, number="106").exists())
+
+    def test_create_only_user_available_ok(self):
+        staff = add_member(self.hotel, "c2@x.com", perms=["rooms.create"])
+        res = self._create(user=staff, number="107")  # available -> create alone
+        self.assertEqual(res.status_code, 201)
+
+    def test_create_plus_status_update_user_succeeds(self):
+        staff = add_member(
+            self.hotel, "cs@x.com", perms=["rooms.create", "rooms.status_update"]
+        )
+        res = self._create(user=staff, number="108", initial_status="dirty")
+        self.assertEqual(res.status_code, 201)
+        room = Room.objects.get(hotel=self.hotel, number="108")
+        self.assertEqual(room.status, "dirty")
+        self.assertEqual(RoomStatusLog.objects.filter(room=room).count(), 1)
+
+    def test_update_does_not_wipe_status_note(self):
+        # Regression: the write serializer's create-only status_note must never
+        # blow away a room's real status_note on a PUT (they collide by name).
+        room = make_room(
+            self.hotel, self.floor, self.rtype, "109",
+            status="maintenance", status_note="keep me",
+        )
+        self.client.force_authenticate(self.manager)
+        res = self.client.put(
+            reverse("rooms:room-detail", args=[room.id]),
+            {
+                "number": "109",
+                "display_name": "Renamed",
+                "floor": self.floor.id,
+                "room_type": self.rtype.id,
+                "is_active": True,
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200)
+        room.refresh_from_db()
+        self.assertEqual(room.status, "maintenance")
+        self.assertEqual(room.status_note, "keep me")
+        self.assertEqual(room.display_name, "Renamed")
+
+    def test_service_integrity_error_is_clean_4xx(self):
+        # L2: a concurrent duplicate number reaches Room.objects.create and
+        # raises IntegrityError; the central service translates it to a clean
+        # DuplicateRoomNumber (400), never a 500. Simulated by calling the
+        # service with an existing number (bypassing the serializer pre-check
+        # the same way a race would).
+        from apps.common.exceptions import DuplicateRoomNumber
+        from apps.rooms import services
+
+        make_room(self.hotel, self.floor, self.rtype, "200")
+        with self.assertRaises(DuplicateRoomNumber) as ctx:
+            services.create_room(
+                self.hotel,
+                number="200",
+                floor=self.floor,
+                room_type=self.rtype,
+                user=self.manager,
+            )
+        self.assertEqual(ctx.exception.default_code, "duplicate_room_number")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["source"], "existing")
+        # The failed create rolled back — still exactly one "200".
+        self.assertEqual(Room.objects.filter(hotel=self.hotel, number="200").count(), 1)
+
+    def test_non_duplicate_integrity_error_not_mislabeled(self):
+        # L2: a NON-duplicate integrity error must NOT be relabelled as a
+        # duplicate. A stale floor instance (its row deleted) makes the room
+        # insert fail the FK constraint, not the unique room-number one, so the
+        # original IntegrityError propagates (atomic still rolls back).
+        from django.db import IntegrityError
+
+        from apps.rooms import services
+
+        stale_floor = make_floor(self.hotel, name="Temp")
+        stale_floor.delete()  # floor_id now points to a non-existent row
+        with self.assertRaises(IntegrityError):
+            services.create_room(
+                self.hotel,
+                number="900",
+                floor=stale_floor,
+                room_type=self.rtype,
+                user=self.manager,
+            )
+        self.assertFalse(Room.objects.filter(hotel=self.hotel, number="900").exists())
+
+
+class RoomBulkCreateStatusPermissionTests(APITestCase):
+    """H1: a non-available initial status on ANY bulk row also requires
+    rooms.status_update, enforced before any write (all-or-nothing)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(self.hotel)
+
+    def _row(self, number, **kw):
+        row = {"number": number, "floor": self.floor.id, "room_type": self.rtype.id}
+        row.update(kw)
+        return row
+
+    def _bulk(self, rooms):
+        return self.client.post(
+            reverse("rooms:room-bulk-create"),
+            {"rooms": rooms},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_create_only_user_blocked_from_non_available(self):
+        staff = add_member(self.hotel, "c@x.com", perms=["rooms.create"])
+        self.client.force_authenticate(staff)
+        res = self._bulk([self._row("101"), self._row("102", initial_status="dirty")])
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "permission_denied")
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_create_only_user_all_available_ok(self):
+        staff = add_member(self.hotel, "c2@x.com", perms=["rooms.create"])
+        self.client.force_authenticate(staff)
+        res = self._bulk([self._row("101"), self._row("102")])
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(Room.objects.filter(hotel=self.hotel).count(), 2)
+
+    def test_create_plus_status_update_user_succeeds(self):
+        staff = add_member(
+            self.hotel, "cs@x.com", perms=["rooms.create", "rooms.status_update"]
+        )
+        self.client.force_authenticate(staff)
+        res = self._bulk([self._row("101"), self._row("102", initial_status="dirty")])
+        self.assertEqual(res.status_code, 201)
+        dirty = Room.objects.get(hotel=self.hotel, number="102")
+        self.assertEqual(dirty.status, "dirty")
+        self.assertEqual(RoomStatusLog.objects.filter(room=dirty).count(), 1)
+
+
+class BoardReservedByBusinessDateTests(APITestCase):
+    """H3: a room is RESERVED only when a blocking reservation COVERS the
+    business date (check_in <= business_date < check_out). A purely future
+    booking does not reserve the room today; the checkout day frees it."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel, name="F1", number="1")
+        self.rtype = make_type(self.hotel)
+
+    def _reserve(self, room, *, in_offset, out_offset, number):
+        import datetime
+
+        from apps.reservations.models import Reservation, ReservationRoomLine
+        from apps.shifts.services import get_business_date
+
+        base = get_business_date(self.hotel)  # the exact date the board uses
+        res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            check_in_date=base + datetime.timedelta(days=in_offset),
+            check_out_date=base + datetime.timedelta(days=out_offset),
+            primary_guest_name="G",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=res, room_type=self.rtype, room=room,
+            quantity=1,
+        )
+        return res
+
+    def _row(self, number):
+        res = self.client.get(
+            reverse("rooms:room-operational-board"), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        return {r["number"]: r for r in res.data["rooms"]}[number]
+
+    def test_future_only_reservation_not_reserved(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "101")
+        self._reserve(room, in_offset=1, out_offset=3, number="R-FUT")
+        row = self._row("101")
+        self.assertEqual(row["occupancy_status"], "free")
+        self.assertTrue(row["available_now"])
+        # ...but it is still surfaced as the NEXT upcoming reservation.
+        self.assertEqual(row["next_reservation"]["reservation_number"], "R-FUT")
+
+    def test_covering_reservation_reserved(self):
+        room = make_room(self.hotel, self.floor, self.rtype, "102")
+        self._reserve(room, in_offset=0, out_offset=2, number="R-COV")
+        row = self._row("102")
+        self.assertEqual(row["occupancy_status"], "reserved")
+        self.assertFalse(row["available_now"])
+
+    def test_checkout_day_frees_room(self):
+        # Half-open [check_in, check_out): a reservation whose checkout IS the
+        # business date no longer covers it -> the room is free again.
+        room = make_room(self.hotel, self.floor, self.rtype, "103")
+        self._reserve(room, in_offset=-2, out_offset=0, number="R-OUT")
+        row = self._row("103")
+        self.assertEqual(row["occupancy_status"], "free")
+        self.assertTrue(row["available_now"])
+
+    def test_summary_reserved_counts_only_covering(self):
+        covering = make_room(self.hotel, self.floor, self.rtype, "201")
+        self._reserve(covering, in_offset=0, out_offset=2, number="R-1")
+        future = make_room(self.hotel, self.floor, self.rtype, "202")
+        self._reserve(future, in_offset=2, out_offset=4, number="R-2")
+        res = self.client.get(
+            reverse("rooms:room-operational-board"), **HDR(self.hotel)
+        )
+        summary = res.data["summary"]
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["reserved"], 1)  # only the covering reservation
+        self.assertEqual(summary["available"], 1)  # the future-only room is bookable now

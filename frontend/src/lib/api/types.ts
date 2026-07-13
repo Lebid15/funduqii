@@ -506,6 +506,10 @@ export interface Room {
  * and blocking reservations, never stored on the room. */
 export type RoomDisplayStatus = RoomStatus | "occupied" | "reserved";
 
+/** Occupancy axis (independent from the operational status): derived purely
+ * from real in-house stays / covering reservations. */
+export type RoomOccupancyStatus = "free" | "occupied" | "reserved";
+
 export interface RoomBoardStay {
   id: number;
   guest_name: string;
@@ -537,6 +541,14 @@ export interface RoomBoardRoom {
   base_rate: string | null;
   is_active: boolean;
   operational_status: RoomStatus;
+  /** Independent occupancy axis (free / occupied / reserved). */
+  occupancy_status: RoomOccupancyStatus;
+  /** True only when the room is bookable right now (every gate open on both
+   * axes). Drives the "Available now" card + filter. */
+  available_now: boolean;
+  floor_is_active: boolean;
+  room_type_is_active: boolean;
+  /** Kept only for buildRoomLinks + the calm card-accent tone (compat). */
   display_status: RoomDisplayStatus;
   status_note: string;
   status_changed_at: string | null;
@@ -547,12 +559,15 @@ export interface RoomBoardRoom {
 export interface RoomBoardCounts {
   total: number;
   available: number;
+  /** Explicit alias of `available` on the bookable-now axis. */
+  available_now: number;
   occupied: number;
   reserved: number;
   dirty: number;
   cleaning: number;
   maintenance: number;
   out_of_service: number;
+  /** dirty + cleaning + maintenance + out_of_service ("Needs action"). */
   attention: number;
 }
 
@@ -568,6 +583,26 @@ export interface RoomOperationalBoard {
   summary: RoomBoardCounts;
   floors: RoomBoardFloor[];
   rooms: RoomBoardRoom[];
+}
+
+/** One room in a bulk-create request (POST /rooms/bulk/). */
+export interface RoomBulkRow {
+  number: string;
+  display_name?: string;
+  floor: number;
+  room_type: number;
+  is_active?: boolean;
+  initial_status?: RoomStatus;
+  status_note?: string;
+}
+
+export interface RoomBulkCreateBody {
+  rooms: RoomBulkRow[];
+}
+
+export interface RoomBulkCreateResponse {
+  created_count: number;
+  rooms: Room[];
 }
 
 /* ==========================================================================

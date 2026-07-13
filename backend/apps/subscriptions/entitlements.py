@@ -120,10 +120,14 @@ def _locked_effective_subscription(hotel) -> HotelSubscription | None:
     return None
 
 
-def check_room_quota(hotel) -> None:
-    """Raise :class:`RoomLimitReached` if creating one more room would exceed the
-    plan's ``room_limit``. No limit (``None``) or no effective subscription (the
-    operational gate governs that case) -> allowed."""
+def check_room_quota(hotel, *, count: int = 1) -> None:
+    """Raise :class:`RoomLimitReached` if creating ``count`` more rooms would
+    exceed the plan's ``room_limit``. No limit (``None``) or no effective
+    subscription (the operational gate governs that case) -> allowed.
+
+    ``count`` defaults to 1, and ``usage + 1 > limit`` is exactly the old
+    ``usage >= limit`` gate, so the single-room create path is unchanged. Bulk
+    creates pass the full batch size so N rooms are checked as one unit."""
     sub = _locked_effective_subscription(hotel)
     if sub is None:
         return
@@ -131,8 +135,10 @@ def check_room_quota(hotel) -> None:
     if limit is None:
         return
     usage = room_usage(hotel)
-    if usage >= limit:
-        raise RoomLimitReached({"limit": limit, "usage": usage})
+    if usage + count > limit:
+        raise RoomLimitReached(
+            {"limit": limit, "usage": usage, "requested": count}
+        )
 
 
 def check_staff_quota(hotel) -> None:

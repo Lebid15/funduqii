@@ -43,6 +43,7 @@ export function RoomFormModal({
   room,
   floors,
   types,
+  initialFloor,
   onClose,
   onSaved,
 }: {
@@ -50,6 +51,8 @@ export function RoomFormModal({
   room?: Room;
   floors: Floor[];
   types: RoomType[];
+  /** Pre-selects a floor on CREATE (e.g. "add room to this floor"). */
+  initialFloor?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -71,13 +74,15 @@ export function RoomFormModal({
   useEffect(() => {
     if (!open) return;
     setNumber(room?.number ?? "");
-    setFloor(room ? String(room.floor) : "");
+    setFloor(
+      room ? String(room.floor) : initialFloor ? String(initialFloor) : "",
+    );
     setType(room ? String(room.room_type) : "");
     setStatus(room && room.status !== "archived" ? room.status : "available");
     setStatusNote(room?.status_note ?? "");
     setIsActive(room?.is_active ?? true);
     setError(null);
-  }, [open, room]);
+  }, [open, room, initialFloor]);
 
   const statusChanged = status !== (room?.status ?? "available");
   const noteMissing =
@@ -105,10 +110,20 @@ export function RoomFormModal({
     };
     setBusy(true);
     try {
-      const saved = room ? await updateRoom(room.id, body) : await createRoom(body);
-      // The status travels its own CONTROLLED path (log + note rule).
-      if (canStatus && statusChanged) {
-        await changeRoomStatus(saved.id, status, statusNote);
+      if (room) {
+        // EDIT: the room fields, then the status via its own CONTROLLED path.
+        await updateRoom(room.id, body);
+        if (canStatus && statusChanged) {
+          await changeRoomStatus(room.id, status, statusNote);
+        }
+      } else {
+        // CREATE: a non-available initial status travels write-only on the
+        // SAME create request (backend requires rooms.status_update for it).
+        if (canStatus && status !== "available") {
+          body.initial_status = status;
+          body.status_note = statusNote.trim();
+        }
+        await createRoom(body);
       }
       onSaved();
     } catch (err) {

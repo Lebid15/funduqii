@@ -1705,7 +1705,8 @@ a {
   flex-wrap: wrap;
   gap: var(--space-3);
   font-size: var(--font-size-xs);
-  color: var(--color-fg-subtle);
+  /* WCAG 1.4.3: fg-subtle (~2.9:1) fails; fg-muted (~6.46:1) passes. */
+  color: var(--color-fg-muted);
   margin-inline-start: auto;
 }
 
@@ -1760,11 +1761,6 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-2);
-}
-.room-op-card__number {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-extrabold);
-  letter-spacing: var(--tracking-tight);
 }
 .room-op-card__id {
   display: flex;
@@ -1844,7 +1840,8 @@ a {
   font-size: var(--font-size-sm);
 }
 .room-op-details__row dt {
-  color: var(--color-fg-subtle);
+  /* WCAG 1.4.3: use fg-muted (~6.46:1) instead of fg-subtle (~2.9:1). */
+  color: var(--color-fg-muted);
   flex: none;
 }
 .room-op-details__row dd {
@@ -1860,12 +1857,150 @@ a {
   color: var(--color-fg-muted);
 }
 
+/* --- Unified rooms workspace (rooms rework) ------------------------------- */
+/* Header action bar: a quiet hint on the start side, the actions on the end. */
+.rooms-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+.rooms-toolbar__actions {
+  margin-inline-start: auto;
+}
+.cluster--end {
+  justify-content: flex-end;
+}
+
+/* Exactly-four summary cards: 4-up desktop, 2-up tablet, a scroll-snap strip
+ * on phones (only the strip scrolls — never the page). */
+.board-stats--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* WCAG 1.4.3: rooms-scoped override so the caption clears 4.5:1 WITHOUT
+ * touching the shared .board-stat__caption rule (used by reservations too). */
+.board-stats--4 .board-stat__caption {
+  color: var(--color-fg-muted);
+}
+@media (max-width: 900px) {
+  .board-stats--4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .board-stats--4 {
+    display: flex;
+    grid-template-columns: none;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--space-1);
+  }
+  .board-stats--4 > .board-stat {
+    flex: 0 0 72%;
+    scroll-snap-align: start;
+  }
+}
+
+/* Two independent badges stack on the card head (occupancy + operational). */
+.room-op-card__badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  flex: none;
+}
+
+/* Collapsible floor section header. */
+.floor-section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.floor-section__chevron {
+  color: var(--color-fg-muted);
+  transition: transform var(--transition-fast);
+}
+.floor-section__chevron--collapsed {
+  transform: rotate(-90deg);
+}
+[dir="rtl"] .floor-section__chevron--collapsed {
+  transform: rotate(90deg);
+}
+.floor-section__empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+
+/* Settings disclosure menu (Manage floors / Room types). */
+.settings-menu {
+  position: relative;
+  display: inline-flex;
+}
+.settings-menu__button {
+  gap: var(--space-2);
+}
+.settings-menu__list {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + var(--space-2));
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-modal);
+  animation: pop-in var(--transition-fast);
+}
+.settings-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.settings-menu__item:hover {
+  background: var(--color-surface-sunken);
+}
+.settings-menu__item .icon {
+  color: var(--color-primary);
+}
+
 @media (max-width: 640px) {
   .room-op-grid {
     grid-template-columns: 1fr;
   }
   .floor-section__summary {
     margin-inline-start: 0;
+  }
+  .rooms-toolbar__actions {
+    width: 100%;
   }
 }
 
