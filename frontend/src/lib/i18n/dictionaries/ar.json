@@ -446,6 +446,21 @@
       "typeInUseMessage": "لا يمكن حذف نوع غرفة مستخدم",
       "floorCount": "عدد الطوابق",
       "saveFloorCount": "حفظ عدد الطوابق",
+      "capacityGuests": {
+        "one": "نزيل واحد",
+        "two": "نزيلان",
+        "few": "{n} نزلاء",
+        "upTo": "حتى {n} نزلاء"
+      },
+      "roomTypeFeatures": "مزايا نوع الغرفة",
+      "amenitiesMore": "+{count} أخرى",
+      "detailBaseCapacity": "السعة الأساسية",
+      "detailMaxCapacity": "السعة القصوى",
+      "capacityHint": "عدد النزلاء الذين يتّسع لهم هذا النوع من الغرف.",
+      "amenityConflict": "لا يمكن اختيار «مسموح بالتدخين» و«غير مسموح بالتدخين» معًا.",
+      "nameRequired": "اسم نوع الغرفة مطلوب.",
+      "capacityInvalid": "أدخل سعة لا تقل عن 1.",
+      "rateInvalid": "أدخل سعرًا يساوي 0 أو أكثر.",
       "amenity": {
         "ac": "تكييف",
         "wifi": "واي فاي",

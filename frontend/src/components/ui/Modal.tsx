@@ -6,6 +6,10 @@ import { X } from "lucide-react";
 
 import { IconButton } from "./IconButton";
 
+/** Width preset for the dialog. `md` is the historical default and renders
+ * EXACTLY the base `.modal` width — larger sizes are opt-in via CSS modifiers. */
+type ModalSize = "md" | "lg" | "xl" | "full";
+
 interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -13,6 +17,8 @@ interface ModalProps {
   closeLabel: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** Optional width preset. Defaults to `md` (unchanged legacy width). */
+  size?: ModalSize;
 }
 
 /** Central modal dialog. Closes on Escape and overlay click; locks scroll. */
@@ -23,6 +29,7 @@ export function Modal({
   closeLabel,
   children,
   footer,
+  size = "md",
 }: ModalProps) {
   useEffect(() => {
     if (!open) return;
@@ -50,7 +57,12 @@ export function Modal({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className={size === "md" ? "modal" : `modal modal--${size}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="modal__header">
           <h2 className="modal__title">{title}</h2>
           <IconButton label={closeLabel} icon={X} onClick={onClose} />

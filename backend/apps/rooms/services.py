@@ -355,6 +355,19 @@ def _display_status(room, occupied_ids, reserved_ids) -> str:
     return "available"
 
 
+def _hotel_currency(hotel) -> str:
+    """The hotel's default currency (from HotelSettings) or USD.
+
+    Mirrors ``finance.services._hotel_currency`` locally (no cross-app import).
+    ``hotel.settings`` is the OneToOne HotelSettings row (may be absent). At most
+    one extra query; no N+1 (called once per board build).
+    """
+    settings_obj = getattr(hotel, "settings", None)
+    if settings_obj and getattr(settings_obj, "default_currency", ""):
+        return settings_obj.default_currency
+    return "USD"
+
+
 def operational_board(hotel) -> dict:
     """Build the full rooms operational-board DTO for one hotel (pure read)."""
     from apps.reservations.models import BLOCKING_STATUSES, ReservationRoomLine
@@ -458,6 +471,7 @@ def operational_board(hotel) -> dict:
                 "room_type_name": room.room_type.name,
                 "room_type_code": room.room_type.code,
                 "room_type_is_active": room_type_is_active,
+                "amenities": list(room.room_type.amenities or []),
                 "base_capacity": room.room_type.base_capacity,
                 "max_capacity": room.room_type.max_capacity,
                 "base_rate": (
@@ -557,4 +571,9 @@ def operational_board(hotel) -> dict:
             }
         )
 
-    return {"summary": summary, "floors": floors, "rooms": room_rows}
+    return {
+        "currency": _hotel_currency(hotel),
+        "summary": summary,
+        "floors": floors,
+        "rooms": room_rows,
+    }

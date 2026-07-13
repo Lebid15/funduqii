@@ -446,6 +446,21 @@
       "typeInUseMessage": "Cannot delete a room type that is in use",
       "floorCount": "Floor Count",
       "saveFloorCount": "Save Floor Count",
+      "capacityGuests": {
+        "one": "1 guest",
+        "two": "2 guests",
+        "few": "{n} guests",
+        "upTo": "Up to {n} guests"
+      },
+      "roomTypeFeatures": "Room-type features",
+      "amenitiesMore": "+{count} more",
+      "detailBaseCapacity": "Base capacity",
+      "detailMaxCapacity": "Max capacity",
+      "capacityHint": "Number of guests this room type sleeps.",
+      "amenityConflict": "Smoking and non-smoking can't both be selected.",
+      "nameRequired": "A room-type name is required.",
+      "capacityInvalid": "Enter a capacity of at least 1.",
+      "rateInvalid": "Enter a price of 0 or more.",
       "amenity": {
         "ac": "Air Conditioning",
         "wifi": "Wi-Fi",

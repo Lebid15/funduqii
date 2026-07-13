@@ -1,17 +1,41 @@
 import {
+  Accessibility,
   Archive,
   Ban,
+  Bath,
+  BedDouble,
+  BedSingle,
   Brush,
+  Briefcase,
   CalendarClock,
   CalendarPlus,
   CheckCircle2,
+  Cigarette,
+  CigaretteOff,
+  Coffee,
+  ConciergeBell,
+  Dot,
   DoorOpen,
   Eye,
+  Fence,
   FileText,
+  Flame,
+  Lock,
   LogIn,
   LogOut,
+  Mountain,
+  Refrigerator,
+  Snowflake,
   Sparkles,
+  Tv,
   UserCheck,
+  Users,
+  Utensils,
+  VolumeX,
+  Waves,
+  Wifi,
+  Wind,
+  Wine,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -82,6 +106,41 @@ export function operationalIcon(status: RoomStatus): LucideIcon {
     default:
       return Archive; // archived
   }
+}
+
+/** Amenity-key → unified lucide icon. Icons ACCOMPANY the translated label
+ * (they are never the sole conveyor of meaning); unknown keys fall back to a
+ * neutral dot. Kept beside the operational icons so the whole rooms section
+ * draws from one consistent set. */
+const AMENITY_ICON: Record<string, LucideIcon> = {
+  ac: Snowflake,
+  wifi: Wifi,
+  tv: Tv,
+  private_bathroom: Bath,
+  fridge: Refrigerator,
+  balcony: Fence,
+  view: Mountain,
+  minibar: Wine,
+  safe: Lock,
+  desk: Briefcase,
+  heating: Flame,
+  kettle: Coffee,
+  hair_dryer: Wind,
+  room_service: ConciergeBell,
+  single_bed: BedSingle,
+  double_bed: BedDouble,
+  twin_beds: BedDouble,
+  jacuzzi: Waves,
+  kitchenette: Utensils,
+  soundproof: VolumeX,
+  no_smoking: CigaretteOff,
+  smoking: Cigarette,
+  family_friendly: Users,
+  accessible: Accessibility,
+};
+
+export function amenityIcon(key: string): LucideIcon {
+  return AMENITY_ICON[key] ?? Dot;
 }
 
 export interface RoomLinkAction {
