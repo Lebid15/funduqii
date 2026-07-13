@@ -19,6 +19,7 @@ from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
     Reservation,
     ReservationRoomLine,
+    ReservationSource,
     ReservationStatus,
     ReservationStatusLog,
 )
@@ -694,6 +695,45 @@ class ReservationTests(APITestCase):
         self.assertEqual(res.data["total"], 2)
         self.assertEqual(res.data["confirmed"], 1)
         self.assertEqual(res.data["held"], 1)
+
+    def test_overview_website_source_count(self):
+        """`website` counts public-website reservations across ALL statuses,
+        strictly hotel-scoped (a second hotel's website bookings are excluded)."""
+
+        def _mk(hotel, source, status):
+            return Reservation.objects.create(
+                hotel=hotel,
+                reservation_number=f"R{Reservation.objects.count() + 1:05d}",
+                status=status,
+                source=source,
+                check_in_date=D1,
+                check_out_date=D2,
+                primary_guest_name="G",
+                hold_expires_at=(
+                    _future() if status == ReservationStatus.HELD else None
+                ),
+            )
+
+        # Hotel A: 3 public-website reservations spanning different statuses
+        # (proves the count ignores status filters) + 1 non-website booking.
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CONFIRMED)
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.HELD)
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CANCELLED)
+        _mk(self.hotel, ReservationSource.DIRECT, ReservationStatus.CONFIRMED)
+
+        # Hotel B: a public-website reservation that must NOT leak into hotel A.
+        other = make_hotel(slug="other-web")
+        _mk(other, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CONFIRMED)
+
+        res = self.client.get(
+            reverse("reservations:reservation-overview"), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        # 3 website reservations in hotel A, regardless of status; hotel B excluded.
+        self.assertEqual(res.data["website"], 3)
+        # Purely additive: existing counts still reflect every hotel-A row.
+        self.assertEqual(res.data["total"], 4)
+        self.assertEqual(res.data["confirmed"], 2)
 
     def test_list_filters(self):
         self._create()

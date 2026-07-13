@@ -704,8 +704,12 @@ export interface ReservationOverview {
   confirmed: number;
   cancelled: number;
   expired: number;
-  /** The hotel's operational "today" — the immediate-reservation wizard
-   * uses this as the arrival date (client clocks can differ). */
+  /** Count of reservations whose `source` is `public_website` (hotel-scoped).
+   * A SOURCE subset — already distributed across the status counts above, not a
+   * status of its own; never summed into the status math. */
+  website: number;
+  /** The hotel's operational "today" — the create wizard defaults the arrival
+   * date to this, and it derives instant-vs-future (client clocks can differ). */
   business_date: string;
   arrivals: Reservation[];
   departures: Reservation[];

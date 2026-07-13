@@ -4,7 +4,6 @@ import {
   CalendarX2,
   Footprints,
   Globe,
-  MoreHorizontal,
   Phone,
   Sparkle,
   Sunrise,
@@ -36,9 +35,6 @@ export function sourceIcon(source: ReservationSource): LucideIcon {
       return Sparkle; // other
   }
 }
-
-/** Re-exported so cards/menus draw the "more actions" affordance from one set. */
-export const MoreActionsIcon = MoreHorizontal;
 
 export type ArrivalFlagKind = "today" | "tomorrow" | "late";
 

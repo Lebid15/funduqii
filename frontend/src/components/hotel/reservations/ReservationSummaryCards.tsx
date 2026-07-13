@@ -5,6 +5,7 @@ import {
   CalendarX2,
   CheckCircle2,
   Clock3,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -12,26 +13,39 @@ import { Icon } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { cx } from "@/lib/utils";
 
-/** The status a summary card maps onto — "" is the Total card (clears status). */
-export type StatusCard = "" | "confirmed" | "held" | "cancelled";
+/** Which summary card is active. "" is the Total card (clears status AND
+ * source); "website" is a SOURCE card (source=public_website), not a status. */
+export type SummaryCardKey = "" | "confirmed" | "held" | "cancelled" | "website";
 
 export interface ReservationCounts {
   total?: number;
   confirmed?: number;
   held?: number;
   cancelled?: number;
+  /** SOURCE subset — public_website reservations, already inside the statuses. */
+  website?: number;
 }
 
-const CARDS: Array<{
-  key: StatusCard;
+interface CardDef {
+  key: SummaryCardKey;
+  /** A status card filters by status; a source card filters by source. */
+  dimension: "status" | "source";
   countKey: keyof ReservationCounts;
-  labelKey: "total" | "confirmed" | "pending" | "cancelled";
-  captionKey: "totalCaption" | "confirmedCaption" | "pendingCaption" | "cancelledCaption";
+  labelKey: "total" | "confirmed" | "pending" | "cancelled" | "website";
+  captionKey:
+    | "totalCaption"
+    | "confirmedCaption"
+    | "pendingCaption"
+    | "cancelledCaption"
+    | "websiteCaption";
   icon: LucideIcon;
   tone: string;
-}> = [
+}
+
+const CARDS: CardDef[] = [
   {
     key: "",
+    dimension: "status",
     countKey: "total",
     labelKey: "total",
     captionKey: "totalCaption",
@@ -40,6 +54,7 @@ const CARDS: Array<{
   },
   {
     key: "confirmed",
+    dimension: "status",
     countKey: "confirmed",
     labelKey: "confirmed",
     captionKey: "confirmedCaption",
@@ -48,6 +63,7 @@ const CARDS: Array<{
   },
   {
     key: "held",
+    dimension: "status",
     countKey: "held",
     labelKey: "pending",
     captionKey: "pendingCaption",
@@ -56,54 +72,80 @@ const CARDS: Array<{
   },
   {
     key: "cancelled",
+    dimension: "status",
     countKey: "cancelled",
     labelKey: "cancelled",
     captionKey: "cancelledCaption",
     icon: CalendarX2,
     tone: "danger",
   },
+  {
+    key: "website",
+    dimension: "source",
+    countKey: "website",
+    labelKey: "website",
+    captionKey: "websiteCaption",
+    icon: Globe,
+    tone: "info",
+  },
 ];
 
-/** EXACTLY four clickable summary cards (reservations rework): Total /
- * Confirmed / Pending / Cancelled, driven by the real hotel-scoped overview
- * counts. Each card is a status quick-filter; the active card highlights the
- * active filter, and clicking Total (or the active card) clears it. */
+/** EXACTLY five clickable summary cards (reservations rework): Total /
+ * Confirmed / Pending / Cancelled are STATUS quick-filters; Website is a SOURCE
+ * quick-filter (public_website). The Website count is a subset of Total already
+ * distributed across the status counts — it is NEVER summed into the status
+ * math, which the caption + the group hint make explicit. Each card highlights
+ * with text/icon/ring (never colour alone). Clicking Total (or the active card)
+ * clears both status and source. */
 export function ReservationSummaryCards({
   counts,
   active,
   onSelect,
 }: {
   counts: ReservationCounts;
-  /** The active status filter, or null when a non-card status (e.g. expired)
-   * is applied — then no card (not even Total) is highlighted. */
-  active: StatusCard | null;
-  onSelect: (status: StatusCard) => void;
+  /** The active card key, or null when a non-card status (e.g. expired) or a
+   * non-website source is applied — then no card is highlighted. */
+  active: SummaryCardKey | null;
+  onSelect: (card: SummaryCardKey) => void;
 }) {
   const { t } = useI18n();
   const c = t.reservations.cards;
 
   return (
-    <div className="board-stats board-stats--4" role="group" aria-label={c.groupLabel}>
-      {CARDS.map((card) => {
-        const isActive = active === card.key;
-        const value = counts[card.countKey];
-        return (
-          <button
-            key={card.labelKey}
-            type="button"
-            className={cx("board-stat", isActive && "board-stat--active")}
-            aria-pressed={isActive}
-            onClick={() => onSelect(card.key)}
-          >
-            <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
-              <Icon icon={card.icon} size="md" />
-            </span>
-            <span className="board-stat__value">{value ?? "…"}</span>
-            <span className="board-stat__label">{c[card.labelKey]}</span>
-            <span className="board-stat__caption">{c[card.captionKey]}</span>
-          </button>
-        );
-      })}
+    <div className="stack-tight">
+      <div className="board-stats board-stats--5" role="group" aria-label={c.groupLabel}>
+        {CARDS.map((card) => {
+          const isActive = active === card.key;
+          const value = counts[card.countKey];
+          const isSource = card.dimension === "source";
+          return (
+            <button
+              key={card.labelKey}
+              type="button"
+              className={cx(
+                "board-stat",
+                isSource && "board-stat--source",
+                isActive && "board-stat--active",
+              )}
+              aria-pressed={isActive}
+              onClick={() => onSelect(card.key)}
+            >
+              <span className="board-stat__head">
+                <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
+                  <Icon icon={card.icon} size="md" />
+                </span>
+                {isSource ? (
+                  <span className="board-stat__tag">{c.sourceTag}</span>
+                ) : null}
+              </span>
+              <span className="board-stat__value">{value ?? "…"}</span>
+              <span className="board-stat__label">{c[card.labelKey]}</span>
+              <span className="board-stat__caption">{c[card.captionKey]}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="board-stats__hint muted small">{c.sourceHint}</p>
     </div>
   );
 }

@@ -1614,50 +1614,6 @@ a {
   background: var(--color-primary-soft);
   color: var(--color-primary-active);
 }
-/* Reservation type chooser (owner UX): two big clickable cards — side by
- * side on desktop, stacked on mobile. Never a dropdown. */
-.choice-cards {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-@media (max-width: 640px) {
-  .choice-cards {
-    grid-template-columns: 1fr;
-  }
-}
-.choice-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-5);
-  background: var(--gradient-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
-  font-family: inherit;
-  font-size: var(--font-size-base);
-  text-align: start;
-  cursor: pointer;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-}
-.choice-card:hover {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-2px);
-}
-.choice-card__icon {
-  display: grid;
-  place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: var(--radius-md);
-  background: var(--color-primary-soft);
-  color: var(--color-primary-active);
-}
-
 /* Removable chip (amenity multi-select): the × button lives inside. */
 .chip--removable {
   padding-inline-end: var(--space-1);
@@ -2014,6 +1970,69 @@ a {
     flex: 0 0 72%;
     scroll-snap-align: start;
   }
+}
+
+/* Exactly-five reservation summary cards: 5-up wide, 3-up medium, 2-up small,
+ * then a scroll-snap STRIP on phones (only the strip scrolls — never the page).
+ * The reservations caption keeps its own contrast without touching the shared
+ * .board-stat__caption rule. */
+.board-stats--5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.board-stats--5 .board-stat__caption {
+  color: var(--color-fg-muted);
+}
+@media (max-width: 1100px) {
+  .board-stats--5 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .board-stats--5 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .board-stats--5 {
+    display: flex;
+    grid-template-columns: none;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--space-1);
+  }
+  .board-stats--5 > .board-stat {
+    flex: 0 0 60%;
+    scroll-snap-align: start;
+  }
+}
+/* Head row of a summary card: icon on the start, an optional dimension tag
+ * (e.g. "Source") on the end. */
+.board-stat__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+}
+.board-stat__tag {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: 0.65rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wide, 0);
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+/* The Website card is a SOURCE dimension, not a status — a dashed frame signals
+ * "different axis" via shape (not colour alone); the tag + caption + group hint
+ * carry the meaning in text. */
+.board-stat--source {
+  border-style: dashed;
+}
+.board-stats__hint {
+  margin: 0;
 }
 
 /* 2) Two independent badges (occupancy + operational) sit in their own row
@@ -4082,10 +4101,38 @@ a {
 .res-list__order {
   font-size: var(--font-size-xs);
 }
+/* Cards-first responsive GRID (reservations rework): 4 columns on wide screens,
+ * then 3 on medium desktop, 2 on tablet and 1 on phones. Fixed-count tracks with
+ * minmax(0,1fr) keep every column able to shrink so long text wraps INSIDE the
+ * card (overflow-wrap) instead of forcing horizontal scroll at any width. Cells
+ * stretch so cards in a row share an equal height. RTL is automatic — the grid
+ * flows in the document's inline direction. */
 .reservation-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-4);
+  align-items: stretch;
+}
+@media (max-width: 1200px) {
+  .reservation-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .reservation-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .reservation-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The list-item wrapper fills its grid cell so the card inside stretches to the
+ * row's height (equal-height cards). */
+.reservation-list > [role="listitem"] {
+  display: flex;
+  min-width: 0;
 }
 
 /* The row card mirrors the rooms operational card: a calm surface with a
@@ -4094,7 +4141,10 @@ a {
  * horizontal scroll at any breakpoint. */
 .res-card {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
+  min-width: 0;
+  height: 100%;
   gap: var(--space-3);
   background: var(--gradient-surface);
   border: 1px solid var(--color-border);
@@ -4271,68 +4321,16 @@ a {
   font-size: var(--font-size-sm);
 }
 
-/* 6) Actions — wrap gracefully; the overflow menu sits on the end. */
+/* 6) Actions — shown directly on the card (no overflow menu); they wrap into a
+ * tidy row and always start at a consistent baseline (logical block-start auto)
+ * so cards of differing content still align their action rows. */
 .res-card__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  margin-top: auto;
-  padding-top: var(--space-1);
-}
-.res-card__actions-end {
-  margin-inline-start: auto;
-}
-
-/* Per-card overflow menu — mirrors the rooms settings-menu a11y and look. */
-.card-menu {
-  position: relative;
-  display: inline-flex;
-}
-.card-menu__list {
-  position: absolute;
-  inset-inline-end: 0;
-  top: calc(100% + var(--space-1));
-  min-width: 12rem;
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-1);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  z-index: var(--z-modal);
-  animation: pop-in var(--transition-fast);
-}
-.card-menu__item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-fg);
-  font-family: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  text-align: start;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-}
-.card-menu__item:hover {
-  background: var(--color-surface-sunken);
-}
-.card-menu__item .icon {
-  flex: none;
-  color: var(--color-fg-muted);
-}
-.card-menu__item--danger {
-  color: var(--color-danger);
-}
-.card-menu__item--danger .icon {
-  color: var(--color-danger);
+  margin-block-start: auto;
+  padding-block-start: var(--space-1);
 }
 
 /* Detail modal section sub-headings. */
@@ -4348,9 +4346,6 @@ a {
 
 @media (max-width: 640px) {
   .res-card__badges {
-    margin-inline-start: 0;
-  }
-  .res-card__actions-end {
     margin-inline-start: 0;
   }
 }

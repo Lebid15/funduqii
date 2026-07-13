@@ -315,6 +315,13 @@ class ReservationOverviewView(APIView):
                 "confirmed": counts.get(ReservationStatus.CONFIRMED, 0),
                 "cancelled": counts.get(ReservationStatus.CANCELLED, 0),
                 "expired": counts.get(ReservationStatus.EXPIRED, 0),
+                # Additive source count: hotel-scoped reservations that came
+                # from the public website, across ALL statuses (this overlaps
+                # the status counts above — it is NOT a mutually-exclusive
+                # bucket). Same request.hotel scope as every other count.
+                "website": base.filter(
+                    source=ReservationSource.PUBLIC_WEBSITE
+                ).count(),
                 # The hotel's operational "today" — the immediate-reservation
                 # wizard prefixes its arrival date with this (the client
                 # clock can differ from the hotel timezone).

@@ -18,6 +18,7 @@ import {
   ClipboardCheck,
   MessageSquareText,
   Plus,
+  Printer,
   SlidersHorizontal,
   Trash2,
   UserRound,
@@ -33,11 +34,11 @@ import {
   ErrorState,
   FilterBar,
   FormField,
-  Icon,
   Input,
   LoadingState,
   Modal,
   Pagination,
+  PrintDocumentLayout,
   SectionCard,
   Select,
   StepSummaryCard,
@@ -56,11 +57,11 @@ import {
   type ReservationLineBody,
   type ReservationUpdateBody,
 } from "@/lib/api/reservations";
-import { createGuest, listGuests } from "@/lib/api/guests";
-import { checkIn as frontDeskCheckIn } from "@/lib/api/stays";
+import { listGuests } from "@/lib/api/guests";
 import { listRoomTypes, listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type {
+  BookingKind,
   Guest,
   Reservation,
   Room,
@@ -70,13 +71,14 @@ import type {
 import { formatDate, reservationStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 
 import { ReservationCard } from "./ReservationCard";
 import { ReservationDetailsModal } from "./ReservationDetailsModal";
 import {
   ReservationSummaryCards,
   type ReservationCounts,
-  type StatusCard,
+  type SummaryCardKey,
 } from "./ReservationSummaryCards";
 
 const PAGE_SIZE = 25;
@@ -122,38 +124,35 @@ export function ReservationsTab({
   const [error, setError] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
-  const [chooserOpen, setChooserOpen] = useState(false);
-  const [initialKind, setInitialKind] = useState<"instant" | "future" | null>(null);
   const [quickLine, setQuickLine] = useState<{ room_type: string; room: string } | null>(null);
   const [editing, setEditing] = useState<Reservation | null>(null);
   const [details, setDetails] = useState<Reservation | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null);
-  const [renewTarget, setRenewTarget] = useState<Reservation | null>(null);
+  const [printTarget, setPrintTarget] = useState<Reservation | null>(null);
 
-  // The page's "New reservation" button pulses this prop — it opens the TYPE
-  // CHOOSER (instant vs future). Consume real increments only (the initial
-  // value must not auto-open on mount).
+  // The page's "New reservation" button pulses this prop — it opens the unified
+  // create form DIRECTLY (no instant/future chooser). Consume real increments
+  // only (the initial value must not auto-open on mount).
   const lastSignal = useRef(createSignal);
   useEffect(() => {
     if (createSignal !== lastSignal.current) {
       lastSignal.current = createSignal;
-      setChooserOpen(true);
+      setCreating(true);
     }
   }, [createSignal]);
 
-  function chooseKind(kind: "instant" | "future") {
-    setChooserOpen(false);
-    setInitialKind(kind);
+  function openCreate() {
+    setQuickLine(null);
     setCreating(true);
   }
 
-  // Deep-links: ?action=new opens the chooser (optionally with a room pinned
-  // from the rooms board); ?action=find&q= focuses the list on a reservation.
+  // Deep-links: ?action=new opens the create form directly (optionally with a
+  // room pinned from the rooms board); ?action=find&q= focuses the list.
   useQuickAction("new", (params) => {
     const room = params.get("room");
     const roomType = params.get("room_type");
     setQuickLine(room && roomType ? { room, room_type: roomType } : null);
-    setChooserOpen(true);
+    setCreating(true);
   });
   useQuickAction("find", (params) => {
     const q = params.get("q") ?? "";
@@ -187,6 +186,7 @@ export function ReservationsTab({
             confirmed: o.confirmed,
             held: o.held,
             cancelled: o.cancelled,
+            website: o.website,
           },
           businessDate: o.business_date,
         }),
@@ -235,15 +235,31 @@ export function ReservationsTab({
     dateTo !== "" ||
     query !== "";
 
-  // The active summary card mirrors the status filter; a non-card status
-  // (expired) highlights nothing, and Total (=="") highlights on no filter.
-  const activeCard: StatusCard | null =
-    status === "" || status === "confirmed" || status === "held" || status === "cancelled"
-      ? (status as StatusCard)
-      : null;
+  // Which summary card is active. Website is a SOURCE filter (public_website);
+  // the others are STATUS filters. Total highlights only when NO status AND NO
+  // source is applied; a non-card status (expired) or non-website source
+  // highlights nothing.
+  const activeCard: SummaryCardKey | null =
+    source === "public_website"
+      ? "website"
+      : source !== ""
+        ? null
+        : status === "" || status === "confirmed" || status === "held" || status === "cancelled"
+          ? (status as SummaryCardKey)
+          : null;
 
-  function onCard(next: StatusCard) {
+  function onCard(next: SummaryCardKey) {
     setPage(1);
+    if (next === "website") {
+      // Source filter: show every status of the public_website source so the
+      // list matches the card count. Toggling it off clears the source.
+      setStatus("");
+      setSource((prev) => (prev === "public_website" ? "" : "public_website"));
+      return;
+    }
+    // A status card (incl. Total "") clears the source dimension and toggles
+    // the status — Total therefore clears both status AND source.
+    setSource("");
     setStatus((prev) => (prev === next ? "" : next));
   }
 
@@ -277,15 +293,6 @@ export function ReservationsTab({
       refresh();
     } catch (err) {
       notify(messageForError(err, t), "error");
-    }
-  }
-
-  async function copyNumber(r: Reservation) {
-    try {
-      await navigator.clipboard.writeText(r.reservation_number);
-      notify(t.reservations.views.copied);
-    } catch {
-      notify(r.reservation_number);
     }
   }
 
@@ -464,6 +471,13 @@ export function ReservationsTab({
               title={t.reservations.views.noReservations}
               hint={t.reservations.list.emptyHint}
               icon={CalendarCheck}
+              action={
+                can("reservations.create") ? (
+                  <Button icon={Plus} onClick={openCreate}>
+                    {t.reservations.views.newReservation}
+                  </Button>
+                ) : undefined
+              }
             />
           )
         ) : (
@@ -479,11 +493,10 @@ export function ReservationsTab({
                     reservation={r}
                     businessDate={overview.businessDate}
                     onView={setDetails}
+                    onPrint={setPrintTarget}
                     onConfirm={confirm}
                     onEdit={setEditing}
                     onCancel={setCancelTarget}
-                    onRenewHold={setRenewTarget}
-                    onCopyNumber={copyNumber}
                   />
                 </div>
               ))}
@@ -504,51 +517,19 @@ export function ReservationsTab({
         )
       ) : null}
 
-      {/* Type chooser (instant vs future) — an explicit modal, never a dropdown. */}
-      <Modal
-        open={chooserOpen}
-        onClose={() => setChooserOpen(false)}
-        title={t.reservations.views.chooseType}
-        closeLabel={t.common.close}
-      >
-        <div className="choice-cards">
-          <button
-            type="button"
-            className="choice-card"
-            disabled={!can("stays.check_in")}
-            title={!can("stays.check_in") ? t.reservations.views.needCheckInPerm : undefined}
-            onClick={() => chooseKind("instant")}
-          >
-            <span className="choice-card__icon">
-              <Icon icon={Zap} size="lg" />
-            </span>
-            <strong>{t.reservations.views.instantTitle}</strong>
-            <span className="muted">{t.reservations.views.instantDesc}</span>
-          </button>
-          <button type="button" className="choice-card" onClick={() => chooseKind("future")}>
-            <span className="choice-card__icon">
-              <Icon icon={CalendarClock} size="lg" />
-            </span>
-            <strong>{t.reservations.views.futureTitle}</strong>
-            <span className="muted">{t.reservations.views.futureDesc}</span>
-          </button>
-        </div>
-      </Modal>
-
+      {/* One unified create path — no instant/future chooser. The booking kind
+          is DERIVED from the arrival date inside the form. */}
       <ReservationModal
         open={creating}
         types={types}
         initialLine={quickLine}
-        initialKind={initialKind}
         onClose={() => {
           setCreating(false);
           setQuickLine(null);
-          setInitialKind(null);
         }}
         onSaved={() => {
           setCreating(false);
           setQuickLine(null);
-          setInitialKind(null);
           notify(t.reservations.saved);
           setPage(1);
           refresh();
@@ -556,7 +537,6 @@ export function ReservationsTab({
         onView={(r) => {
           setCreating(false);
           setQuickLine(null);
-          setInitialKind(null);
           setPage(1);
           refresh();
           setDetails(r);
@@ -601,15 +581,10 @@ export function ReservationsTab({
           refresh();
         }}
       />
-      <RenewHoldModal
-        open={renewTarget !== null}
-        reservation={renewTarget ?? undefined}
-        onClose={() => setRenewTarget(null)}
-        onDone={() => {
-          setRenewTarget(null);
-          notify(t.reservations.saved);
-          refresh();
-        }}
+      <ReservationPrintModal
+        open={printTarget !== null}
+        reservation={printTarget ?? undefined}
+        onClose={() => setPrintTarget(null)}
       />
     </div>
   );
@@ -631,17 +606,11 @@ function todayISO(): string {
   return new Date(now.getTime() - off * 60_000).toISOString().slice(0, 10);
 }
 
-type WizardResult =
-  | { type: "created"; reservation: Reservation }
-  | { type: "checkedIn"; reservation: Reservation; roomNumber: string }
-  | { type: "checkinFailed"; reservation: Reservation; reason: string };
-
 function ReservationModal({
   open,
   reservation,
   types,
   initialLine,
-  initialKind,
   onClose,
   onSaved,
   onView,
@@ -651,7 +620,6 @@ function ReservationModal({
   reservation?: Reservation;
   types: RoomType[];
   initialLine?: { room_type: string; room: string } | null;
-  initialKind?: "instant" | "future" | null;
   onClose: () => void;
   onSaved: () => void;
   onView?: (r: Reservation) => void;
@@ -659,7 +627,6 @@ function ReservationModal({
 }) {
   const { t, locale } = useI18n();
   const editing = Boolean(reservation);
-  const [bookingKind, setBookingKind] = useState<"instant" | "future">("instant");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [arrivalTime, setArrivalTime] = useState("");
@@ -684,33 +651,32 @@ function ReservationModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Two ordered steps (guest → booking+review), an optional existing-guest
-  // pick (required for the IMMEDIATE check-in), the hotel business date, and
-  // the final success / partial-failure screen.
+  // pick (autofills the snapshot), the hotel business date (for the derived
+  // booking kind + default arrival), and the final success screen.
   const [step, setStep] = useState(0);
   const [guests, setGuests] = useState<Guest[]>([]);
   const [guestId, setGuestId] = useState("");
   const [businessDate, setBusinessDate] = useState("");
-  const [result, setResult] = useState<WizardResult | null>(null);
+  const [result, setResult] = useState<Reservation | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    const kind = reservation?.booking_kind ?? initialKind ?? "instant";
-    setBookingKind(kind);
     setStep(0);
     setGuestId("");
     setResult(null);
     setBusinessDate("");
-    setCheckIn(reservation?.check_in_date ?? (kind === "future" ? "" : todayISO()));
-    if (!reservation && kind === "instant") {
-      getReservationOverview()
-        .then((o) => {
-          setBusinessDate(o.business_date);
-          setCheckIn(o.business_date);
-        })
-        .catch(() => {
-          /* The client date stays as a fallback; the backend re-validates. */
-        });
-    }
+    // Default a NEW reservation's arrival to the hotel business date (client
+    // clocks can differ); editing keeps the stored date. The booking kind is
+    // DERIVED from this date at submit — it is never pre-chosen.
+    setCheckIn(reservation?.check_in_date ?? todayISO());
+    getReservationOverview()
+      .then((o) => {
+        setBusinessDate(o.business_date);
+        if (!reservation) setCheckIn(o.business_date);
+      })
+      .catch(() => {
+        /* The client date stays as a fallback; the backend re-validates. */
+      });
     listGuests({ page_size: 200, is_active: "true" })
       .then((r) => setGuests(r.results))
       .catch(() => setGuests([]));
@@ -750,12 +716,7 @@ function ReservationModal({
     listRooms({ page_size: 200 })
       .then((r) => setRooms(r.results))
       .catch(() => setRooms([]));
-  }, [open, reservation, initialLine, initialKind]);
-
-  function changeKind(kind: "instant" | "future") {
-    setBookingKind(kind);
-    if (kind === "instant") setCheckIn(todayISO());
-  }
+  }, [open, reservation, initialLine]);
 
   // Live availability for the chosen dates AND party size — the backend applies
   // its own capacity/overbooking rule; conflicts show per line and are
@@ -837,7 +798,15 @@ function ReservationModal({
     }
   }
 
-  const isInstant = !editing && bookingKind === "instant";
+  // Booking kind is DERIVED from the arrival date (never a pre-choice or a
+  // stored cosmetic value): arriving on the hotel business date is "instant",
+  // any later date is "future". Editing keeps the reservation's stored kind.
+  const derivedKind: BookingKind =
+    editing && reservation
+      ? reservation.booking_kind
+      : checkIn && checkIn === (businessDate || todayISO())
+        ? "instant"
+        : "future";
   // Post-check-in guard: the guest is in-house — dates and rooms are frozen
   // (the backend refuses them too); only safe fields travel in the PATCH.
   const frozen = Boolean(reservation?.has_in_house_stay);
@@ -874,14 +843,11 @@ function ReservationModal({
         quantity: l.room ? 1 : Number(l.quantity) || 1,
       }));
     if (cleanLines.length === 0) return setError(t.reservations.form.linesRequired);
-    if (isInstant && !cleanLines[0]?.room) {
-      return setError(t.reservations.views.roomRequiredInstant);
-    }
 
     setBusy(true);
     try {
       const common = {
-        booking_kind: bookingKind,
+        booking_kind: derivedKind,
         check_in_date: checkIn,
         check_out_date: checkOut,
         expected_arrival_time: arrivalTime || null,
@@ -914,56 +880,18 @@ function ReservationModal({
         onSaved();
         return;
       }
-      // The check-in service needs a GUEST PROFILE — resolve it FIRST so a
-      // guest failure leaves nothing half-done (same flow as front-desk).
-      let checkinGuestId: number | null = null;
-      if (isInstant) {
-        if (guestId) {
-          checkinGuestId = Number(guestId);
-        } else {
-          const guest = await createGuest({
-            full_name: name.trim(),
-            phone: phone.trim(),
-            email: email.trim(),
-            nationality: nationality.trim(),
-            document_number: docNumber.trim(),
-            ...(docType ? { document_type: docType as Guest["document_type"] } : {}),
-          });
-          checkinGuestId = guest.id;
-        }
-      }
+      // Single create path — this form only creates a RESERVATION (held or
+      // confirmed). Check-in belongs to the front desk / stays and is out of
+      // scope here; nothing is auto-checked-in.
       const body: ReservationCreateBody = {
-        status: isInstant ? "confirmed" : initialStatus,
+        status: initialStatus,
         ...common,
       };
-      if (!isInstant && initialStatus === "held") {
+      if (initialStatus === "held") {
         body.hold_expires_at = holdExpires ? new Date(holdExpires).toISOString() : null;
       }
       const created = await createReservation(body);
-      if (!isInstant) {
-        setResult({ type: "created", reservation: created });
-        onRefresh?.();
-        return;
-      }
-      try {
-        await frontDeskCheckIn({
-          reservation: created.id,
-          reservation_line: created.lines[0]?.id ?? null,
-          room: Number(cleanLines[0].room),
-          primary_guest: checkinGuestId as number,
-        });
-        setResult({
-          type: "checkedIn",
-          reservation: created,
-          roomNumber: rooms.find((r) => String(r.id) === lines[0]?.room)?.number ?? "",
-        });
-      } catch (err) {
-        setResult({
-          type: "checkinFailed",
-          reservation: created,
-          reason: messageForError(err, t),
-        });
-      }
+      setResult(created);
       onRefresh?.();
     } catch (err) {
       setError(messageForError(err, t));
@@ -979,10 +907,6 @@ function ReservationModal({
     value: s,
     label: t.reservations.source[s],
   }));
-  const kindOptions = (["instant", "future"] as const).map((k) => ({
-    value: k,
-    label: t.reservations.kind[k],
-  }));
   const payOptions = (["cash", "card", "bank_transfer", "other"] as const).map((v) => ({
     value: v,
     label: t.reservations.expectedPayment[v],
@@ -996,11 +920,7 @@ function ReservationModal({
 
   const v = t.reservations.views;
   const stepTitles = [v.stepGuest, v.stepBooking];
-  const finalLabel = editing
-    ? t.reservations.form.save
-    : isInstant
-      ? v.saveAndCheckIn
-      : v.saveReservation;
+  const finalLabel = editing ? t.reservations.form.save : v.saveReservation;
 
   return (
     <Modal
@@ -1046,58 +966,32 @@ function ReservationModal({
     >
       {result ? (
         <div className="stack">
-          {result.type === "checkinFailed" ? (
-            <Alert tone="warning">
-              {v.checkinFailed} — {result.reason}
-            </Alert>
-          ) : (
-            <Alert tone="success">
-              {result.type === "checkedIn" ? v.successCheckedIn : v.successCreated}
-            </Alert>
-          )}
+          <Alert tone="success">{v.successCreated}</Alert>
           <dl className="room-op-details">
             <div className="room-op-details__row">
               <dt>{t.reservations.list.number}</dt>
-              <dd>{result.reservation.reservation_number}</dd>
+              <dd>{result.reservation_number}</dd>
             </div>
             <div className="room-op-details__row">
               <dt>{t.reservations.form.name}</dt>
-              <dd>{result.reservation.primary_guest_name}</dd>
+              <dd>{result.primary_guest_name}</dd>
             </div>
-            {result.type === "checkedIn" && result.roomNumber ? (
-              <div className="room-op-details__row">
-                <dt>{t.reservations.form.room}</dt>
-                <dd>{result.roomNumber}</dd>
-              </div>
-            ) : null}
             <div className="room-op-details__row">
               <dt>{t.reservations.form.stayDates}</dt>
               <dd>
-                {formatDate(result.reservation.check_in_date, locale)} →{" "}
-                {formatDate(result.reservation.check_out_date, locale)}
+                {formatDate(result.check_in_date, locale)} →{" "}
+                {formatDate(result.check_out_date, locale)}
               </dd>
             </div>
             <div className="room-op-details__row">
               <dt>{t.common.status}</dt>
-              <dd>{reservationStatusLabel(result.reservation.status, t)}</dd>
+              <dd>{reservationStatusLabel(result.status, t)}</dd>
             </div>
           </dl>
           <div className="cluster">
-            <Button variant="secondary" size="sm" onClick={() => onView?.(result.reservation)}>
+            <Button variant="secondary" size="sm" onClick={() => onView?.(result)}>
               {v.openReservation}
             </Button>
-            {result.type === "checkedIn" ? (
-              <>
-                <Link href="/hotel/front-desk?tab=current" className="btn btn--secondary btn--sm">
-                  {v.viewStay}
-                </Link>
-              </>
-            ) : null}
-            {result.type === "checkinFailed" ? (
-              <Link href="/hotel/front-desk?tab=arrivals" className="btn btn--secondary btn--sm">
-                {v.goToFrontDesk}
-              </Link>
-            ) : null}
           </div>
         </div>
       ) : (
@@ -1116,11 +1010,7 @@ function ReservationModal({
           {/* STEP 1 — guest snapshot (existing-guest pick autofills). */}
           {step === 0 ? (
             <SectionCard title={v.stepGuest} icon={UserRound}>
-              <FormField
-                label={v.existingGuestLabel}
-                htmlFor="res-guest-pick"
-                hint={isInstant ? v.existingGuestHintInstant : undefined}
-              >
+              <FormField label={v.existingGuestLabel} htmlFor="res-guest-pick">
                 <Select
                   id="res-guest-pick"
                   value={guestId}
@@ -1172,36 +1062,20 @@ function ReservationModal({
 
               <SectionCard title={t.reservations.form.sectionKindDates} icon={CalendarClock}>
                 <div className="form-grid">
-                  {editing ? (
-                    <FormField
-                      label={t.reservations.form.bookingKind}
-                      htmlFor="res-kind"
-                      hint={bookingKind === "instant" ? t.reservations.form.instantHint : t.reservations.form.futureHint}
-                    >
-                      <Select
-                        id="res-kind"
-                        value={bookingKind}
-                        options={kindOptions}
-                        disabled={frozen}
-                        onChange={(e) => changeKind(e.target.value as "instant" | "future")}
-                      />
-                    </FormField>
-                  ) : (
-                    <FormField label={t.reservations.form.bookingKind} htmlFor="res-kind-fixed">
-                      <Input id="res-kind-fixed" value={t.reservations.kind[bookingKind]} disabled readOnly />
-                    </FormField>
-                  )}
                   <FormField
-                    label={t.reservations.form.checkIn}
-                    htmlFor="res-in"
-                    hint={isInstant && businessDate ? t.reservations.form.instantHint : undefined}
+                    label={t.reservations.form.bookingKind}
+                    htmlFor="res-kind-fixed"
+                    hint={t.reservations.form.bookingKindDerivedHint}
                   >
+                    <Input id="res-kind-fixed" value={t.reservations.kind[derivedKind]} disabled readOnly />
+                  </FormField>
+                  <FormField label={t.reservations.form.checkIn} htmlFor="res-in">
                     <Input
                       id="res-in"
                       type="date"
                       value={checkIn}
                       required
-                      disabled={bookingKind === "instant" || frozen}
+                      disabled={frozen}
                       onChange={(e) => setCheckIn(e.target.value)}
                     />
                   </FormField>
@@ -1226,7 +1100,6 @@ function ReservationModal({
                     <Input id="res-children" type="number" min="0" value={children} onChange={(e) => setChildren(e.target.value)} />
                   </FormField>
                 </div>
-                {isInstant ? <p className="muted small">{v.roomRequiredInstant}</p> : null}
                 {frozen ? <p className="muted small">{v.inHouseFrozen}</p> : null}
                 <div className="stack-tight">
                   {lines.map((line, i) => {
@@ -1277,7 +1150,7 @@ function ReservationModal({
                       </div>
                     );
                   })}
-                  {!isInstant && !frozen ? (
+                  {!frozen ? (
                     <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={addLine}>
                       {t.reservations.form.addLine}
                     </Button>
@@ -1297,7 +1170,7 @@ function ReservationModal({
                   <FormField label={t.reservations.form.expectedPayment} htmlFor="res-pay" hint={t.reservations.form.expectedPaymentHint}>
                     <Select id="res-pay" value={expectedPay} placeholder={t.common.all} options={payOptions} onChange={(e) => setExpectedPay(e.target.value)} />
                   </FormField>
-                  {!editing && !isInstant ? (
+                  {!editing ? (
                     <FormField label={t.reservations.form.initialStatus} htmlFor="res-init">
                       <Select
                         id="res-init"
@@ -1310,7 +1183,7 @@ function ReservationModal({
                       />
                     </FormField>
                   ) : null}
-                  {!editing && !isInstant && initialStatus === "held" ? (
+                  {!editing && initialStatus === "held" ? (
                     <FormField label={t.reservations.form.holdExpiry} htmlFor="res-hold" hint={t.reservations.form.holdExpiryHint}>
                       <Input id="res-hold" type="datetime-local" value={holdExpires} onChange={(e) => setHoldExpires(e.target.value)} />
                     </FormField>
@@ -1335,8 +1208,8 @@ function ReservationModal({
                     label: t.reservations.form.bookingKind,
                     value: (
                       <span className="cluster">
-                        {bookingKind === "instant" ? <Zap size={14} aria-hidden /> : <CalendarClock size={14} aria-hidden />}
-                        {t.reservations.kind[bookingKind]}
+                        {derivedKind === "instant" ? <Zap size={14} aria-hidden /> : <CalendarClock size={14} aria-hidden />}
+                        {t.reservations.kind[derivedKind]}
                       </span>
                     ),
                   },
@@ -1352,7 +1225,7 @@ function ReservationModal({
                     value:
                       editing && reservation
                         ? reservationStatusLabel(reservation.status, t)
-                        : isInstant || initialStatus === "confirmed"
+                        : initialStatus === "confirmed"
                           ? t.reservations.form.createConfirmed
                           : t.reservations.form.createHeld,
                   },
@@ -1443,88 +1316,99 @@ function CancelModal({
 }
 
 // --------------------------------------------------------------------------- //
-// Renew-hold modal                                                            //
+// Print modal — a localized, RTL-aware reservation confirmation               //
 // --------------------------------------------------------------------------- //
 
-/** Extend a held reservation's hold expiry (owner UX: kept off the primary
- * action row, in the card's overflow menu). Consumes the existing PATCH — the
- * backend still owns the state cycle. */
-function RenewHoldModal({
+/** A print-friendly reservation confirmation. Reuses the shared
+ * PrintDocumentLayout primitive inside a `.print-doc` node — the same
+ * `@media print` rule the finance vouchers rely on hides everything else, so
+ * window.print() emits ONLY this document. It inherits the page direction, so
+ * it is RTL-aware, and every label is localized. Reservations are BOOKINGS: it
+ * carries the booking facts (number, status, source, kind, guest, rooms, floor,
+ * type, dates, arrival, nights, guests, notes) — NEVER an amount, balance or
+ * currency, because there is no money on a reservation. */
+function ReservationPrintModal({
   open,
   reservation,
   onClose,
-  onDone,
 }: {
   open: boolean;
   reservation?: Reservation;
   onClose: () => void;
-  onDone: () => void;
 }) {
-  const { t } = useI18n();
-  const [expires, setExpires] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { t, locale } = useI18n();
+  const profile = useHotelProfile();
+  if (!reservation) return null;
+  const r = reservation;
+  const d = t.reservations.details;
+  const p = t.reservations.print;
 
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    // Prefill with the current expiry (in the input's local format), if any.
-    if (reservation?.hold_expires_at) {
-      const d = new Date(reservation.hold_expires_at);
-      const off = d.getTimezoneOffset();
-      setExpires(new Date(d.getTime() - off * 60_000).toISOString().slice(0, 16));
-    } else {
-      setExpires("");
-    }
-  }, [open, reservation]);
+  const roomLabels = r.lines.map((l) =>
+    l.room_number ? `${d.room} ${l.room_number}` : `${l.room_type_name} ×${l.quantity}`,
+  );
+  const floorNames = Array.from(
+    new Set(r.lines.map((l) => l.floor_name).filter((f): f is string => Boolean(f))),
+  );
+  const typeNames = Array.from(new Set(r.lines.map((l) => l.room_type_name)));
+  const note = [r.notes, r.special_requests].filter(Boolean).join(" · ");
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!reservation) return;
-    if (!expires) return setError(t.reservations.form.holdExpiryHint);
-    setBusy(true);
-    try {
-      await updateReservation(reservation.id, {
-        hold_expires_at: new Date(expires).toISOString(),
-      });
-      onDone();
-    } catch (err) {
-      setError(messageForError(err, t));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const meta = [
+    { label: t.common.status, value: reservationStatusLabel(r.status, t) },
+    { label: t.reservations.views.sourceLabel, value: t.reservations.source[r.source] ?? r.source },
+    { label: t.reservations.form.bookingKind, value: t.reservations.kind[r.booking_kind] },
+    { label: d.guest, value: r.primary_guest_name || "—" },
+    ...(r.primary_guest_phone ? [{ label: d.phone, value: r.primary_guest_phone }] : []),
+    ...(roomLabels.length ? [{ label: d.rooms, value: roomLabels.join(" · ") }] : []),
+    ...(floorNames.length ? [{ label: t.reservations.card.floor, value: floorNames.join(" · ") }] : []),
+    ...(typeNames.length ? [{ label: t.reservations.form.roomType, value: typeNames.join(" · ") }] : []),
+    {
+      label: d.dates,
+      value: `${formatDate(r.check_in_date, locale)} → ${formatDate(r.check_out_date, locale)}`,
+    },
+    ...(r.expected_arrival_time
+      ? [{ label: t.reservations.form.arrivalTime, value: r.expected_arrival_time }]
+      : []),
+    { label: d.nights, value: String(r.nights) },
+    { label: d.guests, value: String(r.total_guests) },
+    ...(r.expected_payment_method
+      ? [
+          {
+            label: t.reservations.form.expectedPayment,
+            value: t.reservations.expectedPayment[r.expected_payment_method],
+          },
+        ]
+      : []),
+  ];
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={t.reservations.card.renewHoldTitle}
+      title={p.title}
       closeLabel={t.common.close}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
-            {t.common.cancel}
+          <Button variant="secondary" onClick={onClose}>
+            {t.common.close}
           </Button>
-          <Button form="renew-form" type="submit" loading={busy}>
-            {t.common.save}
+          <Button icon={Printer} onClick={() => window.print()}>
+            {p.action}
           </Button>
         </>
       }
     >
-      <form id="renew-form" className="stack" onSubmit={submit} noValidate>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <Alert tone="info">{t.reservations.card.renewHoldBody}</Alert>
-        <FormField label={t.reservations.form.holdExpiry} htmlFor="renew-expires">
-          <Input
-            id="renew-expires"
-            type="datetime-local"
-            value={expires}
-            required
-            onChange={(e) => setExpires(e.target.value)}
-          />
-        </FormField>
-      </form>
+      <div className="print-doc">
+        <PrintDocumentLayout
+          hotelName={profile?.display_name || profile?.hotel.name || p.title}
+          hotelAddress={[profile?.city, profile?.country].filter(Boolean).join(", ") || undefined}
+          docTitle={p.title}
+          docNumber={r.reservation_number}
+          meta={meta}
+          notes={note || undefined}
+          notesLabel={d.notes}
+          footer={p.footer}
+        />
+      </div>
     </Modal>
   );
 }

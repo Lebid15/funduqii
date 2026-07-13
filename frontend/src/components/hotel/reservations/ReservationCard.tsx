@@ -6,11 +6,10 @@ import {
   Building2,
   CalendarRange,
   CheckCircle2,
-  Copy,
   Eye,
   Moon,
   Pencil,
-  RotateCcw,
+  Printer,
   Users,
   Wallet,
   XCircle,
@@ -27,12 +26,11 @@ import {
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
-import { CardMenu, type CardMenuItem } from "./CardMenu";
 import { arrivalFlag, sourceIcon, sourceTone } from "./reservationShared";
 
 /**
- * One reservation as a full-width row card (reservations rework) — cards-first,
- * mirroring the rooms operational card regions:
+ * One reservation as an equal-height grid card (reservations rework) —
+ * cards-first, mirroring the rooms operational card regions:
  *   (1) header: reservation number (focal, opens details) + status / source /
  *       arrival-flag / public-cancel badges;
  *   (2) guest: initials avatar + name + phone;
@@ -40,27 +38,26 @@ import { arrivalFlag, sourceIcon, sourceTone } from "./reservationShared";
  *       guests, each with a unified icon accompanying the text;
  *   (4) an optional "expected payment" info chip (label only — NEVER an amount);
  *   (5) an optional truncated note;
- *   (6) actions: view / confirm / edit / cancel + an overflow menu, all
- *       permission- and state-aware. Empty regions are hidden.
+ *   (6) actions: view / print / confirm / edit / cancel — shown DIRECTLY on the
+ *       card (no overflow menu), permission- and state-aware. Reservations are
+ *       BOOKINGS only: there is NO money on a card. Empty regions are hidden.
  */
 export function ReservationCard({
   reservation: r,
   businessDate,
   onView,
+  onPrint,
   onConfirm,
   onEdit,
   onCancel,
-  onRenewHold,
-  onCopyNumber,
 }: {
   reservation: Reservation;
   businessDate: string | null;
   onView: (r: Reservation) => void;
+  onPrint: (r: Reservation) => void;
   onConfirm: (r: Reservation) => void;
   onEdit: (r: Reservation) => void;
   onCancel: (r: Reservation) => void;
-  onRenewHold: (r: Reservation) => void;
-  onCopyNumber: (r: Reservation) => void;
 }) {
   const { t, locale } = useI18n();
   const access = useHotelAccess();
@@ -72,6 +69,7 @@ export function ReservationCard({
   const editable = r.status === "held" || r.status === "confirmed";
   const inHouse = r.has_in_house_stay;
 
+  // View + Print are READS, gated by reservations.view; writes never use view.
   const canView = can("reservations.view");
   const canConfirm = r.status === "held" && can("reservations.confirm");
   const canEdit = editable && !inHouse && can("reservations.update");
@@ -86,18 +84,6 @@ export function ReservationCard({
   );
   const typeNames = Array.from(new Set(r.lines.map((l) => l.room_type_name)));
   const note = r.notes || r.special_requests;
-
-  const menuItems: CardMenuItem[] = [
-    { key: "copy", label: c.copyNumber, icon: Copy, onSelect: () => onCopyNumber(r) },
-  ];
-  if (r.status === "held" && can("reservations.update")) {
-    menuItems.push({
-      key: "renew",
-      label: c.renewHold,
-      icon: RotateCcw,
-      onSelect: () => onRenewHold(r),
-    });
-  }
 
   return (
     <article
@@ -237,11 +223,17 @@ export function ReservationCard({
         </p>
       ) : null}
 
-      {/* 6) Actions — permission- and state-aware; secondary items in the menu. */}
+      {/* 6) Actions — shown directly, permission- and state-aware; they wrap into
+          a tidy row and start at a consistent position (margin-block-start:auto). */}
       <div className="res-card__actions">
         {canView ? (
           <Button variant="secondary" size="sm" icon={Eye} onClick={() => onView(r)}>
             {t.reservations.list.view}
+          </Button>
+        ) : null}
+        {canView ? (
+          <Button variant="ghost" size="sm" icon={Printer} onClick={() => onPrint(r)}>
+            {c.print}
           </Button>
         ) : null}
         {canConfirm ? (
@@ -259,9 +251,6 @@ export function ReservationCard({
             {t.reservations.list.cancel}
           </Button>
         ) : null}
-        <span className="res-card__actions-end">
-          <CardMenu label={c.moreActions} items={menuItems} />
-        </span>
       </div>
     </article>
   );
