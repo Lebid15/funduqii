@@ -144,6 +144,17 @@ class Folio(models.Model):
                 condition=models.Q(status="open", stay__isnull=False),
                 name="unique_open_folio_per_stay",
             ),
+            # Reservation-form rework: ONE open PRE-ARRIVAL folio per
+            # reservation (deposit before check-in), i.e. reservation set and
+            # stay still NULL. Mirrors the per-stay guard; the service checks
+            # under a reservation row lock and this is the DB backstop. A
+            # read-only precheck (zero reservations with >1 open stay-null
+            # folio) MUST pass before this constraint is applied.
+            models.UniqueConstraint(
+                fields=["reservation"],
+                condition=models.Q(status="open", stay__isnull=True),
+                name="unique_open_folio_per_reservation",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -246,6 +257,12 @@ class PaymentMethod(models.TextChoices):
     CARD = "card", "Card"
     BANK_TRANSFER = "bank_transfer", "Bank transfer"
     ELECTRONIC = "electronic", "Electronic"
+    # Owner's "electronic داخلي": an internal electronic settlement (e.g. a
+    # closed-loop wallet / house account transfer) distinct from an external
+    # electronic gateway. NOT a real gateway transaction. NOTE: there is no
+    # ``on_room_account`` method by design — posting to the room account is a
+    # charge with no Payment (see services.post_room_account_charge).
+    INTERNAL_ELECTRONIC = "internal_electronic", "Internal electronic"
     OTHER = "other", "Other"
 
 
@@ -260,10 +277,44 @@ class Payment(models.Model):
         Folio, on_delete=models.PROTECT, related_name="payments"
     )
     receipt_number = models.CharField(max_length=32)
+    # ``amount`` is ALWAYS the equivalent contribution in the folio/base
+    # currency — it is the ONLY value ``folio_balance()`` reads, so the balance
+    # derivation is unchanged by multi-currency payments.
     amount = models.DecimalField(**MONEY_KW)
+    # The folio/base currency of ``amount`` (kept for back-compat; existing
+    # rows and same-currency payments record the folio currency here).
     currency = models.CharField(max_length=3, default="USD")
+    # --- Multi-currency snapshot (payment layer only) -----------------------
+    # All nullable/blank-defaulted so legacy rows are valid unchanged. When the
+    # guest tenders a currency other than the folio/base currency, the FX
+    # snapshot below is captured; ``amount`` still holds the base equivalent.
+    # An empty ``payment_currency`` means "same as folio.currency" (legacy).
+    payment_currency = models.CharField(max_length=3, blank=True, default="")
+    # The amount actually tendered, expressed in ``payment_currency`` (informational).
+    original_amount = models.DecimalField(**MONEY_KW, null=True, blank=True)
+    # Manual, high-precision rate (no external gateway/API). Canonical direction:
+    # base ``amount`` = ``original_amount`` * ``exchange_rate`` (i.e. units of
+    # the folio/base currency per 1 unit of ``payment_currency``). The direction
+    # label is stored explicitly in ``rate_basis``.
+    exchange_rate = models.DecimalField(
+        max_digits=18, decimal_places=8, null=True, blank=True
+    )
+    # Free-form annotation recording the rate's direction/meaning (default is
+    # the canonical "base_per_payment"); auditors read this, math uses multiply.
+    rate_basis = models.CharField(max_length=32, blank=True, default="")
+    # When the rate was captured (stamped by the service at creation).
+    rate_captured_at = models.DateTimeField(null=True, blank=True)
+    # Who entered the manual rate (gated by ``exchange_rate.override`` at the
+    # view/serializer layer in a later package).
+    rate_entered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_rates_entered",
+    )
     method = models.CharField(
-        max_length=16, choices=PaymentMethod.choices, default=PaymentMethod.CASH
+        max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
     status = models.CharField(
         max_length=16, choices=PostingStatus.choices, default=PostingStatus.POSTED
@@ -466,7 +517,7 @@ class Expense(models.Model):
     amount = models.DecimalField(**MONEY_KW)
     currency = models.CharField(max_length=3, default="USD")
     method = models.CharField(
-        max_length=16, choices=PaymentMethod.choices, default=PaymentMethod.CASH
+        max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
     # Expenses closure: ``paid_at`` is the EXECUTION timestamp only (stamped
     # by the service, never client-sent); the financial date is business_date.

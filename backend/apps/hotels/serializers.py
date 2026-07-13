@@ -14,6 +14,7 @@ from rest_framework import serializers
 from .models import HotelMedia, HotelSettings, MediaKind
 
 _PHONE_RE = re.compile(r"^[0-9+()\-\s]{5,32}$")
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
 
 def _validate_phoneish(value: str, field: str) -> str:
@@ -55,6 +56,36 @@ class HotelSettingsSerializer(serializers.ModelSerializer):
                 "Currency must be a 3-letter code."
             )
         return (value or "").upper()
+
+    def validate_accepted_currencies(self, value):
+        """Normalize the accepted-currency list.
+
+        Each entry must be a 3-letter ISO code (case-insensitive on input,
+        stored uppercase). Entries are de-duplicated while preserving order.
+        An empty list is valid and means "only the default currency is
+        accepted"; ``default_currency`` is always implicitly accepted, so no
+        entry can conflict with it.
+        """
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError(
+                "accepted_currencies must be a list of 3-letter codes."
+            )
+        cleaned: list[str] = []
+        for entry in value:
+            if not isinstance(entry, str):
+                raise serializers.ValidationError(
+                    "Each accepted currency must be a 3-letter code."
+                )
+            code = entry.strip().upper()
+            if not _CURRENCY_CODE_RE.match(code):
+                raise serializers.ValidationError(
+                    f"'{entry}' is not a valid 3-letter currency code."
+                )
+            if code not in cleaned:
+                cleaned.append(code)
+        return cleaned
 
     def validate_social_links(self, value):
         if not isinstance(value, dict):

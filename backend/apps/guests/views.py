@@ -25,6 +25,7 @@ from apps.rbac.services import has_hotel_permission
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from .models import Guest
+from .normalize import normalize_id, normalize_phone
 from .serializers import (
     GuestBlockSerializer,
     GuestSerializer,
@@ -163,7 +164,10 @@ class GuestDirectoryView(generics.ListAPIView):
                 | qs.filter(document_number__icontains=search)
                 | qs.filter(email__icontains=search)
             ).distinct()
-        return qs
+        # Explicit ordering: ``.annotate(Count(...))`` drops the model Meta
+        # ordering, so DRF pagination would emit UnorderedObjectListWarning and
+        # page inconsistently. Order by the same keys as Meta.
+        return qs.order_by("full_name", "id")
 
     def list(self, request: Request, *args, **kwargs) -> Response:
         page = self.paginate_queryset(self.get_queryset())
@@ -394,3 +398,48 @@ class GuestUnblockView(APIView):
             guest, note=serializer.validated_data.get("note", ""), user=request.user
         )
         return Response(GuestSerializer(guest, context={"request": request}).data)
+
+
+class GuestLookupView(APIView):
+    """Exact-match guest lookup for the reservation form — hotel-scoped and
+    read-only, behind ``guests.view``.
+
+    Query params ``national_id`` and/or ``phone`` are normalized the SAME way
+    the stored keys are, then matched EXACTLY against ``national_id_normalized``
+    / ``phone_normalized`` (OR when both are given, so a match on either surfaces
+    a possible duplicate). Returns ``{"results": [...]}`` — empty when nothing
+    matches. Each result is the guest serialized (``national_id`` masked per
+    ``guests.view_sensitive_data``) plus ``is_blocked`` / ``is_vip`` so the UI
+    can warn."""
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request) -> Response:
+        from django.db.models import Q
+
+        national_id = normalize_id(request.query_params.get("national_id", ""))
+        phone = normalize_phone(request.query_params.get("phone", ""))
+
+        # No usable identifier ⇒ never scan the whole directory; empty result.
+        if not national_id and not phone:
+            return Response({"results": []})
+
+        lookup = Q()
+        if national_id:
+            lookup |= Q(national_id_normalized=national_id)
+        if phone:
+            lookup |= Q(phone_normalized=phone)
+
+        matches = (
+            Guest.objects.filter(hotel=request.hotel).filter(lookup).distinct()
+        )
+        results = []
+        for guest in matches:
+            data = GuestSerializer(guest, context={"request": request}).data
+            # is_blocked / is_vip are already serialized (read-only); set them
+            # explicitly so the contract holds even if the serializer changes.
+            data["is_blocked"] = guest.is_blocked
+            data["is_vip"] = guest.is_vip
+            results.append(data)
+        return Response({"results": results})

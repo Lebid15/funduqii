@@ -15,6 +15,7 @@ import re
 from rest_framework import serializers
 
 from .models import Guest
+from .normalize import normalize_id
 from .services import mask_document
 
 _PHONE_RE = re.compile(r"^[0-9+\-\s()]{4,32}$")
@@ -36,9 +37,15 @@ class GuestSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "full_name",
+            "first_name",
+            "last_name",
+            "father_name",
+            "mother_name",
             "phone",
             "email",
+            "no_email",
             "nationality",
+            "national_id",
             "document_type",
             "document_number",
             "date_of_birth",
@@ -56,8 +63,17 @@ class GuestSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if request is not None and not can_view_sensitive(request):
+        # Fail CLOSED: mask when there is NO request context OR the caller lacks
+        # ``guests.view_sensitive_data``. A missing request can never be treated
+        # as authorized (``can_view_sensitive(None)`` is False anyway) — this
+        # matches the reservations serializers and prevents leaking the raw
+        # ``national_id`` / ``document_number`` when a serializer is used out of
+        # a request cycle.
+        if request is None or not can_view_sensitive(request):
+            # The generic document number AND the structured national ID are
+            # both sensitive — mask both for callers without the permission.
             data["document_number"] = mask_document(instance.document_number)
+            data["national_id"] = mask_document(instance.national_id)
         return data
 
     def validate_full_name(self, value):
@@ -78,6 +94,14 @@ class GuestSerializer(serializers.ModelSerializer):
             )
         return (value or "").strip()
 
+    def validate_national_id(self, value):
+        # A masked value must never round-trip back into the profile.
+        if value and "•" in value:
+            raise serializers.ValidationError(
+                "Enter the real national ID (masked values are rejected)."
+            )
+        return (value or "").strip()
+
     def validate(self, attrs):
         hotel = self.context["request"].hotel
         doc_type = attrs.get(
@@ -95,6 +119,24 @@ class GuestSerializer(serializers.ModelSerializer):
             if qs.exists():
                 raise serializers.ValidationError(
                     {"document_number": "A guest with this document already exists."}
+                )
+        # Mirror the DB partial constraint (unique_guest_national_id_per_hotel),
+        # which is enforced on the NORMALIZED value, so a duplicate national ID
+        # returns a clean 400, not a raw IntegrityError. Two differently-typed
+        # IDs ("1234-5678" / "12345678") normalize to the same key and collide.
+        national_id = attrs.get(
+            "national_id", getattr(self.instance, "national_id", "")
+        )
+        national_id_normalized = normalize_id(national_id)
+        if national_id_normalized:
+            qs = Guest.objects.filter(
+                hotel=hotel, national_id_normalized=national_id_normalized
+            )
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {"national_id": "A guest with this national ID already exists."}
                 )
         return attrs
 

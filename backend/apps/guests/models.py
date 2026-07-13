@@ -10,6 +10,8 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
+from .normalize import normalize_id, normalize_phone
+
 
 class DocumentType(models.TextChoices):
     NATIONAL_ID = "national_id", "National ID"
@@ -31,10 +33,22 @@ class Guest(models.Model):
     hotel = models.ForeignKey(
         "tenancy.Hotel", on_delete=models.CASCADE, related_name="guests"
     )
+    # ``full_name`` stays the legal/display field. Structured parts below are
+    # additive (reservations-form rework) — legacy ``full_name`` is NEVER
+    # auto-split into them.
     full_name = models.CharField(max_length=180)
+    first_name = models.CharField(max_length=80, blank=True, default="")
+    last_name = models.CharField(max_length=80, blank=True, default="")
+    father_name = models.CharField(max_length=80, blank=True, default="")
+    mother_name = models.CharField(max_length=80, blank=True, default="")
     phone = models.CharField(max_length=32, blank=True, default="")
     email = models.EmailField(blank=True, default="")
+    # The guest explicitly has no email (distinct from "not captured yet").
+    no_email = models.BooleanField(default=False)
     nationality = models.CharField(max_length=80, blank=True, default="")
+    # Structured national identifier (kept alongside the generic document
+    # fields). Uniqueness is enforced per hotel by a PARTIAL constraint below.
+    national_id = models.CharField(max_length=80, blank=True, default="")
     document_type = models.CharField(
         max_length=20, choices=DocumentType.choices, blank=True, default=""
     )
@@ -90,6 +104,16 @@ class Guest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Canonical, index-backed lookup keys kept in sync on every save (see
+    # ``save`` below). Never edited directly; derived from ``phone`` /
+    # ``national_id`` so exact lookup ignores spacing / punctuation.
+    phone_normalized = models.CharField(
+        max_length=32, blank=True, default="", db_index=True
+    )
+    national_id_normalized = models.CharField(
+        max_length=80, blank=True, default="", db_index=True
+    )
+
     class Meta:
         db_table = "guests"
         ordering = ["full_name", "id"]
@@ -101,7 +125,34 @@ class Guest(models.Model):
                 condition=~models.Q(document_number=""),
                 name="unique_guest_document_per_hotel",
             ),
+            # When a national ID is recorded, it is unique per hotel — enforced
+            # on the NORMALIZED key so "1234-5678" and "12345678" cannot both
+            # persist and then collide on lookup. Blank IDs are allowed and never
+            # collide (partial index); legacy rows have
+            # ``national_id_normalized=""`` and are excluded by the condition.
+            models.UniqueConstraint(
+                fields=["hotel", "national_id_normalized"],
+                condition=~models.Q(national_id_normalized=""),
+                name="unique_guest_national_id_per_hotel",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        # Keep the normalized lookup keys in sync on EVERY save (create,
+        # full update, or targeted update_fields). Doing it here — not in the
+        # serializer — guarantees the keys are always correct regardless of the
+        # write path.
+        self.phone_normalized = normalize_phone(self.phone)
+        self.national_id_normalized = normalize_id(self.national_id)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            if "phone" in update_fields:
+                update_fields.add("phone_normalized")
+            if "national_id" in update_fields:
+                update_fields.add("national_id_normalized")
+            kwargs["update_fields"] = update_fields
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.full_name} (hotel={self.hotel_id})"

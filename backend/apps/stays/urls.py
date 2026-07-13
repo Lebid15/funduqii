@@ -8,6 +8,7 @@ from .views import (
     CheckOutView,
     CurrentResidentsView,
     DeparturesTodayView,
+    ImmediateCheckInView,
     StayDetailView,
     StayExtendView,
     StayFolioSummaryView,
@@ -34,6 +35,11 @@ urlpatterns = [
         name="stay-departures-today",
     ),
     path("stays/check-in/", CheckInView.as_view(), name="stay-check-in"),
+    path(
+        "stays/immediate-check-in/",
+        ImmediateCheckInView.as_view(),
+        name="stay-immediate-check-in",
+    ),
     path(
         "stays/check-in-rooms/",
         CheckInRoomsView.as_view(),

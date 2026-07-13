@@ -145,6 +145,17 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
     # used; `reopen` is registered for the future — reopening a closed day is
     # deliberately not built in Phase 12 (documented).
     "daily_close": ["view", "prepare", "close", "reopen", "run"],
+    # Reservations rework round. Reservation guest documents (national id /
+    # passport / residence / visa / marriage contract / family book, etc.)
+    # live in secure PRIVATE storage streamed only to authorized users.
+    # `view` gates reading/streaming a document, `upload` gates creating one,
+    # `replace` gates overwriting an existing document's file — deliberately
+    # separate codes, never bundled together.
+    "reservation_documents": ["view", "upload", "replace"],
+    # Manual currency-exchange rate for a multi-currency payment. There is no
+    # reference-rate table this round, so `override` gates entering a manual FX
+    # rate when the payment currency differs from the folio/base currency.
+    "exchange_rate": ["override"],
 }
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(

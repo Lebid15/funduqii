@@ -627,3 +627,92 @@ class RoomMoveService:
             user=user,
         )
         return stay
+
+
+# --- RESERVATIONS-FORM-REWORK: occupant → StayGuest promotion -----------------
+# Used by the immediate-check-in orchestration to carry a reservation's named
+# adult companions into the stay. Runs inside the caller's transaction.
+
+
+def _compose_occupant_name(occupant) -> str:
+    """A display ``full_name`` for a companion from its structured parts."""
+    parts = [
+        (occupant.first_name or "").strip(),
+        (occupant.father_name or "").strip(),
+        (occupant.last_name or "").strip(),
+    ]
+    name = " ".join(part for part in parts if part).strip()
+    return name or (occupant.first_name or "").strip() or "Companion"
+
+
+def _guest_from_occupant(hotel, occupant, *, user=None):
+    """Get-or-create a hotel-scoped ``Guest`` for an occupant with no guest link.
+
+    Reuses an existing guest by EXACT national ID (so the partial per-hotel
+    national-id unique constraint is never violated and the promotion is
+    idempotent); otherwise creates a lightweight Guest from the occupant's
+    structured snapshot. The generic ``document_type``/``document_number`` are
+    deliberately NOT copied — that would risk tripping the per-hotel document
+    uniqueness constraint and roll the whole check-in back.
+    """
+    from apps.guests.models import Guest
+
+    national_id = (occupant.national_id or "").strip()
+    if national_id:
+        existing = Guest.objects.filter(
+            hotel=hotel, national_id=national_id
+        ).first()
+        if existing is not None:
+            return existing
+    actor = user if getattr(user, "is_authenticated", False) else None
+    return Guest.objects.create(
+        hotel=hotel,
+        full_name=_compose_occupant_name(occupant),
+        first_name=(occupant.first_name or ""),
+        last_name=(occupant.last_name or ""),
+        father_name=(occupant.father_name or ""),
+        mother_name=(occupant.mother_name or ""),
+        national_id=national_id,
+        nationality=(occupant.nationality or "")[:80],
+        date_of_birth=occupant.date_of_birth,
+        created_by=actor,
+        updated_by=actor,
+    )
+
+
+def promote_reservation_occupants(reservation, stay, *, user=None) -> list:
+    """Create one companion ``StayGuest`` per adult occupant of ``reservation``.
+
+    - Uses each occupant's linked guest when present; otherwise creates a
+      hotel-scoped Guest from its structured fields (see ``_guest_from_occupant``).
+    - Idempotent/safe: skips any guest already attached to the stay — including
+      the PRIMARY that ``CheckInService`` already created (never duplicated) — and
+      honors the ``unique_guest_per_stay`` constraint.
+    - Cross-tenant safe: an occupant guest from another hotel is skipped.
+
+    Returns the ``StayGuest`` rows created (possibly empty). Runs in the caller's
+    transaction so any failure rolls the whole compose back.
+    """
+    if reservation is None:
+        return []
+    existing_guest_ids = set(
+        StayGuest.objects.filter(stay=stay).values_list("guest_id", flat=True)
+    )
+    created = []
+    for occupant in reservation.occupants.all():
+        guest = occupant.guest or _guest_from_occupant(
+            stay.hotel, occupant, user=user
+        )
+        if guest is None or guest.hotel_id != stay.hotel_id:
+            continue
+        if guest.id in existing_guest_ids:
+            continue
+        stay_guest = StayGuest.objects.create(
+            hotel=stay.hotel,
+            stay=stay,
+            guest=guest,
+            role=StayGuestRole.COMPANION,
+        )
+        existing_guest_ids.add(guest.id)
+        created.append(stay_guest)
+    return created

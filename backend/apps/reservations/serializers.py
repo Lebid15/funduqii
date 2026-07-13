@@ -14,13 +14,19 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.common.exceptions import CrossTenantReference
+from apps.guests.models import Guest
+from apps.guests.serializers import can_view_sensitive
+from apps.guests.services import mask_document
 from apps.rooms.models import Room, RoomStatus, RoomType
 
 from .availability import TypeAvailability
 from .models import (
     BookingKind,
     ExpectedPaymentMethod,
+    OccupantRelationship,
     Reservation,
+    ReservationDocument,
+    ReservationOccupant,
     ReservationRoomLine,
     ReservationSource,
     ReservationStatus,
@@ -81,10 +87,153 @@ class ReservationLineReadSerializer(serializers.ModelSerializer):
         return None
 
 
+class ReservationOccupantReadSerializer(serializers.ModelSerializer):
+    """Read representation of one adult companion.
+
+    ``national_id`` is MASKED for callers without ``guests.view_sensitive_data``
+    (reusing the guests masking rule) and when no request context is present.
+    """
+
+    class Meta:
+        model = ReservationOccupant
+        fields = [
+            "id",
+            "guest",
+            "first_name",
+            "last_name",
+            "father_name",
+            "mother_name",
+            "national_id",
+            "nationality",
+            "date_of_birth",
+            "relationship",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if request is None or not can_view_sensitive(request):
+            data["national_id"] = mask_document(instance.national_id)
+        return data
+
+
+class ReservationDocumentReadSerializer(serializers.ModelSerializer):
+    """Metadata-only read representation of a reservation document.
+
+    The raw files are NEVER exposed here — only ``has_front`` / ``has_back``
+    booleans. Signed/streamed access to the bytes is a later pass. The document
+    ``number`` (an identity number) is masked like the guests document number.
+    """
+
+    has_front = serializers.SerializerMethodField()
+    has_back = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReservationDocument
+        fields = [
+            "id",
+            "reservation",
+            "occupant",
+            "doc_type",
+            "number",
+            "has_front",
+            "has_back",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_has_front(self, obj) -> bool:
+        return bool(obj.front_file)
+
+    def get_has_back(self, obj) -> bool:
+        return bool(obj.back_file)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if request is None or not can_view_sensitive(request):
+            data["number"] = mask_document(instance.number)
+        return data
+
+
+class ReservationOccupantWriteSerializer(serializers.Serializer):
+    """Write payload for one adult companion.
+
+    ``guest`` is an OPTIONAL link to an existing guest (resolved + hotel-scoped
+    by the parent serializer). When omitted, the structured identity is stored
+    inline without forcing a Guest row to be created.
+    """
+
+    guest = serializers.IntegerField(required=False, allow_null=True)
+    first_name = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    last_name = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    father_name = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    mother_name = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    national_id = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    nationality = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, default=""
+    )
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+    relationship = serializers.ChoiceField(
+        choices=OccupantRelationship.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    def validate_national_id(self, value):
+        # A masked value must never round-trip back into an occupant record.
+        if value and "•" in value:
+            raise serializers.ValidationError(
+                "Enter the real national ID (masked values are rejected)."
+            )
+        return (value or "").strip()
+
+
+class ReservationDocumentWriteSerializer(serializers.Serializer):
+    """Metadata-only write payload for a reservation document.
+
+    Files are uploaded through a dedicated endpoint in a later pass; this
+    captures ``doc_type`` / ``number`` / optional ``occupant`` only.
+    """
+
+    occupant = serializers.IntegerField(required=False, allow_null=True)
+    doc_type = serializers.ChoiceField(
+        choices=ReservationDocument._meta.get_field("doc_type").choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    number = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
+
+    def validate_number(self, value):
+        if value and "•" in value:
+            raise serializers.ValidationError(
+                "Enter the real document number (masked values are rejected)."
+            )
+        return (value or "").strip()
+
+
 class ReservationSerializer(serializers.ModelSerializer):
     """Read representation with nested lines and computed fields."""
 
     lines = ReservationLineReadSerializer(many=True, read_only=True)
+    occupants = ReservationOccupantReadSerializer(many=True, read_only=True)
     nights = serializers.IntegerField(read_only=True)
     total_guests = serializers.IntegerField(read_only=True)
     created_by = serializers.SerializerMethodField()
@@ -107,12 +256,21 @@ class ReservationSerializer(serializers.ModelSerializer):
             "check_out_date",
             "expected_arrival_time",
             "nights",
+            # RESERVATIONS-FORM-REWORK: optional link to the central guest
+            # directory (id only) plus the structured, frozen snapshot fields.
+            "primary_guest",
             "primary_guest_name",
             "primary_guest_phone",
             "primary_guest_email",
             "primary_guest_nationality",
             "primary_guest_document_type",
             "primary_guest_document_number",
+            "primary_guest_first_name",
+            "primary_guest_last_name",
+            "primary_guest_father_name",
+            "primary_guest_mother_name",
+            "primary_guest_national_id",
+            "primary_guest_date_of_birth",
             "adults",
             "children",
             "total_guests",
@@ -134,6 +292,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "lines",
+            "occupants",
         ]
         read_only_fields = fields
 
@@ -149,6 +308,23 @@ class ReservationSerializer(serializers.ModelSerializer):
         from .services import has_in_house_stay
 
         return has_in_house_stay(obj)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The primary guest's structured national ID AND the legacy document
+        # number are sensitive identity values: mask BOTH consistently for
+        # callers without ``guests.view_sensitive_data`` (and when no request
+        # context is available, defaulting to masked — fail-closed). Mirrors the
+        # guests masking rule.
+        request = self.context.get("request")
+        if request is None or not can_view_sensitive(request):
+            data["primary_guest_national_id"] = mask_document(
+                instance.primary_guest_national_id
+            )
+            data["primary_guest_document_number"] = mask_document(
+                instance.primary_guest_document_number
+            )
+        return data
 
 
 class ReservationLineWriteSerializer(serializers.Serializer):
@@ -167,6 +343,11 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
     """Create/update payload. Resolves and validates lines against the hotel."""
 
     lines = ReservationLineWriteSerializer(many=True, required=False)
+    # RESERVATIONS-FORM-REWORK: optional link to an existing guest (resolved and
+    # hotel-scoped in ``validate``; declared as a plain id so ModelSerializer
+    # never builds a cross-tenant queryset field) + optional adult companions.
+    primary_guest = serializers.IntegerField(required=False, allow_null=True)
+    occupants = ReservationOccupantWriteSerializer(many=True, required=False)
     status = serializers.ChoiceField(
         choices=[(s.value, s.label) for s in _WRITE_STATUSES],
         required=False,
@@ -198,12 +379,19 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
             "check_in_date",
             "check_out_date",
             "expected_arrival_time",
+            "primary_guest",
             "primary_guest_name",
             "primary_guest_phone",
             "primary_guest_email",
             "primary_guest_nationality",
             "primary_guest_document_type",
             "primary_guest_document_number",
+            "primary_guest_first_name",
+            "primary_guest_last_name",
+            "primary_guest_father_name",
+            "primary_guest_mother_name",
+            "primary_guest_national_id",
+            "primary_guest_date_of_birth",
             "adults",
             "children",
             "notes",
@@ -211,6 +399,7 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
             "booking_channel_name",
             "expected_payment_method",
             "hold_expires_at",
+            "occupants",
             "lines",
         ]
 
@@ -220,6 +409,14 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
         if not value.strip():
             raise serializers.ValidationError("A primary guest name is required.")
         return value.strip()
+
+    def validate_primary_guest_national_id(self, value):
+        # A masked value must never round-trip back into the snapshot.
+        if value and "•" in value:
+            raise serializers.ValidationError(
+                "Enter the real national ID (masked values are rejected)."
+            )
+        return (value or "").strip()
 
     def validate_primary_guest_phone(self, value):
         if value and not _PHONE_RE.match(value):
@@ -334,6 +531,27 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
                     {"hold_expires_at": "A hold expiry time is required for held reservations."}
                 )
 
+        # RESERVATIONS-FORM-REWORK: resolve the optional primary-guest link and
+        # any adult companions against THIS hotel, then keep the ``adults`` count
+        # consistent (1 primary + named adult companions) so the capacity rule
+        # below and downstream stay correct.
+        if "primary_guest" in attrs:
+            attrs["primary_guest"] = self._resolve_guest(
+                attrs.get("primary_guest"), field="primary_guest"
+            )
+        raw_occupants = attrs.get("occupants")
+        if raw_occupants is not None:
+            resolved_occ = []
+            for occ in raw_occupants:
+                occ = dict(occ)
+                occ["guest"] = self._resolve_guest(
+                    occ.get("guest"), field="occupants"
+                )
+                resolved_occ.append(occ)
+            attrs["occupants"] = resolved_occ
+            # 1 primary + the named adult companions.
+            attrs["adults"] = 1 + len(resolved_occ)
+
         raw_lines = attrs.get("lines")
         if creating and not raw_lines:
             raise serializers.ValidationError(
@@ -344,6 +562,20 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
             attrs["lines"] = resolved
             self._validate_capacity(attrs, resolved)
         return attrs
+
+    def _resolve_guest(self, guest_id, *, field):
+        """Resolve an optional guest id to a hotel-scoped ``Guest`` (or None)."""
+        if not guest_id:
+            return None
+        hotel = self.context["request"].hotel
+        guest = Guest.objects.filter(pk=guest_id).first()
+        if guest is None:
+            raise serializers.ValidationError(
+                {field: "The referenced guest does not exist."}
+            )
+        if guest.hotel_id != hotel.id:
+            raise CrossTenantReference({"field": field})
+        return guest
 
     def _validate_capacity(self, attrs, resolved):
         adults = attrs.get("adults", getattr(self.instance, "adults", 1) or 1)
@@ -383,6 +615,22 @@ class TypeAvailabilitySerializer(serializers.Serializer):
 
     def to_representation(self, instance: TypeAvailability) -> dict:
         return instance.as_dict()
+
+
+class RoomAvailabilityQuerySerializer(serializers.Serializer):
+    """Query params for the per-room availability endpoint."""
+
+    check_in = serializers.DateField()
+    check_out = serializers.DateField()
+    floor = serializers.IntegerField(required=False)
+    room_type = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        if attrs["check_in"] >= attrs["check_out"]:
+            raise serializers.ValidationError(
+                {"check_out": "Check-out must be after check-in."}
+            )
+        return attrs
 
 
 class CancelReservationSerializer(serializers.Serializer):

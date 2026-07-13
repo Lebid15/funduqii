@@ -11,10 +11,19 @@ settings payload and never as base64.
 """
 from __future__ import annotations
 
+from datetime import time
+
 from django.conf import settings as django_settings
 from django.db import models
 
 LANGUAGE_CHOICES = [("ar", "Arabic"), ("en", "English"), ("tr", "Turkish")]
+
+# Effective check-out time fallback (Reservations rework). ``check_out_time``
+# below stays a nullable schema field — this is NOT a DB default. It is only the
+# fallback used when computing an expected-departure datetime for a hotel that
+# has not configured its own check-out time. Consumed via
+# ``effective_check_out_time`` by any package that derives expected departure.
+DEFAULT_CHECK_OUT_TIME = time(12, 0)
 
 SMOKING_CHOICES = [
     ("not_allowed", "Not allowed"),
@@ -47,6 +56,13 @@ class HotelSettings(models.Model):
         max_length=2, choices=LANGUAGE_CHOICES, default="en"
     )
     default_currency = models.CharField(max_length=3, default="USD")
+    # Accepted payment currencies (Reservations rework). Multi-currency lives at
+    # the PAYMENT layer only — the reservation/folio currency stays the
+    # ``default_currency`` (base currency). Each entry is a 3-letter uppercase
+    # ISO code. An EMPTY list means "only the default currency is accepted";
+    # ``default_currency`` is ALWAYS implicitly accepted whether or not it is
+    # listed here.
+    accepted_currencies = models.JSONField(default=list, blank=True)
     timezone = models.CharField(max_length=64, default="UTC")
 
     # Daily closing (Phase 12 final closure): the hotel's ONE stored operational
@@ -146,6 +162,18 @@ class HotelSettings(models.Model):
 
     def __str__(self) -> str:
         return f"settings(hotel={self.hotel_id})"
+
+
+def effective_check_out_time(hotel_settings: "HotelSettings | None") -> time:
+    """Return the effective check-out time for expected-departure math.
+
+    Uses the hotel's configured ``check_out_time`` when set, otherwise falls
+    back to :data:`DEFAULT_CHECK_OUT_TIME`. This is a pure read — it never
+    persists anything and does not alter the nullable ``check_out_time`` schema.
+    """
+    if hotel_settings is not None and hotel_settings.check_out_time is not None:
+        return hotel_settings.check_out_time
+    return DEFAULT_CHECK_OUT_TIME
 
 
 def hotel_media_upload_to(instance: "HotelMedia", filename: str) -> str:

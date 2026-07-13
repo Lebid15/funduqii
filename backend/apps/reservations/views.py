@@ -23,14 +23,20 @@ from apps.rbac.services import has_hotel_permission
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
-from .availability import AvailabilityService, blocking_q
-from .models import Reservation, ReservationSource, ReservationStatus
+from .availability import AvailabilityService, blocking_q, overlap_q
+from .models import (
+    Reservation,
+    ReservationRoomLine,
+    ReservationSource,
+    ReservationStatus,
+)
 from .serializers import (
     AvailabilityQuerySerializer,
     CancelReservationSerializer,
     ReservationSerializer,
     ReservationStatusLogSerializer,
     ReservationWriteSerializer,
+    RoomAvailabilityQuerySerializer,
     TypeAvailabilitySerializer,
 )
 
@@ -95,7 +101,7 @@ class ReservationListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         qs = (
             Reservation.objects.filter(hotel=self.request.hotel)
-            .prefetch_related("lines__room_type")
+            .prefetch_related("lines__room_type", "occupants")
         )
         params = self.request.query_params
 
@@ -180,13 +186,22 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines")
+        # ``occupants`` is not a Reservation model field — it must be passed
+        # explicitly, never spread into the model create via ``**data``.
+        occupants = data.pop("occupants", None)
         _guard_assignment(request, lines)
         res_status = data.pop("status")
         reservation = services.create_reservation(
-            request.hotel, lines=lines, status=res_status, user=request.user, **data
+            request.hotel,
+            lines=lines,
+            status=res_status,
+            user=request.user,
+            occupants=occupants,
+            **data,
         )
         return Response(
-            ReservationSerializer(reservation).data, status=status.HTTP_201_CREATED
+            ReservationSerializer(reservation, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -203,7 +218,7 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
 
     def get_queryset(self):
         return Reservation.objects.filter(hotel=self.request.hotel).prefetch_related(
-            "lines__room_type"
+            "lines__room_type", "occupants"
         )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
@@ -215,14 +230,17 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines", None)
+        occupants = data.pop("occupants", None)
         if lines is not None:
             _guard_assignment(request, lines)
         data.pop("status", None)  # status is changed only via confirm/cancel/hold
         services.update_reservation(
-            reservation, lines=lines, user=request.user, **data
+            reservation, lines=lines, occupants=occupants, user=request.user, **data
         )
         reservation.refresh_from_db()
-        return Response(ReservationSerializer(reservation).data)
+        return Response(
+            ReservationSerializer(reservation, context={"request": request}).data
+        )
 
 
 class ReservationConfirmView(APIView):
@@ -234,7 +252,9 @@ class ReservationConfirmView(APIView):
         reservation = _get_reservation(request, pk)
         services.confirm_reservation(reservation, user=request.user)
         reservation.refresh_from_db()
-        return Response(ReservationSerializer(reservation).data)
+        return Response(
+            ReservationSerializer(reservation, context={"request": request}).data
+        )
 
 
 class ReservationCancelView(APIView):
@@ -250,7 +270,9 @@ class ReservationCancelView(APIView):
             reservation, reason=serializer.validated_data["reason"], user=request.user
         )
         reservation.refresh_from_db()
-        return Response(ReservationSerializer(reservation).data)
+        return Response(
+            ReservationSerializer(reservation, context={"request": request}).data
+        )
 
 
 class ReservationHoldView(APIView):
@@ -270,7 +292,9 @@ class ReservationHoldView(APIView):
         expires = request.data.get("hold_expires_at")
         services.hold_reservation(reservation, hold_expires_at=expires, user=request.user)
         reservation.refresh_from_db()
-        return Response(ReservationSerializer(reservation).data)
+        return Response(
+            ReservationSerializer(reservation, context={"request": request}).data
+        )
 
 
 class ReservationLogsView(APIView):
@@ -326,8 +350,12 @@ class ReservationOverviewView(APIView):
                 # wizard prefixes its arrival date with this (the client
                 # clock can differ from the hotel timezone).
                 "business_date": str(get_business_date(hotel)),
-                "arrivals": ReservationSerializer(arrivals, many=True).data,
-                "departures": ReservationSerializer(departures, many=True).data,
+                "arrivals": ReservationSerializer(
+                    arrivals, many=True, context={"request": request}
+                ).data,
+                "departures": ReservationSerializer(
+                    departures, many=True, context={"request": request}
+                ).data,
             }
         )
 
@@ -362,6 +390,107 @@ class AvailabilityView(APIView):
         return Response(
             {"results": TypeAvailabilitySerializer(results, many=True).data}
         )
+
+
+class RoomAvailabilityView(APIView):
+    """Per-room availability for a period (RESERVATIONS-FORM-REWORK).
+
+    ``GET /room-availability/?check_in=&check_out=&floor=&room_type=`` lists the
+    candidate rooms (optionally filtered by floor / room type) with a per-room
+    ``available`` flag for the half-open range ``[check_in, check_out)``. A room
+    is available when it is physically bookable, is NOT specifically pinned by a
+    blocking overlapping reservation line, and is NOT held by an in-house stay
+    overlapping the range. Read-only; behind the reservations-read permission.
+    """
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request) -> Response:
+        from apps.rooms.models import Room, RoomStatus
+        from apps.stays.models import Stay, StayStatus
+
+        serializer = RoomAvailabilityQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        check_in = data["check_in"]
+        check_out = data["check_out"]
+        hotel = request.hotel
+        now = timezone.now()
+
+        rooms = (
+            Room.objects.filter(hotel=hotel, is_active=True)
+            .exclude(status=RoomStatus.ARCHIVED)
+            .select_related("floor", "room_type")
+        )
+        floor_id = data.get("floor")
+        if floor_id is not None:
+            rooms = rooms.filter(floor_id=floor_id)
+        rt_id = data.get("room_type")
+        if rt_id is not None:
+            rooms = rooms.filter(room_type_id=rt_id)
+        rooms = list(rooms)
+
+        # Rooms specifically pinned by a blocking, overlapping reservation line.
+        blocking = (
+            Reservation.objects.filter(hotel=hotel)
+            .filter(overlap_q(check_in, check_out))
+            .filter(blocking_q(now))
+        )
+        assigned_room_ids = set(
+            ReservationRoomLine.objects.filter(
+                hotel=hotel, reservation__in=blocking, room__isnull=False
+            ).values_list("room_id", flat=True)
+        )
+        # Rooms held by an in-house stay overlapping the range (planned dates).
+        stay_room_ids = set(
+            Stay.objects.filter(
+                hotel=hotel,
+                status=StayStatus.IN_HOUSE,
+                planned_check_in_date__lt=check_out,
+                planned_check_out_date__gt=check_in,
+            ).values_list("room_id", flat=True)
+        )
+
+        # Physically bookable rooms, computed once per room type in play.
+        bookable_by_type: dict[int, set[int]] = {}
+        for room in rooms:
+            if room.room_type_id not in bookable_by_type:
+                bookable_by_type[room.room_type_id] = (
+                    AvailabilityService.bookable_room_ids(hotel, room.room_type)
+                )
+
+        currency = (
+            getattr(getattr(hotel, "settings", None), "default_currency", "") or ""
+        )
+
+        results = []
+        for room in rooms:
+            rt = room.room_type
+            bookable = room.id in bookable_by_type.get(room.room_type_id, set())
+            available = (
+                bookable
+                and room.id not in assigned_room_ids
+                and room.id not in stay_room_ids
+            )
+            results.append(
+                {
+                    "id": room.id,
+                    "number": room.number,
+                    "floor_name": room.floor.name if room.floor_id else None,
+                    "floor_number": room.floor.number if room.floor_id else None,
+                    "room_type_id": rt.id,
+                    "room_type_name": rt.name,
+                    "base_capacity": rt.base_capacity,
+                    "max_capacity": rt.max_capacity,
+                    "amenities": rt.amenities,
+                    # Decimal as string (matches the DecimalField convention).
+                    "base_rate": str(rt.base_rate) if rt.base_rate is not None else None,
+                    "currency": currency,
+                    "available": available,
+                }
+            )
+        return Response({"results": results})
 
 
 class AvailabilityCalendarView(APIView):
