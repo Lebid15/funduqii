@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -1710,3 +1711,352 @@ class SensitiveMaskingTests(APITestCase):
         self.assertEqual(data["primary_guest_mother_name"], "Mother Name")
         self.assertEqual(data["primary_guest_date_of_birth"], "1990-05-01")
         self.assertEqual(data["primary_guest_national_id"], "1234567890")
+
+
+# --------------------------------------------------------------------------- #
+# RESERVATIONS-AUTO-ROOM — deterministic auto / validated manual assignment    #
+# --------------------------------------------------------------------------- #
+
+
+def _blocking_line(hotel, rtype, room, ci, co, *, status=ReservationStatus.CONFIRMED):
+    """A blocking (confirmed) reservation pinning ``room`` over ``[ci, co)``."""
+    res = Reservation.objects.create(
+        hotel=hotel,
+        reservation_number=f"RB{Reservation.objects.count() + 1:05d}",
+        status=status,
+        check_in_date=ci,
+        check_out_date=co,
+        primary_guest_name="Blocker",
+    )
+    ReservationRoomLine.objects.create(
+        hotel=hotel, reservation=res, room_type=rtype, room=room, quantity=1
+    )
+    return res
+
+
+class PickAvailableRoomTests(TestCase):
+    """Unit tests for the deterministic picker.
+
+    ``AvailabilityService.pick_available_room`` orders by floor sort_order, then
+    numeric-aware room number, then pk, and honours floor / capacity / dates /
+    blocking reservations / in-house stays / bookable status / tenancy.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="pick")
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        self.r101, self.r102 = make_rooms(
+            self.hotel, self.rtype, 2, floor=self.f1, start=101
+        )
+        self.r201, self.r202 = make_rooms(
+            self.hotel, self.rtype, 2, floor=self.f2, start=201
+        )
+
+    def pick(self, **kw):
+        return AvailabilityService.pick_available_room(
+            self.hotel, room_type=self.rtype, check_in=D1, check_out=D2, **kw
+        )
+
+    def test_returns_first_by_floor_then_number(self):
+        self.assertEqual(self.pick(), self.r101)
+
+    def test_deterministic_same_inputs_same_room(self):
+        self.assertEqual(self.pick(), self.pick())
+
+    def test_respects_floor(self):
+        self.assertEqual(self.pick(floor=self.f2), self.r201)
+
+    def test_respects_room_type(self):
+        other_type = make_type(self.hotel, code="DLX", max_capacity=4)
+        (droom,) = make_rooms(self.hotel, other_type, 1, floor=self.f1, start=301)
+        self.assertEqual(self.pick(), self.r101)  # STD never returns the DLX room
+        self.assertEqual(
+            AvailabilityService.pick_available_room(
+                self.hotel, room_type=other_type, check_in=D1, check_out=D2
+            ),
+            droom,
+        )
+
+    def test_respects_capacity(self):
+        self.assertIsNone(self.pick(min_capacity=self.rtype.max_capacity + 1))
+        self.assertEqual(self.pick(min_capacity=self.rtype.max_capacity), self.r101)
+
+    def test_skips_reservation_blocked_room(self):
+        _blocking_line(self.hotel, self.rtype, self.r101, D1, D2)
+        self.assertEqual(self.pick(), self.r102)
+
+    def test_back_to_back_reservation_not_blocked(self):
+        # A reservation ending exactly at D1 does not overlap [D1, D2).
+        _blocking_line(self.hotel, self.rtype, self.r101, D1 - timedelta(days=3), D1)
+        self.assertEqual(self.pick(), self.r101)
+
+    def test_skips_in_house_stay_room(self):
+        guest = Guest.objects.create(hotel=self.hotel, full_name="G")
+        Stay.objects.create(
+            hotel=self.hotel,
+            room=self.r101,
+            primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1,
+            planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        self.assertEqual(self.pick(), self.r102)
+
+    def test_excludes_non_bookable_rooms(self):
+        self.r101.status = RoomStatus.MAINTENANCE
+        self.r101.save()
+        self.r102.status = RoomStatus.OUT_OF_SERVICE
+        self.r102.save()
+        self.assertEqual(self.pick(), self.r201)
+
+    def test_none_when_no_match(self):
+        for room in (self.r101, self.r102, self.r201, self.r202):
+            room.status = RoomStatus.ARCHIVED
+            room.save()
+        self.assertIsNone(self.pick())
+
+    def test_exclude_room_ids_picks_next(self):
+        self.assertEqual(self.pick(exclude_room_ids={self.r101.id}), self.r102)
+
+    def test_tenant_isolation(self):
+        other = make_hotel(slug="pick-other")
+        ort = make_type(other, code="STD", max_capacity=3)
+        make_rooms(other, ort, 1, start=101)
+        self.assertEqual(self.pick().hotel_id, self.hotel.id)
+
+    def test_numeric_aware_ordering(self):
+        # Rooms "2" and "10" on one floor: numeric-aware ordering picks "2".
+        hotel = make_hotel(slug="num")
+        rtype = make_type(hotel, max_capacity=2)
+        floor = Floor.objects.create(hotel=hotel, name="F", sort_order=1)
+        make_rooms(hotel, rtype, 1, floor=floor, start=10)  # "10"
+        (r2,) = make_rooms(hotel, rtype, 1, floor=floor, start=2)  # "2"
+        self.assertEqual(
+            AvailabilityService.pick_available_room(
+                hotel, room_type=rtype, check_in=D1, check_out=D2
+            ),
+            r2,
+        )
+
+
+class AutoRoomAssignmentCreateTests(APITestCase):
+    """The create API with ``room_assignment_mode='automatic'``."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="auto")
+        self.manager = add_member(
+            self.hotel, "mgr-auto@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 3, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_automatic_assigns_first_room(self):
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        line = res.json()["lines"][0]
+        self.assertEqual(line["room"], self.rooms[0].id)
+        self.assertEqual(line["room_number"], "101")
+
+    def test_automatic_ignores_client_provided_room(self):
+        # The client tries to pin room 103; the backend must ignore it and still
+        # assign the deterministic first room (101).
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[2].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)
+
+    def test_automatic_needs_no_assign_room_permission(self):
+        staff = add_member(
+            self.hotel,
+            "st-auto@x.com",
+            perms=["reservations.view", "reservations.create"],
+        )
+        self.client.force_authenticate(staff)
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNotNone(res.json()["lines"][0]["room"])
+
+    def test_automatic_respects_floor(self):
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        (r201,) = make_rooms(self.hotel, self.rtype, 1, floor=f2, start=201)
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[{"room_type": self.rtype.id, "quantity": 1, "floor": f2.id}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], r201.id)
+
+    def test_automatic_deterministic_serialized_picks(self):
+        first = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        second = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(first.json()["lines"][0]["room"], self.rooms[0].id)
+        self.assertEqual(second.json()["lines"][0]["room"], self.rooms[1].id)
+
+    def test_automatic_no_room_available_fails_no_partial(self):
+        for room in self.rooms:
+            _blocking_line(self.hotel, self.rtype, room, D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_automatic_floor_no_room_available(self):
+        # Type-level capacity is fine (f1 rooms free) but the pinned floor has no
+        # free room -> the picker returns no_room_available and nothing is saved.
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        (r201,) = make_rooms(self.hotel, self.rtype, 1, floor=f2, start=201)
+        _blocking_line(self.hotel, self.rtype, r201, D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[{"room_type": self.rtype.id, "quantity": 1, "floor": f2.id}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["details"]["reason"], "no_room_available")
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_automatic_tenant_isolation(self):
+        other = make_hotel(slug="auto-other")
+        ort = make_type(other, code="STD", max_capacity=3)
+        make_rooms(other, ort, 2, start=901)
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        picked_id = res.json()["lines"][0]["room"]
+        self.assertTrue(Room.objects.filter(id=picked_id, hotel=self.hotel).exists())
+
+
+class ManualRoomAssignmentTests(APITestCase):
+    """The create API with ``room_assignment_mode='manual'``."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="manual")
+        self.manager = add_member(
+            self.hotel, "mgr-man@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_manual_requires_room(self):
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[{"room_type": self.rtype.id, "quantity": 1}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 400)
+
+    def test_manual_assigns_pinned_room(self):
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[1].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[1].id)
+
+    def test_manual_conflict_does_not_silently_swap(self):
+        # Room 101 is taken; a manual pin of 101 conflicts and must NOT be
+        # swapped for the free room 102.
+        _blocking_line(self.hotel, self.rtype, self.rooms[0], D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[0].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_manual_floor_mismatch_conflicts(self):
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {
+                    "room_type": self.rtype.id,
+                    "quantity": 1,
+                    "room": self.rooms[0].id,  # on f1
+                    "floor": f2.id,  # request pins f2 -> mismatch
+                }
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+
+
+class LegacyAssignmentModeTests(APITestCase):
+    """An ABSENT ``room_assignment_mode`` keeps the pre-existing behaviour."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="legacy")
+        self.manager = add_member(
+            self.hotel, "mgr-leg@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_absent_mode_leaves_room_null(self):
+        res = self._create(res_payload(self.rtype))
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(res.json()["lines"][0]["room"])
+
+    def test_absent_mode_keeps_pinned_room(self):
+        body = res_payload(
+            self.rtype,
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[0].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)

@@ -19,7 +19,9 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.common.exceptions import (
     CancellationReasonRequired,
     InvalidReservationTransition,
+    NoAvailability,
     ReservationHasActiveStay,
+    RoomAssignmentConflict,
 )
 
 from .availability import AvailabilityService
@@ -80,13 +82,28 @@ def _log_status(reservation, previous, new, *, note="", user=None):
 
 @transaction.atomic
 def create_reservation(
-    hotel, *, lines, status, user, occupants=None, **fields
+    hotel, *, lines, status, user, occupants=None, room_assignment_mode=None, **fields
 ) -> Reservation:
     """Create a reservation with its room lines after an availability check.
 
     ``lines`` is a list of dicts: ``{"room_type": <RoomType>, "quantity": int,
-    "adults": int?, "children": int?, "notes": str?}``. ``status`` is ``held``
-    or ``confirmed`` (both consume inventory, so both are availability-checked).
+    "adults": int?, "children": int?, "notes": str?, "floor": <Floor|None>}``.
+    ``status`` is ``held`` or ``confirmed`` (both consume inventory, so both are
+    availability-checked).
+
+    ``room_assignment_mode`` (RESERVATIONS-AUTO-ROOM) is REQUEST-ONLY (never
+    persisted) and optional:
+
+    * ``None`` (absent) — LEGACY behaviour, unchanged: each line keeps the room
+      the caller provided (or ``None``). No automatic assignment happens.
+    * ``"automatic"`` — the client CANNOT pin a room; the backend
+      deterministically assigns a specific room to every ``quantity == 1`` line
+      inside this transaction (after ``ensure_can_book`` has locked the type). If
+      no room fits a line, the whole create fails with ``no_room_available`` — no
+      partial reservation, never a room of the wrong floor/type.
+    * ``"manual"`` — every line must pin a specific room; the room is validated
+      (hotel + type + floor + bookable + available) and a same-room overlap
+      raises ``room_assignment_conflict`` (the backend never silently swaps).
 
     ``occupants`` (RESERVATIONS-FORM-REWORK) is an OPTIONAL list of adult
     companions ``{"guest": <Guest|None>, "first_name": str, ..., "relationship":
@@ -117,6 +134,12 @@ def create_reservation(
     # Backend-authoritative capacity: total persons (1 primary + adult
     # companions + children) must fit the selected rooms' max_capacity.
     _enforce_capacity(lines, fields, occupants)
+
+    # RESERVATIONS-AUTO-ROOM: manual mode requires each line to pin a specific
+    # room (validated here, before locks) — a same-room overlap is caught by
+    # ``ensure_can_book`` below. Automatic assignment happens after the locks.
+    if room_assignment_mode == "manual":
+        _validate_manual_assignment(lines)
 
     # DI-F4: when named companions are supplied, store ``adults`` authoritatively
     # as 1 primary + the companions so the persisted counter can never diverge
@@ -153,6 +176,19 @@ def create_reservation(
     else:  # pragma: no cover - only if 5 consecutive collisions
         raise IntegrityError("Could not allocate a reservation number.")
 
+    # RESERVATIONS-AUTO-ROOM: automatic assignment runs under the type locks
+    # ``ensure_can_book`` already acquired, so a concurrent booking cannot pick
+    # the same room. On no match the whole transaction rolls back (no partial
+    # reservation). Absent/manual mode leaves ``line["room"]`` untouched.
+    if room_assignment_mode == "automatic":
+        _assign_rooms_automatically(
+            hotel,
+            lines,
+            check_in,
+            check_out,
+            total_persons=_total_persons_create(fields, occupants),
+        )
+
     for line in lines:
         ReservationRoomLine.objects.create(
             hotel=hotel,
@@ -186,7 +222,14 @@ def create_reservation(
 
 @transaction.atomic
 def update_reservation(
-    reservation, *, lines=None, status=None, user=None, occupants=None, **fields
+    reservation,
+    *,
+    lines=None,
+    status=None,
+    user=None,
+    occupants=None,
+    room_assignment_mode=None,
+    **fields,
 ):
     """Update a reservation, re-checking availability when inventory-affecting.
 
@@ -194,6 +237,14 @@ def update_reservation(
     (only internal notes may change). Any change to dates or lines on a
     still-blocking reservation re-runs the availability check, excluding this
     reservation from the calculation so it does not conflict with itself.
+
+    ``room_assignment_mode`` (RESERVATIONS-AUTO-ROOM §7) never auto-reassigns on
+    a plain open/edit: rooms only change when the request explicitly REPLACES the
+    lines (``lines is not None``) together with a mode. ``"automatic"`` picks
+    fresh rooms for the new lines (client rooms discarded); ``"manual"`` requires
+    and validates a pinned room per line; absent → legacy (the provided/``None``
+    room is kept). The in-house / started-stay freeze still forbids any
+    date/room change once a stay exists (guard below).
 
     ``occupants`` (RESERVATIONS-FORM-REWORK), when not ``None``, REPLACES the
     reservation's adult companions. Capacity is re-enforced whenever the room
@@ -227,6 +278,12 @@ def update_reservation(
 
     check_in = fields.get("check_in_date", reservation.check_in_date)
     check_out = fields.get("check_out_date", reservation.check_out_date)
+
+    # RESERVATIONS-AUTO-ROOM §7: manual replacement validates each new line's
+    # pinned room before the locks; automatic is assigned after the availability
+    # check (below). Only fires when the lines are actually being replaced.
+    if lines is not None and room_assignment_mode == "manual":
+        _validate_manual_assignment(lines)
 
     effective_lines = lines
     inventory_affecting = (
@@ -273,6 +330,18 @@ def update_reservation(
 
     if lines is not None:
         reservation.lines.all().delete()
+        # RESERVATIONS-AUTO-ROOM §7: assign the replacement lines under the locks
+        # ``ensure_can_book`` acquired above; excluding this reservation so it
+        # never conflicts with its own (now deleted) lines.
+        if room_assignment_mode == "automatic":
+            _assign_rooms_automatically(
+                reservation.hotel,
+                lines,
+                check_in,
+                check_out,
+                total_persons=_total_persons_update(reservation, occupants, fields),
+                exclude_reservation_id=reservation.id,
+            )
         for line in lines:
             ReservationRoomLine.objects.create(
                 hotel=reservation.hotel,
@@ -437,6 +506,98 @@ def _db_lines(reservation) -> list[dict]:
 
 def _touches_dates(fields) -> bool:
     return "check_in_date" in fields or "check_out_date" in fields
+
+
+# --- RESERVATIONS-AUTO-ROOM: automatic / manual room assignment --------------
+
+
+def _total_persons_create(fields, occupants) -> int:
+    """Total persons for a create (mirrors ``_enforce_capacity``): 1 primary +
+    named adult companions + children when companions are supplied, else the
+    legacy ``adults + children`` counts."""
+    children = int(fields.get("children") or 0)
+    if occupants:
+        return 1 + len(occupants) + children
+    return int(fields.get("adults") or 1) + children
+
+
+def _total_persons_update(reservation, occupants, fields) -> int:
+    """Total persons for an update (mirrors ``_enforce_capacity_update``)."""
+    children = int(fields.get("children", reservation.children) or 0)
+    if occupants is not None:
+        return 1 + len(occupants) + children
+    existing = reservation.occupants.count()
+    if existing:
+        return 1 + existing + children
+    return int(fields.get("adults", reservation.adults) or 1) + children
+
+
+def _validate_manual_assignment(lines) -> None:
+    """Validate manual room assignment: every line MUST pin a specific room, and
+    a request-pinned floor must match the room's floor.
+
+    The room itself (hotel + type + bookable + quantity 1) is already validated
+    by the write serializer; its availability is enforced by ``ensure_can_book``.
+    The backend never silently swaps a conflicting room for another one.
+    """
+    for line in lines:
+        room = line.get("room")
+        if room is None:
+            raise DRFValidationError(
+                {"room": "A specific room is required in manual assignment mode."}
+            )
+        floor = line.get("floor")
+        if floor is not None:
+            floor_id = floor.pk if hasattr(floor, "pk") else floor
+            if getattr(room, "floor_id", None) != floor_id:
+                raise RoomAssignmentConflict(
+                    {"room": room.id, "reason": "room_floor_mismatch"}
+                )
+
+
+def _assign_rooms_automatically(
+    hotel, lines, check_in, check_out, *, total_persons, exclude_reservation_id=None
+) -> None:
+    """Deterministically assign a specific room to every ``quantity == 1`` line
+    (RESERVATIONS-AUTO-ROOM). Mutates ``line["room"]`` in place.
+
+    A client-provided room is ALWAYS discarded first (security: the client must
+    not be able to pin a room in automatic mode). ``min_capacity`` is passed only
+    for a single-line reservation — where the one room holds everyone — so a
+    multi-room reservation (capacity already enforced across all rooms) is never
+    wrongly rejected. Rooms picked earlier in the same request are excluded so
+    two lines never receive the same room. Raises ``no_room_available`` (a clean
+    no-availability error) when a line has no matching room, failing the save.
+    """
+    used: set[int] = set()
+    single_line = len(lines) == 1
+    for line in lines:
+        line["room"] = None  # never honour a client-pinned room in auto mode
+        if int(line["quantity"]) != 1:
+            # A specific room cannot be pinned to a multi-room line (one FK);
+            # it stays unassigned — ``ensure_can_book`` already guaranteed the
+            # unassigned quantity fits.
+            continue
+        room = AvailabilityService.pick_available_room(
+            hotel,
+            room_type=line["room_type"],
+            check_in=check_in,
+            check_out=check_out,
+            floor=line.get("floor"),
+            min_capacity=total_persons if single_line else None,
+            exclude_room_ids=used,
+            exclude_reservation_id=exclude_reservation_id,
+        )
+        if room is None:
+            raise NoAvailability(
+                {
+                    "room_type": line["room_type"].id,
+                    "room_type_name": getattr(line["room_type"], "name", None),
+                    "reason": "no_room_available",
+                }
+            )
+        line["room"] = room
+        used.add(room.id)
 
 
 # --- RESERVATIONS-FORM-REWORK helpers ---------------------------------------

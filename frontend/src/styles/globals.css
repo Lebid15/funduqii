@@ -2394,6 +2394,289 @@ a {
   }
 }
 
+/* ==========================================================================
+ * Reservation confirmation — a dedicated, formal A4 print document.
+ * FULLY NAMESPACED under `.resv-print` + a NAMED @page so it never changes how
+ * any other document (finance vouchers via `.print-doc`) looks on screen or on
+ * paper. The aggressive print reset is guarded by `body:has(.resv-print)` so it
+ * only engages while a reservation sheet is actually mounted.
+ * ======================================================================== */
+
+/* Named page: A4 + comfortable margins scoped to this document only. Other
+ * print flows keep the browser default. Page numbering via margin boxes is a
+ * progressive enhancement (ignored by engines that don't support it). */
+@page resv-confirmation {
+  size: A4;
+  margin: 14mm 15mm 16mm;
+}
+
+/* On-screen preview: a light backdrop so the sheet reads like paper. */
+.resv-print-frame {
+  background: var(--color-surface-muted, #f1efe9);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  overflow: auto;
+}
+
+.resv-print {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 190mm;
+  margin-inline: auto;
+  padding: 10mm 12mm;
+  background: #ffffff;
+  color: #16181a;
+  font-family: var(--font-sans);
+  font-size: 10.5pt;
+  line-height: 1.5;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+/* --- Header --------------------------------------------------------------- */
+.resv-print__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8mm;
+  padding-bottom: 4mm;
+  border-bottom: 2px solid #16181a;
+}
+.resv-print__brand {
+  display: flex;
+  align-items: center;
+  gap: 5mm;
+}
+.resv-print__logo {
+  max-height: 20mm;
+  max-width: 42mm;
+  object-fit: contain;
+}
+.resv-print__hotel-name {
+  font-size: 15pt;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.01em;
+}
+.resv-print__hotel-line {
+  font-size: 9pt;
+  color: #4a4d50;
+  margin-top: 1mm;
+}
+.resv-print__docmeta {
+  text-align: end;
+  min-width: 46mm;
+}
+.resv-print__doctitle {
+  font-size: 12.5pt;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.resv-print__docline {
+  font-size: 9pt;
+  color: #4a4d50;
+  margin-top: 1mm;
+}
+.resv-print__docline > span:first-child {
+  color: #16181a;
+  font-weight: var(--font-weight-semibold);
+}
+.resv-print__status {
+  display: inline-block;
+  padding: 0.3mm 2mm;
+  border: 1px solid #9aa0a4;
+  border-radius: 2mm;
+  font-weight: var(--font-weight-semibold);
+  color: #16181a;
+}
+.resv-print__status--in {
+  margin-inline-start: 2mm;
+}
+
+/* --- Sections ------------------------------------------------------------- */
+.resv-print__section {
+  margin-top: 6mm;
+  break-inside: avoid;
+}
+.resv-print__section-title {
+  font-size: 10.5pt;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #16181a;
+  padding-bottom: 1.5mm;
+  margin-bottom: 3mm;
+  border-bottom: 1px solid #c7c2b6;
+  /* Never orphan a heading from its content. */
+  break-after: avoid;
+}
+
+.resv-print__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5mm 10mm;
+  margin: 0;
+}
+.resv-print__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5mm;
+  break-inside: avoid;
+}
+.resv-print__grid dt {
+  font-size: 8pt;
+  color: #6b6f72;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.resv-print__grid dd {
+  margin: 0;
+  font-size: 10pt;
+  color: #16181a;
+}
+
+/* --- Tables (companions / payments) -------------------------------------- */
+.resv-print__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 2mm;
+}
+.resv-print__table th,
+.resv-print__table td {
+  text-align: start;
+  padding: 1.5mm 2mm;
+  border-bottom: 1px solid #d9d5ca;
+  font-size: 9.5pt;
+  vertical-align: top;
+}
+.resv-print__table th {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #6b6f72;
+  border-bottom: 1px solid #b7b2a6;
+}
+.resv-print__table--pay td:last-child,
+.resv-print__table--pay th:last-child {
+  text-align: end;
+}
+
+/* --- Notes & official line ------------------------------------------------ */
+.resv-print__section--notes {
+  break-inside: auto;
+}
+.resv-print__note {
+  font-size: 9.5pt;
+  color: #2b2e30;
+  margin-top: 2mm;
+}
+.resv-print__note--official {
+  margin-top: 3mm;
+  font-style: italic;
+  color: #4a4d50;
+}
+.resv-print__muted {
+  color: #6b6f72;
+  font-size: 8.5pt;
+}
+
+/* --- Signatures / stamp --------------------------------------------------- */
+.resv-print__signatures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10mm;
+  margin-top: 12mm;
+  break-inside: avoid;
+}
+.resv-print__sign {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1.5mm;
+}
+.resv-print__sign-line {
+  height: 0;
+  margin-top: 8mm;
+  border-top: 1px solid #16181a;
+}
+.resv-print__stamp-box {
+  height: 20mm;
+  border: 1px dashed #9aa0a4;
+  border-radius: 2mm;
+}
+.resv-print__sign--stamp .resv-print__sign-line {
+  display: none;
+}
+.resv-print__sign-label {
+  font-size: 8.5pt;
+  color: #4a4d50;
+  text-align: center;
+}
+
+/* --- Footer --------------------------------------------------------------- */
+.resv-print__foot {
+  margin-top: 8mm;
+  padding-top: 3mm;
+  border-top: 1px solid #c7c2b6;
+  font-size: 8pt;
+  color: #6b6f72;
+  text-align: center;
+}
+
+/* Technical codes (reservation no., phone, document no., FX rate) stay LTR so
+ * an Arabic RTL page never reorders their digits/segments. */
+.resv-print__code {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+
+/* --- Print path — isolated, B&W-legible, paginated ----------------------- */
+@media print {
+  /* Only fires when a reservation sheet is present, so other documents keep
+     their own print behavior untouched. */
+  body:has(.resv-print) * {
+    visibility: hidden;
+  }
+  body:has(.resv-print) .resv-print,
+  body:has(.resv-print) .resv-print * {
+    visibility: visible;
+  }
+  /* Neutralise the modal's scroll box so the sheet flows onto as many A4 pages
+     as it needs instead of being clipped to the dialog height. */
+  body:has(.resv-print) .modal-overlay,
+  body:has(.resv-print) .modal,
+  body:has(.resv-print) .modal__body,
+  body:has(.resv-print) .resv-print-frame {
+    position: static !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+  .resv-print {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    page: resv-confirmation;
+  }
+  /* Keep each row / financial line and section headings intact across pages. */
+  .resv-print__section,
+  .resv-print__row,
+  .resv-print__signatures {
+    break-inside: avoid;
+  }
+  .resv-print__section-title {
+    break-after: avoid;
+  }
+}
+
 .field-group {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -4869,4 +5152,88 @@ a {
 }
 .resform-book__total--accent dd {
   color: var(--color-primary);
+}
+
+/* --- Post-save success screen (RESERVATIONS-AUTO-ROOM-SUCCESS-PRINT · FE-B) -
+   After a successful save the wizard steps are REPLACED (in the same modal frame)
+   by a calm confirmation of the backend-owned record + Print / View / Close / New.
+   Additive, token-only, RTL/LTR-safe — no palette literals, no screen-ratio sizes. */
+.resform-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  text-align: center;
+}
+.resform-header__check {
+  flex: none;
+  color: var(--color-success);
+}
+.resform-success__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 3.5rem;
+  block-size: 3.5rem;
+  border-radius: var(--radius-full);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+.resform-success__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.resform-success__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-tight);
+}
+.resform-success__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.resform-success__confirm {
+  inline-size: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: start;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+.resform-success__confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.resform-success__grid {
+  inline-size: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  text-align: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.resform-success__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.resform-success__item dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.resform-success__item dd {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
 }

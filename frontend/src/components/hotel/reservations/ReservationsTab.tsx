@@ -15,7 +15,6 @@ import { useQuickAction } from "@/lib/useQuickAction";
 import {
   CalendarCheck,
   Plus,
-  Printer,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -32,7 +31,6 @@ import {
   LoadingState,
   Modal,
   Pagination,
-  PrintDocumentLayout,
   Select,
   Textarea,
   useToast,
@@ -55,24 +53,19 @@ import type {
   ReservationFinancialSummary,
   RoomType,
 } from "@/lib/api/types";
-import { formatDate, formatMoney, reservationStatusLabel } from "@/lib/format";
+import { reservationStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
-import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 
 import { ReservationCard } from "./ReservationCard";
 import { ReservationDetailsModal } from "./ReservationDetailsModal";
+import { ReservationPrintPreview } from "./ReservationPrintPreview";
 import {
   ReservationFormShell,
   createInitialDraft,
   reservationToDraft,
   type ReservationDraft,
 } from "./wizard";
-import {
-  isForeignPayment,
-  occupantDisplayName,
-  relationshipLabel,
-} from "./reservationShared";
 import {
   ReservationSummaryCards,
   type ReservationCounts,
@@ -608,9 +601,10 @@ export function ReservationsTab({
             formState.mode === "edit" ? formState.financialSummary : undefined
           }
           onClose={() => setFormState(null)}
-          onSaved={() => {
+          onSaved={refresh}
+          onViewReservation={(r) => {
             setFormState(null);
-            refresh();
+            setDetails(r);
           }}
         />
       ) : null}
@@ -642,7 +636,7 @@ export function ReservationsTab({
           refresh();
         }}
       />
-      <ReservationPrintModal
+      <ReservationPrintPreview
         open={printTarget !== null}
         reservation={printTarget ?? undefined}
         onClose={() => setPrintTarget(null)}
@@ -723,255 +717,6 @@ function CancelModal({
           />
         </FormField>
       </form>
-    </Modal>
-  );
-}
-
-// --------------------------------------------------------------------------- //
-// Print modal — a localized, RTL-aware reservation confirmation               //
-// --------------------------------------------------------------------------- //
-
-/** A print-friendly reservation confirmation. Reuses the shared
- * PrintDocumentLayout primitive inside a `.print-doc` node — the same
- * `@media print` rule the finance vouchers rely on hides everything else, so
- * window.print() emits ONLY this document. It inherits the page direction, so
- * it is RTL-aware, and every label is localized. It carries the booking facts
- * (number, status, source, kind, guest name, nationality, phone, email,
- * document type, rooms, floor, type, dates, arrival, nights, guests, notes)
- * plus — WHEN PRESENT and the caller may see money (finance.view) — a DERIVED
- * financial block (§40): total, paid, remaining and the recorded payments.
- * Money renders from backend Decimal strings via formatMoney (never Float);
- * with no priced summary the block is omitted honestly. §36/§40 — document
- * images and the sensitive identity fields (national id, father/mother name,
- * date of birth, document number) are NEVER printed. */
-function ReservationPrintModal({
-  open,
-  reservation,
-  onClose,
-}: {
-  open: boolean;
-  reservation?: Reservation;
-  onClose: () => void;
-}) {
-  const { t, locale } = useI18n();
-  const profile = useHotelProfile();
-  const access = useHotelAccess();
-  const can = (...codes: string[]) =>
-    access === null || (!access.loading && access.can(...codes));
-
-  // §40 — DERIVED financial summary for the slip, fetched only when the caller
-  // may see money (finance.view). The backend re-derives and masks it for
-  // callers without the grant; a failed/absent fetch simply omits the block.
-  const canMoney = can("finance.view");
-  const reservationId = reservation?.id ?? null;
-  const [summary, setSummary] = useState<ReservationFinancialSummary | null>(
-    null,
-  );
-
-  useEffect(() => {
-    if (!open || reservationId === null || !canMoney) {
-      setSummary(null);
-      return;
-    }
-    let active = true;
-    getReservationFinancialSummary(reservationId)
-      .then((s) => {
-        if (active) setSummary(s);
-      })
-      .catch(() => {
-        if (active) setSummary(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, reservationId, canMoney]);
-
-  if (!reservation) return null;
-  const r = reservation;
-  const d = t.reservations.details;
-  const p = t.reservations.print;
-  const b = t.reservations.wizard.booking;
-  const card = t.reservations.card;
-
-  // Money is shown only when the summary is priced AND viewable; otherwise the
-  // whole financial block is left off the slip (honest-when-empty).
-  const money =
-    summary !== null && summary.can_view_money && summary.is_priced !== false
-      ? summary
-      : null;
-  const companions = r.occupants ?? [];
-  const docLabel = (v: string) =>
-    (t.guests.documentTypes as Record<string, string>)[v] ?? v;
-
-  const roomLabels = r.lines.map((l) =>
-    l.room_number ? `${d.room} ${l.room_number}` : `${l.room_type_name} ×${l.quantity}`,
-  );
-  const floorNames = Array.from(
-    new Set(r.lines.map((l) => l.floor_name).filter((f): f is string => Boolean(f))),
-  );
-  const typeNames = Array.from(new Set(r.lines.map((l) => l.room_type_name)));
-  const note = [r.notes, r.special_requests].filter(Boolean).join(" · ");
-
-  const meta = [
-    { label: t.common.status, value: reservationStatusLabel(r.status, t) },
-    { label: t.reservations.views.sourceLabel, value: t.reservations.source[r.source] ?? r.source },
-    { label: t.reservations.form.bookingKind, value: t.reservations.kind[r.booking_kind] },
-    { label: d.guest, value: r.primary_guest_name || "—" },
-    ...(r.primary_guest_nationality
-      ? [{ label: t.reservations.form.nationality, value: r.primary_guest_nationality }]
-      : []),
-    ...(r.primary_guest_phone ? [{ label: d.phone, value: r.primary_guest_phone }] : []),
-    ...(r.primary_guest_email ? [{ label: d.email, value: r.primary_guest_email }] : []),
-    ...(r.primary_guest_document_type
-      ? [{ label: t.reservations.form.documentType, value: docLabel(r.primary_guest_document_type) }]
-      : []),
-    ...(roomLabels.length ? [{ label: d.rooms, value: roomLabels.join(" · ") }] : []),
-    ...(floorNames.length ? [{ label: t.reservations.card.floor, value: floorNames.join(" · ") }] : []),
-    ...(typeNames.length ? [{ label: t.reservations.form.roomType, value: typeNames.join(" · ") }] : []),
-    {
-      label: d.dates,
-      value: `${formatDate(r.check_in_date, locale)} → ${formatDate(r.check_out_date, locale)}`,
-    },
-    ...(r.expected_arrival_time
-      ? [{ label: t.reservations.form.arrivalTime, value: r.expected_arrival_time }]
-      : []),
-    { label: d.nights, value: String(r.nights) },
-    { label: d.guests, value: String(r.total_guests) },
-    // §40 — DERIVED money, only when a priced+viewable summary is present.
-    ...(money
-      ? [
-          ...(money.nightly_rate
-            ? [
-                {
-                  label: card.nightly,
-                  value: formatMoney(money.nightly_rate, money.currency, locale),
-                },
-              ]
-            : []),
-          ...(money.reservation_total !== null
-            ? [
-                {
-                  label: card.total,
-                  value: formatMoney(
-                    money.reservation_total,
-                    money.currency,
-                    locale,
-                  ),
-                },
-              ]
-            : []),
-          ...(money.paid !== null
-            ? [
-                {
-                  label: card.paid,
-                  value: formatMoney(money.paid, money.currency, locale),
-                },
-              ]
-            : []),
-          ...(money.remaining !== null
-            ? [
-                {
-                  label: card.remaining,
-                  value: formatMoney(money.remaining, money.currency, locale),
-                },
-              ]
-            : []),
-        ]
-      : []),
-  ];
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={p.title}
-      closeLabel={t.common.close}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            {t.common.close}
-          </Button>
-          <Button icon={Printer} onClick={() => window.print()}>
-            {p.action}
-          </Button>
-        </>
-      }
-    >
-      <div className="print-doc">
-        <PrintDocumentLayout
-          hotelName={profile?.display_name || profile?.hotel.name || p.title}
-          hotelAddress={[profile?.city, profile?.country].filter(Boolean).join(", ") || undefined}
-          docTitle={p.title}
-          docNumber={r.reservation_number}
-          meta={meta}
-          notes={note || undefined}
-          notesLabel={d.notes}
-          footer={money ? p.footerFinancial : p.footer}
-        >
-          {companions.length > 0 ? (
-            <div className="print-companions">
-              <p className="muted">
-                <strong>{d.sectionCompanions}</strong>
-              </p>
-              <table className="print-table">
-                <thead>
-                  <tr>
-                    <th>{t.reservations.form.name}</th>
-                    <th>{t.reservations.wizard.companions.relationship}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {companions.map((occ) => (
-                    <tr key={occ.id}>
-                      <td>{occupantDisplayName(occ, t)}</td>
-                      <td>{relationshipLabel(occ.relationship, t)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-          {/* §40 — recorded payments: method + base amount, with the original
-              tender in parentheses for a foreign-currency payment. Printed only
-              when a viewable summary carries payments. */}
-          {money && money.payments.length > 0 ? (
-            <div className="print-payments">
-              <p className="muted">
-                <strong>{b.recordedPaymentsSection}</strong>
-              </p>
-              <table className="print-table">
-                <thead>
-                  <tr>
-                    <th>{t.finance.print.method}</th>
-                    <th>{t.finance.print.amount}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {money.payments.map((payment) => (
-                    <tr key={payment.id}>
-                      <td>{t.finance.methods[payment.method]}</td>
-                      <td>
-                        {formatMoney(
-                          payment.amount,
-                          payment.currency || money.currency,
-                          locale,
-                        )}
-                        {isForeignPayment(payment, money.currency)
-                          ? ` (${formatMoney(
-                              payment.original_amount as string,
-                              payment.payment_currency,
-                              locale,
-                            )})`
-                          : ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </PrintDocumentLayout>
-      </div>
     </Modal>
   );
 }

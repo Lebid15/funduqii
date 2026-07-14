@@ -269,9 +269,11 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines")
-        # ``occupants`` is not a Reservation model field — it must be passed
-        # explicitly, never spread into the model create via ``**data``.
+        # ``occupants`` and ``room_assignment_mode`` are not Reservation model
+        # fields — they must be passed explicitly, never spread into the model
+        # create via ``**data``.
         occupants = data.pop("occupants", None)
+        room_assignment_mode = data.pop("room_assignment_mode", None)
         _guard_assignment(request, lines)
         res_status = data.pop("status")
         reservation = services.create_reservation(
@@ -280,6 +282,7 @@ class ReservationListCreateView(generics.ListCreateAPIView):
             status=res_status,
             user=request.user,
             occupants=occupants,
+            room_assignment_mode=room_assignment_mode,
             **data,
         )
         return Response(
@@ -318,11 +321,17 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
         data = dict(serializer.validated_data)
         lines = data.pop("lines", None)
         occupants = data.pop("occupants", None)
+        room_assignment_mode = data.pop("room_assignment_mode", None)
         if lines is not None:
             _guard_assignment(request, lines)
         data.pop("status", None)  # status is changed only via confirm/cancel/hold
         services.update_reservation(
-            reservation, lines=lines, occupants=occupants, user=request.user, **data
+            reservation,
+            lines=lines,
+            occupants=occupants,
+            user=request.user,
+            room_assignment_mode=room_assignment_mode,
+            **data,
         )
         reservation.refresh_from_db()
         return Response(

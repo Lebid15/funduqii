@@ -79,9 +79,20 @@ export function getReservationOverview(): Promise<ReservationOverview> {
   return hotelJson<ReservationOverview>("/reservations/overview");
 }
 
+/** RESERVATIONS-AUTO-ROOM: how the physical room is chosen for the reservation.
+ * `"automatic"` → the backend deterministically assigns an available room inside
+ * the atomic create (the client MUST NOT pin one); `"manual"` → the client sends
+ * the chosen room id and the backend validates it (never a silent swap). Absent =
+ * legacy behaviour (the caller's room, or none, is kept as-is). */
+export type RoomAssignmentMode = "automatic" | "manual";
+
 export interface ReservationLineBody {
   room_type: number;
   room?: number | null;
+  /** RESERVATIONS-AUTO-ROOM: optional floor preference. In automatic mode it
+   * narrows the deterministic picker to this floor; in manual mode it must match
+   * the pinned room's floor. Request-only — never persisted on the line. */
+  floor?: number | null;
   quantity: number;
   adults?: number | null;
   children?: number | null;
@@ -139,6 +150,10 @@ export interface ReservationCreateBody {
   /** Named adult companions. Total persons = 1 + occupants + children. */
   occupants?: ReservationOccupantBody[];
   lines: ReservationLineBody[];
+  /** RESERVATIONS-AUTO-ROOM: request-only assignment mode. `"automatic"` → the
+   * backend picks the room (send room_type + floor criteria, never a room id);
+   * `"manual"` → the line pins the chosen room. Omitted = legacy behaviour. */
+  room_assignment_mode?: RoomAssignmentMode;
 }
 
 export function createReservation(

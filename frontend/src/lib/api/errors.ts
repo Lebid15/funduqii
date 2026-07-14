@@ -67,8 +67,18 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.rooms.errors.duplicateRoomNumber;
     case "bulk_request_too_large":
       return t.rooms.errors.bulkTooLarge;
-    case "no_availability":
-      return t.reservations.errors.noAvailability;
+    case "no_availability": {
+      // RESERVATIONS-AUTO-ROOM: automatic assignment surfaces the same code with a
+      // stable `details.reason` when no specific room could be picked — show a
+      // room-selection-aware message instead of the generic dates one.
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      return reason === "no_room_available"
+        ? t.reservations.errors.noRoomAvailable
+        : t.reservations.errors.noAvailability;
+    }
     case "cancellation_reason_required":
       return t.reservations.errors.reasonRequired;
     case "invalid_reservation_transition":

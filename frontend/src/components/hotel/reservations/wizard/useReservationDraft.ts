@@ -20,6 +20,7 @@ import type {
   ReservationLineBody,
   ReservationOccupantBody,
   ReservationUpdateBody,
+  RoomAssignmentMode,
 } from "@/lib/api/reservations";
 import type {
   Guest,
@@ -148,10 +149,15 @@ export interface BookingDraft {
   check_out_date: string;
   expected_arrival_time: string;
   lines: BookingLineDraft[];
-  /** The floor chosen in the SEPARATE floor picker (§23) — gates the room list.
-   * Client-only (never sent): the room line carries the actual room + type. */
+  /** The floor chosen in the SEPARATE floor picker (§23) — gates the room list
+   * and travels as the auto/manual floor criteria on the line. Client-only. */
   selected_floor_id: number | null;
-  /** The physical room chosen from the availability picker (immediate flow). */
+  /** RESERVATIONS-AUTO-ROOM: how the room is chosen. `"automatic"` (default) →
+   * the backend assigns an available room from the floor/type/dates criteria and
+   * the client pins nothing; `"manual"` → the staff pick a specific room. */
+  room_assignment_mode: RoomAssignmentMode;
+  /** The physical room chosen in MANUAL mode (the "manual room id"). Null in
+   * automatic mode — the final room comes back on the save response (§5). */
   selected_room_id: number | null;
   source: ReservationSource;
   status: "held" | "confirmed";
@@ -247,6 +253,8 @@ export function createInitialDraft(
       expected_arrival_time: "",
       lines: [{ room_type: "", room: "", quantity: "1" }],
       selected_floor_id: null,
+      // RESERVATIONS-AUTO-ROOM §2 — automatic room selection is the default.
+      room_assignment_mode: "automatic",
       selected_room_id: null,
       source: "direct",
       status: "confirmed",
@@ -575,16 +583,26 @@ function reducer(state: ReservationDraft, action: Action): ReservationDraft {
 /* Body builders                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** Map the booking-line drafts into API line bodies. A pinned room forces
- * quantity 1; empty rows are dropped. */
+/** Map the booking-line drafts into API line bodies. Empty rows are dropped and
+ * the chosen floor travels as the auto/manual criteria (RESERVATIONS-AUTO-ROOM).
+ * In AUTOMATIC mode the room id is NEVER sent — the backend assigns it — so the
+ * client stays honest even though the server would drop a pinned room anyway. A
+ * pinned (manual) room forces quantity 1. */
 function buildLines(draft: ReservationDraft): ReservationLineBody[] {
+  const automatic = draft.booking.room_assignment_mode === "automatic";
+  const floor = draft.booking.selected_floor_id;
   return draft.booking.lines
     .filter((line) => line.room_type)
-    .map((line) => ({
-      room_type: Number(line.room_type),
-      room: line.room ? Number(line.room) : null,
-      quantity: line.room ? 1 : Number(line.quantity) || 1,
-    }));
+    .map((line) => {
+      const room = automatic ? null : line.room ? Number(line.room) : null;
+      const body: ReservationLineBody = {
+        room_type: Number(line.room_type),
+        room,
+        quantity: room != null ? 1 : Number(line.quantity) || 1,
+      };
+      if (floor != null) body.floor = floor;
+      return body;
+    });
 }
 
 function buildOccupants(draft: ReservationDraft): ReservationOccupantBody[] {
@@ -650,6 +668,9 @@ export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
     adults: 1 + occupants.length,
     children,
     lines: buildLines(draft),
+    // RESERVATIONS-AUTO-ROOM §5 — the mode decides whether the backend assigns
+    // the room (automatic) or honours the pinned room on the line (manual).
+    room_assignment_mode: booking.room_assignment_mode,
   };
   // Free-text internal notes (§19 section 6); omitted when empty.
   const notes = booking.notes.trim();
@@ -698,7 +719,10 @@ export function toImmediateCheckInBody(
   const { booking } = draft;
   return {
     reservation: toCreateBody(draft),
-    room: booking.selected_room_id,
+    // RESERVATIONS-AUTO-ROOM §5 — never pin a room in automatic mode; the backend
+    // assigns it on the line and the check-in admits into that assigned room.
+    room:
+      booking.room_assignment_mode === "manual" ? booking.selected_room_id : null,
     deposit: buildDepositBody(draft),
   };
 }
@@ -840,6 +864,10 @@ export function reservationToDraft(
   });
 
   // --- Booking (dates / times / booked line / source / notes) ---
+  // §7 — an assigned reservation opens in MANUAL with its CURRENT room kept (never
+  // auto-reassigned on open); an unpinned/legacy line opens in automatic. The
+  // staff may still switch modes or re-pick a room from the booking step.
+  const assignedRoomId = reservation.lines.find((line) => line.room)?.room ?? null;
   draft.booking = {
     ...draft.booking,
     check_in_date: reservation.check_in_date,
@@ -853,7 +881,8 @@ export function reservationToDraft(
             quantity: String(line.quantity),
           }))
         : draft.booking.lines,
-    selected_room_id: reservation.lines.find((line) => line.room)?.room ?? null,
+    selected_room_id: assignedRoomId,
+    room_assignment_mode: assignedRoomId != null ? "manual" : "automatic",
     source: reservation.source,
     status: reservation.status === "held" ? "held" : "confirmed",
     notes: reservation.notes ?? "",

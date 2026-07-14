@@ -48,6 +48,28 @@ NON_BOOKABLE_ROOM_STATUSES = (
 )
 
 
+def _room_number_sort_key(number: str):
+    """Numeric-aware sort key for a room number.
+
+    Pure-digit numbers sort by their integer value (so ``2`` precedes ``10``);
+    everything else sorts lexically and AFTER the numeric group. The result is a
+    total, deterministic order across mixed numbering schemes without casting in
+    the database (which would break on non-numeric numbers under PostgreSQL).
+    """
+    n = (number or "").strip()
+    if n.isdigit():
+        return (0, int(n), "")
+    return (1, 0, n)
+
+
+def _room_order_key(room) -> tuple:
+    """Deterministic ordering key for room assignment (§3): the room's floor
+    ``sort_order``, then a numeric-aware room number, then ``pk`` as a final
+    tie-break. ``room.floor`` must be loaded (``select_related('floor')``)."""
+    floor_sort = room.floor.sort_order if room.floor_id else 0
+    return (floor_sort, _room_number_sort_key(room.number), room.pk)
+
+
 def overlap_q(check_in, check_out) -> Q:
     """Reservations whose stay overlaps the half-open range ``[check_in, check_out)``."""
     return Q(check_in_date__lt=check_out) & Q(check_out_date__gt=check_in)
@@ -367,3 +389,92 @@ class AvailabilityService:
                         "reason": "insufficient_rooms" if n else "no_bookable_rooms",
                     }
                 )
+
+    @classmethod
+    def pick_available_room(
+        cls,
+        hotel,
+        *,
+        room_type,
+        check_in,
+        check_out,
+        floor=None,
+        min_capacity=None,
+        exclude_room_ids=None,
+        exclude_reservation_id=None,
+        now=None,
+    ):
+        """Deterministically pick the first available bookable room, or ``None``.
+
+        The candidate set is the hotel's BOOKABLE rooms of ``room_type`` (active
+        room, active floor, active type, manual status not in
+        :data:`NON_BOOKABLE_ROOM_STATUSES`) — optionally restricted to ``floor``
+        and to ``room_type.max_capacity >= min_capacity``. A candidate is dropped
+        when it is pinned by a blocking, overlapping reservation line (the same
+        rule as :meth:`room_is_assigned_in_range`, evaluated in bulk) OR
+        physically occupied by an in-house :class:`~apps.stays.models.Stay`
+        overlapping ``[check_in, check_out)``. ``exclude_room_ids`` removes rooms
+        already chosen earlier in the same request so two auto-assigned lines
+        never collide.
+
+        Ordering is deterministic (§3): ``floor.sort_order`` → room number
+        (numeric-aware, else lexical) → ``pk``. The FIRST candidate is returned.
+
+        Reuses the existing availability helpers and never reinvents the blocking
+        rule. MUST run inside the booking transaction — after
+        :meth:`ensure_can_book` has locked the room type — so a concurrent
+        booking cannot pick the same room.
+        """
+        from apps.stays.models import Stay, StayStatus
+
+        now = now or timezone.now()
+        exclude_room_ids = set(exclude_room_ids or ())
+
+        bookable_ids = cls.bookable_room_ids(hotel, room_type) - exclude_room_ids
+        if not bookable_ids:
+            return None
+
+        candidates_qs = Room.objects.filter(
+            hotel=hotel, room_type=room_type, pk__in=bookable_ids
+        ).select_related("floor", "room_type")
+        if floor is not None:
+            floor_id = floor.pk if hasattr(floor, "pk") else floor
+            candidates_qs = candidates_qs.filter(floor_id=floor_id)
+        if min_capacity is not None:
+            candidates_qs = candidates_qs.filter(
+                room_type__max_capacity__gte=min_capacity
+            )
+        candidates = list(candidates_qs)
+        if not candidates:
+            return None
+        cand_ids = [r.pk for r in candidates]
+
+        # Rooms pinned by a blocking, overlapping reservation line — the same
+        # rule as ``room_is_assigned_in_range``, evaluated once over the whole
+        # candidate set instead of per room.
+        blocking = cls._blocking_overlapping(
+            hotel, check_in, check_out,
+            exclude_reservation_id=exclude_reservation_id, now=now,
+        )
+        res_blocked = set(
+            ReservationRoomLine.objects.filter(
+                hotel=hotel, room_id__in=cand_ids, reservation__in=blocking
+            ).values_list("room_id", flat=True)
+        )
+        # Rooms physically occupied by an in-house stay overlapping the range.
+        stay_blocked = set(
+            Stay.objects.filter(
+                hotel=hotel,
+                room_id__in=cand_ids,
+                status=StayStatus.IN_HOUSE,
+                planned_check_in_date__lt=check_out,
+                planned_check_out_date__gt=check_in,
+            ).values_list("room_id", flat=True)
+        )
+        blocked = res_blocked | stay_blocked
+
+        available = [r for r in candidates if r.pk not in blocked]
+        if not available:
+            return None
+        available.sort(key=_room_order_key)
+        return available[0]
