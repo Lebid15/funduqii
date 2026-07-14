@@ -17,6 +17,11 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "assign_room",
         "check_in",
         "check_out",
+        # STAYS-ARRIVALS-DEPARTURES §29 — mark an expected arrival as a no-show
+        # (a reservation whose guest never checked in). Deliberately separate
+        # from cancel: a no-show follows the arrival/grace policy, not a manual
+        # cancellation, and frees availability per policy.
+        "mark_no_show",
     ],
     "availability": ["view"],
     "rooms": ["view", "create", "update", "delete", "status_update"],
@@ -44,6 +49,11 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "extend",
         "shorten",
         "move_room",
+        # STAYS-ARRIVALS-DEPARTURES §30 — reverse a mistaken check-in through an
+        # organised reversal flow (never a hard delete): reverse the stay, folio
+        # and room state with a mandatory reason + audit. Deliberately separate
+        # from check_out.
+        "reverse_check_in",
     ],
     # Internal finance (Phase 8). Folios/charges/payments/invoices live under
     # one clear `finance` section; expenses have their own.
@@ -64,6 +74,16 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         "invoice_create",
         "invoice_issue",
         "invoice_void",
+        # STAYS-ARRIVALS-DEPARTURES round — deliberately separate codes:
+        # §37 refund = a real payout of a credit balance to the guest (distinct
+        #   from payment_reverse, which is a correction inside the void rules);
+        # §42 reopen = reopen a CLOSED folio (special permission + reason + audit,
+        #   respecting the daily close); distinct from close;
+        # §35 insurance_manage = record / refund / deduct a refundable insurance
+        #   held separately from the folio account.
+        "refund",
+        "reopen",
+        "insurance_manage",
     ],
     # Expenses closure: `reverse` = the full linked counter-voucher AFTER the
     # record's void window closed — deliberately separate from create/void.
