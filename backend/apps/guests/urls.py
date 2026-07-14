@@ -6,6 +6,7 @@ from .views import (
     GuestDetailView,
     GuestDirectoryView,
     GuestListCreateView,
+    GuestLookupView,
     GuestProfileView,
     GuestUnblockView,
     GuestVipView,
@@ -20,6 +21,7 @@ urlpatterns = [
         GuestDirectoryView.as_view(),
         name="guest-directory",
     ),
+    path("guests/lookup/", GuestLookupView.as_view(), name="guest-lookup"),
     path("guests/<int:pk>/", GuestDetailView.as_view(), name="guest-detail"),
     path(
         "guests/<int:pk>/profile/",

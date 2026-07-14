@@ -317,3 +317,30 @@ HOTEL_MEDIA_GALLERY_MAX_BYTES = env.int(
     "HOTEL_MEDIA_GALLERY_MAX_BYTES", default=5 * 1024 * 1024
 )
 HOTEL_MEDIA_GALLERY_MAX_COUNT = env.int("HOTEL_MEDIA_GALLERY_MAX_COUNT", default=10)
+
+# ===========================================================================
+# Reservation guest documents — PRIVATE storage (RESERVATIONS-FORM-REWORK)
+#
+# Guest identity documents (national ID / passport / residence / visa / ...)
+# attached to a reservation are STRICTLY PRIVATE. Unlike hotel media (public),
+# they live under ``PRIVATE_MEDIA_ROOT`` — a location that is deliberately NOT
+# inside ``MEDIA_ROOT`` and is NEVER routed through ``config/urls.py``'s
+# ``static()`` / WhiteNoise. The only sanctioned way to read a document is an
+# authenticated, permission-checked streaming view (delivered in a later pass);
+# there is no public URL for these files.
+#
+# Allowed types are raster images (jpg/jpeg/png/webp) AND PDF. SVG and every
+# other markup/executable/unknown type are rejected by a magic-byte sniff. The
+# size cap is overridable via env, mirroring the HOTEL_MEDIA_* limits above.
+# ===========================================================================
+PRIVATE_MEDIA_ROOT = BASE_DIR / "private_media"
+RESERVATION_DOC_MAX_BYTES = env.int(
+    "RESERVATION_DOC_MAX_BYTES", default=10 * 1024 * 1024
+)
+RESERVATION_DOC_ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "pdf"]
+RESERVATION_DOC_ALLOWED_CONTENT_TYPES = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+]

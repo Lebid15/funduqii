@@ -14,8 +14,10 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.exceptions import PermissionDenied
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelPermission
+from apps.rbac.services import has_hotel_permission
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import Reservation, ReservationRoomLine, ReservationStatus
 from apps.reservations.serializers import ReservationSerializer
@@ -24,9 +26,11 @@ from apps.shifts.services import get_business_date
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from .models import Stay, StayStatus
+from .orchestration import execute_immediate_check_in
 from .serializers import (
     CheckInSerializer,
     CheckOutSerializer,
+    ImmediateCheckInSerializer,
     StayDateChangeSerializer,
     StayMoveRoomSerializer,
     StayNotesSerializer,
@@ -48,6 +52,10 @@ CanUpdate = HasHotelPermission("stays.update")
 CanExtend = HasHotelPermission("stays.extend")
 CanShorten = HasHotelPermission("stays.shorten")
 CanMoveRoom = HasHotelPermission("stays.move_room")
+# Immediate atomic check-in performs BOTH a reservation create and a check-in,
+# so it requires BOTH capabilities (a deposit adds finance.payment_create, and a
+# foreign-currency manual FX rate adds exchange_rate.override — enforced below).
+CanCreateReservation = HasHotelPermission("reservations.create")
 
 
 def _guard_write(request: Request) -> None:
@@ -172,7 +180,11 @@ class ArrivalsTodayView(APIView):
             )
             if admitted < requested:
                 pending.append(res)
-        return Response(ReservationSerializer(pending, many=True).data)
+        return Response(
+            ReservationSerializer(
+                pending, many=True, context={"request": request}
+            ).data
+        )
 
 
 class StayDetailView(generics.RetrieveUpdateAPIView):
@@ -327,6 +339,102 @@ class CheckInRoomsView(APIView):
         return Response(
             [{"id": room.id, "number": room.number} for room in rooms]
         )
+
+
+class ImmediateCheckInView(APIView):
+    """Atomic immediate check-in (RESERVATIONS-FORM-REWORK).
+
+    ``POST .../stays/immediate-check-in/`` composes, all-or-nothing, a confirmed
+    instant reservation + an optional pre-arrival deposit + an in-house stay on
+    ONE folio (the deposit folio is reused, never duplicated). Kept entirely
+    separate from :class:`CheckInView`, which is unchanged.
+
+    Requires BOTH ``reservations.create`` AND ``stays.check_in``. When a deposit
+    is supplied it additionally requires ``finance.payment_create``; a
+    foreign-currency deposit with a manual FX rate also requires
+    ``exchange_rate.override``.
+    """
+
+    def get_permissions(self):
+        return [CanCreateReservation(), CanCheckIn()]
+
+    def post(self, request: Request) -> Response:
+        _guard_write(request)
+        serializer = ImmediateCheckInSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        hotel = request.hotel
+
+        res_data = dict(data["reservation"])
+        lines = res_data.pop("lines")
+        occupants = res_data.pop("occupants", None)
+        primary_guest = res_data.pop("primary_guest", None)
+        res_data.pop("status", None)  # forced to confirmed in the orchestration
+        res_data.pop("booking_kind", None)  # forced to instant in the orchestration
+
+        room = None
+        if data.get("room"):
+            room = generics.get_object_or_404(Room, pk=data["room"], hotel=hotel)
+
+        deposit = data.get("deposit") or None
+        if deposit:
+            deposit = dict(deposit)
+            self._authorize_deposit(request, hotel, deposit)
+
+        result = execute_immediate_check_in(
+            hotel,
+            lines=lines,
+            primary_guest=primary_guest,
+            occupants=occupants,
+            room=room,
+            line_index=data.get("line_index"),
+            deposit=deposit,
+            check_in_notes=data.get("check_in_notes", ""),
+            user=request.user,
+            **res_data,
+        )
+        return Response(
+            self._serialize_result(request, result),
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _authorize_deposit(self, request: Request, hotel, deposit) -> None:
+        # Recording money requires the payment permission; a manual FX rate on a
+        # foreign-currency deposit additionally requires the override permission.
+        if not has_hotel_permission(request.user, hotel, "finance.payment_create"):
+            raise PermissionDenied()
+        currency = (deposit.get("currency") or "").strip().upper()
+        base = (
+            getattr(getattr(hotel, "settings", None), "default_currency", "")
+            or "USD"
+        ).upper()
+        if currency and currency != base and deposit.get("exchange_rate") is not None:
+            if not has_hotel_permission(request.user, hotel, "exchange_rate.override"):
+                raise PermissionDenied()
+
+    def _serialize_result(self, request: Request, result) -> dict:
+        from apps.finance.services import folio_balance
+
+        folio = result["folio"]
+        folio_data = None
+        if folio is not None:
+            folio_data = {
+                "id": folio.id,
+                "folio_number": folio.folio_number,
+                "status": folio.status,
+                "currency": folio.currency,
+                # Balance stays DERIVED (never stored) — invariant #1.
+                "balance": str(folio_balance(folio)["balance"]),
+            }
+        return {
+            "reservation": ReservationSerializer(
+                result["reservation"], context={"request": request}
+            ).data,
+            "stay": StaySerializer(result["stay"]).data,
+            "folio": folio_data,
+        }
 
 
 class CheckOutView(APIView):

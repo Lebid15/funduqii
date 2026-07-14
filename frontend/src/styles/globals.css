@@ -811,6 +811,86 @@ a {
   color: var(--color-fg);
 }
 
+/* --- Action icon button (central, richer than .icon-btn) ------------------ */
+/* Icon-only action control with variants, sizes, visible focus, hover/active
+   feedback and a loading spinner. Adequate click target (>=32px). */
+.action-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.action-icon-btn--sm {
+  width: 2rem;
+  height: 2rem;
+}
+.action-icon-btn--md {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+.action-icon-btn--lg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.action-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-primary);
+}
+/* ghost — quiet, for dense toolbars */
+.action-icon-btn--ghost:not(:disabled):hover {
+  background: var(--color-surface-sunken);
+  color: var(--color-fg);
+}
+.action-icon-btn--ghost:not(:disabled):active {
+  background: var(--color-bg-subtle);
+}
+/* subtle — a visible resting surface */
+.action-icon-btn--subtle {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+}
+.action-icon-btn--subtle:not(:disabled):hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-fg);
+}
+.action-icon-btn--subtle:not(:disabled):active {
+  background: var(--color-border-subtle);
+}
+/* solid — primary emphasis */
+.action-icon-btn--solid {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+.action-icon-btn--solid:not(:disabled):hover {
+  background: var(--color-primary-hover);
+}
+.action-icon-btn--solid:not(:disabled):active {
+  background: var(--color-primary-active);
+}
+.action-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.action-icon-btn[data-loading] {
+  cursor: progress;
+}
+.action-icon-btn__spinner {
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
 /* --- Badges --------------------------------------------------------------- */
 .badge {
   display: inline-flex;
@@ -860,6 +940,70 @@ a {
   background: var(--color-info-soft);
   color: var(--color-info);
   border-color: color-mix(in srgb, var(--color-info) 22%, transparent);
+}
+
+/* Leading icon inside a badge (kept proportional to the xs label so a badge can
+   carry text + icon — never colour alone). Inherits the badge text colour. */
+.badge__icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+/* Filled variant (§13/§20): strong solid fill + WHITE text/icon. Backgrounds use
+   the darker *-strong feedback tokens so contrast meets WCAG AA (>=4.5:1). The
+   `.badge--filled` colour rule is placed after the tone rules so it overrides
+   their text colour at equal specificity; backgrounds use compound selectors. */
+.badge--filled {
+  color: var(--color-fg-inverse);
+  border-color: transparent;
+}
+.badge--neutral.badge--filled {
+  background: var(--color-fg-muted);
+}
+.badge--primary.badge--filled {
+  background: var(--color-primary);
+}
+.badge--success.badge--filled {
+  background: var(--color-success-strong);
+}
+.badge--warning.badge--filled {
+  background: var(--color-warning-strong);
+}
+.badge--danger.badge--filled {
+  background: var(--color-danger-strong);
+}
+.badge--info.badge--filled {
+  background: var(--color-info-strong);
+}
+
+/* Outline variant: surface background + tone border and text. Text uses the
+   darker *-strong tokens so tone text on a light surface stays AA-legible. */
+.badge--outline {
+  background: var(--color-surface);
+}
+.badge--neutral.badge--outline {
+  color: var(--color-fg-muted);
+  border-color: var(--color-border-strong);
+}
+.badge--primary.badge--outline {
+  color: var(--color-primary-active);
+  border-color: var(--color-primary);
+}
+.badge--success.badge--outline {
+  color: var(--color-success-strong);
+  border-color: var(--color-success);
+}
+.badge--warning.badge--outline {
+  color: var(--color-warning-strong);
+  border-color: var(--color-warning);
+}
+.badge--danger.badge--outline {
+  color: var(--color-danger-strong);
+  border-color: var(--color-danger);
+}
+.badge--info.badge--outline {
+  color: var(--color-info-strong);
+  border-color: var(--color-info);
 }
 
 /* --- Dashboard hero ------------------------------------------------------- */
@@ -1614,50 +1758,6 @@ a {
   background: var(--color-primary-soft);
   color: var(--color-primary-active);
 }
-/* Reservation type chooser (owner UX): two big clickable cards — side by
- * side on desktop, stacked on mobile. Never a dropdown. */
-.choice-cards {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-@media (max-width: 640px) {
-  .choice-cards {
-    grid-template-columns: 1fr;
-  }
-}
-.choice-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-5);
-  background: var(--gradient-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
-  font-family: inherit;
-  font-size: var(--font-size-base);
-  text-align: start;
-  cursor: pointer;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-}
-.choice-card:hover {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-2px);
-}
-.choice-card__icon {
-  display: grid;
-  place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: var(--radius-md);
-  background: var(--color-primary-soft);
-  color: var(--color-primary-active);
-}
-
 /* Removable chip (amenity multi-select): the × button lives inside. */
 .chip--removable {
   padding-inline-end: var(--space-1);
@@ -2016,6 +2116,69 @@ a {
   }
 }
 
+/* Exactly-five reservation summary cards: 5-up wide, 3-up medium, 2-up small,
+ * then a scroll-snap STRIP on phones (only the strip scrolls — never the page).
+ * The reservations caption keeps its own contrast without touching the shared
+ * .board-stat__caption rule. */
+.board-stats--5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.board-stats--5 .board-stat__caption {
+  color: var(--color-fg-muted);
+}
+@media (max-width: 1100px) {
+  .board-stats--5 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .board-stats--5 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .board-stats--5 {
+    display: flex;
+    grid-template-columns: none;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--space-1);
+  }
+  .board-stats--5 > .board-stat {
+    flex: 0 0 60%;
+    scroll-snap-align: start;
+  }
+}
+/* Head row of a summary card: icon on the start, an optional dimension tag
+ * (e.g. "Source") on the end. */
+.board-stat__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+}
+.board-stat__tag {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: 0.65rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wide, 0);
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+/* The Website card is a SOURCE dimension, not a status — a dashed frame signals
+ * "different axis" via shape (not colour alone); the tag + caption + group hint
+ * carry the meaning in text. */
+.board-stat--source {
+  border-style: dashed;
+}
+.board-stats__hint {
+  margin: 0;
+}
+
 /* 2) Two independent badges (occupancy + operational) sit in their own row
  * under the title, wrapping on narrow cards. Text + icon + colour, never
  * colour alone (WCAG). */
@@ -2372,6 +2535,289 @@ a {
     inset-block-start: 0;
     inset-inline-start: 0;
     width: 100%;
+  }
+}
+
+/* ==========================================================================
+ * Reservation confirmation — a dedicated, formal A4 print document.
+ * FULLY NAMESPACED under `.resv-print` + a NAMED @page so it never changes how
+ * any other document (finance vouchers via `.print-doc`) looks on screen or on
+ * paper. The aggressive print reset is guarded by `body:has(.resv-print)` so it
+ * only engages while a reservation sheet is actually mounted.
+ * ======================================================================== */
+
+/* Named page: A4 + comfortable margins scoped to this document only. Other
+ * print flows keep the browser default. Page numbering via margin boxes is a
+ * progressive enhancement (ignored by engines that don't support it). */
+@page resv-confirmation {
+  size: A4;
+  margin: 14mm 15mm 16mm;
+}
+
+/* On-screen preview: a light backdrop so the sheet reads like paper. */
+.resv-print-frame {
+  background: var(--color-surface-muted, #f1efe9);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  overflow: auto;
+}
+
+.resv-print {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 190mm;
+  margin-inline: auto;
+  padding: 10mm 12mm;
+  background: #ffffff;
+  color: #16181a;
+  font-family: var(--font-sans);
+  font-size: 10.5pt;
+  line-height: 1.5;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+/* --- Header --------------------------------------------------------------- */
+.resv-print__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8mm;
+  padding-bottom: 4mm;
+  border-bottom: 2px solid #16181a;
+}
+.resv-print__brand {
+  display: flex;
+  align-items: center;
+  gap: 5mm;
+}
+.resv-print__logo {
+  max-height: 20mm;
+  max-width: 42mm;
+  object-fit: contain;
+}
+.resv-print__hotel-name {
+  font-size: 15pt;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.01em;
+}
+.resv-print__hotel-line {
+  font-size: 9pt;
+  color: #4a4d50;
+  margin-top: 1mm;
+}
+.resv-print__docmeta {
+  text-align: end;
+  min-width: 46mm;
+}
+.resv-print__doctitle {
+  font-size: 12.5pt;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.resv-print__docline {
+  font-size: 9pt;
+  color: #4a4d50;
+  margin-top: 1mm;
+}
+.resv-print__docline > span:first-child {
+  color: #16181a;
+  font-weight: var(--font-weight-semibold);
+}
+.resv-print__status {
+  display: inline-block;
+  padding: 0.3mm 2mm;
+  border: 1px solid #9aa0a4;
+  border-radius: 2mm;
+  font-weight: var(--font-weight-semibold);
+  color: #16181a;
+}
+.resv-print__status--in {
+  margin-inline-start: 2mm;
+}
+
+/* --- Sections ------------------------------------------------------------- */
+.resv-print__section {
+  margin-top: 6mm;
+  break-inside: avoid;
+}
+.resv-print__section-title {
+  font-size: 10.5pt;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #16181a;
+  padding-bottom: 1.5mm;
+  margin-bottom: 3mm;
+  border-bottom: 1px solid #c7c2b6;
+  /* Never orphan a heading from its content. */
+  break-after: avoid;
+}
+
+.resv-print__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5mm 10mm;
+  margin: 0;
+}
+.resv-print__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5mm;
+  break-inside: avoid;
+}
+.resv-print__grid dt {
+  font-size: 8pt;
+  color: #6b6f72;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.resv-print__grid dd {
+  margin: 0;
+  font-size: 10pt;
+  color: #16181a;
+}
+
+/* --- Tables (companions / payments) -------------------------------------- */
+.resv-print__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 2mm;
+}
+.resv-print__table th,
+.resv-print__table td {
+  text-align: start;
+  padding: 1.5mm 2mm;
+  border-bottom: 1px solid #d9d5ca;
+  font-size: 9.5pt;
+  vertical-align: top;
+}
+.resv-print__table th {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #6b6f72;
+  border-bottom: 1px solid #b7b2a6;
+}
+.resv-print__table--pay td:last-child,
+.resv-print__table--pay th:last-child {
+  text-align: end;
+}
+
+/* --- Notes & official line ------------------------------------------------ */
+.resv-print__section--notes {
+  break-inside: auto;
+}
+.resv-print__note {
+  font-size: 9.5pt;
+  color: #2b2e30;
+  margin-top: 2mm;
+}
+.resv-print__note--official {
+  margin-top: 3mm;
+  font-style: italic;
+  color: #4a4d50;
+}
+.resv-print__muted {
+  color: #6b6f72;
+  font-size: 8.5pt;
+}
+
+/* --- Signatures / stamp --------------------------------------------------- */
+.resv-print__signatures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10mm;
+  margin-top: 12mm;
+  break-inside: avoid;
+}
+.resv-print__sign {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1.5mm;
+}
+.resv-print__sign-line {
+  height: 0;
+  margin-top: 8mm;
+  border-top: 1px solid #16181a;
+}
+.resv-print__stamp-box {
+  height: 20mm;
+  border: 1px dashed #9aa0a4;
+  border-radius: 2mm;
+}
+.resv-print__sign--stamp .resv-print__sign-line {
+  display: none;
+}
+.resv-print__sign-label {
+  font-size: 8.5pt;
+  color: #4a4d50;
+  text-align: center;
+}
+
+/* --- Footer --------------------------------------------------------------- */
+.resv-print__foot {
+  margin-top: 8mm;
+  padding-top: 3mm;
+  border-top: 1px solid #c7c2b6;
+  font-size: 8pt;
+  color: #6b6f72;
+  text-align: center;
+}
+
+/* Technical codes (reservation no., phone, document no., FX rate) stay LTR so
+ * an Arabic RTL page never reorders their digits/segments. */
+.resv-print__code {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+
+/* --- Print path — isolated, B&W-legible, paginated ----------------------- */
+@media print {
+  /* Only fires when a reservation sheet is present, so other documents keep
+     their own print behavior untouched. */
+  body:has(.resv-print) * {
+    visibility: hidden;
+  }
+  body:has(.resv-print) .resv-print,
+  body:has(.resv-print) .resv-print * {
+    visibility: visible;
+  }
+  /* Neutralise the modal's scroll box so the sheet flows onto as many A4 pages
+     as it needs instead of being clipped to the dialog height. */
+  body:has(.resv-print) .modal-overlay,
+  body:has(.resv-print) .modal,
+  body:has(.resv-print) .modal__body,
+  body:has(.resv-print) .resv-print-frame {
+    position: static !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+  .resv-print {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    page: resv-confirmation;
+  }
+  /* Keep each row / financial line and section headings intact across pages. */
+  .resv-print__section,
+  .resv-print__row,
+  .resv-print__signatures {
+    break-inside: avoid;
+  }
+  .resv-print__section-title {
+    break-after: avoid;
   }
 }
 
@@ -3336,6 +3782,39 @@ a {
   display: block;
 }
 
+/* --- Reservation secure document viewer (RESERVATIONS-FORM-REWORK, Wave 3)
+   Central layout for the in-app blob viewer; documents render `contain` (never
+   cropped) inside a scrollable, height-capped stage. Tokens only. */
+.doc-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.doc-viewer__stage {
+  display: grid;
+  place-items: center;
+  min-height: 16rem;
+  max-height: 70vh;
+  overflow: auto;
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+.doc-viewer__image {
+  max-width: 100%;
+  max-height: 66vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+.doc-viewer__frame {
+  width: 100%;
+  height: 66vh;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
 .print-notes {
   margin-top: var(--space-3);
   font-size: var(--font-size-sm);
@@ -4068,4 +4547,839 @@ a {
   .public-hotel-aside {
     position: static;
   }
+}
+
+/* --- Reservations rework: cards-first list, card menu, detail sections ----- */
+.res-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+.res-list__order {
+  font-size: var(--font-size-xs);
+}
+/* Cards-first responsive GRID (reservations rework): 4 columns on wide screens,
+ * then 3 on medium desktop, 2 on tablet and 1 on phones. Fixed-count tracks with
+ * minmax(0,1fr) keep every column able to shrink so long text wraps INSIDE the
+ * card (overflow-wrap) instead of forcing horizontal scroll at any width. Cells
+ * stretch so cards in a row share an equal height. RTL is automatic — the grid
+ * flows in the document's inline direction. */
+.reservation-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+@media (max-width: 1200px) {
+  .reservation-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .reservation-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .reservation-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The list-item wrapper fills its grid cell so the card inside stretches to the
+ * row's height (equal-height cards). */
+.reservation-list > [role="listitem"] {
+  display: flex;
+  min-width: 0;
+}
+
+/* The row card mirrors the rooms operational card: a calm surface with a
+ * status accent bar and quietly-divided regions. Full-width on desktop and a
+ * clean single-column stack on mobile — flex-wrap + min-width:0 keep it free of
+ * horizontal scroll at any breakpoint. */
+.res-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  gap: var(--card-section-gap);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--res-accent, var(--color-border-strong));
+  border-radius: var(--radius-xl);
+  padding: var(--card-pad);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.res-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.res-card--held {
+  --res-accent: var(--color-warning);
+}
+.res-card--confirmed {
+  --res-accent: var(--color-success);
+}
+.res-card--cancelled {
+  --res-accent: var(--color-danger);
+}
+.res-card--expired {
+  --res-accent: var(--color-fg-muted);
+}
+
+/* 1) Header — two stacked rows: status badges (row 1), then the reservation
+ * number (focal, opens details) plus explicit eye/printer controls (row 2).
+ * The number stays start-aligned and the controls end-aligned so their
+ * position is stable across every card regardless of badge count. */
+.res-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-inline-gap);
+}
+.res-card__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+.res-card__idrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--card-inline-gap);
+}
+.res-card__idactions {
+  display: flex;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-inline-start: auto;
+  flex: none;
+}
+.res-card__open {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1);
+  margin: calc(-1 * var(--space-1));
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.res-card__number {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+  transition: color var(--transition-fast);
+}
+/* Explicit focus ring on the focal number button — matches the house pattern
+ * for interactive controls (.action-icon-btn, .lang-menu__button) so the
+ * affordance never relies on the color shift alone (WCAG 2.4.7). */
+.res-card__open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.res-card__open:hover .res-card__number,
+.res-card__open:focus-visible .res-card__number {
+  color: var(--color-primary-active);
+}
+
+/* 2) Guest — initials avatar + name + phone. */
+.res-card__guest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.res-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+.res-card__guest-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+.res-card__guest-name {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 3) Stay facts — labelled row framed by subtle top/bottom dividers. */
+.res-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--color-border);
+}
+.res-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.res-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.res-card__fact dt .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.res-card__fact dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 5) Truncated note + in-house guard note. */
+.res-card__note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.res-card__inhouse {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* 6) Actions — shown directly on the card (no overflow menu); they wrap into a
+ * tidy row and always start at a consistent baseline (logical block-start auto)
+ * so cards of differing content still align their action rows. */
+.res-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-block-start: auto;
+  padding-block-start: var(--space-1);
+}
+
+/* 5) Financial summary well (§35) — a sunken, permission-gated money block of
+ * separate mini-fields. Additive + token-only; distinct from the fact rows so
+ * money never reads as just another line. */
+.res-card__money {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.res-card__money-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.res-card__money-item > dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.res-card__money-item > dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+.res-card__money-item--total > dd {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+.res-card__money-status {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+.res-card__money-status > dd {
+  margin: 0;
+}
+.res-card__money-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+
+/* 7) Smart action grid (§38) — a tidy grid (no overflow menu) that starts at
+ * two columns in the narrow 4-up card and widens as the card grows, so a state
+ * with the most actions still resolves to one or two clean rows. Full-width
+ * cells with wrapping labels keep it free of overlap and horizontal scroll. */
+.res-card__actions--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  align-items: stretch;
+}
+.res-card__actions--grid > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
+/* Detail modal section sub-headings. */
+.res-detail__subhead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+}
+
+/* --- Reservation form shell (RESERVATIONS-FORM-UX-CORRECTION · F1) --------- */
+/* The reservation wizard is a CENTERED, content-sized MODAL over the list (owner
+   correction). An overlay dims + centres a dialog whose header + stepper + footer
+   frame ONE scroll owner (`.resform-main`), so nothing double-scrolls. Everything
+   is additive, token-only and RTL/LTR-safe via logical properties — no palette,
+   no literals, and NO screen-percentage sizing. */
+.resform-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The margin AROUND the dialog — it never touches the screen edge on desktop. */
+  padding: var(--space-8);
+  background: rgba(6, 33, 29, 0.55);
+  backdrop-filter: blur(4px);
+  animation: fade-in var(--transition-base);
+}
+/* The dialog: a STABLE, content-sized width across steps (no horizontal jump) —
+   capped wide enough for the Booking step's multi-column layout, never sparse and
+   never a fixed screen ratio. Its height grows with the step's content up to the
+   PADDED overlay (`max-height:100%` = viewport minus the overlay margins, not a
+   `dvh` ratio); only then does the content band scroll. A short step yields a
+   short, centred dialog with no wasted gaps. */
+.resform-shell {
+  width: min(60rem, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop-in var(--transition-base);
+}
+/* Small screens: drop the margins and let the dialog become a near-full sheet. */
+@media (max-width: 640px) {
+  .resform-overlay {
+    padding: 0;
+  }
+  .resform-shell {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+}
+
+/* Band 1 — fixed header: back/close + title + reservation-number slot. */
+.resform-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.resform-header__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.resform-header__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resform-header__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.resform-header__slot {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+.resform-header__number {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-tight);
+}
+
+/* Band 3 — the ONLY scroller. `min-height: 0` is the linchpin: it overrides the
+   default `min-height: auto` on a flex child (which refuses to shrink below its
+   content) so this band is bounded to the leftover height between the fixed
+   header/stepper and footer — making ITS `overflow-y` the single scrollbar. No
+   descendant may set its own overflow/height. */
+.resform-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.resform-content {
+  width: 100%;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Band 4 — fixed footer: Cancel/Back on the start, primary on the end. */
+.resform-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  border-block-start: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.resform-footer__primary {
+  margin-inline-start: auto;
+}
+
+/* Band 2 — the stepper. A full rail on wider screens; a compact
+   "step n of N — label" + dot rail on phones (dual-rendered, toggled by media
+   query so there is no viewport JS / hydration mismatch). */
+.resform-stepper {
+  flex: none;
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-6);
+}
+.resform-stepper__rail {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 72rem;
+  margin-inline: auto;
+}
+.resform-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  text-align: center;
+}
+.resform-step:disabled {
+  cursor: default;
+}
+.resform-step:focus-visible {
+  outline: none;
+}
+.resform-step:focus-visible .resform-step__num {
+  box-shadow: var(--focus-ring);
+}
+/* Exactly ONE number per step lives here — the label carries no digit, which
+   kills the old duplicated "1. 1" numbering. */
+.resform-step__num {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-full);
+  font-weight: var(--font-weight-extrabold);
+  font-size: var(--font-size-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-muted);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.resform-step__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+  max-width: 14ch;
+}
+/* Connector between steps — grows to fill and sits level with the numbers. */
+.resform-step__bar {
+  flex: 1 1 auto;
+  height: 2px;
+  min-width: var(--space-4);
+  margin-block-start: 1.05rem;
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+.resform-step__bar--done {
+  background: var(--color-success);
+}
+/* current */
+.resform-step--current .resform-step__num {
+  background: var(--gradient-brand);
+  border-color: transparent;
+  color: var(--color-primary-contrast);
+  box-shadow: var(--shadow-brand);
+}
+.resform-step--current .resform-step__label {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-bold);
+}
+/* done */
+.resform-step--done .resform-step__num {
+  background: var(--color-success-soft);
+  border-color: transparent;
+  color: var(--color-success);
+}
+.resform-step--done .resform-step__label {
+  color: var(--color-fg);
+}
+/* error */
+.resform-step--error .resform-step__num {
+  background: var(--color-danger-soft);
+  border-color: transparent;
+  color: var(--color-danger);
+}
+.resform-step--error .resform-step__label {
+  color: var(--color-danger);
+}
+
+/* Compact mobile stepper — hidden until ≤560px. */
+.resform-stepper__compact {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.resform-stepper__compact-line {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.resform-stepper__dots {
+  display: flex;
+  gap: var(--space-2);
+}
+.resform-step__dot {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+}
+.resform-step__dot--current {
+  background: var(--color-primary);
+}
+.resform-step__dot--done {
+  background: var(--color-success);
+}
+.resform-step__dot--error {
+  background: var(--color-danger);
+}
+
+/* A 3-up field grid for short-field rows (consumed by later step packages):
+   3 → 2 at 900px → 1 at 560px. Token-based gap inherited from `.form-grid`. */
+.form-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 900px) {
+  .form-grid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .form-grid--3 {
+    grid-template-columns: 1fr;
+  }
+  /* Mobile: hide the full rail, show the compact stepper, wrap the footer into
+     thumb-reachable block buttons (primary full-width on its own row). */
+  .resform-stepper__rail {
+    display: none;
+  }
+  .resform-stepper__compact {
+    display: flex;
+  }
+  .resform-header {
+    padding-inline: var(--space-4);
+  }
+  .resform-content {
+    padding-inline: var(--space-4);
+  }
+  .resform-footer {
+    flex-wrap: wrap;
+    padding-inline: var(--space-4);
+  }
+  .resform-footer > .btn {
+    flex: 1 1 auto;
+  }
+  .resform-footer__primary {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
+}
+
+/* --- Step 4 (Booking) — Compact Premium layout ---------------------------- */
+/* RESERVATIONS · Step-4 rework: dense grouped fields (small uppercase heading
+   + hairline divider + a multi-column grid, 4-up on desktop) replace the stacked
+   `SectionCard`s so most of the booking data fits one desktop view — no separate
+   review step. Scoped to `.resform-book`; never changes field density elsewhere. */
+.resform-book {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resform-book__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border);
+}
+.resform-book__group:first-child {
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+.resform-book__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.resform-book__heading .icon {
+  color: var(--color-primary);
+}
+.resform-book__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+.resform-book__grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.resform-book__full {
+  grid-column: 1 / -1;
+}
+@media (max-width: 1100px) {
+  .resform-book__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 820px) {
+  .resform-book__grid,
+  .resform-book__grid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .resform-book__grid,
+  .resform-book__grid--3 {
+    grid-template-columns: 1fr;
+  }
+}
+/* Compact field density INSIDE step 4 only — moderate, still tappable/readable. */
+.resform-book .field {
+  gap: var(--space-1);
+}
+.resform-book .input,
+.resform-book .select,
+.resform-book .textarea {
+  padding: 0.5rem 0.7rem;
+}
+.resform-book .textarea {
+  min-height: 4.25rem;
+}
+/* Read-only display fields read as quiet, sunken, non-editable (but copyable). */
+.resform-book .input[readonly] {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-fg);
+  cursor: default;
+}
+.resform-book .input[readonly]:hover {
+  border-color: var(--color-border);
+}
+.resform-book .input[readonly]:focus {
+  box-shadow: none;
+  border-color: var(--color-border);
+}
+/* Compact available-room rows (number · type · capacity · price · currency). */
+.resform-book__rooms {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resform-book__room {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.resform-book__room--selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+/* Compact live totals strip (the in-step summary that replaces the old review). */
+.resform-book__totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+.resform-book__total {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.resform-book__total dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.resform-book__total dd {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+.resform-book__total--accent dd {
+  color: var(--color-primary);
+}
+
+/* --- Post-save success screen (RESERVATIONS-AUTO-ROOM-SUCCESS-PRINT · FE-B) -
+   After a successful save the wizard steps are REPLACED (in the same modal frame)
+   by a calm confirmation of the backend-owned record + Print / View / Close / New.
+   Additive, token-only, RTL/LTR-safe — no palette literals, no screen-ratio sizes. */
+.resform-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  text-align: center;
+}
+.resform-header__check {
+  flex: none;
+  color: var(--color-success);
+}
+.resform-success__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 3.5rem;
+  block-size: 3.5rem;
+  border-radius: var(--radius-full);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+.resform-success__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.resform-success__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-tight);
+}
+.resform-success__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.resform-success__confirm {
+  inline-size: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: start;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+.resform-success__confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.resform-success__grid {
+  inline-size: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  text-align: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.resform-success__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.resform-success__item dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.resform-success__item dd {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
 }

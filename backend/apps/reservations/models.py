@@ -20,6 +20,16 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
+from .document_storage import (
+    private_document_storage,
+    reservation_document_upload_to,
+)
+from .document_validators import (
+    validate_document_extension,
+    validate_document_signature,
+    validate_document_size,
+)
+
 
 class ReservationStatus(models.TextChoices):
     HELD = "held", "Held"
@@ -97,6 +107,18 @@ class Reservation(models.Model):
     check_out_date = models.DateField()
     expected_arrival_time = models.TimeField(null=True, blank=True)
 
+    # Optional link to the central guest directory (RESERVATIONS-FORM-REWORK).
+    # This is ADDITIVE: the frozen snapshot below stays the historical record,
+    # while the FK enables reuse/normalization. Editing a Guest must NEVER
+    # rewrite the snapshot fields (they are captured once, at booking time).
+    primary_guest = models.ForeignKey(
+        "guests.Guest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservations",
+    )
+
     # Primary guest SNAPSHOT (not a guest profile).
     primary_guest_name = models.CharField(max_length=180)
     primary_guest_phone = models.CharField(max_length=32, blank=True, default="")
@@ -110,6 +132,16 @@ class Reservation(models.Model):
     primary_guest_document_number = models.CharField(
         max_length=64, blank=True, default=""
     )
+
+    # Structured primary-guest snapshot (RESERVATIONS-FORM-REWORK). Mirrors the
+    # structured Guest fields so the snapshot is faithful to the new form. All
+    # blank/null and frozen — additive, and never auto-rewritten by guest edits.
+    primary_guest_first_name = models.CharField(max_length=80, blank=True, default="")
+    primary_guest_last_name = models.CharField(max_length=80, blank=True, default="")
+    primary_guest_father_name = models.CharField(max_length=80, blank=True, default="")
+    primary_guest_mother_name = models.CharField(max_length=80, blank=True, default="")
+    primary_guest_national_id = models.CharField(max_length=80, blank=True, default="")
+    primary_guest_date_of_birth = models.DateField(null=True, blank=True)
 
     adults = models.PositiveSmallIntegerField(default=1)
     children = models.PositiveSmallIntegerField(default=0)
@@ -274,3 +306,144 @@ class ReservationStatusLog(models.Model):
         return (
             f"res={self.reservation_id} {self.previous_status}->{self.new_status}"
         )
+
+
+class OccupantRelationship(models.TextChoices):
+    """How an adult companion relates to the primary guest."""
+
+    SPOUSE = "spouse", "Spouse"
+    CHILD_ADULT = "child_adult", "Adult child"
+    PARENT = "parent", "Parent"
+    SIBLING = "sibling", "Sibling"
+    RELATIVE = "relative", "Relative"
+    OTHER = "other", "Other"
+
+
+class ReservationOccupant(models.Model):
+    """An ADULT companion on a reservation (RESERVATIONS-FORM-REWORK).
+
+    Children remain a simple count on :attr:`Reservation.children`; only named
+    adult companions become rows here. Identity is stored inline (snapshot
+    style) and MAY link to a central ``guests.Guest`` — the link is optional so
+    a companion can be captured without forcing a Guest row to exist.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_occupants",
+    )
+    reservation = models.ForeignKey(
+        Reservation, on_delete=models.CASCADE, related_name="occupants"
+    )
+    guest = models.ForeignKey(
+        "guests.Guest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservation_occupancies",
+    )
+    first_name = models.CharField(max_length=80, blank=True, default="")
+    last_name = models.CharField(max_length=80, blank=True, default="")
+    father_name = models.CharField(max_length=80, blank=True, default="")
+    mother_name = models.CharField(max_length=80, blank=True, default="")
+    national_id = models.CharField(max_length=80, blank=True, default="")
+    nationality = models.CharField(max_length=100, blank=True, default="")
+    date_of_birth = models.DateField(null=True, blank=True)
+    relationship = models.CharField(
+        max_length=16,
+        choices=OccupantRelationship.choices,
+        blank=True,
+        default="",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "reservation_occupants"
+        ordering = ["reservation_id", "id"]
+
+    def __str__(self) -> str:
+        return f"occupant#{self.pk} (res={self.reservation_id})"
+
+
+class ReservationDocumentType(models.TextChoices):
+    NATIONAL_ID = "national_id", "National ID"
+    PASSPORT = "passport", "Passport"
+    RESIDENCE = "residence", "Residence permit"
+    VISA = "visa", "Visa"
+    MARRIAGE_CONTRACT = "marriage_contract", "Marriage contract"
+    FAMILY_BOOK = "family_book", "Family book"
+    FAMILY_STATEMENT = "family_statement", "Family statement"
+    OTHER = "other", "Other"
+
+
+class ReservationDocument(models.Model):
+    """A guest document (metadata + private files) on a reservation.
+
+    A document either belongs to a specific :class:`ReservationOccupant`
+    (``occupant`` set) or to the primary guest / whole reservation
+    (``occupant`` null). The two files (``front_file`` / ``back_file``) live on
+    the PRIVATE document storage — never a public URL. Serving/upload is a
+    later pass; this model is the storage + metadata foundation.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_documents",
+    )
+    reservation = models.ForeignKey(
+        Reservation, on_delete=models.CASCADE, related_name="documents"
+    )
+    occupant = models.ForeignKey(
+        ReservationOccupant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="documents",
+    )
+    doc_type = models.CharField(
+        max_length=32,
+        choices=ReservationDocumentType.choices,
+        blank=True,
+        default="",
+    )
+    number = models.CharField(max_length=64, blank=True, default="")
+    front_file = models.FileField(
+        storage=private_document_storage,
+        upload_to=reservation_document_upload_to,
+        validators=[
+            validate_document_extension,
+            validate_document_size,
+            validate_document_signature,
+        ],
+        null=True,
+        blank=True,
+    )
+    back_file = models.FileField(
+        storage=private_document_storage,
+        upload_to=reservation_document_upload_to,
+        validators=[
+            validate_document_extension,
+            validate_document_size,
+            validate_document_signature,
+        ],
+        null=True,
+        blank=True,
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservation_documents_uploaded",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "reservation_documents"
+        ordering = ["reservation_id", "id"]
+
+    def __str__(self) -> str:
+        return f"document#{self.pk} ({self.doc_type}, res={self.reservation_id})"

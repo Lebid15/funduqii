@@ -1,102 +1,151 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   CalendarCheck,
-  CalendarPlus,
   CalendarX2,
   CheckCircle2,
   Clock3,
   Globe,
-  CalendarRange,
   type LucideIcon,
 } from "lucide-react";
 
 import { Icon } from "@/components/ui";
-import { listReservations } from "@/lib/api/reservations";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { cx } from "@/lib/utils";
 
-import {
-  RESERVATION_VIEWS,
-  VIEW_PARAMS,
-  type ReservationView,
-} from "./reservationViews";
+/** Which summary card is active. "" is the Total card (clears status AND
+ * source); "website" is a SOURCE card (source=public_website), not a status. */
+export type SummaryCardKey = "" | "confirmed" | "held" | "cancelled" | "website";
 
-const ICONS: Record<ReservationView, LucideIcon> = {
-  all: CalendarCheck,
-  today: CalendarPlus,
-  website: Globe,
-  future: CalendarRange,
-  pending: Clock3,
-  confirmed: CheckCircle2,
-  closed: CalendarX2,
-};
+export interface ReservationCounts {
+  total?: number;
+  confirmed?: number;
+  held?: number;
+  cancelled?: number;
+  /** SOURCE subset — public_website reservations, already inside the statuses. */
+  website?: number;
+}
 
-const TONES: Record<ReservationView, string> = {
-  all: "primary",
-  today: "info",
-  website: "info",
-  future: "neutral",
-  pending: "warning",
-  confirmed: "success",
-  closed: "danger",
-};
+interface CardDef {
+  key: SummaryCardKey;
+  /** A status card filters by status; a source card filters by source. */
+  dimension: "status" | "source";
+  countKey: keyof ReservationCounts;
+  labelKey: "total" | "confirmed" | "pending" | "cancelled" | "website";
+  captionKey:
+    | "totalCaption"
+    | "confirmedCaption"
+    | "pendingCaption"
+    | "cancelledCaption"
+    | "websiteCaption";
+  icon: LucideIcon;
+  tone: string;
+}
 
-/** Clickable counters over the seven reservation views (owner reorg) —
- * clicking a card activates its tab. Counts come from seven page_size=1
- * list queries (the paginator count), so they always match the tabs. */
+const CARDS: CardDef[] = [
+  {
+    key: "",
+    dimension: "status",
+    countKey: "total",
+    labelKey: "total",
+    captionKey: "totalCaption",
+    icon: CalendarCheck,
+    tone: "primary",
+  },
+  {
+    key: "confirmed",
+    dimension: "status",
+    countKey: "confirmed",
+    labelKey: "confirmed",
+    captionKey: "confirmedCaption",
+    icon: CheckCircle2,
+    tone: "success",
+  },
+  {
+    key: "held",
+    dimension: "status",
+    countKey: "held",
+    labelKey: "pending",
+    captionKey: "pendingCaption",
+    icon: Clock3,
+    tone: "warning",
+  },
+  {
+    key: "cancelled",
+    dimension: "status",
+    countKey: "cancelled",
+    labelKey: "cancelled",
+    captionKey: "cancelledCaption",
+    icon: CalendarX2,
+    tone: "danger",
+  },
+  {
+    key: "website",
+    dimension: "source",
+    countKey: "website",
+    labelKey: "website",
+    captionKey: "websiteCaption",
+    icon: Globe,
+    tone: "info",
+  },
+];
+
+/** EXACTLY five clickable summary cards (reservations rework): Total /
+ * Confirmed / Pending / Cancelled are STATUS quick-filters; Website is a SOURCE
+ * quick-filter (public_website). The Website count is a subset of Total already
+ * distributed across the status counts — it is NEVER summed into the status
+ * math, which the caption + the group hint make explicit. Each card highlights
+ * with text/icon/ring (never colour alone). Clicking Total (or the active card)
+ * clears both status and source. */
 export function ReservationSummaryCards({
+  counts,
   active,
   onSelect,
-  reloadKey,
 }: {
-  active: ReservationView;
-  onSelect: (view: ReservationView) => void;
-  reloadKey: number;
+  counts: ReservationCounts;
+  /** The active card key, or null when a non-card status (e.g. expired) or a
+   * non-website source is applied — then no card is highlighted. */
+  active: SummaryCardKey | null;
+  onSelect: (card: SummaryCardKey) => void;
 }) {
   const { t } = useI18n();
-  const v = t.reservations.views;
-  const [counts, setCounts] = useState<Partial<Record<ReservationView, number>>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all(
-      RESERVATION_VIEWS.map((view) =>
-        listReservations({ ...VIEW_PARAMS[view], page_size: 1 })
-          .then((data) => [view, data.count] as const)
-          .catch(() => [view, undefined] as const),
-      ),
-    ).then((entries) => {
-      if (cancelled) return;
-      const next: Partial<Record<ReservationView, number>> = {};
-      for (const [view, count] of entries) {
-        if (count !== undefined) next[view] = count;
-      }
-      setCounts(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  const c = t.reservations.cards;
 
   return (
-    <div className="board-stats" role="group" aria-label={t.reservations.title}>
-      {RESERVATION_VIEWS.map((view) => (
-        <button
-          key={view}
-          type="button"
-          className={cx("board-stat", active === view && "board-stat--active")}
-          aria-pressed={active === view}
-          onClick={() => onSelect(view)}
-        >
-          <span className={cx("board-stat__icon", `board-stat__icon--${TONES[view]}`)}>
-            <Icon icon={ICONS[view]} size="md" />
-          </span>
-          <span className="board-stat__value">{counts[view] ?? "…"}</span>
-          <span className="board-stat__label">{v.tabs[view]}</span>
-        </button>
-      ))}
+    <div className="stack-tight">
+      <div className="board-stats board-stats--5" role="group" aria-label={c.groupLabel}>
+        {CARDS.map((card) => {
+          const isActive = active === card.key;
+          const value = counts[card.countKey];
+          const isSource = card.dimension === "source";
+          return (
+            <button
+              key={card.labelKey}
+              type="button"
+              className={cx(
+                "board-stat",
+                isSource && "board-stat--source",
+                isActive && "board-stat--active",
+              )}
+              aria-pressed={isActive}
+              onClick={() => onSelect(card.key)}
+            >
+              <span className="board-stat__head">
+                <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
+                  <Icon icon={card.icon} size="md" />
+                </span>
+                {isSource ? (
+                  <span className="board-stat__tag">{c.sourceTag}</span>
+                ) : null}
+              </span>
+              <span className="board-stat__value">{value ?? "…"}</span>
+              <span className="board-stat__label">{c[card.labelKey]}</span>
+              <span className="board-stat__caption">{c[card.captionKey]}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="board-stats__hint muted small">{c.sourceHint}</p>
     </div>
   );
 }

@@ -1168,3 +1168,105 @@ class CheckInFolioTests(APITestCase):
         )
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.data["code"], "invalid_finance_operation")
+
+
+class ImmediateCheckInRegressionTests(APITestCase):
+    """RESERVATIONS-FINAL-CLOSURE §3 — protect the atomic immediate check-in path.
+
+    Covers the HIGH-1 fix (commit 1250fad): an occupant whose national id is a
+    DIFFERENT raw format but the SAME normalized value as an existing guest must
+    REUSE that guest during promotion — never create a duplicate that trips the
+    per-hotel unique constraint and rolls the whole check-in back. Also asserts a
+    single reused folio, a non-duplicated deposit, and full atomic rollback.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(self.hotel, "imm@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.room = make_room(self.hotel, self.rtype)
+
+    def _run(self, *, occupants=None, deposit=None):
+        from apps.stays.orchestration import execute_immediate_check_in
+
+        return execute_immediate_check_in(
+            self.hotel,
+            lines=[{"room_type": self.rtype, "quantity": 1, "room": self.room}],
+            occupants=occupants,
+            room=self.room,
+            deposit=deposit,
+            room_assignment_mode="manual",
+            user=self.user,
+            check_in_date=D1,
+            check_out_date=D2,
+            source="walk_in",
+            primary_guest_name="Walk In Guest",
+        )
+
+    def test_occupant_guest_reused_by_normalized_national_id(self):
+        # Existing guest stored as "1234-5678"; the companion arrives as "12345678"
+        # — a different raw format but the SAME normalized value.
+        existing = Guest.objects.create(
+            hotel=self.hotel, full_name="Existing Guest", national_id="1234-5678"
+        )
+        before = Guest.objects.filter(hotel=self.hotel).count()  # == 1 (existing)
+
+        result = self._run(
+            occupants=[
+                {
+                    "first_name": "Comp",
+                    "last_name": "Anion",
+                    "national_id": "12345678",
+                    "relationship": "other",
+                }
+            ],
+            deposit={"amount": "40.00", "method": "cash"},
+        )
+
+        # No IntegrityError; only the PRIMARY guest is new — the companion reused
+        # the existing guest (matched on the normalized national id).
+        self.assertEqual(
+            Guest.objects.filter(hotel=self.hotel).count(), before + 1
+        )
+        stay = result["stay"]
+        companion_guest_ids = set(
+            StayGuest.objects.filter(stay=stay).values_list("guest_id", flat=True)
+        )
+        self.assertIn(existing.id, companion_guest_ids)
+        # Stay admitted in-house on the chosen room.
+        self.assertEqual(stay.status, StayStatus.IN_HOUSE)
+        self.assertEqual(stay.room_id, self.room.id)
+        # ONE folio — the deposit folio reused for the stay (no duplicate ledger).
+        res = result["reservation"]
+        self.assertEqual(res.folios.count(), 1)
+        folio = res.folios.get()
+        self.assertEqual(folio.stay_id, stay.id)
+        # The deposit is not duplicated: exactly one payment on the reused folio.
+        self.assertEqual(folio.payments.count(), 1)
+        self.assertIsNotNone(result["folio"])
+        self.assertEqual(result["folio"].id, folio.id)
+
+    def test_full_rollback_when_a_critical_step_fails(self):
+        from apps.finance.models import Folio, Payment
+        from apps.stays import orchestration
+
+        before = {
+            "res": Reservation.objects.count(),
+            "stay": Stay.objects.count(),
+            "folio": Folio.objects.count(),
+            "payment": Payment.objects.count(),
+        }
+        # Inject a failure AFTER the reservation + deposit + stay are created; the
+        # whole compose is one transaction, so nothing may persist.
+        with mock.patch.object(
+            orchestration,
+            "promote_reservation_occupants",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self._run(deposit={"amount": "25.00", "method": "cash"})
+
+        self.assertEqual(Reservation.objects.count(), before["res"])
+        self.assertEqual(Stay.objects.count(), before["stay"])
+        self.assertEqual(Folio.objects.count(), before["folio"])
+        self.assertEqual(Payment.objects.count(), before["payment"])

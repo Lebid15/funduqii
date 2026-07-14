@@ -52,6 +52,13 @@ class PaymentSerializer(serializers.ModelSerializer):
         fields = [
             "id", "folio", "folio_number", "reservation_number", "receipt_number",
             "amount", "currency", "method", "status", "paid_at", "business_date",
+            # RESERVATIONS-FORM-UX-CORRECTION (§29): the FX snapshot already stored
+            # on the model, now surfaced read-only so the reservation detail/edit
+            # screens can show payment currency + rate + equivalent. Additive:
+            # ``amount``/``currency`` (base) are unchanged, so existing consumers
+            # keep working; these are informational and default to "" / null.
+            "payment_currency", "original_amount", "exchange_rate", "rate_basis",
+            "rate_captured_at",
             "reverses", "reverses_receipt", "payer_name",
             "reference", "notes", "void_reason", "voided_at", "voided_by",
             "created_by", "created_at",

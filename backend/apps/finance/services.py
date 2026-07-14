@@ -22,7 +22,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
 from apps.common.exceptions import (
@@ -60,6 +60,47 @@ from .models import (
 
 TWO = Decimal("0.01")
 ZERO = Decimal("0.00")
+#: Largest magnitude a ``MONEY_KW`` field (max_digits=12, decimal_places=2) can
+#: store: 10 integer digits, so ``abs(value)`` must stay strictly below 10**10.
+#: An FX-derived base amount at or beyond this is rejected as a clean validation
+#: error instead of surfacing later as a DB ``NumericValueOutOfRange`` (500).
+MONEY_MAX_ABS = Decimal(10) ** 10
+
+
+class RateBasis(models.TextChoices):
+    """Canonical FX direction for a multi-currency ``Payment`` — the stored
+    label DIRECTS how the base/folio ``amount`` is derived from the tendered
+    ``original_amount`` and the manual ``exchange_rate`` (see
+    ``record_reservation_payment``):
+
+    - ``base_per_payment``: base = ``original_amount`` * ``exchange_rate``
+      (rate = base-currency units per 1 unit of the payment currency).
+    - ``payment_per_base``: base = ``original_amount`` / ``exchange_rate``
+      (rate = payment-currency units per 1 unit of the base currency).
+    """
+
+    BASE_PER_PAYMENT = "base_per_payment", "Base per payment (base = original * rate)"
+    PAYMENT_PER_BASE = "payment_per_base", "Payment per base (base = original / rate)"
+
+
+#: Canonical FX direction stored on multi-currency payments when the caller does
+#: not supply its own ``rate_basis`` label (see ``RateBasis``). Preserved as the
+#: back-compat default so existing same-direction callers are unaffected — the
+#: value is the plain string ``"base_per_payment"``.
+DEFAULT_RATE_BASIS = RateBasis.BASE_PER_PAYMENT.value
+
+
+def _resolve_rate_basis(rate_basis) -> str:
+    """Normalise a caller-supplied ``rate_basis`` to one of the two canonical
+    ``RateBasis`` values; an empty/blank label falls back to
+    ``DEFAULT_RATE_BASIS``. Anything else is rejected as a clean validation
+    error rather than being stored as a cosmetic, math-ignored label."""
+    value = (rate_basis or "").strip() or DEFAULT_RATE_BASIS
+    if value not in RateBasis.values:
+        raise InvalidFinanceOperation(
+            {"reason": "invalid_rate_basis", "rate_basis": rate_basis}
+        )
+    return value
 
 _PREFIX = {
     NumberKind.FOLIO: "FOL",
@@ -223,6 +264,21 @@ def _hotel_currency(hotel) -> str:
     return "USD"
 
 
+def _accepted_currencies(hotel) -> list[str]:
+    """The hotel's accepted PAYMENT currencies, upper-cased and de-duplicated.
+
+    ``HotelSettings.accepted_currencies`` (a JSON list) is added in a separate
+    package; until it exists — or whenever it is empty — the accepted set is
+    exactly the hotel's default (base) currency. The default is ALWAYS accepted.
+    """
+    default = _hotel_currency(hotel).upper()
+    settings_obj = getattr(hotel, "settings", None)
+    raw = getattr(settings_obj, "accepted_currencies", None) or []
+    codes = {str(code).strip().upper() for code in raw if str(code).strip()}
+    codes.add(default)
+    return sorted(codes)
+
+
 @transaction.atomic
 def create_folio(hotel, *, reservation=None, stay=None, guest=None,
                  customer_name="", currency=None, notes="", user=None,
@@ -269,6 +325,69 @@ def create_folio(hotel, *, reservation=None, stay=None, guest=None,
     return folio
 
 
+def _reuse_reservation_folio_for_stay(stay, *, user=None):
+    """Attach ``stay`` to its reservation's existing OPEN pre-arrival folio.
+
+    When a deposit was taken before arrival the reservation already owns its ONE
+    open folio (``reservation`` set, ``stay`` NULL). Instead of opening a SECOND
+    folio for the stay — which would split the ledger and strand the deposit —
+    the stay is linked onto that same folio. It then satisfies the per-stay open
+    folio guard (``stay`` is no longer NULL) and no longer the per-reservation
+    one, so no unique constraint is violated. Any deposit payment already on the
+    folio now belongs to the stay folio automatically — ONE ledger (invariant #1);
+    the balance stays DERIVED.
+
+    Returns the now stay-linked folio, or ``None`` when there is nothing to reuse
+    (the stay has no reservation, or the reservation has no open stay-null folio).
+    The reservation row is locked first to serialize with
+    ``ensure_reservation_folio`` so a folio created mid-flight is never missed.
+    """
+    if stay.reservation_id is None:
+        return None
+    from apps.reservations.models import Reservation
+
+    # Serialize with ensure_reservation_folio on the reservation row so a
+    # concurrently-created deposit folio can never be missed (which would open a
+    # duplicate ledger). Re-locking inside the same transaction is a no-op.
+    Reservation.objects.select_for_update().filter(
+        pk=stay.reservation_id
+    ).first()
+    folio = (
+        Folio.objects.select_for_update()
+        .filter(
+            hotel=stay.hotel,
+            reservation_id=stay.reservation_id,
+            stay__isnull=True,
+            status=FolioStatus.OPEN,
+        )
+        .first()
+    )
+    if folio is None:
+        return None
+    folio.stay = stay
+    folio.updated_by = _actor(user)
+    update_fields = ["stay", "updated_by", "updated_at"]
+    # Fill the folio's guest from the stay when it was opened from a bare
+    # snapshot (no central guest linked yet) — keeps the ledger coherent.
+    if folio.guest_id is None and stay.primary_guest_id is not None:
+        folio.guest = stay.primary_guest
+        update_fields.append("guest")
+        if not folio.customer_name:
+            folio.customer_name = stay.primary_guest.full_name
+            update_fields.append("customer_name")
+    folio.save(update_fields=update_fields)
+    _record_event(
+        stay.hotel,
+        event_type="folio.attached_to_stay",
+        severity="info",
+        title=f"Folio {folio.folio_number} carried into stay",
+        message=f"{folio.customer_name or '—'} · deposit folio → stay",
+        user=user,
+        obj=folio,
+    )
+    return folio
+
+
 @transaction.atomic
 def ensure_stay_folio(stay, *, user=None) -> Folio:
     """Get-or-create the stay's ONE open folio (idempotent, race-safe).
@@ -290,6 +409,16 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     ).first()
     if existing is not None:
         return existing
+    # Reservation-folio reuse (RESERVATIONS-FORM-REWORK — immediate check-in):
+    # if a pre-arrival deposit opened the reservation's ONE folio (reservation
+    # set, stay NULL), ATTACH this stay to that same folio instead of opening a
+    # second one — the deposit then lives on the stay folio automatically (ONE
+    # ledger). Backward-compatible: with no reservation, or no open reservation
+    # folio, this is a no-op and the stay folio is created below exactly as
+    # before.
+    reused = _reuse_reservation_folio_for_stay(stay, user=user)
+    if reused is not None:
+        return reused
     try:
         return create_folio(
             stay.hotel,
@@ -305,6 +434,91 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
         return Folio.objects.get(
             hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
         )
+
+
+@transaction.atomic
+def ensure_reservation_folio(reservation, *, user=None) -> Folio:
+    """Get-or-create the reservation's ONE open PRE-ARRIVAL folio (idempotent,
+    race-safe) — the folio for a deposit taken before check-in.
+
+    This is the SANCTIONED path that may create a reservation-only folio
+    (``reservation`` set, ``stay`` NULL). The generic ``create_folio`` still
+    refuses that shape (``ReservationFolioNotSupported``); only this service is
+    allowed to build it directly. Currency is forced to the hotel default and
+    NO charge, payment, or deposit is posted here.
+
+    Concurrency: the reservation row is locked (``select_for_update``) so two
+    callers cannot open two folios; the partial unique constraint
+    ``unique_open_folio_per_reservation`` is the DB backstop.
+    """
+    reservation = (
+        type(reservation).objects.select_for_update().get(pk=reservation.pk)
+    )
+    hotel = reservation.hotel
+    existing = Folio.objects.filter(
+        hotel=hotel,
+        reservation=reservation,
+        stay__isnull=True,
+        status=FolioStatus.OPEN,
+    ).first()
+    if existing is not None:
+        return existing
+    # FIN-F2: the two partial-unique constraints (``unique_open_folio_per_stay``
+    # and ``unique_open_folio_per_reservation``) do NOT jointly forbid a single
+    # reservation from holding BOTH an open stay-null folio AND an open stay
+    # folio. Guard that structural gap: if this reservation already has an OPEN
+    # STAY folio, refuse to open a second (reservation-only) ledger for it — this
+    # runs under the reservation ``select_for_update`` above, so it is race-safe.
+    stay_folio = Folio.objects.filter(
+        hotel=hotel,
+        reservation=reservation,
+        stay__isnull=False,
+        status=FolioStatus.OPEN,
+    ).first()
+    if stay_folio is not None:
+        raise InvalidFinanceOperation(
+            {"reason": "reservation_already_has_stay_folio", "folio": stay_folio.id}
+        )
+    # ``primary_guest`` (a central Guest FK) is added in a later package; until
+    # then it is absent — fall back to the reservation's snapshot name.
+    guest = getattr(reservation, "primary_guest", None)
+    customer_name = (
+        (guest.full_name if guest else "")
+        or getattr(reservation, "primary_guest_name", "")
+        or ""
+    )
+    actor = _actor(user)
+    number = next_number(hotel, NumberKind.FOLIO)
+    try:
+        folio = Folio.objects.create(
+            hotel=hotel,
+            reservation=reservation,
+            stay=None,
+            guest=guest,
+            customer_name=customer_name,
+            folio_number=number,
+            currency=_hotel_currency(hotel),
+            created_by=actor,
+            updated_by=actor,
+        )
+    except IntegrityError:
+        # Lost a race that slipped past the lock: the winner's folio is ours.
+        return Folio.objects.get(
+            hotel=hotel,
+            reservation=reservation,
+            stay__isnull=True,
+            status=FolioStatus.OPEN,
+        )
+    _record_event(
+        hotel,
+        event_type="folio.created",
+        severity="info",
+        title=f"Folio {folio.folio_number} opened",
+        message=f"{folio.customer_name or '—'} · reservation",
+        user=user,
+        obj=folio,
+    )
+    return folio
 
 
 def _guard_open(folio):
@@ -436,6 +650,30 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
 
 
 @transaction.atomic
+def post_room_account_charge(folio, *, description, quantity, unit_amount,
+                            charge_type=ChargeType.ROOM, tax_rate=ZERO,
+                            tax_amount=None, source="room_account",
+                            user=None) -> FolioCharge:
+    """Post an "on room account" item: the charge is added to the folio and
+    left OWING. This is a thin, intent-revealing delegate to ``add_charge``.
+
+    Invariant #5: on-room-account is NOT a payment. This NEVER creates a
+    ``Payment`` — doing so would falsely reduce the balance. The balance stays
+    truthful (``folio_balance`` = posted charges − posted payments)."""
+    return add_charge(
+        folio,
+        charge_type=charge_type,
+        description=description,
+        quantity=quantity,
+        unit_amount=unit_amount,
+        tax_rate=tax_rate,
+        tax_amount=tax_amount,
+        source=source,
+        user=user,
+    )
+
+
+@transaction.atomic
 def void_charge(charge, *, reason, user=None) -> FolioCharge:
     """Void a charge — only inside its own open business date, on an open
     folio. Later corrections go through ``adjust_charge``."""
@@ -517,9 +755,21 @@ def adjust_charge(charge, *, reason, user=None) -> FolioCharge:
 
 @transaction.atomic
 def record_payment(folio, *, amount, method, payer_name="",
-                   reference="", notes="", user=None) -> Payment:
+                   reference="", notes="", user=None,
+                   payment_currency="", original_amount=None,
+                   exchange_rate=None, rate_basis="",
+                   rate_captured_at=None, rate_entered_by=None) -> Payment:
     """Record a payment stamped to NOW and to the current open hotel
-    business date (the caller never chooses either)."""
+    business date (the caller never chooses either).
+
+    ``amount`` is ALWAYS the equivalent in the folio/base currency — it is the
+    only value ``folio_balance()`` reads. The optional FX snapshot fields
+    (``payment_currency``/``original_amount``/``exchange_rate``/``rate_basis``/
+    ``rate_captured_at``/``rate_entered_by``) are purely informational and
+    default to legacy behaviour, so existing callers are unaffected. Prefer
+    ``record_reservation_payment`` (or a stay equivalent) to derive and pass
+    these; this base recorder does not compute FX itself.
+    """
     from apps.shifts.services import get_open_shift_for
 
     folio = _lock_folio(folio)
@@ -534,6 +784,13 @@ def record_payment(folio, *, amount, method, payer_name="",
         receipt_number=next_number(folio.hotel, NumberKind.RECEIPT),
         amount=money(amount),
         currency=folio.currency,
+        payment_currency=payment_currency or "",
+        original_amount=(money(original_amount)
+                         if original_amount is not None else None),
+        exchange_rate=exchange_rate,
+        rate_basis=rate_basis or "",
+        rate_captured_at=rate_captured_at,
+        rate_entered_by=_actor(rate_entered_by),
         method=method,
         paid_at=timezone.now(),
         business_date=business_date,
@@ -553,6 +810,122 @@ def record_payment(folio, *, amount, method, payer_name="",
         obj=payment,
     )
     return payment
+
+
+@transaction.atomic
+def record_reservation_payment(reservation, *, amount=None, method,
+                               currency=None, original_amount=None,
+                               exchange_rate=None, rate_basis="",
+                               user=None, business_date=None,
+                               payer_name="", reference="", notes="") -> Payment:
+    """Record a payment (typically a pre-arrival deposit) against a
+    reservation's own folio, with optional multi-currency capture at the
+    PAYMENT layer only.
+
+    Flow:
+      1. ``ensure_reservation_folio`` gets/creates the reservation's single
+         open stay-null folio (currency = hotel default = base currency).
+      2. Resolve ``currency`` (defaults to the folio/base currency); it must be
+         one of the hotel's accepted currencies (or the default).
+      3. Same currency as the folio → ``amount`` is the base amount (positive).
+         Different currency → a manual ``exchange_rate`` AND the tendered
+         ``original_amount`` are REQUIRED and the base ``amount`` is derived as
+         ``money(original_amount * exchange_rate)`` (canonical
+         ``base_per_payment`` direction; ``rate_basis`` records the direction).
+         The FX snapshot (payment_currency / original_amount / exchange_rate /
+         rate_basis / rate_captured_at=now / rate_entered_by=user) is stored.
+      4. The Payment is posted through the existing ``record_payment`` path, so
+         it is stamped to NOW + the current open business date and attached to
+         the creator's open shift. The base ``amount`` alone drives
+         ``folio_balance`` (its derivation is unchanged).
+
+    ``business_date`` is accepted for signature stability only: like every
+    dated finance write, the payment is stamped to the hotel's current open
+    business date by ``record_payment`` (no back-/future-dating), so any value
+    passed here is deliberately ignored.
+
+    The ``exchange_rate.override`` permission that gates a MANUAL rate is
+    enforced at the view/serializer layer in a later package; this service is
+    the sanctioned money path only.
+    """
+    folio = ensure_reservation_folio(reservation, user=user)
+    base_currency = folio.currency
+    resolved_currency = (currency or base_currency).strip().upper()
+
+    accepted = _accepted_currencies(folio.hotel)
+    if resolved_currency not in accepted:
+        raise InvalidFinanceOperation(
+            {
+                "reason": "currency_not_accepted",
+                "currency": resolved_currency,
+                "accepted": accepted,
+            }
+        )
+
+    if resolved_currency == base_currency.upper():
+        # Same-currency payment: the given amount IS the base amount.
+        if amount is None or money(amount) <= ZERO:
+            raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+        base_amount = money(amount)
+        fx = dict(
+            payment_currency=base_currency,
+            original_amount=base_amount,
+            exchange_rate=None,
+            rate_basis="",
+            rate_captured_at=None,
+            rate_entered_by=None,
+        )
+    else:
+        # Foreign-currency payment: a manual rate + the tendered amount are
+        # required; the base amount is DERIVED (never client-trusted) and the
+        # DIRECTION of that derivation is DICTATED by ``rate_basis``.
+        resolved_basis = _resolve_rate_basis(rate_basis)
+        if exchange_rate is None or Decimal(str(exchange_rate)) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "exchange_rate_required", "currency": resolved_currency}
+            )
+        if original_amount is None or money(original_amount) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "original_amount_required", "currency": resolved_currency}
+            )
+        rate = Decimal(str(exchange_rate))
+        original = money(original_amount)
+        if resolved_basis == RateBasis.PAYMENT_PER_BASE:
+            # rate = payment-currency units per 1 base unit ⇒ base = original / rate.
+            if rate == ZERO:
+                raise InvalidFinanceOperation({"reason": "invalid_exchange_rate"})
+            base_amount = money(original / rate)
+        else:
+            # base_per_payment: rate = base units per 1 payment unit ⇒ multiply.
+            base_amount = money(original * rate)
+        fx = dict(
+            payment_currency=resolved_currency,
+            original_amount=original,
+            exchange_rate=rate,
+            rate_basis=resolved_basis,
+            rate_captured_at=timezone.now(),
+            rate_entered_by=user,
+        )
+
+    # FIN-F3: the resolved base amount must be strictly positive AND fit what a
+    # ``MONEY_KW`` column can hold, so an extreme rate/amount is rejected here as
+    # a clean 400 instead of surfacing later as a DB ``NumericValueOutOfRange``
+    # (500). Applies to both the same- and foreign-currency branches above.
+    if base_amount <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if base_amount.copy_abs() >= MONEY_MAX_ABS:
+        raise InvalidFinanceOperation({"reason": "amount_out_of_range"})
+
+    return record_payment(
+        folio,
+        amount=base_amount,
+        method=method,
+        payer_name=payer_name,
+        reference=reference,
+        notes=notes,
+        user=user,
+        **fx,
+    )
 
 
 @transaction.atomic

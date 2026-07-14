@@ -9,20 +9,24 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User
+from apps.guests.models import Guest
 from apps.rbac.services import grant_permission
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
     Reservation,
+    ReservationDocument,
     ReservationRoomLine,
+    ReservationSource,
     ReservationStatus,
-    ReservationStatusLog,
 )
 from apps.rooms.models import Floor, Room, RoomStatus, RoomType
+from apps.stays.models import Stay, StayStatus
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
 
 HDR = lambda h: {"HTTP_X_HOTEL_ID": str(h.id)}  # noqa: E731
@@ -695,6 +699,45 @@ class ReservationTests(APITestCase):
         self.assertEqual(res.data["confirmed"], 1)
         self.assertEqual(res.data["held"], 1)
 
+    def test_overview_website_source_count(self):
+        """`website` counts public-website reservations across ALL statuses,
+        strictly hotel-scoped (a second hotel's website bookings are excluded)."""
+
+        def _mk(hotel, source, status):
+            return Reservation.objects.create(
+                hotel=hotel,
+                reservation_number=f"R{Reservation.objects.count() + 1:05d}",
+                status=status,
+                source=source,
+                check_in_date=D1,
+                check_out_date=D2,
+                primary_guest_name="G",
+                hold_expires_at=(
+                    _future() if status == ReservationStatus.HELD else None
+                ),
+            )
+
+        # Hotel A: 3 public-website reservations spanning different statuses
+        # (proves the count ignores status filters) + 1 non-website booking.
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CONFIRMED)
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.HELD)
+        _mk(self.hotel, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CANCELLED)
+        _mk(self.hotel, ReservationSource.DIRECT, ReservationStatus.CONFIRMED)
+
+        # Hotel B: a public-website reservation that must NOT leak into hotel A.
+        other = make_hotel(slug="other-web")
+        _mk(other, ReservationSource.PUBLIC_WEBSITE, ReservationStatus.CONFIRMED)
+
+        res = self.client.get(
+            reverse("reservations:reservation-overview"), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        # 3 website reservations in hotel A, regardless of status; hotel B excluded.
+        self.assertEqual(res.data["website"], 3)
+        # Purely additive: existing counts still reflect every hotel-A row.
+        self.assertEqual(res.data["total"], 4)
+        self.assertEqual(res.data["confirmed"], 2)
+
     def test_list_filters(self):
         self._create()
         r2 = self._create(status="held", hold_expires_at=_future(), lines=[{"room_type": self.rtype.id, "quantity": 1}])
@@ -1019,9 +1062,6 @@ class PostCheckInGuardTests(APITestCase):
     def setUp(self):
         from django.utils import timezone as dj_tz
 
-        from apps.guests.models import Guest
-        from apps.stays.models import Stay
-
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
         self.rtype = make_type(self.hotel)
@@ -1194,3 +1234,896 @@ class PublicCancelVisibilityTests(APITestCase):
             for r in self.client.get(url, **HDR(self.hotel)).data["results"]
         }
         self.assertEqual(numbers, set())
+
+
+# --- Reservations UI rework: additive read-only display fields ------------- #
+
+
+class DisplayFieldTests(APITestCase):
+    """Purely additive read fields for the reworked reservations UI:
+    ``created_by_name`` on the reservation, and ``floor_name``/``floor_number``
+    on each room line (sourced from the SPECIFIC assigned room's floor)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        # A floor with an explicit name AND number, to prove both are surfaced.
+        self.floor = Floor.objects.create(
+            hotel=self.hotel, name="First Floor", number="1"
+        )
+        self.rooms = make_rooms(self.hotel, self.rtype, 1, floor=self.floor)
+
+    def _res(self, *, created_by, number="R-DISP"):
+        return Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Guest",
+            created_by=created_by,
+        )
+
+    def _detail(self, res):
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_created_by_name_uses_full_name(self):
+        # add_member sets full_name="Member".
+        data = self._detail(self._res(created_by=self.manager))
+        self.assertEqual(data["created_by_name"], "Member")
+        # The existing email field is unchanged (purely additive).
+        self.assertEqual(data["created_by"], self.manager.email)
+
+    def test_created_by_name_falls_back_to_email(self):
+        no_name = User.objects.create_user(
+            email="noname@x.com", password="StrongPass!234", full_name=""
+        )
+        data = self._detail(self._res(created_by=no_name, number="R-NONAME"))
+        self.assertEqual(data["created_by_name"], "noname@x.com")
+
+    def test_created_by_name_null_without_creator(self):
+        data = self._detail(self._res(created_by=None, number="R-NOCREATOR"))
+        self.assertIsNone(data["created_by_name"])
+
+    def test_line_floor_fields_from_assigned_room_and_null_when_unassigned(self):
+        res = self._res(created_by=self.manager)
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=None,
+            quantity=1,
+        )
+        lines = {line["room"]: line for line in self._detail(res)["lines"]}
+
+        assigned = lines[self.rooms[0].id]
+        self.assertEqual(assigned["floor_name"], "First Floor")
+        self.assertEqual(assigned["floor_number"], "1")
+
+        unassigned = lines[None]
+        self.assertIsNone(unassigned["floor_name"])
+        self.assertIsNone(unassigned["floor_number"])
+
+
+# --------------------------------------------------------------------------- #
+# RESERVATIONS-FORM-UX-CORRECTION — deposit / financial summary / derived      #
+# read fields / sensitive masking (§26/§27/§31/§33/§37/§45)                    #
+# --------------------------------------------------------------------------- #
+
+
+def make_stay(hotel, reservation, line, room, *, status=StayStatus.IN_HOUSE):
+    """Create a Stay off a reservation for the guard/derived-field tests.
+
+    A CHECKED_OUT stay leaves the reservation CONFIRMED (departed guest) and is
+    exactly the Finance-F1 case: the booking has a stay yet is not in-house.
+    """
+    guest = Guest.objects.create(hotel=hotel, full_name="Stay Guest")
+    now = timezone.now()
+    return Stay.objects.create(
+        hotel=hotel,
+        reservation=reservation,
+        reservation_line=line,
+        room=room,
+        primary_guest=guest,
+        status=status,
+        planned_check_in_date=reservation.check_in_date,
+        planned_check_out_date=reservation.check_out_date,
+        actual_check_in_at=now,
+        actual_check_out_at=(now if status == StayStatus.CHECKED_OUT else None),
+    )
+
+
+class ReservationDepositTests(APITestCase):
+    """§27 pre-arrival DEPOSIT endpoint + Finance-F1 any-stay guard.
+
+    A deposit is a PRE-arrival concept: it records money on the reservation's ONE
+    folio (reused at check-in, single ledger) and is refused once ANY stay exists
+    — in-house OR already checked-out.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        # base_rate 100 × 2 nights (D1→D2) = 200 → priced reservation.
+        self.rtype = make_type(self.hotel, max_capacity=3, base_rate="100.00")
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+        self.res, self.line = self._reservation()
+
+    def _reservation(self, *, number="R-DEP", status=ReservationStatus.CONFIRMED):
+        res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=status,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Deposit Guest",
+        )
+        line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        return res, line
+
+    def _deposit(self, res, body, *, user=None):
+        self.client.force_authenticate(user or self.manager)
+        return self.client.post(
+            reverse("reservations:reservation-payments", args=[res.id]),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_deposit_success_records_payment_on_reservation_folio(self):
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["payment"]["amount"], "50.00")
+        fin = resp.data["financial_summary"]
+        self.assertEqual(fin["reservation_total"], "200.00")
+        self.assertEqual(fin["paid"], "50.00")
+        self.assertEqual(fin["remaining"], "150.00")
+        self.assertEqual(fin["currency"], "USD")
+        # ONE pre-arrival folio (stay-null) holds the deposit — no duplicate ledger.
+        self.assertEqual(self.res.folios.count(), 1)
+        self.assertIsNone(self.res.folios.get().stay_id)
+
+    def test_deposit_folio_is_reused_at_check_in_no_duplicate(self):
+        from apps.finance.services import ensure_stay_folio
+
+        self.assertEqual(
+            self._deposit(self.res, {"amount": "40.00", "method": "cash"}).status_code,
+            201,
+        )
+        self.assertEqual(self.res.folios.count(), 1)
+        pre_folio = self.res.folios.get()
+        self.assertIsNone(pre_folio.stay_id)
+        # Checking in reuses that same folio instead of opening a second ledger.
+        guest = Guest.objects.create(hotel=self.hotel, full_name="Deposit Guest")
+        stay = Stay.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            reservation_line=self.line,
+            room=self.rooms[0],
+            primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1,
+            planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        reused = ensure_stay_folio(stay)
+        self.assertEqual(reused.id, pre_folio.id)
+        self.assertEqual(self.res.folios.count(), 1)  # still ONE folio
+        reused.refresh_from_db()
+        self.assertEqual(reused.stay_id, stay.id)
+
+    def test_deposit_rejects_non_positive_amount(self):
+        resp = self._deposit(self.res, {"amount": "0", "method": "cash"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_deposit_rejected_when_reservation_has_in_house_stay(self):
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_deposit_rejected_when_reservation_has_checked_out_stay(self):
+        # Finance-F1: a departed guest's reservation is still CONFIRMED but must
+        # NOT accept a new pre-arrival deposit (would orphan an open folio).
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def _cancel(self, res, *, user=None, reason="closing"):
+        self.client.force_authenticate(user or self.manager)
+        return self.client.post(
+            reverse("reservations:reservation-cancel", args=[res.id]),
+            {"reason": reason},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_cancel_rejected_when_reservation_has_checked_out_stay(self):
+        # RESERVATIONS-FINAL-CLOSURE §2 — a departed guest's reservation is still
+        # CONFIRMED but must NOT be re-cancelled: its record belongs to the stay,
+        # and a normal cancel would corrupt operational history/reports.
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.status, ReservationStatus.CONFIRMED)
+
+    def test_cancel_rejected_when_reservation_has_in_house_stay(self):
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_cancel_allowed_before_any_stay(self):
+        # The broadened guard must NOT over-block: a booking that never checked in
+        # still cancels normally.
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 200)
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.status, ReservationStatus.CANCELLED)
+
+    def test_deposit_requires_payment_create_permission(self):
+        # reservations.view alone is never enough to record money (§42).
+        viewer = add_member(self.hotel, "dep-view@x.com", perms=["reservations.view"])
+        denied = self._deposit(
+            self.res, {"amount": "10.00", "method": "cash"}, user=viewer
+        )
+        self.assertEqual(denied.status_code, 403)
+        payer = add_member(
+            self.hotel, "dep-pay@x.com", perms=["finance.payment_create"]
+        )
+        ok = self._deposit(
+            self.res, {"amount": "10.00", "method": "cash"}, user=payer
+        )
+        self.assertEqual(ok.status_code, 201)
+
+    def test_foreign_manual_rate_requires_exchange_rate_override(self):
+        body = {
+            "method": "cash",
+            "currency": "EUR",
+            "original_amount": "20.00",
+            "exchange_rate": "1.10",
+            "rate_basis": "base_per_payment",
+        }
+        payer = add_member(
+            self.hotel, "fx@x.com", perms=["finance.payment_create"]
+        )
+        denied = self._deposit(self.res, body, user=payer)
+        self.assertEqual(denied.status_code, 403)
+        # Granting exchange_rate.override clears the FX permission gate; the
+        # request no longer 403s (it moves past permission to currency handling).
+        over = add_member(
+            self.hotel,
+            "fx2@x.com",
+            perms=["finance.payment_create", "exchange_rate.override"],
+        )
+        granted = self._deposit(self.res, body, user=over)
+        self.assertNotEqual(granted.status_code, 403)
+
+
+class ReservationFinancialSummaryTests(APITestCase):
+    """§26/§31/§35 derived financial summary — total = rate×nights, paid = Σ
+    posted payments, remaining = total−paid; money gated by ``finance.view`` and
+    tenant-scoped."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, base_rate="100.00")
+        self.rooms = make_rooms(self.hotel, self.rtype, 1)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-FIN",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,  # 2 nights
+            primary_guest_name="Fin Guest",
+        )
+        self.line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+
+    def _summary(self, res, user, hotel=None):
+        self.client.force_authenticate(user)
+        return self.client.get(
+            reverse("reservations:reservation-financial-summary", args=[res.id]),
+            **HDR(hotel or self.hotel),
+        )
+
+    def test_totals_derived_from_rate_and_posted_payments(self):
+        from apps.finance.services import record_reservation_payment
+
+        record_reservation_payment(
+            self.res, amount="50.00", method="cash", user=self.manager
+        )
+        resp = self._summary(self.res, self.manager)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["can_view_money"])
+        self.assertEqual(resp.data["reservation_total"], "200.00")
+        self.assertEqual(resp.data["paid"], "50.00")
+        self.assertEqual(resp.data["remaining"], "150.00")
+        self.assertEqual(resp.data["currency"], "USD")
+        self.assertEqual(resp.data["nights"], 2)
+
+    def test_summary_moves_to_folio_after_check_in(self):
+        # RESERVATIONS-FINAL-CLOSURE §1 — before a stay the reservation reports
+        # paid/remaining/status; once ANY stay exists those are SUPPRESSED (they
+        # would compare the room total to folio payments incl. in-stay charges) and
+        # the REAL folio balance (central source of truth) is surfaced instead.
+        from apps.finance.services import record_reservation_payment
+
+        record_reservation_payment(
+            self.res, amount="50.00", method="cash", user=self.manager
+        )
+        pre = self._summary(self.res, self.manager).data
+        self.assertFalse(pre["has_stay"])
+        self.assertEqual(pre["paid"], "50.00")
+        self.assertEqual(pre["remaining"], "150.00")
+        self.assertEqual(pre["payment_status"], "partial")
+        self.assertIsNone(pre["folio_balance"])
+
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+
+        post = self._summary(self.res, self.manager).data
+        self.assertTrue(post["has_stay"])
+        self.assertIsNone(post["paid"])
+        self.assertIsNone(post["remaining"])
+        self.assertIsNone(post["payment_status"])
+        # The reservation's folio (charges 0 − payments 50) is a 50 credit; the
+        # real folio balance is surfaced, never a misleading reservation figure.
+        self.assertEqual(post["folio_balance"], "-50.00")
+        # The room total stays as a reference; it is NOT compared to folio payments.
+        self.assertEqual(post["reservation_total"], "200.00")
+
+    def test_money_masked_without_finance_view(self):
+        staff = add_member(self.hotel, "noview@x.com", perms=["reservations.view"])
+        resp = self._summary(self.res, staff)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["can_view_money"])
+        self.assertIsNone(resp.data["reservation_total"])
+        self.assertIsNone(resp.data["paid"])
+        self.assertIsNone(resp.data["remaining"])
+        self.assertEqual(resp.data["payments"], [])
+        # Non-sensitive shape still present.
+        self.assertEqual(resp.data["currency"], "USD")
+        self.assertEqual(resp.data["nights"], 2)
+
+    def test_summary_is_tenant_scoped(self):
+        other = make_hotel(slug="other-fin")
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        resp = self._summary(self.res, om, hotel=other)
+        self.assertEqual(resp.status_code, 404)
+
+
+class DerivedStayAndDocumentFieldTests(APITestCase):
+    """§25/§37 derived read fields on the reservation serializer:
+    ``stay_status`` (latest stay's status, or null) and ``document_count`` (a
+    non-sensitive count computed from the prefetched ``documents`` relation)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+
+    def _res(self, number):
+        res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Guest",
+        )
+        line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        return res, line
+
+    def _detail(self, res):
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_stay_status_null_and_zero_documents_by_default(self):
+        res, _ = self._res("R-NONE")
+        data = self._detail(res)
+        self.assertIsNone(data["stay_status"])
+        self.assertEqual(data["document_count"], 0)
+
+    def test_stay_status_in_house(self):
+        res, line = self._res("R-INH")
+        make_stay(self.hotel, res, line, self.rooms[0], status=StayStatus.IN_HOUSE)
+        self.assertEqual(self._detail(res)["stay_status"], "in_house")
+
+    def test_stay_status_checked_out(self):
+        res, line = self._res("R-OUT")
+        make_stay(self.hotel, res, line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        self.assertEqual(self._detail(res)["stay_status"], "checked_out")
+
+    def test_document_count_reflects_documents_on_detail_and_list(self):
+        res, _ = self._res("R-DOC")
+        ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=res, doc_type="passport", number="A1"
+        )
+        ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=res, doc_type="national_id", number="B2"
+        )
+        self.assertEqual(self._detail(res)["document_count"], 2)
+        resp = self.client.get(
+            reverse("reservations:reservation-list"), **HDR(self.hotel)
+        )
+        row = next(
+            r for r in resp.data["results"] if r["reservation_number"] == "R-DOC"
+        )
+        self.assertEqual(row["document_count"], 2)
+
+    def test_document_count_uses_prefetch_no_extra_query(self):
+        # Once ``documents`` is prefetched (as the list/detail querysets do),
+        # ``len(obj.documents.all())`` — the exact mechanism of the serializer's
+        # ``document_count`` — issues ZERO extra queries per reservation (no N+1).
+        res, _ = self._res("R-PF")
+        for i in range(3):
+            ReservationDocument.objects.create(
+                hotel=self.hotel, reservation=res, doc_type="other", number=f"N{i}"
+            )
+        prefetched = list(
+            Reservation.objects.filter(hotel=self.hotel).prefetch_related("documents")
+        )
+        with self.assertNumQueries(0):
+            counts = [len(r.documents.all()) for r in prefetched]
+        self.assertEqual(counts, [3])
+
+
+class SensitiveMaskingTests(APITestCase):
+    """§36/§39 (sec-F2): the primary guest's father/mother names + DoB are
+    sensitive — REDACTED to null (and national ID masked) for callers without
+    ``guests.view_sensitive_data`` — masked SERVER-SIDE, not just hidden in UI."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.rtype = make_type(self.hotel)
+        make_rooms(self.hotel, self.rtype, 1)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-SENS",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Sensitive Guest",
+            primary_guest_father_name="Father Name",
+            primary_guest_mother_name="Mother Name",
+            primary_guest_national_id="1234567890",
+            primary_guest_date_of_birth=date(1990, 5, 1),
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=self.res, room_type=self.rtype, quantity=1
+        )
+
+    def _detail(self, user):
+        self.client.force_authenticate(user)
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[self.res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_masked_without_view_sensitive_permission(self):
+        staff = add_member(self.hotel, "plain@x.com", perms=["reservations.view"])
+        data = self._detail(staff)
+        self.assertIsNone(data["primary_guest_father_name"])
+        self.assertIsNone(data["primary_guest_mother_name"])
+        self.assertIsNone(data["primary_guest_date_of_birth"])
+        self.assertIn("•", data["primary_guest_national_id"])
+
+    def test_visible_with_view_sensitive_permission(self):
+        staff = add_member(
+            self.hotel,
+            "sens@x.com",
+            perms=["reservations.view", "guests.view_sensitive_data"],
+        )
+        data = self._detail(staff)
+        self.assertEqual(data["primary_guest_father_name"], "Father Name")
+        self.assertEqual(data["primary_guest_mother_name"], "Mother Name")
+        self.assertEqual(data["primary_guest_date_of_birth"], "1990-05-01")
+        self.assertEqual(data["primary_guest_national_id"], "1234567890")
+
+
+# --------------------------------------------------------------------------- #
+# RESERVATIONS-AUTO-ROOM — deterministic auto / validated manual assignment    #
+# --------------------------------------------------------------------------- #
+
+
+def _blocking_line(hotel, rtype, room, ci, co, *, status=ReservationStatus.CONFIRMED):
+    """A blocking (confirmed) reservation pinning ``room`` over ``[ci, co)``."""
+    res = Reservation.objects.create(
+        hotel=hotel,
+        reservation_number=f"RB{Reservation.objects.count() + 1:05d}",
+        status=status,
+        check_in_date=ci,
+        check_out_date=co,
+        primary_guest_name="Blocker",
+    )
+    ReservationRoomLine.objects.create(
+        hotel=hotel, reservation=res, room_type=rtype, room=room, quantity=1
+    )
+    return res
+
+
+class PickAvailableRoomTests(TestCase):
+    """Unit tests for the deterministic picker.
+
+    ``AvailabilityService.pick_available_room`` orders by floor sort_order, then
+    numeric-aware room number, then pk, and honours floor / capacity / dates /
+    blocking reservations / in-house stays / bookable status / tenancy.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="pick")
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        self.r101, self.r102 = make_rooms(
+            self.hotel, self.rtype, 2, floor=self.f1, start=101
+        )
+        self.r201, self.r202 = make_rooms(
+            self.hotel, self.rtype, 2, floor=self.f2, start=201
+        )
+
+    def pick(self, **kw):
+        return AvailabilityService.pick_available_room(
+            self.hotel, room_type=self.rtype, check_in=D1, check_out=D2, **kw
+        )
+
+    def test_returns_first_by_floor_then_number(self):
+        self.assertEqual(self.pick(), self.r101)
+
+    def test_deterministic_same_inputs_same_room(self):
+        self.assertEqual(self.pick(), self.pick())
+
+    def test_respects_floor(self):
+        self.assertEqual(self.pick(floor=self.f2), self.r201)
+
+    def test_respects_room_type(self):
+        other_type = make_type(self.hotel, code="DLX", max_capacity=4)
+        (droom,) = make_rooms(self.hotel, other_type, 1, floor=self.f1, start=301)
+        self.assertEqual(self.pick(), self.r101)  # STD never returns the DLX room
+        self.assertEqual(
+            AvailabilityService.pick_available_room(
+                self.hotel, room_type=other_type, check_in=D1, check_out=D2
+            ),
+            droom,
+        )
+
+    def test_respects_capacity(self):
+        self.assertIsNone(self.pick(min_capacity=self.rtype.max_capacity + 1))
+        self.assertEqual(self.pick(min_capacity=self.rtype.max_capacity), self.r101)
+
+    def test_skips_reservation_blocked_room(self):
+        _blocking_line(self.hotel, self.rtype, self.r101, D1, D2)
+        self.assertEqual(self.pick(), self.r102)
+
+    def test_back_to_back_reservation_not_blocked(self):
+        # A reservation ending exactly at D1 does not overlap [D1, D2).
+        _blocking_line(self.hotel, self.rtype, self.r101, D1 - timedelta(days=3), D1)
+        self.assertEqual(self.pick(), self.r101)
+
+    def test_skips_in_house_stay_room(self):
+        guest = Guest.objects.create(hotel=self.hotel, full_name="G")
+        Stay.objects.create(
+            hotel=self.hotel,
+            room=self.r101,
+            primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1,
+            planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        self.assertEqual(self.pick(), self.r102)
+
+    def test_excludes_non_bookable_rooms(self):
+        self.r101.status = RoomStatus.MAINTENANCE
+        self.r101.save()
+        self.r102.status = RoomStatus.OUT_OF_SERVICE
+        self.r102.save()
+        self.assertEqual(self.pick(), self.r201)
+
+    def test_none_when_no_match(self):
+        for room in (self.r101, self.r102, self.r201, self.r202):
+            room.status = RoomStatus.ARCHIVED
+            room.save()
+        self.assertIsNone(self.pick())
+
+    def test_exclude_room_ids_picks_next(self):
+        self.assertEqual(self.pick(exclude_room_ids={self.r101.id}), self.r102)
+
+    def test_tenant_isolation(self):
+        other = make_hotel(slug="pick-other")
+        ort = make_type(other, code="STD", max_capacity=3)
+        make_rooms(other, ort, 1, start=101)
+        self.assertEqual(self.pick().hotel_id, self.hotel.id)
+
+    def test_numeric_aware_ordering(self):
+        # Rooms "2" and "10" on one floor: numeric-aware ordering picks "2".
+        hotel = make_hotel(slug="num")
+        rtype = make_type(hotel, max_capacity=2)
+        floor = Floor.objects.create(hotel=hotel, name="F", sort_order=1)
+        make_rooms(hotel, rtype, 1, floor=floor, start=10)  # "10"
+        (r2,) = make_rooms(hotel, rtype, 1, floor=floor, start=2)  # "2"
+        self.assertEqual(
+            AvailabilityService.pick_available_room(
+                hotel, room_type=rtype, check_in=D1, check_out=D2
+            ),
+            r2,
+        )
+
+
+class AutoRoomAssignmentCreateTests(APITestCase):
+    """The create API with ``room_assignment_mode='automatic'``."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="auto")
+        self.manager = add_member(
+            self.hotel, "mgr-auto@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 3, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_automatic_assigns_first_room(self):
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        line = res.json()["lines"][0]
+        self.assertEqual(line["room"], self.rooms[0].id)
+        self.assertEqual(line["room_number"], "101")
+
+    def test_automatic_ignores_client_provided_room(self):
+        # The client tries to pin room 103; the backend must ignore it and still
+        # assign the deterministic first room (101).
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[2].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)
+
+    def test_automatic_needs_no_assign_room_permission(self):
+        staff = add_member(
+            self.hotel,
+            "st-auto@x.com",
+            perms=["reservations.view", "reservations.create"],
+        )
+        self.client.force_authenticate(staff)
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNotNone(res.json()["lines"][0]["room"])
+
+    def test_automatic_respects_floor(self):
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        (r201,) = make_rooms(self.hotel, self.rtype, 1, floor=f2, start=201)
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[{"room_type": self.rtype.id, "quantity": 1, "floor": f2.id}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], r201.id)
+
+    def test_automatic_deterministic_serialized_picks(self):
+        first = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        second = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(first.json()["lines"][0]["room"], self.rooms[0].id)
+        self.assertEqual(second.json()["lines"][0]["room"], self.rooms[1].id)
+
+    def test_automatic_no_room_available_fails_no_partial(self):
+        for room in self.rooms:
+            _blocking_line(self.hotel, self.rtype, room, D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_automatic_floor_no_room_available(self):
+        # Type-level capacity is fine (f1 rooms free) but the pinned floor has no
+        # free room -> the picker returns no_room_available and nothing is saved.
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        (r201,) = make_rooms(self.hotel, self.rtype, 1, floor=f2, start=201)
+        _blocking_line(self.hotel, self.rtype, r201, D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="automatic",
+            lines=[{"room_type": self.rtype.id, "quantity": 1, "floor": f2.id}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["details"]["reason"], "no_room_available")
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_automatic_tenant_isolation(self):
+        other = make_hotel(slug="auto-other")
+        ort = make_type(other, code="STD", max_capacity=3)
+        make_rooms(other, ort, 2, start=901)
+        res = self._create(res_payload(self.rtype, room_assignment_mode="automatic"))
+        self.assertEqual(res.status_code, 201)
+        picked_id = res.json()["lines"][0]["room"]
+        self.assertTrue(Room.objects.filter(id=picked_id, hotel=self.hotel).exists())
+
+
+class ManualRoomAssignmentTests(APITestCase):
+    """The create API with ``room_assignment_mode='manual'``."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="manual")
+        self.manager = add_member(
+            self.hotel, "mgr-man@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_manual_requires_room(self):
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[{"room_type": self.rtype.id, "quantity": 1}],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 400)
+
+    def test_manual_assigns_pinned_room(self):
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[1].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[1].id)
+
+    def test_manual_conflict_does_not_silently_swap(self):
+        # Room 101 is taken; a manual pin of 101 conflicts and must NOT be
+        # swapped for the free room 102.
+        _blocking_line(self.hotel, self.rtype, self.rooms[0], D1, D2)
+        before = Reservation.objects.filter(hotel=self.hotel).count()
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[0].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), before)
+
+    def test_manual_floor_mismatch_conflicts(self):
+        f2 = Floor.objects.create(hotel=self.hotel, name="F2", sort_order=2)
+        body = res_payload(
+            self.rtype,
+            room_assignment_mode="manual",
+            lines=[
+                {
+                    "room_type": self.rtype.id,
+                    "quantity": 1,
+                    "room": self.rooms[0].id,  # on f1
+                    "floor": f2.id,  # request pins f2 -> mismatch
+                }
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 409)
+
+
+class LegacyAssignmentModeTests(APITestCase):
+    """An ABSENT ``room_assignment_mode`` keeps the pre-existing behaviour."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="legacy")
+        self.manager = add_member(
+            self.hotel, "mgr-leg@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        self.f1 = Floor.objects.create(hotel=self.hotel, name="F1", sort_order=1)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2, floor=self.f1, start=101)
+        self.client.force_authenticate(self.manager)
+
+    def _create(self, body):
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_absent_mode_leaves_room_null(self):
+        res = self._create(res_payload(self.rtype))
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(res.json()["lines"][0]["room"])
+
+    def test_absent_mode_keeps_pinned_room(self):
+        body = res_payload(
+            self.rtype,
+            lines=[
+                {"room_type": self.rtype.id, "quantity": 1, "room": self.rooms[0].id}
+            ],
+        )
+        res = self._create(body)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)

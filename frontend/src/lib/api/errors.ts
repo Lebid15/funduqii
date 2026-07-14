@@ -67,8 +67,18 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.rooms.errors.duplicateRoomNumber;
     case "bulk_request_too_large":
       return t.rooms.errors.bulkTooLarge;
-    case "no_availability":
-      return t.reservations.errors.noAvailability;
+    case "no_availability": {
+      // RESERVATIONS-AUTO-ROOM: automatic assignment surfaces the same code with a
+      // stable `details.reason` when no specific room could be picked — show a
+      // room-selection-aware message instead of the generic dates one.
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      return reason === "no_room_available"
+        ? t.reservations.errors.noRoomAvailable
+        : t.reservations.errors.noAvailability;
+    }
     case "cancellation_reason_required":
       return t.reservations.errors.reasonRequired;
     case "invalid_reservation_transition":
@@ -105,8 +115,29 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.finance.errors.folioNotBalanced;
     case "void_reason_required":
       return t.finance.errors.voidReasonRequired;
-    case "invalid_finance_operation":
-      return t.finance.errors.invalidOperation;
+    case "invalid_finance_operation": {
+      // FX/finance failures all arrive under this code with a stable
+      // `details.reason`; map the known reasons to a field-specific message so
+      // the user learns which input is wrong instead of a generic line.
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      switch (reason) {
+        case "currency_not_accepted":
+          return t.finance.errors.currencyNotAccepted;
+        case "exchange_rate_required":
+          return t.finance.errors.exchangeRateRequired;
+        case "original_amount_required":
+          return t.finance.errors.originalAmountRequired;
+        case "invalid_exchange_rate":
+          return t.finance.errors.invalidExchangeRate;
+        case "amount_out_of_range":
+          return t.finance.errors.amountOutOfRange;
+        default:
+          return t.finance.errors.invalidOperation;
+      }
+    }
     case "invalid_amount":
       return t.finance.errors.invalidAmount;
     case "void_window_closed":

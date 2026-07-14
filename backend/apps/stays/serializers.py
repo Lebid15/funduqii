@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from apps.reservations.serializers import ReservationWriteSerializer
+
 from .models import Stay, StayGuest, StayStatusLog
 
 
@@ -126,3 +128,75 @@ class StayStatusLogSerializer(serializers.Serializer):
 
     def get_changed_by(self, obj):
         return obj.changed_by.email if obj.changed_by_id else None
+
+
+# --- RESERVATIONS-FORM-REWORK: immediate atomic check-in ---------------------
+
+
+class ImmediateDepositSerializer(serializers.Serializer):
+    """Optional pre-arrival deposit for an immediate check-in.
+
+    The base ``amount`` is in the folio/base currency. A foreign-currency deposit
+    instead supplies ``original_amount`` + ``exchange_rate`` and the finance
+    service DERIVES the base amount (single ledger — invariants #1/#4). The base
+    ``amount`` alone drives the derived folio balance; nothing is stored twice.
+    """
+
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    method = serializers.CharField(max_length=32)
+    currency = serializers.CharField(
+        max_length=3, required=False, allow_blank=True, default=""
+    )
+    original_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    exchange_rate = serializers.DecimalField(
+        max_digits=18, decimal_places=8, required=False, allow_null=True
+    )
+    rate_basis = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+    payer_name = serializers.CharField(
+        max_length=180, required=False, allow_blank=True, default=""
+    )
+    reference = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_method(self, value):
+        from apps.finance.models import PaymentMethod
+
+        if value not in {code for code, _ in PaymentMethod.choices}:
+            raise serializers.ValidationError("Unsupported payment method.")
+        return value
+
+    def validate(self, attrs):
+        if attrs.get("amount") is None and attrs.get("original_amount") is None:
+            raise serializers.ValidationError(
+                "Provide an amount (or original_amount for a foreign-currency "
+                "deposit)."
+            )
+        return attrs
+
+
+class ImmediateCheckInSerializer(serializers.Serializer):
+    """Validate the composed immediate-check-in payload.
+
+    ``reservation`` REUSES the reservations write serializer, so lines / primary
+    guest / occupants / capacity are resolved and hotel-scoped exactly as a normal
+    reservation create. ``room`` is the physical room to admit into; ``line_index``
+    picks the reservation line when there is more than one; ``deposit`` is optional.
+    """
+
+    reservation = ReservationWriteSerializer()
+    room = serializers.IntegerField(required=False, allow_null=True)
+    line_index = serializers.IntegerField(
+        required=False, allow_null=True, min_value=0
+    )
+    check_in_notes = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    deposit = ImmediateDepositSerializer(required=False, allow_null=True)

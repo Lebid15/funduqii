@@ -45,6 +45,31 @@ async function proxy(request: Request, ctx: Ctx): Promise<Response> {
     return NextResponse.json({ code: "session_expired" }, { status: 401 });
   }
 
+  // Binary passthrough: for a non-JSON/text upstream response (image/*,
+  // application/pdf, application/octet-stream, … — anything NOT starting with
+  // `application/json` or `text/`) the bytes must be forwarded UNTOUCHED.
+  // `res.text()` would decode them as UTF-8 and corrupt the file, so stream the
+  // raw body and forward the security headers the backend set on private files.
+  // JSON/text (every existing endpoint) keeps the exact text behavior below.
+  const upstreamType = res.headers.get("Content-Type") ?? "";
+  const isTextual =
+    upstreamType.startsWith("application/json") ||
+    upstreamType.startsWith("text/");
+  if (upstreamType && !isTextual) {
+    const headers = new Headers();
+    for (const name of [
+      "Content-Type",
+      "Content-Disposition",
+      "Cache-Control",
+      "X-Content-Type-Options",
+      "Referrer-Policy",
+    ]) {
+      const value = res.headers.get(name);
+      if (value) headers.set(name, value);
+    }
+    return new NextResponse(res.body, { status: res.status, headers });
+  }
+
   const text = await res.text();
   return new NextResponse(text || null, {
     status: res.status,
