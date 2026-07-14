@@ -19,6 +19,7 @@ import {
   FormField,
   Icon,
   Input,
+  PaymentStatusBadge,
   Select,
   Switch,
   Textarea,
@@ -838,9 +839,6 @@ function RecordedPaymentsCard({
   const currency = summary.currency;
   const money = (value: string | null) =>
     value ? formatMoney(value, currency, locale) : "—";
-  const statusLabel = summary.payment_status
-    ? b.paymentStatus[summary.payment_status]
-    : "—";
 
   return (
     <section className="resform-book__group">
@@ -866,8 +864,15 @@ function RecordedPaymentsCard({
             readOnly
           />
         </FormField>
-        <FormField label={b.paymentStatusLabel} htmlFor="wiz-rec-status">
-          <Input id="wiz-rec-status" type="text" value={statusLabel} readOnly />
+        <FormField label={b.paymentStatusLabel}>
+          {summary.payment_status ? (
+            <PaymentStatusBadge
+              status={summary.payment_status}
+              labels={b.paymentStatus}
+            />
+          ) : (
+            <span className="muted">—</span>
+          )}
         </FormField>
       </div>
       {summary.payments.length === 0 ? (

@@ -27,6 +27,7 @@ import {
   Icon,
   Input,
   Modal,
+  PaymentStatusBadge,
   SectionCard,
   Select,
   useToast,
@@ -67,7 +68,6 @@ import {
   isMaskedValue,
   isRelationshipProofDoc,
   occupantDisplayName,
-  paymentStatusTone,
   relationshipLabel,
   sourceIcon,
   sourceTone,
@@ -621,9 +621,10 @@ export function ReservationDetailsModal({
                     <div className="room-op-details__row">
                       <dt>{card.paymentLabel}</dt>
                       <dd>
-                        <Badge tone={paymentStatusTone(summary.payment_status)}>
-                          {card.paymentStatus[summary.payment_status]}
-                        </Badge>
+                        <PaymentStatusBadge
+                          status={summary.payment_status}
+                          labels={card.paymentStatus}
+                        />
                       </dd>
                     </div>
                   ) : null}

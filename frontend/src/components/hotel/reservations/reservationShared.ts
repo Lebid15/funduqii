@@ -19,7 +19,6 @@ import type {
   Payment,
   ReservationDocumentType,
   ReservationOccupant,
-  ReservationPaymentStatus,
   ReservationStatus,
 } from "@/lib/api/types";
 import type { ReservationSource } from "@/lib/api/types";
@@ -30,20 +29,6 @@ import type { Dictionary } from "@/lib/i18n/dictionaries";
  * source; everything else is neutral. */
 export function sourceTone(source: ReservationSource): BadgeTone {
   return source === "public_website" ? "info" : "neutral";
-}
-
-/** PAYMENT-STATUS badge tone for the card's financial summary (§35): paid →
- * success, partially paid → warning, unpaid → neutral (an unpaid FUTURE booking
- * is normal, never an error). Colour is always paired with a text label. */
-export function paymentStatusTone(status: ReservationPaymentStatus): BadgeTone {
-  switch (status) {
-    case "paid":
-      return "success";
-    case "partial":
-      return "warning";
-    default:
-      return "neutral"; // unpaid
-  }
 }
 
 export function sourceIcon(source: ReservationSource): LucideIcon {
