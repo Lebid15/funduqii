@@ -1497,3 +1497,75 @@ class ReverseCheckInTests(APITestCase):
         stay = self._check_in()
         with self.assertRaises(ReverseCheckInReasonRequired):
             ReverseCheckInService.execute(stay, reason="  ", user=self.manager)
+
+
+class InsuranceTests(APITestCase):
+    """§35 — refundable insurance held separately: record, refund, deduct (posts
+    a settling payment to the folio), and the check-out gate until it is settled."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ins@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)  # unpriced -> folio balance stays 0
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
+
+    def _check_in(self):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+
+    def test_record_then_full_refund(self):
+        from apps.finance.models import InsuranceStatus
+        from apps.finance.services import record_insurance, refund_insurance
+
+        stay = self._check_in()
+        ins = record_insurance(
+            hotel=self.hotel, amount="100.00", stay=stay,
+            reservation=self.res, user=self.manager,
+        )
+        self.assertEqual(ins.status, InsuranceStatus.HELD)
+        self.assertEqual(str(ins.held_amount), "100.00")
+        refund_insurance(ins, reason="no damage", user=self.manager)  # full refund
+        ins.refresh_from_db()
+        self.assertEqual(ins.status, InsuranceStatus.REFUNDED)
+        self.assertEqual(str(ins.held_amount), "0.00")
+
+    def test_deduct_posts_a_settling_payment_to_the_folio(self):
+        from apps.finance.models import ChargeType, InsuranceStatus
+        from apps.finance.services import (
+            add_charge, deduct_insurance, folio_balance, record_insurance,
+        )
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        add_charge(
+            folio, charge_type=ChargeType.OTHER, description="damage",
+            quantity=1, unit_amount="30.00", user=self.manager,
+        )
+        self.assertEqual(str(folio_balance(folio)["balance"]), "30.00")
+        ins = record_insurance(hotel=self.hotel, amount="100.00", stay=stay, user=self.manager)
+        deduct_insurance(ins, amount="30.00", reason="damage cover", user=self.manager)
+        # The deduction posted a payment that settled the folio.
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+        ins.refresh_from_db()
+        self.assertEqual(str(ins.deducted_amount), "30.00")
+        self.assertEqual(str(ins.held_amount), "70.00")
+        self.assertEqual(ins.status, InsuranceStatus.PARTIALLY_DEDUCTED)
+
+    def test_checkout_blocked_until_insurance_settled(self):
+        from apps.common.exceptions import InsuranceNotSettled
+        from apps.finance.services import record_insurance, refund_insurance
+        from apps.stays.services import CheckOutService
+
+        stay = self._check_in()
+        ins = record_insurance(hotel=self.hotel, amount="50.00", stay=stay, user=self.manager)
+        with self.assertRaises(InsuranceNotSettled):
+            CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
+        refund_insurance(ins, reason="returned", user=self.manager)  # settle
+        out = CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
+        self.assertEqual(out.status, StayStatus.CHECKED_OUT)

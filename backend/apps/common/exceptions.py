@@ -543,6 +543,18 @@ class FolioBalanceOutstanding(FunduqiiAPIException):
     default_code = "folio_balance_outstanding"
 
 
+class InsuranceNotSettled(FunduqiiAPIException):
+    """Check-out is blocked while a refundable insurance held against the stay is
+    not fully refunded or settled (STAYS-ARRIVALS-DEPARTURES §35/§38)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay has refundable insurance that is not yet refunded or settled. "
+        "Handle the insurance before check-out."
+    )
+    default_code = "insurance_not_settled"
+
+
 class FolioAwaitingFinalCharges(FunduqiiAPIException):
     """Check-out is blocked while reception is still confirming the stay's final
     charges (STAYS-ARRIVALS-DEPARTURES §32) — the folio must not close until the

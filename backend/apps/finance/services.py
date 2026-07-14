@@ -1443,3 +1443,123 @@ def reverse_expense(expense, *, reason, user=None) -> Expense:
         obj=reversal,
     )
     return reversal
+
+
+# --- Refundable insurance (STAYS-ARRIVALS-DEPARTURES §35 / owner D2) ---------
+# Held SEPARATELY from the folio: never revenue, never on the folio balance. A
+# documented deduction posts ONLY the deducted portion to the folio (a payment
+# settling the account); a refund returns money to the guest (no folio movement).
+
+
+def _refresh_insurance_status(ins) -> None:
+    """Recompute the derived insurance status from held/deducted/refunded."""
+    from .models import InsuranceStatus
+
+    held = ins.amount - ins.deducted_amount - ins.refunded_amount
+    if held >= ins.amount:
+        ins.status = InsuranceStatus.HELD
+    elif held > ZERO:
+        ins.status = InsuranceStatus.PARTIALLY_DEDUCTED
+    elif ins.deducted_amount == ZERO:
+        ins.status = InsuranceStatus.REFUNDED
+    else:
+        ins.status = InsuranceStatus.CONSUMED
+    if held <= ZERO and ins.settled_at is None:
+        ins.settled_at = timezone.now()
+
+
+@transaction.atomic
+def record_insurance(*, hotel, amount, currency=None, method=None, reservation=None,
+                     stay=None, reference="", notes="", user=None):
+    """Record a REFUNDABLE insurance/security amount held SEPARATELY from the
+    folio (§35). Never revenue; never on the folio balance. Positive amount."""
+    from .models import PaymentMethod, RefundableInsurance
+
+    amt = money(amount)
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    return RefundableInsurance.objects.create(
+        hotel=hotel,
+        reservation=reservation,
+        stay=stay,
+        currency=(currency or _hotel_currency(hotel)).upper(),
+        amount=amt,
+        method=(method or PaymentMethod.CASH),
+        reference=reference or "",
+        notes=notes or "",
+        received_by=_actor(user),
+        received_at=timezone.now(),
+        created_by=_actor(user),
+    )
+
+
+@transaction.atomic
+def refund_insurance(insurance, *, amount=None, reason="", user=None):
+    """Refund held insurance to the guest (§35). The money returns to the guest —
+    NOT a folio movement. ``amount`` defaults to the full remaining held amount."""
+    from .models import RefundableInsurance
+
+    insurance = RefundableInsurance.objects.select_for_update().get(pk=insurance.pk)
+    held = insurance.amount - insurance.deducted_amount - insurance.refunded_amount
+    amt = money(amount) if amount is not None else held
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > held:
+        raise InvalidAmount({"field": "amount", "reason": "exceeds_held"})
+    insurance.refunded_amount += amt
+    _refresh_insurance_status(insurance)
+    insurance.settled_by = _actor(user)
+    insurance.save()
+    _record_event(
+        insurance.hotel,
+        event_type="insurance.refunded",
+        severity="info",
+        title=f"Insurance refunded {amt} {insurance.currency}",
+        message=reason or "",
+        user=user,
+        obj=insurance,
+    )
+    return insurance
+
+
+@transaction.atomic
+def deduct_insurance(insurance, *, amount, reason, user=None):
+    """Deduct part of the held insurance for a documented reason (§35): the
+    deducted portion is posted to the stay's folio as a documented payment
+    (settling the account) — needs a reason + audit. Reduces the held amount."""
+    reason = _require_reason(reason)
+    from .models import PaymentMethod, RefundableInsurance
+
+    insurance = RefundableInsurance.objects.select_for_update().get(pk=insurance.pk)
+    held = insurance.amount - insurance.deducted_amount - insurance.refunded_amount
+    amt = money(amount)
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > held:
+        raise InvalidAmount({"field": "amount", "reason": "exceeds_held"})
+    if insurance.stay_id is None:
+        raise InvalidFinanceOperation({"reason": "insurance_not_linked_to_stay"})
+    folio = ensure_stay_folio(insurance.stay, user=user)
+    record_payment(
+        folio,
+        amount=amt,
+        method=PaymentMethod.OTHER,
+        payer_name="Insurance",
+        reference=f"insurance:{insurance.id}",
+        notes=f"insurance deduction: {reason}"[:255],
+        user=user,
+    )
+    insurance.deducted_amount += amt
+    _refresh_insurance_status(insurance)
+    insurance.settled_by = _actor(user)
+    insurance.save()
+    _record_event(
+        insurance.hotel,
+        event_type="insurance.deducted",
+        severity="warning",
+        title=f"Insurance deducted {amt} {insurance.currency}",
+        message=reason,
+        user=user,
+        obj=insurance,
+    )
+    return insurance

@@ -32,6 +32,7 @@ from apps.common.exceptions import (
     EarlyDepartureReasonRequired,
     FolioAwaitingFinalCharges,
     FolioBalanceOutstanding,
+    InsuranceNotSettled,
     InvalidCheckIn,
     InvalidCheckOut,
     InvalidStayChange,
@@ -374,6 +375,16 @@ class CheckOutService:
                         "folio_number": folio.folio_number,
                         "balance": str(balance),
                     }
+                )
+
+        # §35/§38 — refundable insurance held against this stay must be fully
+        # refunded or settled (held_amount == 0) before departure.
+        from apps.finance.models import RefundableInsurance
+
+        for ins in RefundableInsurance.objects.filter(hotel=stay.hotel, stay=stay):
+            if ins.held_amount > 0:
+                raise InsuranceNotSettled(
+                    {"insurance": ins.id, "held": str(ins.held_amount)}
                 )
 
         actor = user if getattr(user, "is_authenticated", False) else None
