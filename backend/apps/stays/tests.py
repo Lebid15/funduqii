@@ -1569,3 +1569,56 @@ class InsuranceTests(APITestCase):
         refund_insurance(ins, reason="returned", user=self.manager)  # settle
         out = CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
         self.assertEqual(out.status, StayStatus.CHECKED_OUT)
+
+
+class SettlementAndRefundTests(APITestCase):
+    """§34/§37 — settle a stay folio (multi-currency aware) and refund a credit."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "set@x.com", kind=MembershipType.MANAGER)
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
+
+    def _check_in(self):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+
+    def test_settle_folio_to_zero(self):
+        from apps.finance.services import folio_balance, record_folio_settlement
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")  # room charge
+        record_folio_settlement(folio, method="cash", amount="200.00", user=self.manager)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_refund_a_credit_balance(self):
+        from apps.finance.services import (
+            folio_balance, record_folio_settlement, refund_folio_credit,
+        )
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        record_folio_settlement(folio, method="cash", amount="250.00", user=self.manager)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "-50.00")  # overpaid
+        refund_folio_credit(folio, reason="overpayment", user=self.manager)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_refund_requires_a_credit(self):
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.finance.services import refund_folio_credit
+
+        stay = self._check_in()
+        folio = stay.folios.get()  # 200 owed, no credit
+        with self.assertRaises(InvalidFinanceOperation):
+            refund_folio_credit(folio, reason="x", user=self.manager)

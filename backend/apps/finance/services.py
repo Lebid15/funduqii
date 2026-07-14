@@ -1563,3 +1563,129 @@ def deduct_insurance(insurance, *, amount, reason, user=None):
         obj=insurance,
     )
     return insurance
+
+
+# --- Stay-folio settlement + credit refund (STAYS §34/§37) ------------------
+
+
+def _resolve_payment_fx(folio, *, amount, currency, original_amount,
+                        exchange_rate, rate_basis, user):
+    """Resolve a payment's BASE amount + FX snapshot for ``folio`` (§34/§57).
+
+    Same currency as the folio → ``amount`` IS the base amount. Foreign currency →
+    a manual ``exchange_rate`` AND the tendered ``original_amount`` are required and
+    the base amount is DERIVED (never client-trusted); the direction is dictated by
+    ``rate_basis``. Returns ``(base_amount, fx_dict)``. Mirrors the deposit path.
+    """
+    base_currency = folio.currency
+    resolved_currency = (currency or base_currency).strip().upper()
+    accepted = _accepted_currencies(folio.hotel)
+    if resolved_currency not in accepted:
+        raise InvalidFinanceOperation(
+            {"reason": "currency_not_accepted", "currency": resolved_currency,
+             "accepted": accepted}
+        )
+    if resolved_currency == base_currency.upper():
+        if amount is None or money(amount) <= ZERO:
+            raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+        base_amount = money(amount)
+        fx = dict(payment_currency=base_currency, original_amount=base_amount,
+                  exchange_rate=None, rate_basis="", rate_captured_at=None,
+                  rate_entered_by=None)
+    else:
+        resolved_basis = _resolve_rate_basis(rate_basis)
+        if exchange_rate is None or Decimal(str(exchange_rate)) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "exchange_rate_required", "currency": resolved_currency}
+            )
+        if original_amount is None or money(original_amount) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "original_amount_required", "currency": resolved_currency}
+            )
+        rate = Decimal(str(exchange_rate))
+        original = money(original_amount)
+        if resolved_basis == RateBasis.PAYMENT_PER_BASE:
+            if rate == ZERO:
+                raise InvalidFinanceOperation({"reason": "invalid_exchange_rate"})
+            base_amount = money(original / rate)
+        else:
+            base_amount = money(original * rate)
+        fx = dict(payment_currency=resolved_currency, original_amount=original,
+                  exchange_rate=rate, rate_basis=resolved_basis,
+                  rate_captured_at=timezone.now(), rate_entered_by=user)
+    if base_amount <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if base_amount.copy_abs() >= MONEY_MAX_ABS:
+        raise InvalidFinanceOperation({"reason": "amount_out_of_range"})
+    return base_amount, fx
+
+
+@transaction.atomic
+def record_folio_settlement(folio, *, method, amount=None, currency=None,
+                            original_amount=None, exchange_rate=None, rate_basis="",
+                            payer_name="", reference="", notes="", user=None):
+    """Settle a stay/folio balance with a payment (§34), multi-currency aware
+    (same FX resolution as a deposit). Only on an OPEN folio; the base amount alone
+    drives ``folio_balance``. A manual FX rate is gated by ``exchange_rate.override``
+    at the view layer."""
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    base_amount, fx = _resolve_payment_fx(
+        folio, amount=amount, currency=currency, original_amount=original_amount,
+        exchange_rate=exchange_rate, rate_basis=rate_basis, user=user,
+    )
+    return record_payment(
+        folio, amount=base_amount, method=method, payer_name=payer_name,
+        reference=reference, notes=notes, user=user, **fx,
+    )
+
+
+@transaction.atomic
+def refund_folio_credit(folio, *, amount=None, reason, method=None, user=None):
+    """Refund a folio CREDIT balance to the guest (§37): when posted payments
+    exceed posted charges (overpaid), return the excess. Posts a NEGATIVE payment
+    (money out) that brings the balance toward zero; the original payments are
+    NEVER deleted and the financial date is never changed silently. Requires a
+    reason (finance.refund at the view layer)."""
+    from .models import PaymentMethod
+
+    reason = _require_reason(reason)
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    balance = folio_balance(folio)["balance"]
+    credit = -balance  # positive when the guest overpaid (balance is negative)
+    if credit <= ZERO:
+        raise InvalidFinanceOperation(
+            {"reason": "no_credit_to_refund", "balance": str(balance)}
+        )
+    amt = money(amount) if amount is not None else credit
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > credit:
+        raise InvalidFinanceOperation({"reason": "exceeds_credit", "credit": str(credit)})
+    business_date = _business_date(folio.hotel)
+    _ensure_day_open(folio.hotel, business_date)
+    refund = Payment.objects.create(
+        hotel=folio.hotel,
+        folio=folio,
+        receipt_number=next_number(folio.hotel, NumberKind.RECEIPT),
+        amount=money(-amt),
+        currency=folio.currency,
+        method=(method or PaymentMethod.CASH),
+        status=PostingStatus.POSTED,
+        paid_at=timezone.now(),
+        business_date=business_date,
+        reference="refund",
+        notes=reason[:255],
+        created_by=_actor(user),
+    )
+    _record_event(
+        folio.hotel,
+        event_type="folio.refund",
+        severity="warning",
+        title=f"Refund {amt} {folio.currency} on folio {folio.folio_number}",
+        message=reason,
+        user=user,
+        obj=refund,
+    )
+    return refund
