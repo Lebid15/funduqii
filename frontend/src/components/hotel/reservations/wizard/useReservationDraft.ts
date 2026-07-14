@@ -333,6 +333,7 @@ type Action =
   | { type: "companions/unlinkOccupant"; key: string }
   | { type: "companions/setChildren"; value: number }
   | { type: "booking/patch"; patch: Partial<BookingDraft> }
+  | { type: "booking/setRoomMode"; mode: RoomAssignmentMode }
   | { type: "booking/patchPayment"; patch: Partial<PaymentDraft> }
   | { type: "documents/set"; documents: PendingDocument[] };
 
@@ -561,6 +562,43 @@ function reducer(state: ReservationDraft, action: Action): ReservationDraft {
 
     case "booking/patch":
       return { ...state, booking: { ...state.booking, ...action.patch } };
+
+    case "booking/setRoomMode": {
+      // RESERVATIONS-AUTO-ROOM §2/§4 — switching modes must never silently drop
+      // or silently keep a room the other mode ignores.
+      const b = state.booking;
+      if (action.mode === b.room_assignment_mode) return state;
+      if (action.mode === "automatic") {
+        // → AUTOMATIC: the staff can never pin a room; clear the manual pin AND
+        // the line's room so no stale/ignored selection travels to the backend.
+        // The room-TYPE (+ floor) criteria on the line are KEPT — they drive the
+        // automatic assignment.
+        return {
+          ...state,
+          booking: {
+            ...b,
+            room_assignment_mode: "automatic",
+            selected_room_id: null,
+            lines: b.lines.map((line) => ({ ...line, room: "" })),
+          },
+        };
+      }
+      // → MANUAL: keep a currently pinned room if one exists; otherwise reset the
+      // line to a pristine "pick a room" state so the automatic type-only
+      // criteria never becomes an unintended unassigned manual line (the staff
+      // must explicitly pick a room in manual mode).
+      const hasPinnedRoom = b.selected_room_id != null;
+      return {
+        ...state,
+        booking: {
+          ...b,
+          room_assignment_mode: "manual",
+          lines: hasPinnedRoom
+            ? b.lines
+            : b.lines.map((line) => ({ ...line, room_type: "", room: "" })),
+        },
+      };
+    }
 
     case "booking/patchPayment":
       return {
@@ -950,6 +988,10 @@ export interface ReservationDraftActions {
   unlinkOccupant: (key: string) => void;
   setChildren: (value: number) => void;
   patchBooking: (patch: Partial<BookingDraft>) => void;
+  /** RESERVATIONS-AUTO-ROOM — switch automatic/manual with the mode-transition
+   * clearing (clears the pin on → automatic; resets an unpinned line on →
+   * manual). */
+  setRoomMode: (mode: RoomAssignmentMode) => void;
   patchPayment: (patch: Partial<PaymentDraft>) => void;
   setDocuments: (documents: PendingDocument[]) => void;
 }
@@ -996,6 +1038,7 @@ export function useReservationDraft(
         dispatch({ type: "companions/unlinkOccupant", key }),
       setChildren: (value) => dispatch({ type: "companions/setChildren", value }),
       patchBooking: (patch) => dispatch({ type: "booking/patch", patch }),
+      setRoomMode: (mode) => dispatch({ type: "booking/setRoomMode", mode }),
       patchPayment: (patch) => dispatch({ type: "booking/patchPayment", patch }),
       setDocuments: (documents) => dispatch({ type: "documents/set", documents }),
     }),

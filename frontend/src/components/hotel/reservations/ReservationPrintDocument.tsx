@@ -11,7 +11,7 @@ import type {
 import {
   fxDirectionLabel,
   isForeignPayment,
-  occupantDisplayName,
+  occupantPrintName,
   relationshipLabel,
 } from "./reservationShared";
 
@@ -303,7 +303,9 @@ export function ReservationPrintDocument({
             <tbody>
               {companions.map((occ) => (
                 <tr className="resv-print__row" key={occ.id}>
-                  <td>{occupantDisplayName(occ, t)}</td>
+                  {/* First + last only — the printed slip omits the father name
+                      (F2/§17), matching the primary guest's name policy. */}
+                  <td>{occupantPrintName(occ, t)}</td>
                   <td>{relationshipLabel(occ.relationship, t)}</td>
                 </tr>
               ))}

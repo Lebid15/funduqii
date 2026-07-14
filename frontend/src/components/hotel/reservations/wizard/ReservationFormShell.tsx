@@ -278,6 +278,9 @@ export function ReservationFormShell({
   }
 
   async function submit() {
+    // Belt-and-braces re-entry guard: the Save button is already disabled while
+    // busy, but never allow a second concurrent submit.
+    if (busy) return;
     // A closed reservation can't be saved (Save is hidden too); guard anyway.
     if (isEdit && editReadOnly) return;
 

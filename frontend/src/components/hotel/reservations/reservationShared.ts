@@ -207,3 +207,19 @@ export function occupantDisplayName(
     .join(" ");
   return name || t.reservations.wizard.companions.adultRow;
 }
+
+/** PRINT-ONLY companion name: first + last, WITHOUT the father name (F2/§17). The
+ * printed customer slip never shows a father name for the primary guest, so the
+ * companion rows follow the same policy for consistency. Distinct from
+ * `occupantDisplayName` (which composes the father name) so the on-screen details
+ * are unaffected. */
+export function occupantPrintName(
+  occupant: Pick<ReservationOccupant, "first_name" | "last_name">,
+  t: Dictionary,
+): string {
+  const name = [occupant.first_name, occupant.last_name]
+    .map((part) => (part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return name || t.reservations.wizard.companions.adultRow;
+}

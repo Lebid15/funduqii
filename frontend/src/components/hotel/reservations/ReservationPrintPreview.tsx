@@ -54,8 +54,11 @@ export function ReservationPrintPreview({
   const p = t.reservations.print;
   const profile = useHotelProfile();
   const access = useHotelAccess();
+  // FAIL-CLOSED (F1): a printed customer document must never leak money/sensitive
+  // fields when the access context is absent — a null context grants nothing. The
+  // server also masks these; this is defense-in-depth on the printed slip.
   const can = (...codes: string[]) =>
-    access === null || (!access.loading && access.can(...codes));
+    access !== null && !access.loading && access.can(...codes);
 
   const canViewMoney = can("finance.view");
   const canViewSensitive = can("guests.view_sensitive_data");

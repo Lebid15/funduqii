@@ -213,6 +213,9 @@ export function BookingStep({
     access === null || (!access.loading && access.can(...codes));
 
   const booking = draft.booking;
+  // RESERVATIONS-AUTO-ROOM §2 — automatic is the default; the staff never pin a
+  // room in this mode (the room list + "Select" are hidden below).
+  const automatic = booking.room_assignment_mode === "automatic";
   const isEdit = Boolean(editContext);
   const stayLocked = editContext?.stayLocked ?? false;
   const checkInDate = booking.check_in_date;
@@ -344,6 +347,34 @@ export function BookingStep({
     (row) => !typeFilter || String(row.room_type_id) === typeFilter,
   );
 
+  // RESERVATIONS-AUTO-ROOM — in AUTOMATIC mode the room-TYPE on the single line
+  // is the assignment CRITERIA (not a display filter): the backend picks a room
+  // of that type on the chosen floor. `autoMatchCount` is display-only
+  // reassurance — how many available rooms match — never a specific room number.
+  const lineType = booking.lines[0]?.room_type ?? "";
+  const autoMatchCount =
+    automatic && lineType
+      ? rooms.filter((row) => String(row.room_type_id) === lineType).length
+      : 0;
+
+  // AUTOMATIC still needs a room-TYPE criteria on the line (the backend drops any
+  // pinned room but requires the type). Default/repair it to a type available on
+  // the chosen floor whenever the current value is empty or stale for that floor,
+  // so an automatic booking is always valid WITHOUT a misleading room pick. Never
+  // runs in manual mode and never overrides a type the floor still offers.
+  useEffect(() => {
+    if (!automatic || selectedFloorId == null) return;
+    if (typeOptions.length === 0) return;
+    if (typeOptions.some((option) => option.value === lineType)) return;
+    const first = booking.lines[0] ?? { room_type: "", room: "", quantity: "1" };
+    actions.patchBooking({
+      lines: [
+        { ...first, room_type: typeOptions[0].value, room: "", quantity: "1" },
+      ],
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automatic, selectedFloorId, typeOptions, lineType]);
+
   // Keep the selected room's data stable even while the staff browse another
   // floor (the availability list only holds the current floor's rooms).
   const selectedRoom =
@@ -370,6 +401,16 @@ export function BookingStep({
     });
   }
 
+  // AUTOMATIC — the room-TYPE selector sets the assignment CRITERIA on the line
+  // (no specific room is ever pinned in this mode).
+  function selectAutoType(value: string) {
+    const first = booking.lines[0] ?? { room_type: "", room: "", quantity: "1" };
+    actions.patchBooking({
+      selected_room_id: null,
+      lines: [{ ...first, room_type: value, room: "", quantity: "1" }],
+    });
+  }
+
   function toggleImmediate(value: boolean) {
     // §24 — an immediate check-in uses today's date. Seed the arrival date to the
     // hotel business date when turning it on (the backend clock is authoritative).
@@ -386,7 +427,14 @@ export function BookingStep({
 
   // Estimated stay total + remaining (exact decimal, no Float). Backend derives
   // the authoritative figures on save; these are honest client-side estimates.
-  const nightlyRate = selectedRoom?.base_rate ?? null;
+  // In AUTOMATIC mode no specific room is pinned, but every room of the chosen
+  // type shares the same base_rate — so the nightly price / total still show (§26).
+  const nightlyRate =
+    selectedRoom?.base_rate ??
+    (automatic && lineType
+      ? rooms.find((row) => String(row.room_type_id) === lineType)?.base_rate ??
+        null
+      : null);
   const estimatedTotal =
     nightlyRate && nights > 0 ? mulDecimalByInt(nightlyRate, nights) : null;
 
@@ -529,112 +577,174 @@ export function BookingStep({
               </FormField>
             </div>
           </>
-        ) : !datesReady ? (
-          <Alert tone="info">{b.pickDatesFirst}</Alert>
         ) : (
           <>
-            <FormField label={b.filterFloor}>
-              {floors.length === 0 ? (
-                <p className="muted small">{b.noFloors}</p>
-              ) : (
-                <div className="cluster">
-                  {floors.map((floor) => (
-                    <Button
-                      key={floor.id}
-                      type="button"
-                      variant={selectedFloorId === floor.id ? "primary" : "secondary"}
-                      size="sm"
-                      icon={Layers}
-                      onClick={() => selectFloor(floor.id)}
-                    >
-                      {floor.name || b.floorGroup.replace("{floor}", floor.number)}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </FormField>
+            {/* AUTOMATIC (default) vs MANUAL. In automatic the individual room
+                list + "Select" are hidden so no misleading pick is possible; the
+                backend assigns an available room from the floor/type criteria. */}
+            <Switch
+              id="wiz-book-auto-room"
+              checked={automatic}
+              onChange={(value) =>
+                actions.setRoomMode(value ? "automatic" : "manual")
+              }
+              label={b.autoRoomToggle}
+            />
 
-            {selectedFloorId == null ? (
-              <Alert tone="info">{b.selectFloorFirst}</Alert>
+            {!datesReady ? (
+              <Alert tone="info">{b.pickDatesFirst}</Alert>
             ) : (
               <>
-                {typeOptions.length > 1 ? (
-                  <div className="resform-book__grid">
-                    <FormField label={b.filterType} htmlFor="wiz-book-type">
-                      <Select
-                        id="wiz-book-type"
-                        value={typeFilter}
-                        placeholder={b.allTypes}
-                        options={typeOptions}
-                        onChange={(e) => setTypeFilter(e.target.value)}
-                      />
-                    </FormField>
-                  </div>
-                ) : null}
-
-                {roomsLoading ? <p className="muted small">{b.loadingRooms}</p> : null}
-                {!roomsLoading && roomsError ? (
-                  <Alert tone="warning">{b.roomsError}</Alert>
-                ) : null}
-                {!roomsLoading && !roomsError && visibleRooms.length === 0 ? (
-                  <p className="muted small">{b.noAvailableRooms}</p>
-                ) : null}
-
-                {visibleRooms.length > 0 ? (
-                  <div className="resform-book__rooms">
-                    {visibleRooms.map((row) => {
-                      const selected = row.id === booking.selected_room_id;
-                      return (
-                        <div
-                          key={row.id}
-                          className={cx(
-                            "resform-book__room",
-                            selected && "resform-book__room--selected",
-                          )}
+                <FormField label={b.filterFloor}>
+                  {floors.length === 0 ? (
+                    <p className="muted small">{b.noFloors}</p>
+                  ) : (
+                    <div className="cluster">
+                      {floors.map((floor) => (
+                        <Button
+                          key={floor.id}
+                          type="button"
+                          variant={
+                            selectedFloorId === floor.id ? "primary" : "secondary"
+                          }
+                          size="sm"
+                          icon={Layers}
+                          onClick={() => selectFloor(floor.id)}
                         >
-                          <span className="cluster">
-                            <strong>{row.number}</strong>
-                            <span className="muted small">{row.room_type_name}</span>
-                            <span className="muted small">
-                              {formatCapacity(
-                                row.base_capacity,
-                                row.max_capacity,
-                                t,
-                                locale,
+                          {floor.name ||
+                            b.floorGroup.replace("{floor}", floor.number)}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </FormField>
+
+                {selectedFloorId == null ? (
+                  <Alert tone="info">{b.selectFloorFirst}</Alert>
+                ) : automatic ? (
+                  <>
+                    {/* Room-TYPE = assignment criteria (not a display filter). */}
+                    {typeOptions.length > 1 ? (
+                      <div className="resform-book__grid">
+                        <FormField label={b.filterType} htmlFor="wiz-book-auto-type">
+                          <Select
+                            id="wiz-book-auto-type"
+                            value={lineType}
+                            options={typeOptions}
+                            onChange={(e) => selectAutoType(e.target.value)}
+                          />
+                        </FormField>
+                      </div>
+                    ) : null}
+
+                    {roomsLoading ? (
+                      <p className="muted small">{b.loadingRooms}</p>
+                    ) : null}
+                    {!roomsLoading && roomsError ? (
+                      <Alert tone="warning">{b.roomsError}</Alert>
+                    ) : null}
+                    {!roomsLoading && !roomsError && rooms.length === 0 ? (
+                      <p className="muted small">{b.noAvailableRooms}</p>
+                    ) : null}
+                    {!roomsLoading && !roomsError && rooms.length > 0 ? (
+                      <>
+                        <Alert tone="info">{b.autoRoomBox}</Alert>
+                        {autoMatchCount > 0 ? (
+                          <p className="muted small">
+                            {b.autoRoomCount.replace(
+                              "{count}",
+                              String(autoMatchCount),
+                            )}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {typeOptions.length > 1 ? (
+                      <div className="resform-book__grid">
+                        <FormField label={b.filterType} htmlFor="wiz-book-type">
+                          <Select
+                            id="wiz-book-type"
+                            value={typeFilter}
+                            placeholder={b.allTypes}
+                            options={typeOptions}
+                            onChange={(e) => setTypeFilter(e.target.value)}
+                          />
+                        </FormField>
+                      </div>
+                    ) : null}
+
+                    {roomsLoading ? (
+                      <p className="muted small">{b.loadingRooms}</p>
+                    ) : null}
+                    {!roomsLoading && roomsError ? (
+                      <Alert tone="warning">{b.roomsError}</Alert>
+                    ) : null}
+                    {!roomsLoading && !roomsError && visibleRooms.length === 0 ? (
+                      <p className="muted small">{b.noAvailableRooms}</p>
+                    ) : null}
+
+                    {visibleRooms.length > 0 ? (
+                      <div className="resform-book__rooms">
+                        {visibleRooms.map((row) => {
+                          const selected = row.id === booking.selected_room_id;
+                          return (
+                            <div
+                              key={row.id}
+                              className={cx(
+                                "resform-book__room",
+                                selected && "resform-book__room--selected",
                               )}
-                            </span>
-                            <span className="muted small">
-                              {row.base_rate
-                                ? formatMoney(row.base_rate, row.currency, locale)
-                                : "—"}
-                            </span>
-                            {selected ? (
-                              <Badge tone="success">{b.selected}</Badge>
-                            ) : null}
-                          </span>
-                          <Button
-                            type="button"
-                            variant={selected ? "primary" : "secondary"}
-                            size="sm"
-                            onClick={() => selectRoom(row)}
-                          >
-                            {selected ? b.selected : b.select}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                            >
+                              <span className="cluster">
+                                <strong>{row.number}</strong>
+                                <span className="muted small">
+                                  {row.room_type_name}
+                                </span>
+                                <span className="muted small">
+                                  {formatCapacity(
+                                    row.base_capacity,
+                                    row.max_capacity,
+                                    t,
+                                    locale,
+                                  )}
+                                </span>
+                                <span className="muted small">
+                                  {row.base_rate
+                                    ? formatMoney(row.base_rate, row.currency, locale)
+                                    : "—"}
+                                </span>
+                                {selected ? (
+                                  <Badge tone="success">{b.selected}</Badge>
+                                ) : null}
+                              </span>
+                              <Button
+                                type="button"
+                                variant={selected ? "primary" : "secondary"}
+                                size="sm"
+                                onClick={() => selectRoom(row)}
+                              >
+                                {selected ? b.selected : b.select}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {overCapacity && selectedRoom ? (
+                      <Alert tone="warning">
+                        {b.capacityWarning
+                          .replace("{max}", String(selectedRoom.max_capacity))
+                          .replace("{total}", String(partySize))}
+                      </Alert>
+                    ) : null}
+                  </>
+                )}
               </>
             )}
-
-            {overCapacity && selectedRoom ? (
-              <Alert tone="warning">
-                {b.capacityWarning
-                  .replace("{max}", String(selectedRoom.max_capacity))
-                  .replace("{total}", String(partySize))}
-              </Alert>
-            ) : null}
           </>
         )}
       </section>
