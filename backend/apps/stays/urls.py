@@ -16,6 +16,7 @@ from .views import (
     StayLogsView,
     StayMoveCandidatesView,
     StayMoveRoomView,
+    StaysOverviewView,
     StayShortenView,
 )
 
@@ -24,6 +25,7 @@ app_name = "stays"
 urlpatterns = [
     path("stays/", StayListView.as_view(), name="stay-list"),
     path("stays/current/", CurrentResidentsView.as_view(), name="stay-current"),
+    path("stays/overview/", StaysOverviewView.as_view(), name="stay-overview"),
     path(
         "stays/arrivals-today/",
         ArrivalsTodayView.as_view(),

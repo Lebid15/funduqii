@@ -143,6 +143,19 @@ class CurrentResidentsView(generics.ListAPIView):
         return _stay_qs(self.request.hotel).filter(status=StayStatus.IN_HOUSE)
 
 
+class StaysOverviewView(APIView):
+    """Six smart-card counts for the operations page (§6/§50) — a fixed set of
+    queries, based on the hotel's current business date."""
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get(self, request: Request) -> Response:
+        from .services import stays_overview
+
+        return Response(stays_overview(request.hotel))
+
+
 class DeparturesTodayView(generics.ListAPIView):
     serializer_class = StaySerializer
 

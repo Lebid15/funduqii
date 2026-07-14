@@ -839,3 +839,51 @@ def promote_reservation_occupants(reservation, stay, *, user=None) -> list:
         existing_guest_ids.add(guest.id)
         created.append(stay_guest)
     return created
+
+
+def stays_overview(hotel) -> dict:
+    """Counts for the six operational cards (§6/§50) in a FIXED set of queries —
+    never per-row work — based on the hotel's current business date.
+
+    1 arriving today · 2 awaiting check-in (due/overdue, no stay) · 3 checked-in
+    today · 4 current residents · 5 departing today · 6 needs attention (overdue
+    arrivals + overstays + folios awaiting final charges).
+    """
+    from django.db.models import Q
+
+    from apps.reservations.models import Reservation, ReservationStatus
+
+    from .models import Stay, StayStatus
+
+    bd = get_business_date(hotel)
+    confirmed_no_stay = Reservation.objects.filter(
+        hotel=hotel, status=ReservationStatus.CONFIRMED, stays__isnull=True,
+    )
+    arriving_today = confirmed_no_stay.filter(check_in_date=bd).count()
+    awaiting_check_in = confirmed_no_stay.filter(check_in_date__lte=bd).count()
+    overdue_arrivals = confirmed_no_stay.filter(check_in_date__lt=bd).count()
+
+    in_house = Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+    current_residents = in_house.count()
+    departing_today = in_house.filter(planned_check_out_date=bd).count()
+    checked_in_today = Stay.objects.filter(
+        hotel=hotel, actual_check_in_at__date=bd
+    ).count()
+
+    stays_attention = (
+        in_house.filter(
+            Q(planned_check_out_date__lt=bd)
+            | Q(folios__status="open", folios__awaiting_final_charges=True)
+        )
+        .distinct()
+        .count()
+    )
+    return {
+        "business_date": str(bd),
+        "arriving_today": arriving_today,
+        "awaiting_check_in": awaiting_check_in,
+        "checked_in_today": checked_in_today,
+        "current_residents": current_residents,
+        "departing_today": departing_today,
+        "needs_attention": overdue_arrivals + stays_attention,
+    }

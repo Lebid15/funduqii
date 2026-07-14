@@ -1622,3 +1622,49 @@ class SettlementAndRefundTests(APITestCase):
         folio = stay.folios.get()  # 200 owed, no credit
         with self.assertRaises(InvalidFinanceOperation):
             refund_folio_credit(folio, reason="x", user=self.manager)
+
+
+class StaysOverviewTests(APITestCase):
+    """§6/§50 — the six-card overview counts come from the backend in one call."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ov@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.rooms = [
+            make_room(self.hotel, self.rtype, number=str(101 + i)) for i in range(3)
+        ]
+
+    def _overview(self):
+        self.client.force_authenticate(self.manager)
+        return self.client.get(
+            reverse("stays:stay-overview"), **HDR(self.hotel)
+        ).json()
+
+    def test_overview_counts(self):
+        # An arriving-today reservation (confirmed, today, no stay yet).
+        make_reservation(self.hotel, self.rtype, room=self.rooms[0])
+        # A current resident (in-house stay checked in today).
+        from apps.stays.services import CheckInService
+
+        r2, l2 = make_reservation(self.hotel, self.rtype, room=self.rooms[1])
+        CheckInService.execute(
+            self.hotel, reservation=r2, reservation_line=l2, room=self.rooms[1],
+            primary_guest=make_guest(self.hotel, name="R2"), companions=(),
+            user=self.manager,
+        )
+
+        data = self._overview()
+        self.assertEqual(data["arriving_today"], 1)
+        self.assertGreaterEqual(data["awaiting_check_in"], 1)
+        self.assertEqual(data["current_residents"], 1)
+        self.assertEqual(data["checked_in_today"], 1)
+        self.assertEqual(data["departing_today"], 0)
+        self.assertIn("business_date", data)
+        self.assertIn("needs_attention", data)
+
+    def test_overview_requires_stays_view(self):
+        viewer = add_member(self.hotel, "noview-ov@x.com", perms=[])
+        self.client.force_authenticate(viewer)
+        resp = self.client.get(reverse("stays:stay-overview"), **HDR(self.hotel))
+        self.assertEqual(resp.status_code, 403)
