@@ -119,7 +119,11 @@ export function ReservationCard({
   // Writes are suppressed once the guest is in-house (front-desk owns the stay).
   const canConfirm = r.status === "held" && !inHouse && can("reservations.confirm");
   const canEdit = editable && !inHouse && can("reservations.update");
-  const canCancel = editable && !inHouse && can("reservations.cancel");
+  // RESERVATIONS-FINAL-CLOSURE §2 — cancel is hidden once the reservation has
+  // produced ANY stay (in-house OR already checked-out); a departed booking must
+  // not be re-cancelled. `stay_id` is the latest related stay of any status, so
+  // `stay_id === null` means "never checked in". The backend enforces this too.
+  const canCancel = editable && r.stay_id === null && can("reservations.cancel");
   // §10 — a status may resolve to zero bottom actions (e.g. cancelled/expired
   // with no documents, or an in-house booking); the grid is then omitted so no
   // empty gap is left behind.
@@ -343,25 +347,40 @@ export function ReservationCard({
                 <dt>{c.total}</dt>
                 <dd>{money(r.reservation_total)}</dd>
               </div>
-              <div className="res-card__money-item">
-                <dt>{c.paid}</dt>
-                <dd>{money(r.paid)}</dd>
-              </div>
-              <div className="res-card__money-item">
-                <dt>{c.remaining}</dt>
-                <dd>{money(r.remaining)}</dd>
-              </div>
-              {r.payment_status ? (
+              {r.stay_id !== null ? (
+                // §1 — after check-in the account lives on the stay's folio; a
+                // reservation-level paid/remaining/status would compare the room
+                // total to folio payments that include in-stay charges. Show the
+                // "on folio" state instead (the real balance is in the details).
                 <div className="res-card__money-item res-card__money-status">
                   <dt>{c.paymentLabel}</dt>
                   <dd>
-                    <PaymentStatusBadge
-                      status={r.payment_status}
-                      labels={c.paymentStatus}
-                    />
+                    <Badge tone="neutral">{c.onFolioAccount}</Badge>
                   </dd>
                 </div>
-              ) : null}
+              ) : (
+                <>
+                  <div className="res-card__money-item">
+                    <dt>{c.paid}</dt>
+                    <dd>{money(r.paid)}</dd>
+                  </div>
+                  <div className="res-card__money-item">
+                    <dt>{c.remaining}</dt>
+                    <dd>{money(r.remaining)}</dd>
+                  </div>
+                  {r.payment_status ? (
+                    <div className="res-card__money-item res-card__money-status">
+                      <dt>{c.paymentLabel}</dt>
+                      <dd>
+                        <PaymentStatusBadge
+                          status={r.payment_status}
+                          labels={c.paymentStatus}
+                        />
+                      </dd>
+                    </div>
+                  ) : null}
+                </>
+              )}
             </>
           )}
         </dl>

@@ -276,7 +276,10 @@ export function ReservationDetailsModal({
           {r.status === "held" && can("reservations.confirm") ? (
             <Button onClick={() => onConfirm(r)}>{d.confirm}</Button>
           ) : null}
-          {editable && !inHouse && can("reservations.cancel") ? (
+          {editable && r.stay_id === null && can("reservations.cancel") ? (
+            // RESERVATIONS-FINAL-CLOSURE §2 — cancel is hidden once ANY stay
+            // exists (in-house OR checked-out), matching the card and the backend
+            // guard, so the button is never shown for an action the server refuses.
             <Button variant="danger" onClick={() => onCancel(r)}>
               {d.cancel}
             </Button>
@@ -601,33 +604,57 @@ export function ReservationDetailsModal({
                         : "—"}
                     </dd>
                   </div>
-                  <div className="room-op-details__row">
-                    <dt>{card.paid}</dt>
-                    <dd>
-                      {summary.paid !== null
-                        ? formatMoney(summary.paid, summary.currency, locale)
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div className="room-op-details__row">
-                    <dt>{card.remaining}</dt>
-                    <dd>
-                      {summary.remaining !== null
-                        ? formatMoney(summary.remaining, summary.currency, locale)
-                        : "—"}
-                    </dd>
-                  </div>
-                  {summary.payment_status ? (
-                    <div className="room-op-details__row">
-                      <dt>{card.paymentLabel}</dt>
-                      <dd>
-                        <PaymentStatusBadge
-                          status={summary.payment_status}
-                          labels={card.paymentStatus}
-                        />
-                      </dd>
-                    </div>
-                  ) : null}
+                  {summary.has_stay ? (
+                    // §1 — after check-in the account moved to the stay's folio;
+                    // show the REAL folio balance (central source) + a clear note,
+                    // never a misleading reservation-level paid/remaining/status.
+                    <>
+                      <div className="room-op-details__row">
+                        <dt>{card.folioBalance}</dt>
+                        <dd>
+                          {summary.folio_balance != null
+                            ? formatMoney(summary.folio_balance, summary.currency, locale)
+                            : "—"}
+                        </dd>
+                      </div>
+                      <div className="room-op-details__row">
+                        <dt>{card.paymentLabel}</dt>
+                        <dd>
+                          <Badge tone="neutral">{card.onFolioAccount}</Badge>
+                        </dd>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="room-op-details__row">
+                        <dt>{card.paid}</dt>
+                        <dd>
+                          {summary.paid !== null
+                            ? formatMoney(summary.paid, summary.currency, locale)
+                            : "—"}
+                        </dd>
+                      </div>
+                      <div className="room-op-details__row">
+                        <dt>{card.remaining}</dt>
+                        <dd>
+                          {summary.remaining !== null
+                            ? formatMoney(summary.remaining, summary.currency, locale)
+                            : "—"}
+                        </dd>
+                      </div>
+                      {summary.payment_status ? (
+                        <div className="room-op-details__row">
+                          <dt>{card.paymentLabel}</dt>
+                          <dd>
+                            <PaymentStatusBadge
+                              status={summary.payment_status}
+                              labels={card.paymentStatus}
+                            />
+                          </dd>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                 </dl>
 
                 {/* §39 — link to the stay and its folio reference when present. */}

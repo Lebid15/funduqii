@@ -433,14 +433,15 @@ class CancellationReasonRequired(FunduqiiAPIException):
 
 
 class ReservationHasActiveStay(FunduqiiAPIException):
-    """Post-check-in guard (reservations final closure): once a guest is
-    in-house, the STAY is the source of truth — the reservation's dates,
-    rooms and existence must not be changed from the reservations section."""
+    """Post-check-in guard (reservations final closure): once the reservation has
+    produced ANY stay — in-house OR already checked-out — the STAY is the source
+    of truth, so the reservation's dates, rooms, existence (cancel) and new
+    deposits must not be changed from the reservations section."""
 
     status_code = status.HTTP_409_CONFLICT
     default_detail = (
-        "This reservation has an in-house stay. Operate on the stay from the"
-        " front desk instead."
+        "This reservation already has a stay (in-house or checked out). Operate"
+        " on the stay from the front desk instead."
     )
     default_code = "reservation_has_active_stay"
 

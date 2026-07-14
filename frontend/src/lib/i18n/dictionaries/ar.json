@@ -818,6 +818,8 @@
       "remaining": "المتبقي",
       "paymentLabel": "الدفع",
       "notPriced": "غير مسعّرة بعد",
+      "onFolioAccount": "على الفوليو",
+      "folioBalance": "رصيد الفوليو",
       "paymentStatus": {
         "unpaid": "غير مدفوع",
         "partial": "مدفوع جزئيًا",

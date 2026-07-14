@@ -438,11 +438,15 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
         raise InvalidReservationTransition(
             {"detail": "An expired reservation cannot be cancelled."}
         )
-    # Post-check-in guard (final closure): a reservation whose guest is
-    # in-house cannot be cancelled — check the guest out from the front desk.
-    if has_in_house_stay(reservation):
+    # Post-check-in guard (RESERVATIONS-FINAL-CLOSURE §2): once the reservation has
+    # produced ANY stay — in-house OR already checked-out — its record belongs to
+    # the stay/folio and must NOT be rewritten to "cancelled" through the normal
+    # cancel cycle (that would corrupt operational history + reports). A correction
+    # after check-in travels through the front desk's own reversal flow. This
+    # mirrors the has_any_stay guard already enforced on update/deposit.
+    if has_any_stay(reservation):
         raise ReservationHasActiveStay(
-            {"reservation": reservation.id, "reason": "guest_in_house"}
+            {"reservation": reservation.id, "reason": "reservation_has_stay"}
         )
     previous = reservation.status
     reservation.status = ReservationStatus.CANCELLED
@@ -753,7 +757,7 @@ def latest_stay(reservation):
     return max(stays, key=lambda s: s.id)
 
 
-def reservation_financials(reservation, *, hotel=None) -> dict:
+def reservation_financials(reservation, *, hotel=None, include_folio_balance=False) -> dict:
     """Derive a reservation's money summary — a READ-ONLY view, never stored.
 
     Design (RESERVATIONS-FORM-UX-CORRECTION §26/§31/§35, office decision — there
@@ -804,6 +808,40 @@ def reservation_financials(reservation, *, hotel=None) -> dict:
     nightly = money(nightly) if is_priced else None
     total = money(total) if is_priced else None
 
+    # RESERVATIONS-FINAL-CLOSURE §1 — once the reservation has produced a STAY, the
+    # money lives on the stay's folio (invariant #1: the reused folio). A
+    # reservation-level paid/remaining/status would compare the ROOM total against
+    # folio payments that ALSO include in-stay charges (services, F&B) — a
+    # misleading figure that contradicts the central source of truth. So the
+    # account is reported as "moved to folio": the derived reservation-level money
+    # (paid/remaining/status) is suppressed, and the REAL folio balance is surfaced
+    # instead. The folio balance is only computed when explicitly requested
+    # (``include_folio_balance``) so the list render never pays a per-card
+    # folio-charge query. ``reservation.stays`` is prefetched on the list/detail
+    # paths, so ``has_stay`` costs no extra query there.
+    has_stay = any(True for _ in reservation.stays.all())
+    if has_stay:
+        folio_balance = None
+        if include_folio_balance:
+            from apps.finance.services import folio_balance as _folio_balance
+
+            bal = ZERO
+            for folio in reservation.folios.all():
+                bal += _folio_balance(folio)["balance"]
+            folio_balance = money(bal)
+        return {
+            "currency": currency,
+            "nights": nights,
+            "nightly_rate": nightly,
+            "reservation_total": total,
+            "paid": None,
+            "remaining": None,
+            "payment_status": None,
+            "is_priced": is_priced,
+            "has_stay": True,
+            "folio_balance": folio_balance,
+        }
+
     paid = ZERO
     for folio in reservation.folios.all():
         for payment in folio.payments.all():
@@ -831,4 +869,6 @@ def reservation_financials(reservation, *, hotel=None) -> dict:
         "remaining": remaining,
         "payment_status": payment_status,
         "is_priced": is_priced,
+        "has_stay": False,
+        "folio_balance": None,
     }

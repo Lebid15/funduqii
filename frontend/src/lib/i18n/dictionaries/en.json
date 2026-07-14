@@ -818,6 +818,8 @@
       "remaining": "Remaining",
       "paymentLabel": "Payment",
       "notPriced": "Not priced yet",
+      "onFolioAccount": "On the folio",
+      "folioBalance": "Folio balance",
       "paymentStatus": {
         "unpaid": "Unpaid",
         "partial": "Partially paid",

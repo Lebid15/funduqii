@@ -121,7 +121,10 @@ def _financial_summary_payload(request: Request, reservation) -> dict:
 
     hotel = request.hotel
     can_money = has_hotel_permission(request.user, hotel, "finance.view")
-    fin = reservation_financials(reservation, hotel=hotel)
+    # RESERVATIONS-FINAL-CLOSURE §1 — the detail view CAN afford the real folio
+    # balance (single reservation, not the list), so request it: after check-in the
+    # money summary reflects the folio, not a misleading reservation-level figure.
+    fin = reservation_financials(reservation, hotel=hotel, include_folio_balance=True)
 
     def s(value):
         return str(value) if value is not None else None
@@ -132,6 +135,9 @@ def _financial_summary_payload(request: Request, reservation) -> dict:
         "currency": fin["currency"],
         "nights": fin["nights"],
         "is_priced": fin["is_priced"],
+        # Non-sensitive flag: the account has moved to the stay's folio. Drives the
+        # UI to show the folio state instead of a stale reservation-account summary.
+        "has_stay": fin["has_stay"],
         "can_view_money": can_money,
     }
     if can_money:
@@ -142,6 +148,7 @@ def _financial_summary_payload(request: Request, reservation) -> dict:
                 "paid": s(fin["paid"]),
                 "remaining": s(fin["remaining"]),
                 "payment_status": fin["payment_status"],
+                "folio_balance": s(fin["folio_balance"]),
                 "payments": _collect_reservation_payments(request, reservation),
             }
         )
@@ -153,6 +160,7 @@ def _financial_summary_payload(request: Request, reservation) -> dict:
                 "paid": None,
                 "remaining": None,
                 "payment_status": None,
+                "folio_balance": None,
                 "payments": [],
             }
         )

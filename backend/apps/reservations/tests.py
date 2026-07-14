@@ -1455,6 +1455,42 @@ class ReservationDepositTests(APITestCase):
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.data["code"], "reservation_has_active_stay")
 
+    def _cancel(self, res, *, user=None, reason="closing"):
+        self.client.force_authenticate(user or self.manager)
+        return self.client.post(
+            reverse("reservations:reservation-cancel", args=[res.id]),
+            {"reason": reason},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_cancel_rejected_when_reservation_has_checked_out_stay(self):
+        # RESERVATIONS-FINAL-CLOSURE §2 — a departed guest's reservation is still
+        # CONFIRMED but must NOT be re-cancelled: its record belongs to the stay,
+        # and a normal cancel would corrupt operational history/reports.
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.status, ReservationStatus.CONFIRMED)
+
+    def test_cancel_rejected_when_reservation_has_in_house_stay(self):
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_cancel_allowed_before_any_stay(self):
+        # The broadened guard must NOT over-block: a booking that never checked in
+        # still cancels normally.
+        resp = self._cancel(self.res)
+        self.assertEqual(resp.status_code, 200)
+        self.res.refresh_from_db()
+        self.assertEqual(self.res.status, ReservationStatus.CANCELLED)
+
     def test_deposit_requires_payment_create_permission(self):
         # reservations.view alone is never enough to record money (§42).
         viewer = add_member(self.hotel, "dep-view@x.com", perms=["reservations.view"])
@@ -1544,6 +1580,37 @@ class ReservationFinancialSummaryTests(APITestCase):
         self.assertEqual(resp.data["remaining"], "150.00")
         self.assertEqual(resp.data["currency"], "USD")
         self.assertEqual(resp.data["nights"], 2)
+
+    def test_summary_moves_to_folio_after_check_in(self):
+        # RESERVATIONS-FINAL-CLOSURE §1 — before a stay the reservation reports
+        # paid/remaining/status; once ANY stay exists those are SUPPRESSED (they
+        # would compare the room total to folio payments incl. in-stay charges) and
+        # the REAL folio balance (central source of truth) is surfaced instead.
+        from apps.finance.services import record_reservation_payment
+
+        record_reservation_payment(
+            self.res, amount="50.00", method="cash", user=self.manager
+        )
+        pre = self._summary(self.res, self.manager).data
+        self.assertFalse(pre["has_stay"])
+        self.assertEqual(pre["paid"], "50.00")
+        self.assertEqual(pre["remaining"], "150.00")
+        self.assertEqual(pre["payment_status"], "partial")
+        self.assertIsNone(pre["folio_balance"])
+
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+
+        post = self._summary(self.res, self.manager).data
+        self.assertTrue(post["has_stay"])
+        self.assertIsNone(post["paid"])
+        self.assertIsNone(post["remaining"])
+        self.assertIsNone(post["payment_status"])
+        # The reservation's folio (charges 0 − payments 50) is a 50 credit; the
+        # real folio balance is surfaced, never a misleading reservation figure.
+        self.assertEqual(post["folio_balance"], "-50.00")
+        # The room total stays as a reference; it is NOT compared to folio payments.
+        self.assertEqual(post["reservation_total"], "200.00")
 
     def test_money_masked_without_finance_view(self):
         staff = add_member(self.hotel, "noview@x.com", perms=["reservations.view"])

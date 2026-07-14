@@ -1082,6 +1082,11 @@ export interface ReservationFinancialSummary {
   paid: string | null;
   remaining: string | null;
   payment_status: ReservationPaymentStatus | null;
+  /** RESERVATIONS-FINAL-CLOSURE §1 — true once a stay exists; the account has
+   * moved to the folio. When true, paid/remaining/payment_status are null and
+   * `folio_balance` carries the real current balance from the central folio. */
+  has_stay: boolean;
+  folio_balance: string | null;
   payments: Payment[];
 }
 

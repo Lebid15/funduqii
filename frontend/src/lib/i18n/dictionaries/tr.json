@@ -818,6 +818,8 @@
       "remaining": "Kalan",
       "paymentLabel": "Ödeme",
       "notPriced": "Henüz fiyatlanmadı",
+      "onFolioAccount": "Folyoda",
+      "folioBalance": "Folyo bakiyesi",
       "paymentStatus": {
         "unpaid": "Ödenmedi",
         "partial": "Kısmen ödendi",

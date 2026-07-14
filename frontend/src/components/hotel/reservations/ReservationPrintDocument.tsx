@@ -194,16 +194,37 @@ export function ReservationPrintDocument({
         value: <bdi>{formatMoney(money.reservation_total, money.currency, locale)}</bdi>,
       });
     }
-    // Zero-paid is truthful: paid renders as the currency's zero, remaining
-    // stays the backend value — no phantom method/rate is invented.
-    financialRows.push({
-      label: p.paid,
-      value: <bdi>{formatMoney(money.paid, money.currency, locale)}</bdi>,
-    });
+    // Pre-stay: zero-paid is truthful (renders as the currency's zero). Once the
+    // account has moved to the stay's folio (§1) `paid` is null server-side — omit
+    // it rather than print a misleading zero; the folio statement is the account.
+    if (money.paid !== null) {
+      financialRows.push({
+        label: p.paid,
+        value: <bdi>{formatMoney(money.paid, money.currency, locale)}</bdi>,
+      });
+    }
     if (money.remaining !== null) {
       financialRows.push({
         label: p.remaining,
         value: <bdi>{formatMoney(money.remaining, money.currency, locale)}</bdi>,
+      });
+    }
+    if (money.has_stay) {
+      // §1 — after check-in the account moved to the stay's folio; the misleading
+      // reservation-level paid/remaining are already omitted above. Show the REAL
+      // folio balance + a clear "on folio" note (and the reservation payments
+      // table is suppressed below) so the sheet never implies a competing account.
+      if (money.folio_balance !== null) {
+        financialRows.push({
+          label: t.reservations.card.folioBalance,
+          value: (
+            <bdi>{formatMoney(money.folio_balance, money.currency, locale)}</bdi>
+          ),
+        });
+      }
+      financialRows.push({
+        label: t.reservations.card.paymentLabel,
+        value: t.reservations.card.onFolioAccount,
       });
     }
   }
@@ -326,7 +347,7 @@ export function ReservationPrintDocument({
               </div>
             ))}
           </dl>
-          {money.payments.length > 0 ? (
+          {money.payments.length > 0 && !money.has_stay ? (
             <table className="resv-print__table resv-print__table--pay">
               <thead>
                 <tr>
