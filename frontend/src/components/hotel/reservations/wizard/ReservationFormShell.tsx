@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { X } from "lucide-react";
 
 import { Alert, Badge, Button, IconButton, useToast } from "@/components/ui";
 import { messageForError } from "@/lib/api/errors";
@@ -33,10 +34,13 @@ export type ReservationFormMode = "create" | "edit";
 
 /**
  * The reservation form SHELL (RESERVATIONS-FORM-UX-CORRECTION · F1). The 4-step
- * flow (Guest → Companions → Documents → Booking) is now a full-screen PAGE, not
- * a modal: a fixed header + `ReservationStepper` + one `min-height:0` scroll band
- * + a fixed footer. Body scroll is locked (same approach as `Modal.tsx`) so the
- * app shell underneath never double-scrolls.
+ * flow (Guest → Companions → Documents → Booking) renders as a CENTERED,
+ * content-sized MODAL over the reservations list (owner correction): an overlay
+ * dims the list and centres a dialog of header + `ReservationStepper` + one
+ * `min-height:0` scroll band + footer. Body scroll is locked, Escape / backdrop
+ * click close, and focus returns to the trigger on unmount — the same approach as
+ * `Modal.tsx`. `onClose`/`onSaved` let the list host swap-and-refresh in place;
+ * the standalone deep-link routes fall back to navigating to the list.
  *
  * The SAME shell drives both flows (§33). CREATE runs `useReservationSubmit`
  * (create-or-immediate-check-in + staged document upload). EDIT (`mode="edit"`)
@@ -53,6 +57,8 @@ export function ReservationFormShell({
   reservation,
   initialDraft,
   financialSummary,
+  onClose,
+  onSaved,
 }: {
   mode: ReservationFormMode;
   /** Edit mode only — header number, field locking and the edit-save target. */
@@ -61,6 +67,12 @@ export function ReservationFormShell({
   initialDraft?: ReservationDraft;
   /** Edit mode only — DISPLAY-only record of payments already taken (§31). */
   financialSummary?: ReservationFinancialSummary | null;
+  /** Dismiss without saving. Defaults to navigating back to the list route
+   * (deep-link fallback); the list host passes a state-clearing closer instead. */
+  onClose?: () => void;
+  /** After a successful create/edit save. Defaults to the list route; the list
+   * host passes a closer that also refreshes the rows + overview counts. */
+  onSaved?: () => void;
 }) {
   const { t } = useI18n();
   const { notify } = useToast();
@@ -115,13 +127,16 @@ export function ReservationFormShell({
         }
       : null;
 
-  // Lock body scroll for the lifetime of the full-screen shell — exactly the
-  // pattern `Modal.tsx` uses — so the sidebar/topbar underneath cannot scroll.
+  // Lock body scroll for the modal's lifetime and return focus to the trigger on
+  // unmount — exactly the pattern `Modal.tsx` uses — so the list underneath cannot
+  // scroll and keyboard focus is restored when the dialog closes.
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus?.();
     };
   }, []);
 
@@ -131,8 +146,26 @@ export function ReservationFormShell({
   }, [step]);
 
   const close = useCallback(() => {
-    router.push(LIST_ROUTE);
-  }, [router]);
+    if (onClose) onClose();
+    else router.push(LIST_ROUTE);
+  }, [onClose, router]);
+
+  // After a successful save: hand back to the host (close + refresh in place) or,
+  // on a standalone deep-link route, navigate to the list.
+  const afterSave = useCallback(() => {
+    if (onSaved) onSaved();
+    else router.push(LIST_ROUTE);
+  }, [onSaved, router]);
+
+  // Escape closes the dialog unless a submit is in flight (mirrors `Modal.tsx`);
+  // backdrop click is handled on the overlay below.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, close]);
 
   /** Per-step client-side gate. The backend re-validates everything on submit;
    * these are lightweight hints only. Returns an error string or null. */
@@ -254,7 +287,7 @@ export function ReservationFormShell({
           );
         }
         notify(w.editSaved);
-        router.push(LIST_ROUTE);
+        afterSave();
         return;
       }
 
@@ -277,7 +310,7 @@ export function ReservationFormShell({
       } else {
         notify(t.reservations.saved);
       }
-      router.push(LIST_ROUTE);
+      afterSave();
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -293,16 +326,32 @@ export function ReservationFormShell({
       ? w.submitCheckIn
       : w.submit;
 
-  return (
-    <section className="resform-shell" aria-label={title}>
-      {/* Band 1 — fixed header: back-to-list + title + reservation-number slot. */}
-      <header className="resform-header">
-        <IconButton
-          label={w.backToList}
-          icon={ArrowLeft}
-          onClick={close}
-          disabled={busy}
-        />
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      className="resform-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        // Backdrop click closes — but never mid-submit, and never a click that
+        // started inside the dialog and dragged out.
+        if (event.target === event.currentTarget && !busy) close();
+      }}
+    >
+      <section
+        className="resform-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        {/* Band 1 — header: close + title + reservation-number slot. */}
+        <header className="resform-header">
+          <IconButton
+            label={t.common.close}
+            icon={X}
+            onClick={close}
+            disabled={busy}
+          />
         <div className="resform-header__titles">
           <span className="resform-header__title">{title}</span>
         </div>
@@ -405,6 +454,8 @@ export function ReservationFormShell({
           </Button>
         )}
       </footer>
-    </section>
+      </section>
+    </div>,
+    document.body,
   );
 }

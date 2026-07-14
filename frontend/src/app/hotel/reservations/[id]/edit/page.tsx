@@ -34,9 +34,13 @@ interface EditData {
 }
 
 /**
- * Full-screen EDIT reservation page (RESERVATIONS-FORM-UX-CORRECTION §33). Loads
- * the reservation, its documents and its derived financial summary IN PARALLEL,
- * then hydrates the SAME wizard as create via `reservationToDraft`: guest,
+ * EDIT reservation deep-link route (RESERVATIONS-FORM-UX-CORRECTION §33). The
+ * primary UX opens this wizard as a MODAL over the list; this route renders the
+ * SAME `ReservationFormShell` modal standalone so `/hotel/reservations/[id]/edit`
+ * still resolves (close / save navigate back to the list via the shell's
+ * defaults). It loads the reservation, its documents and its derived financial
+ * summary IN PARALLEL, then hydrates the SAME wizard as create via
+ * `reservationToDraft`: guest,
  * companions, children, dates/room, notes and the existing documents (shown "on
  * file", never re-staged). The financial summary is DISPLAY-only and threaded to
  * the shell separately (§31 — an old transaction is never an editable field).

@@ -4431,19 +4431,51 @@ a {
 }
 
 /* --- Reservation form shell (RESERVATIONS-FORM-UX-CORRECTION · F1) --------- */
-/* The reservation wizard is now a full-screen PAGE, not a modal. A fixed
-   header + stepper + footer frame ONE scroll owner (`.resform-main`), so the
-   app shell underneath never double-scrolls. Everything is additive, token-only
-   and RTL/LTR-safe via logical properties — no palette, no literals. */
-.resform-shell {
+/* The reservation wizard is a CENTERED, content-sized MODAL over the list (owner
+   correction). An overlay dims + centres a dialog whose header + stepper + footer
+   frame ONE scroll owner (`.resform-main`), so nothing double-scrolls. Everything
+   is additive, token-only and RTL/LTR-safe via logical properties — no palette,
+   no literals, and NO screen-percentage sizing. */
+.resform-overlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
   display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  background: var(--color-bg);
+  align-items: center;
+  justify-content: center;
+  /* The margin AROUND the dialog — it never touches the screen edge on desktop. */
+  padding: var(--space-8);
+  background: rgba(6, 33, 29, 0.55);
+  backdrop-filter: blur(4px);
   animation: fade-in var(--transition-base);
+}
+/* The dialog: a STABLE, content-sized width across steps (no horizontal jump) —
+   capped wide enough for the Booking step's multi-column layout, never sparse and
+   never a fixed screen ratio. Its height grows with the step's content up to the
+   PADDED overlay (`max-height:100%` = viewport minus the overlay margins, not a
+   `dvh` ratio); only then does the content band scroll. A short step yields a
+   short, centred dialog with no wasted gaps. */
+.resform-shell {
+  width: min(60rem, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop-in var(--transition-base);
+}
+/* Small screens: drop the margins and let the dialog become a near-full sheet. */
+@media (max-width: 640px) {
+  .resform-overlay {
+    padding: 0;
+  }
+  .resform-shell {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
 }
 
 /* Band 1 — fixed header: back/close + title + reservation-number slot. */
@@ -4500,9 +4532,7 @@ a {
 }
 .resform-content {
   width: 100%;
-  max-width: 72rem;
-  margin-inline: auto;
-  padding: var(--space-6) var(--space-6) var(--space-10);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);

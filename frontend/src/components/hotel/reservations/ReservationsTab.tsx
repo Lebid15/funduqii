@@ -7,6 +7,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -39,8 +40,10 @@ import {
 import {
   cancelReservation,
   confirmReservation,
+  getReservation,
   getReservationFinancialSummary,
   getReservationOverview,
+  listReservationDocuments,
   listReservations,
 } from "@/lib/api/reservations";
 import { listRoomTypes } from "@/lib/api/rooms";
@@ -48,6 +51,7 @@ import { getSettings } from "@/lib/api/hotel";
 import { messageForError } from "@/lib/api/errors";
 import type {
   Reservation,
+  ReservationDocument,
   ReservationFinancialSummary,
   RoomType,
 } from "@/lib/api/types";
@@ -58,6 +62,12 @@ import { useHotelProfile } from "@/lib/session/HotelProfileContext";
 
 import { ReservationCard } from "./ReservationCard";
 import { ReservationDetailsModal } from "./ReservationDetailsModal";
+import {
+  ReservationFormShell,
+  createInitialDraft,
+  reservationToDraft,
+  type ReservationDraft,
+} from "./wizard";
 import {
   isForeignPayment,
   occupantDisplayName,
@@ -120,35 +130,57 @@ export function ReservationsTab({
   const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null);
   const [printTarget, setPrintTarget] = useState<Reservation | null>(null);
 
-  // The page's "New reservation" button pulses this prop — it now navigates to
-  // the full-screen create PAGE (no modal). Consume real increments only (the
-  // initial value must not auto-navigate on mount).
+  // The reservation form opens as a MODAL over this list (owner correction): the
+  // create + edit actions set this local state to render `<ReservationFormShell>`
+  // above the dimmed rows, rather than navigating to a full-screen page. Edit first
+  // loads the reservation + documents + financial summary (as the edit route does)
+  // so the wizard hydrates identically; `editLoading` covers that fetch.
+  const [formState, setFormState] = useState<
+    | { mode: "create"; initialDraft?: ReservationDraft }
+    | {
+        mode: "edit";
+        reservation: Reservation;
+        draft: ReservationDraft;
+        financialSummary: ReservationFinancialSummary | null;
+      }
+    | null
+  >(null);
+  const [editLoading, setEditLoading] = useState(false);
+
+  // The page's "New reservation" button pulses this prop — it opens the create
+  // MODAL over this list (owner correction). Consume real increments only (the
+  // initial value must not auto-open on mount).
   const lastSignal = useRef(createSignal);
   useEffect(() => {
     if (createSignal !== lastSignal.current) {
       lastSignal.current = createSignal;
-      router.push("/hotel/reservations/new");
+      setFormState({ mode: "create" });
     }
-  }, [createSignal, router]);
+  }, [createSignal]);
 
   function openCreate() {
-    router.push("/hotel/reservations/new");
+    setFormState({ mode: "create" });
   }
 
   // Deep-links: ?action=new (topbar quick action / a room pinned from the rooms
-  // board) now opens the full-screen create PAGE, forwarding the pinned room.
-  // `replace` so the ?action= URL never lingers in history (back/refresh won't
-  // re-trigger it). ?action=find&q= focuses the list (below).
+  // board) opens the create MODAL over this list, seeding the pinned room. The
+  // query is `replace`d away afterwards so the ?action= URL never lingers in
+  // history (back/refresh won't re-open it). ?action=find&q= focuses the list.
   const actionParam = searchParams.get("action");
   const roomParam = searchParams.get("room");
   const roomTypeParam = searchParams.get("room_type");
   useEffect(() => {
     if (actionParam !== "new") return;
-    const params = new URLSearchParams();
-    if (roomParam) params.set("room", roomParam);
-    if (roomTypeParam) params.set("room_type", roomTypeParam);
-    const qs = params.toString();
-    router.replace(`/hotel/reservations/new${qs ? `?${qs}` : ""}`);
+    let seed: ReservationDraft | undefined;
+    if (roomParam && roomTypeParam) {
+      seed = createInitialDraft();
+      seed.booking.lines = [
+        { room_type: roomTypeParam, room: roomParam, quantity: "1" },
+      ];
+      seed.booking.selected_room_id = Number(roomParam);
+    }
+    setFormState({ mode: "create", initialDraft: seed });
+    router.replace("/hotel/reservations");
   }, [actionParam, roomParam, roomTypeParam, router]);
   useQuickAction("find", (params) => {
     const q = params.get("q") ?? "";
@@ -287,6 +319,38 @@ export function ReservationsTab({
     loadOverview();
     onChanged?.();
   }, [load, loadOverview, onChanged]);
+
+  // Edit opens the SAME wizard shell as a modal — but first loads the full
+  // reservation, its documents and its derived financial summary IN PARALLEL
+  // (identical to the /[id]/edit route), degrading gracefully when a supplementary
+  // read is not permitted. The reservation fetch is the only hard dependency.
+  const openEdit = useCallback(
+    async (target: Reservation) => {
+      setEditLoading(true);
+      try {
+        const [reservation, documents, financialSummary] = await Promise.all([
+          getReservation(target.id),
+          listReservationDocuments(target.id).catch(
+            () => [] as ReservationDocument[],
+          ),
+          getReservationFinancialSummary(target.id).catch(
+            () => null as ReservationFinancialSummary | null,
+          ),
+        ]);
+        setFormState({
+          mode: "edit",
+          reservation,
+          draft: reservationToDraft(reservation, { documents }),
+          financialSummary,
+        });
+      } catch (err) {
+        notify(messageForError(err, t), "error");
+      } finally {
+        setEditLoading(false);
+      }
+    },
+    [notify, t],
+  );
 
   async function confirm(r: Reservation) {
     try {
@@ -498,7 +562,7 @@ export function ReservationsTab({
                     onView={setDetails}
                     onPrint={setPrintTarget}
                     onConfirm={confirm}
-                    onEdit={() => router.push(`/hotel/reservations/${r.id}/edit`)}
+                    onEdit={() => openEdit(r)}
                     onCancel={setCancelTarget}
                   />
                 </div>
@@ -520,15 +584,44 @@ export function ReservationsTab({
         )
       ) : null}
 
-      {/* Create and edit both live on full-screen pages
-          (/hotel/reservations/new and /hotel/reservations/[id]/edit). */}
+      {/* Create + edit open as a centered MODAL over this list (owner correction).
+          The deep-link routes /new and /[id]/edit render the same shell standalone.
+          A brief loading overlay covers the edit fetch before the wizard mounts. */}
+      {editLoading && typeof document !== "undefined"
+        ? createPortal(
+            <div className="resform-overlay" role="presentation">
+              <LoadingState label={t.common.loading} />
+            </div>,
+            document.body,
+          )
+        : null}
+      {formState ? (
+        <ReservationFormShell
+          mode={formState.mode}
+          reservation={
+            formState.mode === "edit" ? formState.reservation : undefined
+          }
+          initialDraft={
+            formState.mode === "edit" ? formState.draft : formState.initialDraft
+          }
+          financialSummary={
+            formState.mode === "edit" ? formState.financialSummary : undefined
+          }
+          onClose={() => setFormState(null)}
+          onSaved={() => {
+            setFormState(null);
+            refresh();
+          }}
+        />
+      ) : null}
+
       <ReservationDetailsModal
         open={details !== null}
         reservation={details ?? undefined}
         onClose={() => setDetails(null)}
         onEdit={(r) => {
           setDetails(null);
-          router.push(`/hotel/reservations/${r.id}/edit`);
+          openEdit(r);
         }}
         onConfirm={(r) => {
           setDetails(null);

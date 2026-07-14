@@ -12,10 +12,13 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 /**
- * Full-screen CREATE reservation page (RESERVATIONS-FORM-UX-CORRECTION · F1).
- * Replaces the old modal wizard. A room pinned from the rooms board arrives as
- * `?room=&room_type=` and seeds the first booking line. Permission-gated by
- * `reservations.create`; the backend remains the authoritative guard.
+ * CREATE reservation deep-link route (RESERVATIONS-FORM-UX-CORRECTION · F1). The
+ * primary UX opens the wizard as a MODAL over the list; this route renders the
+ * SAME `ReservationFormShell` modal standalone so `/hotel/reservations/new` still
+ * resolves (close / save navigate back to the list via the shell's defaults). A
+ * room pinned from the rooms board arrives as `?room=&room_type=` and seeds the
+ * first booking line. Permission-gated by `reservations.create`; the backend
+ * remains the authoritative guard.
  */
 export default function NewReservationPage() {
   const { t } = useI18n();
