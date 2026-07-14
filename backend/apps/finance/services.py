@@ -589,6 +589,75 @@ def void_folio(folio, *, reason, user=None) -> Folio:
     return folio
 
 
+@transaction.atomic
+def set_folio_awaiting_final_charges(folio, *, awaiting, note="", user=None) -> Folio:
+    """Toggle the folio's "awaiting final charges" operational flag (§32). While
+    true the folio must NOT close and departure is blocked; cleared once the final
+    charges are confirmed. Only on an OPEN folio."""
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    awaiting = bool(awaiting)
+    folio.awaiting_final_charges = awaiting
+    folio.awaiting_final_charges_note = (note or "")[:255] if awaiting else ""
+    folio.save(
+        update_fields=[
+            "awaiting_final_charges",
+            "awaiting_final_charges_note",
+            "updated_at",
+        ]
+    )
+    _record_event(
+        folio.hotel,
+        event_type=(
+            "folio.awaiting_final_charges_set"
+            if awaiting
+            else "folio.awaiting_final_charges_cleared"
+        ),
+        severity="info",
+        title=(
+            f"Folio {folio.folio_number} "
+            f"{'is awaiting' if awaiting else 'cleared'} final charges"
+        ),
+        message=folio.awaiting_final_charges_note,
+        user=user,
+        obj=folio,
+    )
+    return folio
+
+
+@transaction.atomic
+def reopen_folio(folio, *, reason, user=None) -> Folio:
+    """Reopen a CLOSED folio (STAYS-ARRIVALS-DEPARTURES §42).
+
+    Special permission (view layer) + mandatory reason + audit. A VOIDED folio
+    can never reopen. The reopen requires (and is dated to) the current OPEN
+    business day, so it respects the daily close. No financial movement is created
+    — closed history is never edited, only the folio is made writable again.
+    """
+    reason = _require_reason(reason)
+    folio = _lock_folio(folio)
+    if folio.status == FolioStatus.OPEN:
+        return folio
+    if folio.status == FolioStatus.VOIDED:
+        raise InvalidFinanceOperation({"reason": "cannot_reopen_voided"})
+    business_date = _business_date(folio.hotel)
+    _ensure_day_open(folio.hotel, business_date)
+    folio.status = FolioStatus.OPEN
+    folio.closed_at = None
+    folio.closed_by = None
+    folio.save(update_fields=["status", "closed_at", "closed_by", "updated_at"])
+    _record_event(
+        folio.hotel,
+        event_type="folio.reopened",
+        severity="warning",
+        title=f"Folio {folio.folio_number} reopened",
+        message=reason,
+        user=user,
+        obj=folio,
+    )
+    return folio
+
+
 # --- Charges ----------------------------------------------------------------
 
 

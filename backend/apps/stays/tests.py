@@ -1357,3 +1357,67 @@ class RoomChargePostingTests(APITestCase):
         stay = self._check_in(res2, line2, room2, make_guest(self.hotel, name="G2"))
         folio = stay.folios.get()
         self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+
+
+class FolioLifecycleGateTests(APITestCase):
+    """§32/§38/§42 — awaiting-final-charges blocks check-out; a closed folio can
+    be reopened with a reason."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "afc@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)  # unpriced -> folio balance stays 0
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
+
+    def _check_in(self):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+
+    def test_awaiting_final_charges_blocks_checkout_until_cleared(self):
+        from apps.common.exceptions import FolioAwaitingFinalCharges
+        from apps.finance.services import set_folio_awaiting_final_charges
+        from apps.stays.services import CheckOutService
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        set_folio_awaiting_final_charges(
+            folio, awaiting=True, note="restaurant", user=self.manager
+        )
+        with self.assertRaises(FolioAwaitingFinalCharges):
+            CheckOutService.execute(stay, checkout_reason="early departure", user=self.manager)
+        # Cleared -> departure proceeds (balance is 0 on the unpriced room).
+        set_folio_awaiting_final_charges(folio, awaiting=False, user=self.manager)
+        out = CheckOutService.execute(stay, checkout_reason="early departure", user=self.manager)
+        self.assertEqual(out.status, StayStatus.CHECKED_OUT)
+
+    def test_closed_folio_can_be_reopened_with_reason(self):
+        from apps.finance.models import FolioStatus
+        from apps.finance.services import reopen_folio
+        from apps.stays.services import CheckOutService
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        CheckOutService.execute(stay, checkout_reason="early departure", user=self.manager)  # closes the balanced folio
+        folio.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.CLOSED)
+        reopen_folio(folio, reason="late charge correction", user=self.manager)
+        folio.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+
+    def test_reopen_requires_a_reason(self):
+        from apps.common.exceptions import VoidReasonRequired
+        from apps.finance.services import reopen_folio
+        from apps.stays.services import CheckOutService
+
+        stay = self._check_in()
+        folio = stay.folios.get()
+        CheckOutService.execute(stay, checkout_reason="early departure", user=self.manager)
+        folio.refresh_from_db()
+        with self.assertRaises(VoidReasonRequired):
+            reopen_folio(folio, reason="  ", user=self.manager)

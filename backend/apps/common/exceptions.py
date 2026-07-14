@@ -531,6 +531,19 @@ class FolioBalanceOutstanding(FunduqiiAPIException):
     default_code = "folio_balance_outstanding"
 
 
+class FolioAwaitingFinalCharges(FunduqiiAPIException):
+    """Check-out is blocked while reception is still confirming the stay's final
+    charges (STAYS-ARRIVALS-DEPARTURES §32) — the folio must not close until the
+    final charges (restaurant / services / minibar / damages) are confirmed."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay's folio is awaiting final charges. Confirm the final charges "
+        "before check-out."
+    )
+    default_code = "folio_awaiting_final_charges"
+
+
 class EarlyDepartureReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A reason is required for an early departure."

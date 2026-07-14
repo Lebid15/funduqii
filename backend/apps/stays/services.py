@@ -30,6 +30,7 @@ from apps.common.exceptions import (
     ArrivalDateInFuture,
     CrossTenantReference,
     EarlyDepartureReasonRequired,
+    FolioAwaitingFinalCharges,
     FolioBalanceOutstanding,
     InvalidCheckIn,
     InvalidCheckOut,
@@ -353,6 +354,17 @@ class CheckOutService:
             )
         )
         for folio in open_folios:
+            # §32/§38 — a folio still awaiting final charges must not close and
+            # blocks departure (checked BEFORE the balance: the balance is not yet
+            # final while charges are pending).
+            if folio.awaiting_final_charges:
+                raise FolioAwaitingFinalCharges(
+                    {
+                        "folio": folio.id,
+                        "folio_number": folio.folio_number,
+                        "reason": folio.awaiting_final_charges_note,
+                    }
+                )
             balance = folio_balance(folio)["balance"]
             if balance != 0:
                 raise FolioBalanceOutstanding(
