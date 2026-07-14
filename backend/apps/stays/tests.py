@@ -1679,3 +1679,71 @@ class StaysOverviewTests(APITestCase):
         self.client.force_authenticate(viewer)
         resp = self.client.get(reverse("stays:stay-overview"), **HDR(self.hotel))
         self.assertEqual(resp.status_code, 403)
+
+
+class FolioCycleEndpointsTests(APITestCase):
+    """§32/§34/§37/§42 — folio settle / awaiting-charges / reopen / refund endpoints."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "fe@x.com", kind=MembershipType.MANAGER)
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
+        self.client.force_authenticate(self.manager)
+
+    def _folio(self):
+        from apps.stays.services import CheckInService
+
+        stay = CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+        return stay.folios.get()  # holds a 200 room charge
+
+    def _post(self, name, folio, body):
+        return self.client.post(
+            reverse(name, args=[folio.id]), body, format="json", **HDR(self.hotel)
+        )
+
+    def test_settle_endpoint(self):
+        from apps.finance.services import folio_balance
+
+        folio = self._folio()
+        resp = self._post("finance:folio-settle", folio, {"method": "cash", "amount": "200.00"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_awaiting_then_reopen_endpoints(self):
+        from apps.finance.models import FolioStatus
+        from apps.finance.services import close_folio
+
+        folio = self._folio()
+        self.assertEqual(
+            self._post("finance:folio-awaiting-charges", folio,
+                       {"awaiting": True, "note": "restaurant"}).status_code, 200)
+        folio.refresh_from_db()
+        self.assertTrue(folio.awaiting_final_charges)
+        self._post("finance:folio-settle", folio, {"method": "cash", "amount": "200.00"})
+        self._post("finance:folio-awaiting-charges", folio, {"awaiting": False})
+        folio.refresh_from_db()
+        close_folio(folio, user=self.manager)
+        folio.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.CLOSED)
+        self.assertEqual(
+            self._post("finance:folio-reopen", folio, {"reason": "correction"}).status_code, 200)
+        folio.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+
+    def test_refund_endpoint(self):
+        from apps.finance.services import folio_balance, record_folio_settlement
+
+        folio = self._folio()
+        record_folio_settlement(folio, method="cash", amount="250.00", user=self.manager)  # overpay
+        resp = self._post("finance:folio-refund", folio, {"reason": "overpayment"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")

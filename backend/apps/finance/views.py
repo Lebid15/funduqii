@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from django.db.models import Q, Sum
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +18,7 @@ from rest_framework.views import APIView
 from apps.common.exceptions import FolioClosed, InvalidFinanceOperation
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelPermission
+from apps.rbac.services import has_hotel_permission
 from apps.reservations.models import Reservation
 from apps.shifts.services import get_business_date
 from apps.stays.models import Stay
@@ -58,6 +60,9 @@ CanChargeCreate = HasHotelPermission("finance.charge_create")
 CanChargeVoid = HasHotelPermission("finance.charge_void")
 CanPaymentCreate = HasHotelPermission("finance.payment_create")
 CanPaymentVoid = HasHotelPermission("finance.payment_void")
+CanReopen = HasHotelPermission("finance.reopen")
+CanRefund = HasHotelPermission("finance.refund")
+CanInsuranceManage = HasHotelPermission("finance.insurance_manage")
 CanAdjust = HasHotelPermission("finance.adjust")
 CanPaymentReverse = HasHotelPermission("finance.payment_reverse")
 CanInvoiceCreate = HasHotelPermission("finance.invoice_create")
@@ -180,6 +185,105 @@ class FolioCloseView(APIView):
         _guard_write(request)
         folio = _get(Folio, request, pk)
         services.close_folio(folio, user=request.user)
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioReopenView(APIView):
+    """Reopen a CLOSED folio (§42) — POST folios/<id>/reopen/ with a mandatory
+    ``reason``. Requires ``finance.reopen``."""
+
+    def get_permissions(self):
+        return [CanReopen()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.reopen_folio(
+            folio, reason=(request.data.get("reason") or ""), user=request.user
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioAwaitingChargesView(APIView):
+    """Toggle the folio's awaiting-final-charges flag (§32) — POST
+    folios/<id>/awaiting-final-charges/ with ``awaiting`` (bool) + optional
+    ``note``. Requires ``finance.update``."""
+
+    def get_permissions(self):
+        return [CanUpdate()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.set_folio_awaiting_final_charges(
+            folio,
+            awaiting=bool(request.data.get("awaiting")),
+            note=(request.data.get("note") or ""),
+            user=request.user,
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioSettleView(APIView):
+    """Settle a folio balance with a payment (§34), multi-currency aware — POST
+    folios/<id>/settle/. Requires ``finance.payment_create``; a manual FX rate on
+    a foreign-currency payment additionally requires ``exchange_rate.override``."""
+
+    def get_permissions(self):
+        return [CanPaymentCreate()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        data = request.data
+        currency = (data.get("currency") or "").strip().upper()
+        if (
+            currency
+            and currency != folio.currency.upper()
+            and data.get("exchange_rate") is not None
+            and not has_hotel_permission(
+                request.user, request.hotel, "exchange_rate.override"
+            )
+        ):
+            raise PermissionDenied()
+        services.record_folio_settlement(
+            folio,
+            method=data.get("method", "cash"),
+            amount=data.get("amount"),
+            currency=(currency or None),
+            original_amount=data.get("original_amount"),
+            exchange_rate=data.get("exchange_rate"),
+            rate_basis=data.get("rate_basis", ""),
+            payer_name=data.get("payer_name", ""),
+            reference=data.get("reference", ""),
+            notes=data.get("notes", ""),
+            user=request.user,
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioRefundView(APIView):
+    """Refund a folio credit balance to the guest (§37) — POST folios/<id>/refund/
+    with a mandatory ``reason`` (+ optional ``amount``/``method``). Requires
+    ``finance.refund``."""
+
+    def get_permissions(self):
+        return [CanRefund()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.refund_folio_credit(
+            folio,
+            amount=request.data.get("amount"),
+            reason=(request.data.get("reason") or ""),
+            method=request.data.get("method"),
+            user=request.user,
+        )
         folio.refresh_from_db()
         return Response(FolioSerializer(folio).data)
 
