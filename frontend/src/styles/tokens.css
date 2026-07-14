@@ -51,6 +51,16 @@
   --color-info-soft: #eaf1fe;
   --color-neutral-soft: #eef0ea;
 
+  /* Strong feedback fills (RESERVATION-CARD refinement §13/§20) — darker
+     variants used ONLY for solid/filled badges so WHITE text + icon meet WCAG
+     AA (>=4.5:1). Additive: the soft base tokens above are untouched.
+     Verified contrast on white: success 5.36, warning 5.91, danger 5.97,
+     info 6.50. */
+  --color-success-strong: #087a52;
+  --color-warning-strong: #8a5a12;
+  --color-danger-strong: #b5352f;
+  --color-info-strong: #2257c4;
+
   /* --- Gradients (soft, premium) ------------------------------------ */
   --gradient-brand: linear-gradient(135deg, #0e7c72 0%, #0a544e 100%);
   --gradient-hero:
@@ -75,6 +85,15 @@
   --space-10: 2.5rem;
   --space-12: 3rem;
   --space-16: 4rem;
+
+  /* Card spacing (RESERVATION-CARD refinement §11) — reuse the --space-* scale
+     so cards share one rhythm. Additive only; consuming components (e.g. the
+     reservation card) opt in — nothing here changes existing layouts. */
+  --card-pad: var(--space-5); /* outer card padding */
+  --card-section-gap: var(--space-4); /* gap between stacked card sections */
+  --card-inline-gap: var(--space-3); /* gap between inline groups in a row */
+  --card-badge-gap: var(--space-2); /* gap between adjacent badges */
+  --card-action-gap: var(--space-2); /* gap between action buttons */
 
   /* --- Radius -------------------------------------------------------- */
   --radius-sm: 0.375rem;

@@ -59,6 +59,7 @@ import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 import { ReservationCard } from "./ReservationCard";
 import { ReservationDetailsModal } from "./ReservationDetailsModal";
+import { ReservationDocumentsModal } from "./ReservationDocumentsModal";
 import { ReservationPrintPreview } from "./ReservationPrintPreview";
 import {
   ReservationFormShell,
@@ -121,7 +122,25 @@ export function ReservationsTab({
 
   const [details, setDetails] = useState<Reservation | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null);
+  const [docsTarget, setDocsTarget] = useState<Reservation | null>(null);
   const [printTarget, setPrintTarget] = useState<Reservation | null>(null);
+  const [printLoadingId, setPrintLoadingId] = useState<number | null>(null);
+
+  // Printing opens the preview modal (which reads the reservation idempotently and
+  // shows its own LoadingState). The card's printer icon shows a brief spinner
+  // during the hand-off, released once the modal is open.
+  const requestPrint = useCallback((target: Reservation) => {
+    setPrintLoadingId(target.id);
+    setPrintTarget(target);
+  }, []);
+  useEffect(() => {
+    if (printTarget === null) {
+      setPrintLoadingId(null);
+      return;
+    }
+    const id = window.setTimeout(() => setPrintLoadingId(null), 0);
+    return () => window.clearTimeout(id);
+  }, [printTarget]);
 
   // The reservation form opens as a MODAL over this list (owner correction): the
   // create + edit actions set this local state to render `<ReservationFormShell>`
@@ -552,8 +571,10 @@ export function ReservationsTab({
                     reservation={r}
                     businessDate={overview.businessDate}
                     checkoutTime={checkoutTime}
+                    printLoading={printLoadingId === r.id}
                     onView={setDetails}
-                    onPrint={setPrintTarget}
+                    onPrint={requestPrint}
+                    onDocuments={setDocsTarget}
                     onConfirm={confirm}
                     onEdit={() => openEdit(r)}
                     onCancel={setCancelTarget}
@@ -635,6 +656,11 @@ export function ReservationsTab({
           notify(t.reservations.saved);
           refresh();
         }}
+      />
+      <ReservationDocumentsModal
+        open={docsTarget !== null}
+        reservation={docsTarget ?? undefined}
+        onClose={() => setDocsTarget(null)}
       />
       <ReservationPrintPreview
         open={printTarget !== null}

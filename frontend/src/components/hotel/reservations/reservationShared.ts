@@ -2,11 +2,14 @@ import {
   Building2,
   CalendarClock,
   CalendarX2,
+  CheckCircle2,
+  Clock,
   Footprints,
   Globe,
   Phone,
   Sparkle,
   Sunrise,
+  XCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,6 +20,7 @@ import type {
   ReservationDocumentType,
   ReservationOccupant,
   ReservationPaymentStatus,
+  ReservationStatus,
 } from "@/lib/api/types";
 import type { ReservationSource } from "@/lib/api/types";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
@@ -54,6 +58,22 @@ export function sourceIcon(source: ReservationSource): LucideIcon {
       return Building2;
     default:
       return Sparkle; // other
+  }
+}
+
+/** Icon for the reservation-STATUS badge (§4/§20). A distinct glyph per status
+ * so the FILLED status badge never conveys meaning by colour alone; pairs with
+ * {@link reservationStatusTone} + the translated status label. */
+export function reservationStatusIcon(status: ReservationStatus): LucideIcon {
+  switch (status) {
+    case "confirmed":
+      return CheckCircle2;
+    case "held":
+      return Clock;
+    case "cancelled":
+      return XCircle;
+    default:
+      return CalendarX2; // expired
   }
 }
 

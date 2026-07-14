@@ -1,7 +1,12 @@
 /** Central UI component library. Import shared primitives from here. */
 export { ActionCard } from "./ActionCard";
+export {
+  ActionIconButton,
+  type ActionIconButtonSize,
+  type ActionIconButtonVariant,
+} from "./ActionIconButton";
 export { Alert } from "./Alert";
-export { Badge, type BadgeTone } from "./Badge";
+export { Badge, type BadgeTone, type BadgeVariant } from "./Badge";
 export { Button } from "./Button";
 export { Card } from "./Card";
 export { ConfirmDialog } from "./ConfirmDialog";
@@ -15,6 +20,11 @@ export { Input } from "./Input";
 export { Modal } from "./Modal";
 export { PageHeader } from "./PageHeader";
 export { Pagination } from "./Pagination";
+export {
+  PaymentStatusBadge,
+  PAYMENT_STATUS_META,
+  type PaymentStatusValue,
+} from "./PaymentStatusBadge";
 export { PasswordInput } from "./PasswordInput";
 export { PrintDocumentLayout } from "./PrintDocumentLayout";
 export { SectionCard } from "./SectionCard";

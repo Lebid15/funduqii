@@ -811,6 +811,86 @@ a {
   color: var(--color-fg);
 }
 
+/* --- Action icon button (central, richer than .icon-btn) ------------------ */
+/* Icon-only action control with variants, sizes, visible focus, hover/active
+   feedback and a loading spinner. Adequate click target (>=32px). */
+.action-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.action-icon-btn--sm {
+  width: 2rem;
+  height: 2rem;
+}
+.action-icon-btn--md {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+.action-icon-btn--lg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.action-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-primary);
+}
+/* ghost — quiet, for dense toolbars */
+.action-icon-btn--ghost:not(:disabled):hover {
+  background: var(--color-surface-sunken);
+  color: var(--color-fg);
+}
+.action-icon-btn--ghost:not(:disabled):active {
+  background: var(--color-bg-subtle);
+}
+/* subtle — a visible resting surface */
+.action-icon-btn--subtle {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+}
+.action-icon-btn--subtle:not(:disabled):hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-fg);
+}
+.action-icon-btn--subtle:not(:disabled):active {
+  background: var(--color-border-subtle);
+}
+/* solid — primary emphasis */
+.action-icon-btn--solid {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+.action-icon-btn--solid:not(:disabled):hover {
+  background: var(--color-primary-hover);
+}
+.action-icon-btn--solid:not(:disabled):active {
+  background: var(--color-primary-active);
+}
+.action-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.action-icon-btn[data-loading] {
+  cursor: progress;
+}
+.action-icon-btn__spinner {
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
 /* --- Badges --------------------------------------------------------------- */
 .badge {
   display: inline-flex;
@@ -860,6 +940,70 @@ a {
   background: var(--color-info-soft);
   color: var(--color-info);
   border-color: color-mix(in srgb, var(--color-info) 22%, transparent);
+}
+
+/* Leading icon inside a badge (kept proportional to the xs label so a badge can
+   carry text + icon — never colour alone). Inherits the badge text colour. */
+.badge__icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+/* Filled variant (§13/§20): strong solid fill + WHITE text/icon. Backgrounds use
+   the darker *-strong feedback tokens so contrast meets WCAG AA (>=4.5:1). The
+   `.badge--filled` colour rule is placed after the tone rules so it overrides
+   their text colour at equal specificity; backgrounds use compound selectors. */
+.badge--filled {
+  color: var(--color-fg-inverse);
+  border-color: transparent;
+}
+.badge--neutral.badge--filled {
+  background: var(--color-fg-muted);
+}
+.badge--primary.badge--filled {
+  background: var(--color-primary);
+}
+.badge--success.badge--filled {
+  background: var(--color-success-strong);
+}
+.badge--warning.badge--filled {
+  background: var(--color-warning-strong);
+}
+.badge--danger.badge--filled {
+  background: var(--color-danger-strong);
+}
+.badge--info.badge--filled {
+  background: var(--color-info-strong);
+}
+
+/* Outline variant: surface background + tone border and text. Text uses the
+   darker *-strong tokens so tone text on a light surface stays AA-legible. */
+.badge--outline {
+  background: var(--color-surface);
+}
+.badge--neutral.badge--outline {
+  color: var(--color-fg-muted);
+  border-color: var(--color-border-strong);
+}
+.badge--primary.badge--outline {
+  color: var(--color-primary-active);
+  border-color: var(--color-primary);
+}
+.badge--success.badge--outline {
+  color: var(--color-success-strong);
+  border-color: var(--color-success);
+}
+.badge--warning.badge--outline {
+  color: var(--color-warning-strong);
+  border-color: var(--color-warning);
+}
+.badge--danger.badge--outline {
+  color: var(--color-danger-strong);
+  border-color: var(--color-danger);
+}
+.badge--info.badge--outline {
+  color: var(--color-info-strong);
+  border-color: var(--color-info);
 }
 
 /* --- Dashboard hero ------------------------------------------------------- */
@@ -4461,12 +4605,12 @@ a {
   flex-direction: column;
   min-width: 0;
   height: 100%;
-  gap: var(--space-3);
+  gap: var(--card-section-gap);
   background: var(--gradient-surface);
   border: 1px solid var(--color-border);
   border-inline-start: 4px solid var(--res-accent, var(--color-border-strong));
   border-radius: var(--radius-xl);
-  padding: var(--space-5) var(--space-6);
+  padding: var(--card-pad);
   box-shadow: var(--shadow-xs);
   transition: box-shadow var(--transition-base), transform var(--transition-base);
 }
@@ -4487,18 +4631,37 @@ a {
   --res-accent: var(--color-fg-muted);
 }
 
-/* 1) Header — number (focal, opens details) on the start, badges on the end. */
+/* 1) Header — two stacked rows: status badges (row 1), then the reservation
+ * number (focal, opens details) plus explicit eye/printer controls (row 2).
+ * The number stays start-aligned and the controls end-aligned so their
+ * position is stable across every card regardless of badge count. */
 .res-card__header {
   display: flex;
+  flex-direction: column;
+  gap: var(--card-inline-gap);
+}
+.res-card__status-row {
+  display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+.res-card__idrow {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--card-inline-gap);
+}
+.res-card__idactions {
+  display: flex;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-inline-start: auto;
+  flex: none;
 }
 .res-card__open {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
   min-width: 0;
   padding: var(--space-1);
   margin: calc(-1 * var(--space-1));
@@ -4518,27 +4681,16 @@ a {
   overflow-wrap: anywhere;
   transition: color var(--transition-fast);
 }
-.res-card__open-cue {
-  flex: none;
-  color: var(--color-fg-muted);
-  opacity: 0.6;
-  transition: color var(--transition-fast), opacity var(--transition-fast);
+/* Explicit focus ring on the focal number button — matches the house pattern
+ * for interactive controls (.action-icon-btn, .lang-menu__button) so the
+ * affordance never relies on the color shift alone (WCAG 2.4.7). */
+.res-card__open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .res-card__open:hover .res-card__number,
 .res-card__open:focus-visible .res-card__number {
   color: var(--color-primary-active);
-}
-.res-card__open:hover .res-card__open-cue,
-.res-card__open:focus-visible .res-card__open-cue {
-  color: var(--color-primary-active);
-  opacity: 1;
-}
-.res-card__badges {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-inline-start: auto;
 }
 
 /* 2) Guest — initials avatar + name + phone. */
@@ -4627,7 +4779,7 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--card-action-gap);
   margin-block-start: auto;
   padding-block-start: var(--space-1);
 }
@@ -4705,12 +4857,6 @@ a {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   color: var(--color-fg-muted);
-}
-
-@media (max-width: 640px) {
-  .res-card__badges {
-    margin-inline-start: 0;
-  }
 }
 
 /* --- Reservation form shell (RESERVATIONS-FORM-UX-CORRECTION · F1) --------- */
