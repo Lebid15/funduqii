@@ -426,6 +426,12 @@ class InvalidReservationTransition(FunduqiiAPIException):
     default_code = "invalid_reservation_transition"
 
 
+class NoShowReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to mark a reservation as a no-show."
+    default_code = "no_show_reason_required"
+
+
 class CancellationReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A cancellation reason is required."

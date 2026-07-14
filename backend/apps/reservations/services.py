@@ -19,6 +19,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.common.exceptions import (
     CancellationReasonRequired,
     InvalidReservationTransition,
+    NoShowReasonRequired,
     NoAvailability,
     ReservationHasActiveStay,
     RoomAssignmentConflict,
@@ -255,9 +256,10 @@ def update_reservation(
     if reservation.status in (
         ReservationStatus.CANCELLED,
         ReservationStatus.EXPIRED,
+        ReservationStatus.NO_SHOW,
     ) and (lines is not None or _touches_dates(fields)):
         raise InvalidReservationTransition(
-            {"detail": "A cancelled or expired reservation cannot be re-booked."}
+            {"detail": "A cancelled, expired or no-show reservation cannot be re-booked."}
         )
 
     # Post-check-in guard (final closure + Finance-F1): once the reservation
@@ -469,6 +471,74 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
         actor=user,
         related_object=reservation,
         related_url="/hotel/reservations",
+    )
+    return reservation
+
+
+@transaction.atomic
+def mark_no_show(reservation, *, reason, user=None) -> Reservation:
+    """Mark an expected arrival as a NO-SHOW (§29): the guest never arrived within
+    the hotel's policy and no stay was created. A SOFT transition (never a delete)
+    that frees availability (``NO_SHOW`` is non-blocking) and records the reason +
+    actor via the status log.
+
+    Guards: only a LIVE arrival (held/confirmed) with NO stay, whose arrival date
+    has already come (never a future booking). The deposit is NOT auto-forfeited or
+    refunded here — handling it is a separate, explicit finance action per the
+    hotel's cancellation policy (§29: never treat the deposit as due/refunded
+    without a rule).
+    """
+    if not (reason or "").strip():
+        raise NoShowReasonRequired()
+    if reservation.status == ReservationStatus.NO_SHOW:
+        return reservation
+    if reservation.status not in (
+        ReservationStatus.HELD,
+        ReservationStatus.CONFIRMED,
+    ):
+        raise InvalidReservationTransition(
+            {"detail": "Only a live arrival can be marked as a no-show."}
+        )
+    if has_any_stay(reservation):
+        raise ReservationHasActiveStay(
+            {"reservation": reservation.id, "reason": "reservation_has_stay"}
+        )
+    from apps.shifts.services import get_business_date
+
+    business_date = get_business_date(reservation.hotel)
+    if reservation.check_in_date > business_date:
+        raise InvalidReservationTransition(
+            {
+                "detail": "The arrival date has not passed yet.",
+                "check_in_date": str(reservation.check_in_date),
+                "business_date": str(business_date),
+            }
+        )
+    previous = reservation.status
+    reservation.status = ReservationStatus.NO_SHOW
+    reservation.no_show_reason = reason.strip()
+    if user is not None and getattr(user, "is_authenticated", False):
+        reservation.updated_by = user
+    reservation.save()
+    _log_status(
+        reservation,
+        previous,
+        reservation.status,
+        note=f"no-show · {reason.strip()}",
+        user=user,
+    )
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        reservation.hotel,
+        event_type="reservation.no_show",
+        category="reservation",
+        severity="warning",
+        title=f"Reservation {reservation.reservation_number} marked no-show",
+        message=reason.strip(),
+        actor=user,
+        related_object=reservation,
+        related_url="/hotel/front-desk",
     )
     return reservation
 

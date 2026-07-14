@@ -2127,3 +2127,66 @@ class LegacyAssignmentModeTests(APITestCase):
         res = self._create(body)
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)
+
+
+class NoShowTests(APITestCase):
+    """§29 — mark an expected arrival as a no-show: guarded, soft, frees inventory."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ns@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 1)
+
+    def _res(self, *, ci, number="R-NS"):
+        res = Reservation.objects.create(
+            hotel=self.hotel, reservation_number=number,
+            status=ReservationStatus.CONFIRMED, booking_kind="future",
+            check_in_date=ci, check_out_date=ci + timedelta(days=1),
+            primary_guest_name="NS Guest",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=res, room_type=self.rtype,
+            room=self.rooms[0], quantity=1,
+        )
+        return res
+
+    def test_mark_no_show_transitions_and_frees_inventory(self):
+        from apps.reservations.availability import blocking_q
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1))  # arrival long past
+        mark_no_show(res, reason="did not arrive", user=self.manager)
+        res.refresh_from_db()
+        self.assertEqual(res.status, ReservationStatus.NO_SHOW)
+        self.assertEqual(res.no_show_reason, "did not arrive")
+        # NO_SHOW is non-blocking: excluded from the availability engine.
+        self.assertFalse(
+            Reservation.objects.filter(blocking_q(), pk=res.pk).exists()
+        )
+
+    def test_no_show_requires_reason(self):
+        from apps.common.exceptions import NoShowReasonRequired
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-R")
+        with self.assertRaises(NoShowReasonRequired):
+            mark_no_show(res, reason="  ", user=self.manager)
+
+    def test_cannot_no_show_a_future_arrival(self):
+        from apps.common.exceptions import InvalidReservationTransition
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=D1, number="R-NS-F")  # D1 is a future date
+        with self.assertRaises(InvalidReservationTransition):
+            mark_no_show(res, reason="did not arrive", user=self.manager)
+
+    def test_cannot_no_show_a_reservation_with_a_stay(self):
+        from apps.common.exceptions import ReservationHasActiveStay
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-S")
+        line = res.lines.get()
+        make_stay(self.hotel, res, line, self.rooms[0], status=StayStatus.IN_HOUSE)
+        with self.assertRaises(ReservationHasActiveStay):
+            mark_no_show(res, reason="did not arrive", user=self.manager)
