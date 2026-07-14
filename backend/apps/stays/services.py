@@ -35,6 +35,7 @@ from apps.common.exceptions import (
     InvalidCheckIn,
     InvalidCheckOut,
     InvalidStayChange,
+    ReverseCheckInReasonRequired,
     ReservationLineFull,
     RoomAssignmentConflict,
     RoomNotReady,
@@ -419,6 +420,89 @@ class CheckOutService:
                 if early
                 else stay.primary_guest.full_name
             ),
+            user=user,
+        )
+        return stay
+
+
+class ReverseCheckInService:
+    """Reverse a MISTAKEN check-in (§30) — an organised reversal, never a delete.
+
+    Voids the check-in's room charges (same business date), reverts the stay's
+    folio to a pre-arrival reservation folio (detaches the stay, so any deposit
+    survives as a pre-arrival deposit and the room frees), and soft-cancels the
+    stay with a mandatory reason + audit. Historical PAYMENTS are never deleted;
+    only an IN-HOUSE stay can be reversed. The reservation returns to a bookable
+    state so a correct check-in can follow.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def execute(stay, *, reason, user=None) -> Stay:
+        if not (reason or "").strip():
+            raise ReverseCheckInReasonRequired()
+        reason = reason.strip()
+        stay = (
+            Stay.objects.select_for_update()
+            .select_related("room", "reservation", "hotel")
+            .get(pk=stay.pk)
+        )
+        if stay.status != StayStatus.IN_HOUSE:
+            raise InvalidStayChange({"reason": "not_in_house", "status": stay.status})
+
+        from apps.finance.models import (
+            ChargeType,
+            Folio,
+            FolioStatus,
+            PostingStatus,
+        )
+        from apps.finance.services import (
+            ROOM_CHARGE_SOURCE,
+            ROOM_EXTENSION_SOURCE,
+            void_charge,
+        )
+
+        open_folios = list(
+            Folio.objects.select_for_update().filter(
+                hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
+            )
+        )
+        for folio in open_folios:
+            # Void the check-in's room charges (reverses the financial effect).
+            # Payments/deposits are NEVER deleted — no silent loss of history.
+            for charge in folio.charges.filter(
+                type=ChargeType.ROOM,
+                source__in=[ROOM_CHARGE_SOURCE, ROOM_EXTENSION_SOURCE],
+                status=PostingStatus.POSTED,
+            ):
+                void_charge(charge, reason=f"check-in reversed · {reason}", user=user)
+            # Detach the folio from the stay: it reverts to the reservation's ONE
+            # pre-arrival folio (reservation set, stay NULL), so any deposit lives
+            # on as a pre-arrival deposit and a future re-check-in reuses it (never
+            # a second ledger). A folio with no reservation link stays attached to
+            # the cancelled stay as read-only history.
+            if folio.reservation_id is not None:
+                folio.stay = None
+                folio.save(update_fields=["stay", "updated_at"])
+
+        previous = stay.status
+        stay.status = StayStatus.CANCELLED
+        stay.checkout_reason = reason
+        stay.save(update_fields=["status", "checkout_reason", "updated_at"])
+        # The room frees automatically (occupancy is derived from in-house stays).
+        _log(
+            stay,
+            previous,
+            StayStatus.CANCELLED,
+            note=f"check-in reversed · {reason}",
+            user=user,
+        )
+        _record(
+            stay,
+            event_type="stay.check_in_reversed",
+            severity="warning",
+            title=f"Check-in reversed: room {stay.room.number}",
+            message=f"{stay.primary_guest.full_name} · {reason}",
             user=user,
         )
         return stay

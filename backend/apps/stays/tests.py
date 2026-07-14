@@ -1421,3 +1421,79 @@ class FolioLifecycleGateTests(APITestCase):
         folio.refresh_from_db()
         with self.assertRaises(VoidReasonRequired):
             reopen_folio(folio, reason="  ", user=self.manager)
+
+
+class ReverseCheckInTests(APITestCase):
+    """§30 — reverse a mistaken check-in: void the room charges, keep the deposit,
+    detach the folio to pre-arrival, cancel the stay, free the room."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "rev@x.com", kind=MembershipType.MANAGER)
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
+
+    def _check_in(self):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+
+    def test_reverse_voids_room_charge_keeps_deposit_frees_room(self):
+        from apps.finance.models import ChargeType, FolioStatus, PostingStatus
+        from apps.finance.services import folio_balance, record_reservation_payment
+        from apps.stays.services import ReverseCheckInService
+
+        # Deposit before arrival -> opens the reservation's pre-arrival folio.
+        record_reservation_payment(
+            self.res, amount="40.00", method="cash", user=self.manager
+        )
+        stay = self._check_in()  # reuses the deposit folio, posts a 200 room charge
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "160.00")  # 200 - 40
+
+        ReverseCheckInService.execute(stay, reason="wrong guest", user=self.manager)
+
+        stay.refresh_from_db()
+        self.assertEqual(stay.status, StayStatus.CANCELLED)
+        folio.refresh_from_db()
+        # Room charge voided; folio detached back to the reservation (pre-arrival).
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            0,
+        )
+        self.assertIsNone(folio.stay_id)
+        self.assertEqual(folio.reservation_id, self.res.id)
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+        # Deposit survives -> -40 credit on the pre-arrival folio.
+        self.assertEqual(str(folio_balance(folio)["balance"]), "-40.00")
+        # The room is free again (no in-house stay).
+        self.assertFalse(
+            Stay.objects.filter(room=self.room, status=StayStatus.IN_HOUSE).exists()
+        )
+
+    def test_cannot_reverse_a_non_in_house_stay(self):
+        from apps.common.exceptions import InvalidStayChange
+        from apps.stays.services import ReverseCheckInService
+
+        stay = self._check_in()
+        ReverseCheckInService.execute(stay, reason="x", user=self.manager)  # -> cancelled
+        with self.assertRaises(InvalidStayChange):
+            ReverseCheckInService.execute(stay, reason="again", user=self.manager)
+
+    def test_reverse_requires_a_reason(self):
+        from apps.common.exceptions import ReverseCheckInReasonRequired
+        from apps.stays.services import ReverseCheckInService
+
+        stay = self._check_in()
+        with self.assertRaises(ReverseCheckInReasonRequired):
+            ReverseCheckInService.execute(stay, reason="  ", user=self.manager)

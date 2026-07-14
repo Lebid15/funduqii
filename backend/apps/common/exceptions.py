@@ -525,6 +525,12 @@ class InvalidStayChange(FunduqiiAPIException):
     default_code = "invalid_stay_change"
 
 
+class ReverseCheckInReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to reverse a check-in."
+    default_code = "reverse_check_in_reason_required"
+
+
 class FolioBalanceOutstanding(FunduqiiAPIException):
     """Check-out is blocked while the stay's open folio holds a non-zero
     balance — settlement happens in Finance, never at the front desk."""
