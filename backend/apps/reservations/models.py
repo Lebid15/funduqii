@@ -36,6 +36,11 @@ class ReservationStatus(models.TextChoices):
     CONFIRMED = "confirmed", "Confirmed"
     CANCELLED = "cancelled", "Cancelled"
     EXPIRED = "expired", "Expired"
+    # STAYS-ARRIVALS-DEPARTURES §29 — the guest never arrived within the hotel's
+    # grace policy and no stay was created. Terminal + non-blocking (frees
+    # availability like cancelled/expired); reached ONLY via the guarded
+    # mark_no_show flow, never a manual status edit.
+    NO_SHOW = "no_show", "No-show"
 
 
 # Statuses that consume inventory. ``held`` is conditional: it only blocks while
