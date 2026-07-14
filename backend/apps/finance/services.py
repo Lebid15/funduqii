@@ -673,6 +673,76 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
     )
 
 
+# STAYS-ARRIVALS-DEPARTURES — source markers for the stay's own room charges so
+# the initial charge is idempotent while later extensions post distinct rows.
+ROOM_CHARGE_SOURCE = "stay_room"
+ROOM_EXTENSION_SOURCE = "stay_room_extension"
+
+
+@transaction.atomic
+def post_stay_room_charge(stay, *, user=None):
+    """Post the stay's initial ROOM charge (nightly rate × nights) to its open
+    folio (STAYS-ARRIVALS-DEPARTURES §24/§31 / owner decision D1).
+
+    The folio must hold the COMPLETE account: without the room charge the balance
+    understates what the guest owes and the check-out "balance == 0" gate would be
+    wrong. Idempotent — skips if this stay's folio already holds a ``stay_room``
+    ROOM charge. Skips an UNPRICED room (``base_rate`` NULL/<=0) so the statement
+    honestly shows no room line (matching reservation ``is_priced=False``).
+    Returns the ``FolioCharge`` or ``None``.
+    """
+    folio = ensure_stay_folio(stay, user=user)
+    if folio.charges.filter(
+        type=ChargeType.ROOM,
+        source=ROOM_CHARGE_SOURCE,
+        status=PostingStatus.POSTED,
+    ).exists():
+        return None
+    line = stay.reservation_line
+    room_type = getattr(line, "room_type", None) if line is not None else None
+    rate = room_type.base_rate if room_type is not None else None
+    nights = stay.nights
+    if rate is None or money(rate) <= ZERO or nights <= 0:
+        return None
+    label = room_type.name if room_type is not None else "Room"
+    return add_charge(
+        folio,
+        charge_type=ChargeType.ROOM,
+        description=f"{label} — {nights} night(s)",
+        quantity=nights,
+        unit_amount=money(rate),
+        source=ROOM_CHARGE_SOURCE,
+        user=user,
+    )
+
+
+@transaction.atomic
+def post_stay_extension_charge(stay, *, added_nights, user=None):
+    """Post a ROOM charge for ADDED nights when a stay is extended (§25). Distinct
+    from the initial charge (its own ``stay_room_extension`` source), so each
+    extension is a real, separately-audited folio movement. Skips an unpriced room
+    or a non-positive ``added_nights``. Returns the ``FolioCharge`` or ``None``.
+    """
+    if added_nights is None or int(added_nights) <= 0:
+        return None
+    folio = ensure_stay_folio(stay, user=user)
+    line = stay.reservation_line
+    room_type = getattr(line, "room_type", None) if line is not None else None
+    rate = room_type.base_rate if room_type is not None else None
+    if rate is None or money(rate) <= ZERO:
+        return None
+    label = room_type.name if room_type is not None else "Room"
+    return add_charge(
+        folio,
+        charge_type=ChargeType.ROOM,
+        description=f"{label} — extension ({int(added_nights)} night(s))",
+        quantity=int(added_nights),
+        unit_amount=money(rate),
+        source=ROOM_EXTENSION_SOURCE,
+        user=user,
+    )
+
+
 @transaction.atomic
 def void_charge(charge, *, reason, user=None) -> FolioCharge:
     """Void a charge — only inside its own open business date, on an open

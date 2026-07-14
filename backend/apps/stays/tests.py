@@ -1270,3 +1270,90 @@ class ImmediateCheckInRegressionTests(APITestCase):
         self.assertEqual(Stay.objects.count(), before["stay"])
         self.assertEqual(Folio.objects.count(), before["folio"])
         self.assertEqual(Payment.objects.count(), before["payment"])
+
+
+class RoomChargePostingTests(APITestCase):
+    """STAYS-ARRIVALS-DEPARTURES §24/§31 (owner D1) — the room/night charge is
+    posted to the stay folio at check-in so the folio is the COMPLETE account;
+    an extension posts the added nights; an unpriced room posts nothing."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "rc@x.com", kind=MembershipType.MANAGER)
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        self.room = make_room(self.hotel, self.rtype)
+        self.guest = make_guest(self.hotel)
+        self.res, self.line = make_reservation(
+            self.hotel, self.rtype, room=self.room
+        )  # D1 -> D2 = 2 nights
+
+    def _check_in(self, res, line, room, guest):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel,
+            reservation=res,
+            reservation_line=line,
+            room=room,
+            primary_guest=guest,
+            companions=(),
+            user=self.manager,
+        )
+
+    def test_room_charge_posted_at_check_in(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import folio_balance
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        room_charges = folio.charges.filter(
+            type=ChargeType.ROOM, status=PostingStatus.POSTED
+        )
+        self.assertEqual(room_charges.count(), 1)
+        # 100/night x 2 nights (D1 -> D2).
+        self.assertEqual(str(room_charges.get().total_amount), "200.00")
+        # No payment yet -> the guest owes the room charge.
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
+
+    def test_room_charge_is_idempotent(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import post_stay_room_charge
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        post_stay_room_charge(stay, user=self.manager)  # second call must not re-post
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
+
+    def test_extension_posts_added_nights(self):
+        from datetime import timedelta
+
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import folio_balance
+        from apps.stays.services import ExtendStayService
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        ExtendStayService.execute(
+            stay, new_check_out_date=D2 + timedelta(days=1), user=self.manager
+        )
+        # initial (2 nights = 200) + extension (1 night = 100).
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            2,
+        )
+        self.assertEqual(str(folio_balance(folio)["balance"]), "300.00")
+
+    def test_unpriced_room_posts_no_charge(self):
+        from apps.finance.models import ChargeType
+
+        rtype2 = make_type(self.hotel, code="UNP")  # no base_rate
+        room2 = make_room(self.hotel, rtype2, number="102")
+        res2, line2 = make_reservation(self.hotel, rtype2, room=room2)
+        stay = self._check_in(res2, line2, room2, make_guest(self.hotel, name="G2"))
+        folio = stay.folios.get()
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)

@@ -292,9 +292,13 @@ class CheckInService:
         # Folio closure round: every stay opens with its ONE operational folio
         # (same transaction — a failed folio rolls the whole check-in back).
         # Lazy import: finance is a later phase.
-        from apps.finance.services import ensure_stay_folio
+        from apps.finance.services import ensure_stay_folio, post_stay_room_charge
 
         ensure_stay_folio(stay, user=user)
+        # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner D1): post the room/night charge
+        # so the folio is the COMPLETE account (skipped for an unpriced room).
+        # Same transaction — a failure rolls the whole check-in back.
+        post_stay_room_charge(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
             stay,
@@ -414,7 +418,8 @@ class ExtendStayService:
     Availability for the ADDED window is re-checked through the central
     engine (excluding the stay's own reservation so it never conflicts with
     itself); the reservation's end grows with the stay so inventory stays
-    unified. The arrival date never changes and no charges are created.
+    unified. The arrival date never changes; the ADDED nights are posted to the
+    folio as a room charge (§25 / owner decision D1), skipped for an unpriced room.
     """
 
     @staticmethod
@@ -450,6 +455,13 @@ class ExtendStayService:
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
         _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
+        # §25 (owner D1): the ADDED nights are a real folio charge so the account
+        # (and the check-out balance gate) stays correct. Same transaction.
+        from apps.finance.services import post_stay_extension_charge
+
+        post_stay_extension_charge(
+            stay, added_nights=(new_check_out_date - old_end).days, user=user
+        )
         note = f"extended {old_end} -> {new_check_out_date}"
         if (reason or "").strip():
             note = f"{note} · {reason.strip()}"
