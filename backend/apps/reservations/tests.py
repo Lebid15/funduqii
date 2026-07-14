@@ -2190,3 +2190,23 @@ class NoShowTests(APITestCase):
         make_stay(self.hotel, res, line, self.rooms[0], status=StayStatus.IN_HOUSE)
         with self.assertRaises(ReservationHasActiveStay):
             mark_no_show(res, reason="did not arrive", user=self.manager)
+
+    def test_no_show_endpoint(self):
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-API")
+        self.client.force_authenticate(self.manager)
+        resp = self.client.post(
+            reverse("reservations:reservation-no-show", args=[res.id]),
+            {"reason": "did not arrive"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "no_show")
+
+    def test_no_show_endpoint_requires_permission(self):
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-PERM")
+        viewer = add_member(self.hotel, "ns-viewer@x.com", perms=["reservations.view"])
+        self.client.force_authenticate(viewer)
+        resp = self.client.post(
+            reverse("reservations:reservation-no-show", args=[res.id]),
+            {"reason": "x"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 403)

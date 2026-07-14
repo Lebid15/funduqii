@@ -41,6 +41,7 @@ from .services import (
     CheckInService,
     CheckOutService,
     ExtendStayService,
+    ReverseCheckInService,
     RoomMoveService,
     ShortenStayService,
 )
@@ -52,6 +53,7 @@ CanUpdate = HasHotelPermission("stays.update")
 CanExtend = HasHotelPermission("stays.extend")
 CanShorten = HasHotelPermission("stays.shorten")
 CanMoveRoom = HasHotelPermission("stays.move_room")
+CanReverseCheckIn = HasHotelPermission("stays.reverse_check_in")
 # Immediate atomic check-in performs BOTH a reservation create and a check-in,
 # so it requires BOTH capabilities (a deposit adds finance.payment_create, and a
 # foreign-currency manual FX rate adds exchange_rate.override — enforced below).
@@ -464,6 +466,23 @@ class CheckOutView(APIView):
             check_out_notes=serializer.validated_data.get("check_out_notes", ""),
             checkout_reason=serializer.validated_data.get("checkout_reason", ""),
             user=request.user,
+        )
+        stay.refresh_from_db()
+        return Response(StaySerializer(stay).data)
+
+
+class ReverseCheckInView(APIView):
+    """Reverse a mistaken check-in (§30) — POST stays/<id>/reverse-check-in/ with
+    a mandatory ``reason``. Requires ``stays.reverse_check_in``."""
+
+    def get_permissions(self):
+        return [CanReverseCheckIn()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
+        ReverseCheckInService.execute(
+            stay, reason=(request.data.get("reason") or ""), user=request.user
         )
         stay.refresh_from_db()
         return Response(StaySerializer(stay).data)

@@ -47,6 +47,7 @@ CanCreate = HasHotelPermission("reservations.create")
 CanUpdate = HasHotelPermission("reservations.update")
 CanConfirm = HasHotelPermission("reservations.confirm")
 CanCancel = HasHotelPermission("reservations.cancel")
+CanNoShow = HasHotelPermission("reservations.mark_no_show")
 CanAvailability = HasHotelPermission("availability.view")
 # §27 deposit-for-future — recording money requires the payment permission
 # (a foreign-currency manual FX rate additionally requires exchange_rate.override,
@@ -372,6 +373,25 @@ class ReservationCancelView(APIView):
         serializer.is_valid(raise_exception=True)
         services.cancel_reservation(
             reservation, reason=serializer.validated_data["reason"], user=request.user
+        )
+        reservation.refresh_from_db()
+        return Response(
+            ReservationSerializer(reservation, context={"request": request}).data
+        )
+
+
+class ReservationNoShowView(APIView):
+    """Mark an expected arrival as a no-show (§29) — POST reservations/<id>/no-show/
+    with a mandatory ``reason``. Requires ``reservations.mark_no_show``."""
+
+    def get_permissions(self):
+        return [CanNoShow()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        reservation = _get_reservation(request, pk)
+        services.mark_no_show(
+            reservation, reason=(request.data.get("reason") or ""), user=request.user
         )
         reservation.refresh_from_db()
         return Response(

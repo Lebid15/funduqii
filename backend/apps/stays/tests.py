@@ -1498,6 +1498,17 @@ class ReverseCheckInTests(APITestCase):
         with self.assertRaises(ReverseCheckInReasonRequired):
             ReverseCheckInService.execute(stay, reason="  ", user=self.manager)
 
+    def test_reverse_check_in_endpoint(self):
+        stay = self._check_in()
+        self.client.force_authenticate(self.manager)
+        resp = self.client.post(
+            reverse("stays:stay-reverse-check-in", args=[stay.id]),
+            {"reason": "wrong guest"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        stay.refresh_from_db()
+        self.assertEqual(stay.status, StayStatus.CANCELLED)
+
 
 class InsuranceTests(APITestCase):
     """§35 — refundable insurance held separately: record, refund, deduct (posts
