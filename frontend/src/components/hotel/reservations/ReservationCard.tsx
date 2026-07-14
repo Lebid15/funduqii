@@ -87,7 +87,10 @@ export function ReservationCard({
 
   // View + Print + Documents are READS (never a write permission for a write).
   const canView = can("reservations.view");
-  const canViewDocs = can("reservation_documents.view");
+  // §37 — the "View documents" button appears ONLY when the caller may read docs
+  // AND the reservation actually has at least one; the count rides on a badge.
+  const docCount = r.document_count;
+  const showDocs = can("reservation_documents.view") && docCount > 0;
   // Writes are suppressed once the guest is in-house (front-desk owns the stay).
   const canConfirm = r.status === "held" && !inHouse && can("reservations.confirm");
   const canEdit = editable && !inHouse && can("reservations.update");
@@ -318,9 +321,10 @@ export function ReservationCard({
             {t.reservations.list.view}
           </Button>
         ) : null}
-        {canViewDocs ? (
+        {showDocs ? (
           <Button variant="secondary" size="sm" icon={FileText} onClick={() => onView(r)}>
             {c.documents}
+            <Badge tone="neutral">{docCount}</Badge>
           </Button>
         ) : null}
         {canView ? (

@@ -750,6 +750,7 @@ export function ReservationDetailsModal({
       <DocumentViewer
         open={viewerDoc !== null}
         document={viewerDoc ?? undefined}
+        occupants={companions}
         onClose={() => setViewerDoc(null)}
       />
     </Modal>

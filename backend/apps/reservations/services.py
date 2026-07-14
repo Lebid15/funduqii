@@ -209,13 +209,15 @@ def update_reservation(
             {"detail": "A cancelled or expired reservation cannot be re-booked."}
         )
 
-    # Post-check-in guard (final closure): with an in-house stay the STAY is
-    # the source of truth — dates and room lines are frozen here; only safe,
-    # non-operational fields (notes, requests, contact snapshot) may change.
-    # Operational changes travel through the front desk.
-    if (lines is not None or _touches_dates(fields)) and has_in_house_stay(
-        reservation
-    ):
+    # Post-check-in guard (final closure + Finance-F1): once the reservation
+    # has ANY stay — in-house OR already checked-out — the STAY is the source of
+    # truth, so dates and room lines are frozen here; only safe, non-operational
+    # fields (notes, requests, contact snapshot) may change. A checked-out
+    # reservation is still CONFIRMED, so this broadened check (``has_any_stay``,
+    # not ``has_in_house_stay``) also blocks re-shaping the inventory of a booking
+    # whose guest has already departed. Operational changes travel through the
+    # front desk (§33/§42 — the backend is the authoritative guard).
+    if (lines is not None or _touches_dates(fields)) and has_any_stay(reservation):
         raise ReservationHasActiveStay(
             {
                 "reservation": reservation.id,
@@ -554,6 +556,24 @@ def has_in_house_stay(reservation) -> bool:
     return Stay.objects.filter(
         reservation=reservation, status=StayStatus.IN_HOUSE
     ).exists()
+
+
+def has_any_stay(reservation) -> bool:
+    """True when the reservation has ANY related stay — in-house OR already
+    checked-out (Finance-F1, §27/§33).
+
+    A pre-arrival concept (a fresh deposit, a date/room/line edit) is only valid
+    while the booking has NEVER produced a stay. The moment a stay exists the
+    money and inventory live on the stay/folio, so a NEW reservation deposit
+    would open an ORPHAN pre-arrival folio (inflating paid / negative remaining)
+    and a date/room edit would silently diverge from the stay. This broadens
+    ``has_in_house_stay`` to also catch a checked-out booking whose reservation is
+    still CONFIRMED and whose stay folio is CLOSED. A single ``exists`` query — no
+    prefetch assumption, safe on the un-prefetched view/service paths.
+    """
+    from apps.stays.models import Stay
+
+    return Stay.objects.filter(reservation=reservation).exists()
 
 
 def latest_stay(reservation):

@@ -22,7 +22,6 @@ import type {
   ReservationUpdateBody,
 } from "@/lib/api/reservations";
 import type {
-  ExpectedPaymentMethod,
   Guest,
   OccupantRelationship,
   Reservation,
@@ -156,11 +155,6 @@ export interface BookingDraft {
   selected_room_id: number | null;
   source: ReservationSource;
   status: "held" | "confirmed";
-  /** Informational only (future reservations): the method the guest expects to
-   * pay with. Constrained to the backend `ExpectedPaymentMethod` choices — NOT
-   * the deposit `payment.method` — and persisted via `toCreateBody`. Empty means
-   * "not specified" and is omitted from the create body. */
-  expected_payment_method: ExpectedPaymentMethod;
   payment: PaymentDraft;
   /** Free-text internal notes for the reservation (§19 section 6). */
   notes: string;
@@ -256,7 +250,6 @@ export function createInitialDraft(
       selected_room_id: null,
       source: "direct",
       status: "confirmed",
-      expected_payment_method: "",
       payment: {
         method: "",
         currency: "",
@@ -661,11 +654,6 @@ export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
   // Free-text internal notes (§19 section 6); omitted when empty.
   const notes = booking.notes.trim();
   if (notes) body.notes = notes;
-  // Informational-only expected method (future reservations); omitted when unset
-  // so nothing invalid is ever sent. Constrained to the backend enum by its type.
-  if (booking.expected_payment_method) {
-    body.expected_payment_method = booking.expected_payment_method;
-  }
   if (occupants.length > 0) body.occupants = occupants;
   return body;
 }
@@ -868,7 +856,6 @@ export function reservationToDraft(
     selected_room_id: reservation.lines.find((line) => line.room)?.room ?? null,
     source: reservation.source,
     status: reservation.status === "held" ? "held" : "confirmed",
-    expected_payment_method: reservation.expected_payment_method,
     notes: reservation.notes ?? "",
     immediate_check_in: false,
   };

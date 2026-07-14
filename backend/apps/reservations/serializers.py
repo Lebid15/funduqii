@@ -273,6 +273,12 @@ class ReservationSerializer(serializers.ModelSerializer):
     # ``has_in_house_stay``. Read-only, prefetched (no N+1).
     stay_status = serializers.SerializerMethodField()
     stay_id = serializers.SerializerMethodField()
+    # RESERVATIONS-FORM-UX-CORRECTION §37 — a NON-sensitive count of the
+    # reservation's documents (``ReservationDocument`` rows). Lets the card show
+    # the docs button only when count>0 with a count Badge. Computed from the
+    # prefetched ``documents`` relation (list/detail querysets) so it never N+1s;
+    # the button itself is gated on the frontend by ``reservation_documents.view``.
+    document_count = serializers.SerializerMethodField()
     # RESERVATIONS-FORM-UX-CORRECTION §26/§31/§35 — compact DERIVED financial read
     # (never stored). Money fields are gated by ``finance.view`` (masked to null
     # otherwise); ``currency``/``nights`` are not sensitive.
@@ -329,6 +335,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             "has_in_house_stay",
             "stay_status",
             "stay_id",
+            "document_count",
             "nightly_rate",
             "reservation_total",
             "currency",
@@ -369,6 +376,11 @@ class ReservationSerializer(serializers.ModelSerializer):
 
         stay = latest_stay(obj)
         return stay.id if stay is not None else None
+
+    def get_document_count(self, obj) -> int:
+        # ``len`` of the prefetched ``documents`` relation — zero extra queries on
+        # the prefetched list/detail paths (RESERVATIONS-FORM-UX-CORRECTION §37).
+        return len(obj.documents.all())
 
     # --- Derived financial summary (permission-gated, no stored balance) ------
 

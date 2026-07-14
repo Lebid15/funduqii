@@ -643,12 +643,14 @@ function CancelModal({
  * `@media print` rule the finance vouchers rely on hides everything else, so
  * window.print() emits ONLY this document. It inherits the page direction, so
  * it is RTL-aware, and every label is localized. It carries the booking facts
- * (number, status, source, kind, guest, rooms, floor, type, dates, arrival,
- * nights, guests, notes) plus — WHEN PRESENT and the caller may see money
- * (finance.view) — a DERIVED financial block (§40): total, paid, remaining and
- * the recorded payments. Money renders from backend Decimal strings via
- * formatMoney (never Float); with no priced summary the block is omitted
- * honestly. Document images and identity-only fields are never printed. */
+ * (number, status, source, kind, guest name, nationality, phone, email,
+ * document type, rooms, floor, type, dates, arrival, nights, guests, notes)
+ * plus — WHEN PRESENT and the caller may see money (finance.view) — a DERIVED
+ * financial block (§40): total, paid, remaining and the recorded payments.
+ * Money renders from backend Decimal strings via formatMoney (never Float);
+ * with no priced summary the block is omitted honestly. §36/§40 — document
+ * images and the sensitive identity fields (national id, father/mother name,
+ * date of birth, document number) are NEVER printed. */
 function ReservationPrintModal({
   open,
   reservation,
@@ -697,7 +699,6 @@ function ReservationPrintModal({
   const p = t.reservations.print;
   const b = t.reservations.wizard.booking;
   const card = t.reservations.card;
-  const g = t.reservations.wizard.guest;
 
   // Money is shown only when the summary is priced AND viewable; otherwise the
   // whole financial block is left off the slip (honest-when-empty).
@@ -723,18 +724,6 @@ function ReservationPrintModal({
     { label: t.reservations.views.sourceLabel, value: t.reservations.source[r.source] ?? r.source },
     { label: t.reservations.form.bookingKind, value: t.reservations.kind[r.booking_kind] },
     { label: d.guest, value: r.primary_guest_name || "—" },
-    ...(r.primary_guest_father_name
-      ? [{ label: g.fatherName, value: r.primary_guest_father_name }]
-      : []),
-    ...(r.primary_guest_mother_name
-      ? [{ label: g.motherName, value: r.primary_guest_mother_name }]
-      : []),
-    ...(r.primary_guest_national_id
-      ? [{ label: g.nationalId, value: r.primary_guest_national_id }]
-      : []),
-    ...(r.primary_guest_date_of_birth
-      ? [{ label: g.dateOfBirth, value: formatDate(r.primary_guest_date_of_birth, locale) }]
-      : []),
     ...(r.primary_guest_nationality
       ? [{ label: t.reservations.form.nationality, value: r.primary_guest_nationality }]
       : []),
@@ -742,9 +731,6 @@ function ReservationPrintModal({
     ...(r.primary_guest_email ? [{ label: d.email, value: r.primary_guest_email }] : []),
     ...(r.primary_guest_document_type
       ? [{ label: t.reservations.form.documentType, value: docLabel(r.primary_guest_document_type) }]
-      : []),
-    ...(r.primary_guest_document_number
-      ? [{ label: t.reservations.form.documentNumber, value: r.primary_guest_document_number }]
       : []),
     ...(roomLabels.length ? [{ label: d.rooms, value: roomLabels.join(" · ") }] : []),
     ...(floorNames.length ? [{ label: t.reservations.card.floor, value: floorNames.join(" · ") }] : []),
@@ -758,14 +744,6 @@ function ReservationPrintModal({
       : []),
     { label: d.nights, value: String(r.nights) },
     { label: d.guests, value: String(r.total_guests) },
-    ...(r.expected_payment_method
-      ? [
-          {
-            label: t.reservations.form.expectedPayment,
-            value: t.reservations.expectedPayment[r.expected_payment_method],
-          },
-        ]
-      : []),
     // §40 — DERIVED money, only when a priced+viewable summary is present.
     ...(money
       ? [

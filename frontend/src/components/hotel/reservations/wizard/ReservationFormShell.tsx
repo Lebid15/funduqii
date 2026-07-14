@@ -83,10 +83,12 @@ export function ReservationFormShell({
   const can = (...codes: string[]) =>
     access === null || (!access.loading && access.can(...codes));
 
-  // §25/§33 — a STARTED stay freezes the dates + room (changed only through the
-  // stay service, never a reservation edit). A cancelled/expired reservation is
-  // closed: the form is shown read-only and Save is hidden.
-  const stayLocked = isEdit && reservation?.stay_status === "in_house";
+  // §25/§33 (Finance-F1) — ANY stay (in-house OR already checked-out) makes the
+  // STAY the source of truth: it freezes the dates + room (changed only through
+  // the stay service, never a reservation edit) AND blocks a NEW pre-arrival
+  // deposit, exactly as the backend now rejects both once a stay exists. A
+  // cancelled/expired reservation is closed: the form is read-only and Save hides.
+  const stayLocked = isEdit && Boolean(reservation?.stay_status);
   const editReadOnly =
     isEdit &&
     (reservation?.status === "cancelled" || reservation?.status === "expired");
@@ -356,7 +358,10 @@ export function ReservationFormShell({
               />
             ) : null}
             {STEPS[step] === "documents" ? (
-              <DocumentsStep draft={draft} actions={actions} />
+              <DocumentsStep
+                draft={draft}
+                actions={actions}
+              />
             ) : null}
             {STEPS[step] === "booking" ? (
               <BookingStep

@@ -8,7 +8,6 @@ no hard delete, status logs, overbooking prevention), and regressions.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 from django.urls import reverse
 from django.utils import timezone
@@ -20,11 +19,10 @@ from apps.rbac.services import grant_permission
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
     Reservation,
-    ReservationOccupant,
+    ReservationDocument,
     ReservationRoomLine,
     ReservationSource,
     ReservationStatus,
-    ReservationStatusLog,
 )
 from apps.rooms.models import Floor, Room, RoomStatus, RoomType
 from apps.stays.models import Stay, StayStatus
@@ -1063,9 +1061,6 @@ class PostCheckInGuardTests(APITestCase):
     def setUp(self):
         from django.utils import timezone as dj_tz
 
-        from apps.guests.models import Guest
-        from apps.stays.models import Stay
-
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
         self.rtype = make_type(self.hotel)
@@ -1321,3 +1316,397 @@ class DisplayFieldTests(APITestCase):
         unassigned = lines[None]
         self.assertIsNone(unassigned["floor_name"])
         self.assertIsNone(unassigned["floor_number"])
+
+
+# --------------------------------------------------------------------------- #
+# RESERVATIONS-FORM-UX-CORRECTION — deposit / financial summary / derived      #
+# read fields / sensitive masking (§26/§27/§31/§33/§37/§45)                    #
+# --------------------------------------------------------------------------- #
+
+
+def make_stay(hotel, reservation, line, room, *, status=StayStatus.IN_HOUSE):
+    """Create a Stay off a reservation for the guard/derived-field tests.
+
+    A CHECKED_OUT stay leaves the reservation CONFIRMED (departed guest) and is
+    exactly the Finance-F1 case: the booking has a stay yet is not in-house.
+    """
+    guest = Guest.objects.create(hotel=hotel, full_name="Stay Guest")
+    now = timezone.now()
+    return Stay.objects.create(
+        hotel=hotel,
+        reservation=reservation,
+        reservation_line=line,
+        room=room,
+        primary_guest=guest,
+        status=status,
+        planned_check_in_date=reservation.check_in_date,
+        planned_check_out_date=reservation.check_out_date,
+        actual_check_in_at=now,
+        actual_check_out_at=(now if status == StayStatus.CHECKED_OUT else None),
+    )
+
+
+class ReservationDepositTests(APITestCase):
+    """§27 pre-arrival DEPOSIT endpoint + Finance-F1 any-stay guard.
+
+    A deposit is a PRE-arrival concept: it records money on the reservation's ONE
+    folio (reused at check-in, single ledger) and is refused once ANY stay exists
+    — in-house OR already checked-out.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        # base_rate 100 × 2 nights (D1→D2) = 200 → priced reservation.
+        self.rtype = make_type(self.hotel, max_capacity=3, base_rate="100.00")
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+        self.res, self.line = self._reservation()
+
+    def _reservation(self, *, number="R-DEP", status=ReservationStatus.CONFIRMED):
+        res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=status,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Deposit Guest",
+        )
+        line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        return res, line
+
+    def _deposit(self, res, body, *, user=None):
+        self.client.force_authenticate(user or self.manager)
+        return self.client.post(
+            reverse("reservations:reservation-payments", args=[res.id]),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_deposit_success_records_payment_on_reservation_folio(self):
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["payment"]["amount"], "50.00")
+        fin = resp.data["financial_summary"]
+        self.assertEqual(fin["reservation_total"], "200.00")
+        self.assertEqual(fin["paid"], "50.00")
+        self.assertEqual(fin["remaining"], "150.00")
+        self.assertEqual(fin["currency"], "USD")
+        # ONE pre-arrival folio (stay-null) holds the deposit — no duplicate ledger.
+        self.assertEqual(self.res.folios.count(), 1)
+        self.assertIsNone(self.res.folios.get().stay_id)
+
+    def test_deposit_folio_is_reused_at_check_in_no_duplicate(self):
+        from apps.finance.services import ensure_stay_folio
+
+        self.assertEqual(
+            self._deposit(self.res, {"amount": "40.00", "method": "cash"}).status_code,
+            201,
+        )
+        self.assertEqual(self.res.folios.count(), 1)
+        pre_folio = self.res.folios.get()
+        self.assertIsNone(pre_folio.stay_id)
+        # Checking in reuses that same folio instead of opening a second ledger.
+        guest = Guest.objects.create(hotel=self.hotel, full_name="Deposit Guest")
+        stay = Stay.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            reservation_line=self.line,
+            room=self.rooms[0],
+            primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1,
+            planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        reused = ensure_stay_folio(stay)
+        self.assertEqual(reused.id, pre_folio.id)
+        self.assertEqual(self.res.folios.count(), 1)  # still ONE folio
+        reused.refresh_from_db()
+        self.assertEqual(reused.stay_id, stay.id)
+
+    def test_deposit_rejects_non_positive_amount(self):
+        resp = self._deposit(self.res, {"amount": "0", "method": "cash"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_deposit_rejected_when_reservation_has_in_house_stay(self):
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.IN_HOUSE)
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_deposit_rejected_when_reservation_has_checked_out_stay(self):
+        # Finance-F1: a departed guest's reservation is still CONFIRMED but must
+        # NOT accept a new pre-arrival deposit (would orphan an open folio).
+        make_stay(self.hotel, self.res, self.line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        resp = self._deposit(self.res, {"amount": "50.00", "method": "cash"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["code"], "reservation_has_active_stay")
+
+    def test_deposit_requires_payment_create_permission(self):
+        # reservations.view alone is never enough to record money (§42).
+        viewer = add_member(self.hotel, "dep-view@x.com", perms=["reservations.view"])
+        denied = self._deposit(
+            self.res, {"amount": "10.00", "method": "cash"}, user=viewer
+        )
+        self.assertEqual(denied.status_code, 403)
+        payer = add_member(
+            self.hotel, "dep-pay@x.com", perms=["finance.payment_create"]
+        )
+        ok = self._deposit(
+            self.res, {"amount": "10.00", "method": "cash"}, user=payer
+        )
+        self.assertEqual(ok.status_code, 201)
+
+    def test_foreign_manual_rate_requires_exchange_rate_override(self):
+        body = {
+            "method": "cash",
+            "currency": "EUR",
+            "original_amount": "20.00",
+            "exchange_rate": "1.10",
+            "rate_basis": "base_per_payment",
+        }
+        payer = add_member(
+            self.hotel, "fx@x.com", perms=["finance.payment_create"]
+        )
+        denied = self._deposit(self.res, body, user=payer)
+        self.assertEqual(denied.status_code, 403)
+        # Granting exchange_rate.override clears the FX permission gate; the
+        # request no longer 403s (it moves past permission to currency handling).
+        over = add_member(
+            self.hotel,
+            "fx2@x.com",
+            perms=["finance.payment_create", "exchange_rate.override"],
+        )
+        granted = self._deposit(self.res, body, user=over)
+        self.assertNotEqual(granted.status_code, 403)
+
+
+class ReservationFinancialSummaryTests(APITestCase):
+    """§26/§31/§35 derived financial summary — total = rate×nights, paid = Σ
+    posted payments, remaining = total−paid; money gated by ``finance.view`` and
+    tenant-scoped."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = make_type(self.hotel, base_rate="100.00")
+        self.rooms = make_rooms(self.hotel, self.rtype, 1)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-FIN",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,  # 2 nights
+            primary_guest_name="Fin Guest",
+        )
+        self.line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+
+    def _summary(self, res, user, hotel=None):
+        self.client.force_authenticate(user)
+        return self.client.get(
+            reverse("reservations:reservation-financial-summary", args=[res.id]),
+            **HDR(hotel or self.hotel),
+        )
+
+    def test_totals_derived_from_rate_and_posted_payments(self):
+        from apps.finance.services import record_reservation_payment
+
+        record_reservation_payment(
+            self.res, amount="50.00", method="cash", user=self.manager
+        )
+        resp = self._summary(self.res, self.manager)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["can_view_money"])
+        self.assertEqual(resp.data["reservation_total"], "200.00")
+        self.assertEqual(resp.data["paid"], "50.00")
+        self.assertEqual(resp.data["remaining"], "150.00")
+        self.assertEqual(resp.data["currency"], "USD")
+        self.assertEqual(resp.data["nights"], 2)
+
+    def test_money_masked_without_finance_view(self):
+        staff = add_member(self.hotel, "noview@x.com", perms=["reservations.view"])
+        resp = self._summary(self.res, staff)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["can_view_money"])
+        self.assertIsNone(resp.data["reservation_total"])
+        self.assertIsNone(resp.data["paid"])
+        self.assertIsNone(resp.data["remaining"])
+        self.assertEqual(resp.data["payments"], [])
+        # Non-sensitive shape still present.
+        self.assertEqual(resp.data["currency"], "USD")
+        self.assertEqual(resp.data["nights"], 2)
+
+    def test_summary_is_tenant_scoped(self):
+        other = make_hotel(slug="other-fin")
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        resp = self._summary(self.res, om, hotel=other)
+        self.assertEqual(resp.status_code, 404)
+
+
+class DerivedStayAndDocumentFieldTests(APITestCase):
+    """§25/§37 derived read fields on the reservation serializer:
+    ``stay_status`` (latest stay's status, or null) and ``document_count`` (a
+    non-sensitive count computed from the prefetched ``documents`` relation)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 2)
+
+    def _res(self, number):
+        res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number=number,
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Guest",
+        )
+        line = ReservationRoomLine.objects.create(
+            hotel=self.hotel,
+            reservation=res,
+            room_type=self.rtype,
+            room=self.rooms[0],
+            quantity=1,
+        )
+        return res, line
+
+    def _detail(self, res):
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_stay_status_null_and_zero_documents_by_default(self):
+        res, _ = self._res("R-NONE")
+        data = self._detail(res)
+        self.assertIsNone(data["stay_status"])
+        self.assertEqual(data["document_count"], 0)
+
+    def test_stay_status_in_house(self):
+        res, line = self._res("R-INH")
+        make_stay(self.hotel, res, line, self.rooms[0], status=StayStatus.IN_HOUSE)
+        self.assertEqual(self._detail(res)["stay_status"], "in_house")
+
+    def test_stay_status_checked_out(self):
+        res, line = self._res("R-OUT")
+        make_stay(self.hotel, res, line, self.rooms[0],
+                  status=StayStatus.CHECKED_OUT)
+        self.assertEqual(self._detail(res)["stay_status"], "checked_out")
+
+    def test_document_count_reflects_documents_on_detail_and_list(self):
+        res, _ = self._res("R-DOC")
+        ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=res, doc_type="passport", number="A1"
+        )
+        ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=res, doc_type="national_id", number="B2"
+        )
+        self.assertEqual(self._detail(res)["document_count"], 2)
+        resp = self.client.get(
+            reverse("reservations:reservation-list"), **HDR(self.hotel)
+        )
+        row = next(
+            r for r in resp.data["results"] if r["reservation_number"] == "R-DOC"
+        )
+        self.assertEqual(row["document_count"], 2)
+
+    def test_document_count_uses_prefetch_no_extra_query(self):
+        # Once ``documents`` is prefetched (as the list/detail querysets do),
+        # ``len(obj.documents.all())`` — the exact mechanism of the serializer's
+        # ``document_count`` — issues ZERO extra queries per reservation (no N+1).
+        res, _ = self._res("R-PF")
+        for i in range(3):
+            ReservationDocument.objects.create(
+                hotel=self.hotel, reservation=res, doc_type="other", number=f"N{i}"
+            )
+        prefetched = list(
+            Reservation.objects.filter(hotel=self.hotel).prefetch_related("documents")
+        )
+        with self.assertNumQueries(0):
+            counts = [len(r.documents.all()) for r in prefetched]
+        self.assertEqual(counts, [3])
+
+
+class SensitiveMaskingTests(APITestCase):
+    """§36/§39 (sec-F2): the primary guest's father/mother names + DoB are
+    sensitive — REDACTED to null (and national ID masked) for callers without
+    ``guests.view_sensitive_data`` — masked SERVER-SIDE, not just hidden in UI."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.rtype = make_type(self.hotel)
+        make_rooms(self.hotel, self.rtype, 1)
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="R-SENS",
+            status=ReservationStatus.CONFIRMED,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Sensitive Guest",
+            primary_guest_father_name="Father Name",
+            primary_guest_mother_name="Mother Name",
+            primary_guest_national_id="1234567890",
+            primary_guest_date_of_birth=date(1990, 5, 1),
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=self.res, room_type=self.rtype, quantity=1
+        )
+
+    def _detail(self, user):
+        self.client.force_authenticate(user)
+        resp = self.client.get(
+            reverse("reservations:reservation-detail", args=[self.res.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.data
+
+    def test_masked_without_view_sensitive_permission(self):
+        staff = add_member(self.hotel, "plain@x.com", perms=["reservations.view"])
+        data = self._detail(staff)
+        self.assertIsNone(data["primary_guest_father_name"])
+        self.assertIsNone(data["primary_guest_mother_name"])
+        self.assertIsNone(data["primary_guest_date_of_birth"])
+        self.assertIn("•", data["primary_guest_national_id"])
+
+    def test_visible_with_view_sensitive_permission(self):
+        staff = add_member(
+            self.hotel,
+            "sens@x.com",
+            perms=["reservations.view", "guests.view_sensitive_data"],
+        )
+        data = self._detail(staff)
+        self.assertEqual(data["primary_guest_father_name"], "Father Name")
+        self.assertEqual(data["primary_guest_mother_name"], "Mother Name")
+        self.assertEqual(data["primary_guest_date_of_birth"], "1990-05-01")
+        self.assertEqual(data["primary_guest_national_id"], "1234567890")

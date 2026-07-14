@@ -701,6 +701,10 @@ export interface Reservation {
    * departed guest from one who never arrived; complements `has_in_house_stay`. */
   stay_status: StayStatus | null;
   stay_id: number | null;
+  /** §37 — DERIVED count of the reservation's uploaded documents (never stored;
+   * `len` of the prefetched relation). Drives the card's "View documents" button:
+   * it only appears when this is > 0, with the count on a badge. */
+  document_count: number;
   /** §26/§31/§35 — DERIVED financial read (never stored). The money fields are
    * gated by `finance.view` and come back null when the caller may not see
    * money; `currency`/`nights` are always present. Money values are decimal

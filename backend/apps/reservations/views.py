@@ -174,10 +174,16 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         qs = (
             Reservation.objects.filter(hotel=self.request.hotel)
             # ``folios__payments`` + ``stays`` feed the derived financial summary
-            # (paid/remaining/status) and ``stay_status`` on the read serializer
-            # without an N+1 (RESERVATIONS-FORM-UX-CORRECTION §25/§35).
+            # (paid/remaining/status) and ``stay_status`` on the read serializer;
+            # ``documents`` feeds the derived ``document_count`` (§37) — all
+            # prefetched so the list never N+1s (RESERVATIONS-FORM-UX-CORRECTION
+            # §25/§35/§37).
             .prefetch_related(
-                "lines__room_type", "occupants", "folios__payments", "stays"
+                "lines__room_type",
+                "occupants",
+                "folios__payments",
+                "stays",
+                "documents",
             )
         )
         params = self.request.query_params
@@ -295,7 +301,11 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
 
     def get_queryset(self):
         return Reservation.objects.filter(hotel=self.request.hotel).prefetch_related(
-            "lines__room_type", "occupants", "folios__payments", "stays"
+            "lines__room_type",
+            "occupants",
+            "folios__payments",
+            "stays",
+            "documents",
         )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
@@ -385,10 +395,10 @@ class ReservationPaymentCreateView(APIView):
     balance stays derived (invariant #1). Requires ``finance.payment_create``; a
     foreign-currency deposit with a manual FX rate additionally requires
     ``exchange_rate.override`` (mirrors ``stays.ImmediateCheckInView._authorize_deposit``).
-    A deposit is refused once the reservation has an in-house stay (that money goes
-    through the stay/folio path) and on a cancelled/expired reservation. A zero
-    tender is rejected by the serializer. Returns the created payment + the updated
-    derived financial summary.
+    A deposit is refused once the reservation has ANY stay — in-house OR already
+    checked-out — (that money goes through the stay/folio path; Finance-F1) and on
+    a cancelled/expired reservation. A zero tender is rejected by the serializer.
+    Returns the created payment + the updated derived financial summary.
     """
 
     def get_permissions(self):
@@ -398,9 +408,13 @@ class ReservationPaymentCreateView(APIView):
         _guard_write(request)
         reservation = _get_reservation(request, pk)
 
-        # A started stay's money goes through the stay/folio path — never a
-        # pre-arrival deposit here (§27, invariant #5).
-        if services.has_in_house_stay(reservation):
+        # Finance-F1 (§27, invariant #5): a pre-arrival deposit is refused once
+        # the reservation has ANY stay — in-house OR already checked-out. A
+        # deposit is a PRE-arrival concept; the moment a stay exists the money
+        # goes through the stay/folio path, so a new deposit here would open an
+        # ORPHAN pre-arrival folio (inflating paid / negative remaining) on a
+        # checked-out booking whose stay folio is already CLOSED.
+        if services.has_any_stay(reservation):
             raise ReservationHasActiveStay(
                 {"reservation": reservation.id, "reason": "deposit_via_stay_folio"}
             )
@@ -517,9 +531,13 @@ class ReservationOverviewView(APIView):
             counts[row["status"]] = counts.get(row["status"], 0) + 1
 
         # Prefetch what the read serializer's derived fields need so the two
-        # small (<=10) lists do not N+1 on lines/folios/payments/stays.
+        # small (<=10) lists do not N+1 on lines/folios/payments/stays/documents.
         blocking = base.filter(blocking_q()).prefetch_related(
-            "lines__room_type", "occupants", "folios__payments", "stays"
+            "lines__room_type",
+            "occupants",
+            "folios__payments",
+            "stays",
+            "documents",
         )
         arrivals = (
             blocking.filter(check_in_date__gte=today)
