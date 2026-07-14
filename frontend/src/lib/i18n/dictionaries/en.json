@@ -1005,6 +1005,10 @@
         "reservationNumber": "Reservation number",
         "autoAssigned": "Assigned automatically",
         "autoAssignedHint": "The reservation number is assigned by the system.",
+        "numberOnSave": "Generated on save",
+        "checkoutTime": "Expected checkout time",
+        "persons": "Total persons",
+        "reservationCurrency": "Reservation currency",
         "checkIn": "Check-in date",
         "checkOut": "Check-out date",
         "arrivalTime": "Expected arrival time",
@@ -1092,42 +1096,11 @@
           "partial": "Partially paid",
           "paid": "Paid"
         },
-        "noPaymentsYet": "No payments recorded yet."
-      },
-      "review": {
-        "title": "Review before saving",
-        "description": "Check everything below, then save the reservation.",
-        "edit": "Edit",
-        "guestSection": "Guest",
-        "companionsSection": "Companions",
-        "documentsSection": "Documents",
-        "staySection": "Stay & room",
-        "financialSection": "Price & payment",
-        "guestName": "Name",
-        "phone": "Phone",
-        "adults": "Adult companions",
-        "children": "Children",
-        "documentsCount": "Uploaded documents",
-        "checkIn": "Check-in",
-        "checkOut": "Check-out",
-        "floor": "Floor",
-        "room": "Room",
-        "nights": "Nights",
-        "persons": "Total persons",
-        "nightlyPrice": "Nightly price",
-        "total": "Total",
-        "paid": "Paid",
-        "paymentCurrency": "Payment currency",
-        "exchangeRate": "Exchange rate",
-        "remaining": "Remaining",
-        "immediate": "Immediate check-in",
-        "yes": "Yes",
-        "no": "No",
-        "none": "None",
-        "notPriced": "Not priced yet",
-        "noRoom": "No room selected"
+        "noPaymentsYet": "No payments recorded yet.",
+        "checkInSuccessNumber": "Reservation {number} created and guest checked in."
       }
-    }
+    },
+    "savedWithNumber": "Reservation {number} saved."
   },
   "guests": {
     "nav": "Guests",

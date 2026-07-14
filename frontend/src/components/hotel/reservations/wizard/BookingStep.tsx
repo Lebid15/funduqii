@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
   BedDouble,
   CalendarClock,
@@ -16,13 +17,12 @@ import {
   Badge,
   Button,
   FormField,
+  Icon,
   Input,
-  SectionCard,
   Select,
   Switch,
   Textarea,
 } from "@/components/ui";
-import { AmenityChips } from "@/components/hotel/rooms/AmenityChips";
 import { getSettings } from "@/lib/api/hotel";
 import { listFloors } from "@/lib/api/rooms";
 import { getRoomAvailability, getReservationOverview } from "@/lib/api/reservations";
@@ -32,12 +32,12 @@ import type {
   ReservationFinancialSummary,
   RoomAvailabilityRow,
 } from "@/lib/api/types";
-import { formatCapacity, formatDate, formatMoney, initials } from "@/lib/format";
+import { cx } from "@/lib/utils";
+import { formatCapacity, formatDate, formatMoney } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useCurrentUser } from "@/lib/session/CurrentUserContext";
 
-import { ReservationReviewStep } from "./ReservationReviewStep";
 import { totalPersons } from "./useReservationDraft";
 import type { ReservationDraftActions, ReservationDraft } from "./useReservationDraft";
 
@@ -156,13 +156,26 @@ function nightsBetween(checkIn: string, checkOut: string): number {
   return diff > 0 ? diff : 0;
 }
 
+/** A small group heading — icon + uppercase label + hairline divider (from CSS).
+ * Replaces the old boxed `SectionCard` heads for the Compact Premium layout. */
+function GroupHeading({ icon, children }: { icon: LucideIcon; children: string }) {
+  return (
+    <h4 className="resform-book__heading">
+      <Icon icon={icon} size="sm" />
+      {children}
+    </h4>
+  );
+}
+
 /** EDIT context (§25/§33). When present the step is an EDIT of a saved
- * reservation: `stayLocked` freezes the dates + room (a started stay is changed
- * only through the stay service), `allowNewDeposit` shows the new-deposit entry
- * (a stayless reservation + `finance.payment_create`), `financialSummary` is the
- * read-only record of payments already taken, and `lockedRoomLabel` names the
- * frozen room. Undefined for CREATE — the step behaves exactly as before. */
+ * reservation: `reservationNumber` is the real saved number shown read-only,
+ * `stayLocked` freezes the dates + room (a started stay is changed only through
+ * the stay service), `allowNewDeposit` shows the new-deposit entry (a stayless
+ * reservation + `finance.payment_create`), `financialSummary` is the read-only
+ * record of payments already taken, and `lockedRoomLabel` names the frozen room.
+ * Undefined for CREATE — the number shows a "generated on save" state instead. */
 export interface BookingEditContext {
+  reservationNumber: string;
   stayLocked: boolean;
   allowNewDeposit: boolean;
   financialSummary: ReservationFinancialSummary | null;
@@ -170,24 +183,25 @@ export interface BookingEditContext {
 }
 
 /**
- * Step 4 — Booking (§19–§32). SEVEN clear SectionCards (never one long box):
- * (1) reservation info, (2) dates & times, (3) floor → room, (4) immediate
- * check-in, (5) price & real payment (with multi-currency FX), (6) notes and
- * (7) the review before Save. Availability and pricing are backend-authoritative
+ * Step 4 — Booking (§19–§32), Compact Premium layout. Dense grouped fields
+ * (small heading + hairline divider + multi-column grid) instead of stacked
+ * boxes: reservation info, dates & times, floor → room, immediate check-in,
+ * price & real payment (with multi-currency FX), and notes. There is NO separate
+ * pre-save review — Save is the final action; a compact live totals strip sits
+ * inside the price group. Availability and pricing stay backend-authoritative
  * (this UI never decides bookability); money is displayed from backend Decimal
  * strings / exact estimates, never IEEE Float. In EDIT mode (`editContext`) the
- * dates/room lock per stay status, the immediate-check-in toggle is hidden, and
- * a read-only record of existing payments is shown above any new-deposit entry.
+ * number shows the real saved value, dates/room lock per stay status, the
+ * immediate-check-in toggle is hidden, and a read-only record of existing
+ * payments is shown above any new-deposit entry.
  */
 export function BookingStep({
   draft,
   actions,
-  onEditStep,
   editContext,
 }: {
   draft: ReservationDraft;
   actions: ReservationDraftActions;
-  onEditStep: (index: number) => void;
   editContext?: BookingEditContext | null;
 }) {
   const { t, locale } = useI18n();
@@ -311,9 +325,10 @@ export function BookingStep({
 
   const staffName = me?.full_name || me?.email || "—";
   const staffRole = access?.isManager ? b.roleManager : b.roleStaff;
-  const expectedDeparture = booking.check_out_date
-    ? `${formatDate(booking.check_out_date, locale)}${checkoutTime ? ` · ${checkoutTime.slice(0, 5)}` : ""}`
-    : "—";
+  const reservationNumberDisplay = isEdit
+    ? editContext?.reservationNumber || "—"
+    : b.numberOnSave;
+  const checkoutTimeDisplay = checkoutTime ? checkoutTime.slice(0, 5) : "—";
 
   // Room-type filter options derived from the AVAILABLE rooms on the chosen floor.
   const typeOptions = useMemo(() => {
@@ -399,19 +414,25 @@ export function BookingStep({
     : null;
 
   return (
-    <div className="stack">
-      {/* (1) Reservation info — staff + number + source, all backend-owned. */}
-      <SectionCard title={b.infoSection} icon={ClipboardList} description={b.infoDescription}>
-        <div className="cluster">
-          <Badge tone="neutral">{initials(staffName)}</Badge>
-          <span className="stack-tight">
-            <strong>{staffName}</strong>
-            <span className="muted small">{staffRole}</span>
-          </span>
-        </div>
-        <div className="form-grid">
-          <FormField label={b.reservationNumber} hint={b.autoAssignedHint}>
-            <p className="muted small">{b.autoAssigned}</p>
+    <div className="resform-book">
+      {/* (1) Reservation information — number + staff + source, backend-owned. */}
+      <section className="resform-book__group">
+        <GroupHeading icon={ClipboardList}>{b.infoSection}</GroupHeading>
+        <div className="resform-book__grid">
+          <FormField
+            label={b.reservationNumber}
+            htmlFor="wiz-book-number"
+            hint={isEdit ? undefined : b.autoAssignedHint}
+          >
+            <Input
+              id="wiz-book-number"
+              type="text"
+              value={reservationNumberDisplay}
+              readOnly
+            />
+          </FormField>
+          <FormField label={b.staff} htmlFor="wiz-book-staff" hint={staffRole}>
+            <Input id="wiz-book-staff" type="text" value={staffName} readOnly />
           </FormField>
           <FormField label={b.source} htmlFor="wiz-book-source">
             <Select
@@ -429,12 +450,13 @@ export function BookingStep({
             />
           </FormField>
         </div>
-      </SectionCard>
+      </section>
 
-      {/* (2) Dates & times — auto nights + expected departure from settings. */}
-      <SectionCard title={b.datesSection} icon={CalendarClock} description={b.datesDescription}>
+      {/* (2) Dates & times — auto nights + persons, checkout time from settings. */}
+      <section className="resform-book__group">
+        <GroupHeading icon={CalendarClock}>{b.datesSection}</GroupHeading>
         {stayLocked ? <Alert tone="info">{b.stayLockedDates}</Alert> : null}
-        <div className="form-grid">
+        <div className="resform-book__grid">
           <FormField label={b.checkIn} htmlFor="wiz-book-in">
             <Input
               id="wiz-book-in"
@@ -442,16 +464,6 @@ export function BookingStep({
               value={booking.check_in_date}
               disabled={stayLocked}
               onChange={(e) => actions.patchBooking({ check_in_date: e.target.value })}
-            />
-          </FormField>
-          <FormField label={b.checkOut} htmlFor="wiz-book-out">
-            <Input
-              id="wiz-book-out"
-              type="date"
-              value={booking.check_out_date}
-              min={booking.check_in_date || undefined}
-              disabled={stayLocked}
-              onChange={(e) => actions.patchBooking({ check_out_date: e.target.value })}
             />
           </FormField>
           {!immediate ? (
@@ -467,24 +479,55 @@ export function BookingStep({
               />
             </FormField>
           ) : null}
-          <FormField label={b.nights} htmlFor="wiz-book-nights">
-            <Input id="wiz-book-nights" value={String(nights)} disabled readOnly />
+          <FormField label={b.checkOut} htmlFor="wiz-book-out">
+            <Input
+              id="wiz-book-out"
+              type="date"
+              value={booking.check_out_date}
+              min={booking.check_in_date || undefined}
+              disabled={stayLocked}
+              onChange={(e) => actions.patchBooking({ check_out_date: e.target.value })}
+            />
           </FormField>
-          <FormField label={b.expectedDeparture} htmlFor="wiz-book-departure">
-            <Input id="wiz-book-departure" value={expectedDeparture} disabled readOnly />
+          <FormField label={b.checkoutTime} htmlFor="wiz-book-checkout-time">
+            <Input
+              id="wiz-book-checkout-time"
+              type="text"
+              value={checkoutTimeDisplay}
+              readOnly
+            />
+          </FormField>
+          <FormField label={b.nights} htmlFor="wiz-book-nights">
+            <Input id="wiz-book-nights" type="text" value={String(nights)} readOnly />
+          </FormField>
+          <FormField label={b.persons} htmlFor="wiz-book-persons">
+            <Input
+              id="wiz-book-persons"
+              type="text"
+              value={String(partySize)}
+              readOnly
+            />
           </FormField>
         </div>
-      </SectionCard>
+      </section>
 
       {/* (3) Floor → room. Separate floor picker FIRST, then available rooms.
           When a stay has started the room is frozen (§33) — show it read-only. */}
-      <SectionCard title={b.roomSection} icon={BedDouble} description={b.roomHint}>
+      <section className="resform-book__group">
+        <GroupHeading icon={BedDouble}>{b.roomSection}</GroupHeading>
         {stayLocked ? (
           <>
             <Alert tone="info">{b.stayLockedDates}</Alert>
-            <FormField label={b.roomSection}>
-              <p className="muted">{editContext?.lockedRoomLabel || "—"}</p>
-            </FormField>
+            <div className="resform-book__grid">
+              <FormField label={b.roomSection} htmlFor="wiz-book-locked-room">
+                <Input
+                  id="wiz-book-locked-room"
+                  type="text"
+                  value={editContext?.lockedRoomLabel || "—"}
+                  readOnly
+                />
+              </FormField>
+            </div>
           </>
         ) : !datesReady ? (
           <Alert tone="info">{b.pickDatesFirst}</Alert>
@@ -516,15 +559,17 @@ export function BookingStep({
             ) : (
               <>
                 {typeOptions.length > 1 ? (
-                  <FormField label={b.filterType} htmlFor="wiz-book-type">
-                    <Select
-                      id="wiz-book-type"
-                      value={typeFilter}
-                      placeholder={b.allTypes}
-                      options={typeOptions}
-                      onChange={(e) => setTypeFilter(e.target.value)}
-                    />
-                  </FormField>
+                  <div className="resform-book__grid">
+                    <FormField label={b.filterType} htmlFor="wiz-book-type">
+                      <Select
+                        id="wiz-book-type"
+                        value={typeFilter}
+                        placeholder={b.allTypes}
+                        options={typeOptions}
+                        onChange={(e) => setTypeFilter(e.target.value)}
+                      />
+                    </FormField>
+                  </div>
                 ) : null}
 
                 {roomsLoading ? <p className="muted small">{b.loadingRooms}</p> : null}
@@ -535,39 +580,51 @@ export function BookingStep({
                   <p className="muted small">{b.noAvailableRooms}</p>
                 ) : null}
 
-                {visibleRooms.map((row) => {
-                  const selected = row.id === booking.selected_room_id;
-                  return (
-                    <div className="stack-tight" key={row.id}>
-                      <div className="line-row">
-                        <span className="cluster">
-                          <strong>{row.number}</strong>
-                          <span className="muted small">{row.room_type_name}</span>
-                          <span className="muted small">
-                            {formatCapacity(row.base_capacity, row.max_capacity, t, locale)}
-                          </span>
-                          <span className="muted small">
-                            {row.base_rate
-                              ? formatMoney(row.base_rate, row.currency, locale)
-                              : "—"}
-                          </span>
-                          {selected ? <Badge tone="success">{b.selected}</Badge> : null}
-                        </span>
-                        <Button
-                          type="button"
-                          variant={selected ? "primary" : "secondary"}
-                          size="sm"
-                          onClick={() => selectRoom(row)}
+                {visibleRooms.length > 0 ? (
+                  <div className="resform-book__rooms">
+                    {visibleRooms.map((row) => {
+                      const selected = row.id === booking.selected_room_id;
+                      return (
+                        <div
+                          key={row.id}
+                          className={cx(
+                            "resform-book__room",
+                            selected && "resform-book__room--selected",
+                          )}
                         >
-                          {selected ? b.selected : b.select}
-                        </Button>
-                      </div>
-                      {row.amenities.length > 0 ? (
-                        <AmenityChips amenities={row.amenities} max={6} />
-                      ) : null}
-                    </div>
-                  );
-                })}
+                          <span className="cluster">
+                            <strong>{row.number}</strong>
+                            <span className="muted small">{row.room_type_name}</span>
+                            <span className="muted small">
+                              {formatCapacity(
+                                row.base_capacity,
+                                row.max_capacity,
+                                t,
+                                locale,
+                              )}
+                            </span>
+                            <span className="muted small">
+                              {row.base_rate
+                                ? formatMoney(row.base_rate, row.currency, locale)
+                                : "—"}
+                            </span>
+                            {selected ? (
+                              <Badge tone="success">{b.selected}</Badge>
+                            ) : null}
+                          </span>
+                          <Button
+                            type="button"
+                            variant={selected ? "primary" : "secondary"}
+                            size="sm"
+                            onClick={() => selectRoom(row)}
+                          >
+                            {selected ? b.selected : b.select}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </>
             )}
 
@@ -580,12 +637,13 @@ export function BookingStep({
             ) : null}
           </>
         )}
-      </SectionCard>
+      </section>
 
       {/* (4) Immediate check-in — CREATE only (edit is never the immediate path,
           §33); gated by both permissions, default OFF. */}
       {canImmediate && !isEdit ? (
-        <SectionCard title={b.immediateSection} icon={LogIn}>
+        <section className="resform-book__group">
+          <GroupHeading icon={LogIn}>{b.immediateSection}</GroupHeading>
           <Switch
             id="wiz-book-immediate"
             checked={immediate}
@@ -596,7 +654,7 @@ export function BookingStep({
           {immediateDateMismatch ? (
             <Alert tone="warning">{b.immediateTodayHint}</Alert>
           ) : null}
-        </SectionCard>
+        </section>
       ) : null}
 
       {/* (5a) Recorded payments — read-only history (§31/§35). EDIT only: an old
@@ -617,38 +675,30 @@ export function BookingStep({
           canOverrideRate={can("exchange_rate.override")}
           immediate={immediate}
           selectedRoom={selectedRoom}
-          nights={nights}
           estimatedTotal={estimatedTotal}
           estimatedRemaining={estimatedRemaining}
           baseEquivalent={baseEquivalent}
+          paidBase={paidBase}
         />
       ) : null}
 
-      {/* (6) Notes. */}
-      <SectionCard title={b.notesSection} icon={StickyNote}>
-        <FormField label={b.notesLabel} htmlFor="wiz-book-notes">
+      {/* (6) Notes — modest height, grows within reason (CSS resize). */}
+      <section className="resform-book__group">
+        <GroupHeading icon={StickyNote}>{b.notesSection}</GroupHeading>
+        <FormField
+          label={b.notesLabel}
+          htmlFor="wiz-book-notes"
+          className="resform-book__full"
+        >
           <Textarea
             id="wiz-book-notes"
-            rows={3}
+            rows={2}
             value={booking.notes}
             placeholder={b.notesPlaceholder}
             onChange={(e) => actions.patchBooking({ notes: e.target.value })}
           />
         </FormField>
-      </SectionCard>
-
-      {/* (7) Review before Save (§32). */}
-      <SectionCard title={w.review.title} icon={ClipboardList} description={w.review.description}>
-        <ReservationReviewStep
-          draft={draft}
-          nights={nights}
-          selectedRoom={selectedRoom}
-          reservationCurrency={baseCurrency}
-          estimatedTotal={estimatedTotal}
-          estimatedRemaining={estimatedRemaining}
-          onEditStep={onEditStep}
-        />
-      </SectionCard>
+      </section>
     </div>
   );
 }
@@ -668,9 +718,10 @@ function RecordedPaymentsCard({
 
   if (!summary.can_view_money) {
     return (
-      <SectionCard title={b.recordedPaymentsSection} icon={CreditCard}>
+      <section className="resform-book__group">
+        <GroupHeading icon={CreditCard}>{b.recordedPaymentsSection}</GroupHeading>
         <p className="muted small">{b.financialHidden}</p>
-      </SectionCard>
+      </section>
     );
   }
 
@@ -682,29 +733,33 @@ function RecordedPaymentsCard({
     : "—";
 
   return (
-    <SectionCard
-      title={b.recordedPaymentsSection}
-      icon={CreditCard}
-      description={b.recordedPaymentsDescription}
-    >
-      <dl className="form-grid">
-        <div>
-          <dt className="field__label">{b.reservationTotal}</dt>
-          <dd>{money(summary.reservation_total)}</dd>
-        </div>
-        <div>
-          <dt className="field__label">{b.paidLabel}</dt>
-          <dd>{money(summary.paid)}</dd>
-        </div>
-        <div>
-          <dt className="field__label">{b.remaining}</dt>
-          <dd>{money(summary.remaining)}</dd>
-        </div>
-        <div>
-          <dt className="field__label">{b.paymentStatusLabel}</dt>
-          <dd>{statusLabel}</dd>
-        </div>
-      </dl>
+    <section className="resform-book__group">
+      <GroupHeading icon={CreditCard}>{b.recordedPaymentsSection}</GroupHeading>
+      <p className="muted small">{b.recordedPaymentsDescription}</p>
+      <div className="resform-book__grid">
+        <FormField label={b.reservationTotal} htmlFor="wiz-rec-total">
+          <Input
+            id="wiz-rec-total"
+            type="text"
+            value={money(summary.reservation_total)}
+            readOnly
+          />
+        </FormField>
+        <FormField label={b.paidLabel} htmlFor="wiz-rec-paid">
+          <Input id="wiz-rec-paid" type="text" value={money(summary.paid)} readOnly />
+        </FormField>
+        <FormField label={b.remaining} htmlFor="wiz-rec-remaining">
+          <Input
+            id="wiz-rec-remaining"
+            type="text"
+            value={money(summary.remaining)}
+            readOnly
+          />
+        </FormField>
+        <FormField label={b.paymentStatusLabel} htmlFor="wiz-rec-status">
+          <Input id="wiz-rec-status" type="text" value={statusLabel} readOnly />
+        </FormField>
+      </div>
       {summary.payments.length === 0 ? (
         <p className="muted small">{b.noPaymentsYet}</p>
       ) : (
@@ -736,7 +791,7 @@ function RecordedPaymentsCard({
           })}
         </ul>
       )}
-    </SectionCard>
+    </section>
   );
 }
 
@@ -745,11 +800,12 @@ function RecordedPaymentsCard({
 type UiPayMethod = "" | "cash" | "internal_electronic" | "on_room_account";
 
 /** The price + REAL payment sub-form (§26/§28/§29/§30/§31). Shows the room price,
- * nights and reservation total, then an honest payment block that works for BOTH
- * a deposit-for-future and an immediate deposit; when the payment currency differs
- * from the reservation currency it exposes the FX rate + direction + equivalent
- * (gated by `exchange_rate.override`). Remaining is DISPLAY-only (never editable,
- * never stored). Amount 0 ⇒ no method required, no money movement. */
+ * reservation currency and total, then an honest payment block that works for
+ * BOTH a deposit-for-future and an immediate deposit; when the payment currency
+ * differs from the reservation currency it exposes the FX rate + direction +
+ * equivalent (gated by `exchange_rate.override`). A compact live totals strip
+ * (total · paid · remaining) closes the group — remaining is DISPLAY-only (never
+ * editable, never stored). Amount 0 ⇒ no method required, no money movement. */
 function PaymentSection({
   draft,
   actions,
@@ -758,10 +814,10 @@ function PaymentSection({
   canOverrideRate,
   immediate,
   selectedRoom,
-  nights,
   estimatedTotal,
   estimatedRemaining,
   baseEquivalent,
+  paidBase,
 }: {
   draft: ReservationDraft;
   actions: ReservationDraftActions;
@@ -770,10 +826,10 @@ function PaymentSection({
   canOverrideRate: boolean;
   immediate: boolean;
   selectedRoom: RoomAvailabilityRow | null;
-  nights: number;
   estimatedTotal: string | null;
   estimatedRemaining: string | null;
   baseEquivalent: string | null;
+  paidBase: string;
 }) {
   const { t, locale } = useI18n();
   const b = t.reservations.wizard.booking;
@@ -849,135 +905,151 @@ function PaymentSection({
   const remainingDisplay = estimatedRemaining
     ? formatMoney(estimatedRemaining, reservationCurrency, locale)
     : "—";
+  const paidDisplay = formatMoney(paidBase, reservationCurrency, locale);
 
   return (
-    <SectionCard title={b.priceSection} icon={CreditCard} description={b.priceDescription}>
+    <section className="resform-book__group">
+      <GroupHeading icon={CreditCard}>{b.priceSection}</GroupHeading>
+
       {/* Price — reservation currency, from the backend room rate (§26). */}
-      <dl className="form-grid">
-        <div>
-          <dt className="field__label">{b.nightlyPrice}</dt>
-          <dd>{nightlyDisplay}</dd>
-        </div>
-        <div>
-          <dt className="field__label">{b.nights}</dt>
-          <dd>{String(nights)}</dd>
-        </div>
-        <div>
-          <dt className="field__label">{b.reservationTotal}</dt>
-          <dd>{totalDisplay}</dd>
-        </div>
-      </dl>
-      {estimatedTotal ? (
-        <p className="muted small">{b.reservationTotalEstimate}</p>
-      ) : null}
+      <div className="resform-book__grid resform-book__grid--3">
+        <FormField label={b.nightlyPrice} htmlFor="wiz-pay-nightly">
+          <Input id="wiz-pay-nightly" type="text" value={nightlyDisplay} readOnly />
+        </FormField>
+        <FormField label={b.reservationCurrency} htmlFor="wiz-pay-res-currency">
+          <Input
+            id="wiz-pay-res-currency"
+            type="text"
+            value={reservationCurrency || "—"}
+            readOnly
+          />
+        </FormField>
+        <FormField label={b.reservationTotal} htmlFor="wiz-pay-total">
+          <Input id="wiz-pay-total" type="text" value={totalDisplay} readOnly />
+        </FormField>
+      </div>
 
-      {/* Payment method — real receipt (§28/§30). */}
-      <FormField label={b.paymentMethod} htmlFor="wiz-pay-method" hint={b.noPaymentHint}>
-        <Select
-          id="wiz-pay-method"
-          value={methodValue}
-          options={methodChoices.map((value) => ({
-            value,
-            label: value === "" ? b.method.none : b.method[value],
-          }))}
-          onChange={(e) => setMethod(e.target.value as UiPayMethod)}
-        />
-      </FormField>
+      {/* Payment method — real receipt (§28/§30) + tender fields on the same row. */}
+      <div className="resform-book__grid">
+        <FormField label={b.paymentMethod} htmlFor="wiz-pay-method" hint={b.noPaymentHint}>
+          <Select
+            id="wiz-pay-method"
+            value={methodValue}
+            options={methodChoices.map((value) => ({
+              value,
+              label: value === "" ? b.method.none : b.method[value],
+            }))}
+            onChange={(e) => setMethod(e.target.value as UiPayMethod)}
+          />
+        </FormField>
 
-      {onRoomAccount ? <Alert tone="info">{b.onRoomAccountHint}</Alert> : null}
+        {takesDeposit && currencyOptions.length > 1 ? (
+          <FormField label={b.paymentCurrency} htmlFor="wiz-pay-currency">
+            <Select
+              id="wiz-pay-currency"
+              value={payCurrency}
+              options={currencyOptions}
+              onChange={(e) => setCurrency(e.target.value)}
+            />
+          </FormField>
+        ) : null}
 
-      {takesDeposit ? (
-        <>
-          {!immediate ? <Alert tone="info">{b.depositForFutureHint}</Alert> : null}
+        {takesDeposit && !isForeign ? (
+          <FormField
+            label={b.paidAmount.replace("{currency}", reservationCurrency || payCurrency)}
+            htmlFor="wiz-pay-amount"
+          >
+            <Input
+              id="wiz-pay-amount"
+              inputMode="decimal"
+              value={payment.amount}
+              onChange={(e) => actions.patchPayment({ amount: e.target.value })}
+            />
+          </FormField>
+        ) : null}
 
-          {currencyOptions.length > 1 ? (
-            <FormField label={b.paymentCurrency} htmlFor="wiz-pay-currency">
-              <Select
-                id="wiz-pay-currency"
-                value={payCurrency}
-                options={currencyOptions}
-                onChange={(e) => setCurrency(e.target.value)}
-              />
-            </FormField>
-          ) : null}
-
-          {!isForeign ? (
+        {takesDeposit && isForeign ? (
+          <>
             <FormField
-              label={b.paidAmount.replace("{currency}", reservationCurrency || payCurrency)}
-              htmlFor="wiz-pay-amount"
+              label={b.originalAmount.replace("{currency}", payCurrency)}
+              htmlFor="wiz-pay-original"
             >
               <Input
-                id="wiz-pay-amount"
+                id="wiz-pay-original"
                 inputMode="decimal"
-                value={payment.amount}
-                onChange={(e) => actions.patchPayment({ amount: e.target.value })}
+                value={payment.original_amount}
+                onChange={(e) =>
+                  actions.patchPayment({ original_amount: e.target.value })
+                }
               />
             </FormField>
-          ) : (
-            <>
-              <div className="form-grid">
-                <FormField
-                  label={b.originalAmount.replace("{currency}", payCurrency)}
-                  htmlFor="wiz-pay-original"
-                >
-                  <Input
-                    id="wiz-pay-original"
-                    inputMode="decimal"
-                    value={payment.original_amount}
-                    onChange={(e) =>
-                      actions.patchPayment({ original_amount: e.target.value })
-                    }
-                  />
-                </FormField>
-                <FormField
-                  label={b.exchangeRate}
-                  htmlFor="wiz-pay-rate"
-                  hint={!canOverrideRate ? b.fxPermissionHint : undefined}
-                >
-                  <Input
-                    id="wiz-pay-rate"
-                    inputMode="decimal"
-                    value={payment.exchange_rate}
-                    disabled={!canOverrideRate}
-                    onChange={(e) => actions.patchPayment({ exchange_rate: e.target.value })}
-                  />
-                </FormField>
-                <FormField label={b.rateBasis} htmlFor="wiz-pay-basis">
-                  <Select
-                    id="wiz-pay-basis"
-                    value={payment.rate_basis}
-                    placeholder={b.rateBasisPlaceholder}
-                    disabled={!canOverrideRate}
-                    options={RATE_BASES.map((value) => ({
-                      value,
-                      label: b.rateBasisOptions[value],
-                    }))}
-                    onChange={(e) => actions.patchPayment({ rate_basis: e.target.value })}
-                  />
-                </FormField>
-              </div>
-              {baseEquivalent ? (
-                <p className="muted small">
-                  {b.baseEquivalent}:{" "}
-                  <strong>{formatMoney(baseEquivalent, reservationCurrency, locale)}</strong>
-                </p>
-              ) : null}
-            </>
-          )}
+            <FormField
+              label={b.exchangeRate}
+              htmlFor="wiz-pay-rate"
+              hint={!canOverrideRate ? b.fxPermissionHint : undefined}
+            >
+              <Input
+                id="wiz-pay-rate"
+                inputMode="decimal"
+                value={payment.exchange_rate}
+                disabled={!canOverrideRate}
+                onChange={(e) => actions.patchPayment({ exchange_rate: e.target.value })}
+              />
+            </FormField>
+            <FormField label={b.rateBasis} htmlFor="wiz-pay-basis">
+              <Select
+                id="wiz-pay-basis"
+                value={payment.rate_basis}
+                placeholder={b.rateBasisPlaceholder}
+                disabled={!canOverrideRate}
+                options={RATE_BASES.map((value) => ({
+                  value,
+                  label: b.rateBasisOptions[value],
+                }))}
+                onChange={(e) => actions.patchPayment({ rate_basis: e.target.value })}
+              />
+            </FormField>
+            <FormField label={b.baseEquivalent} htmlFor="wiz-pay-equivalent">
+              <Input
+                id="wiz-pay-equivalent"
+                type="text"
+                value={
+                  baseEquivalent
+                    ? formatMoney(baseEquivalent, reservationCurrency, locale)
+                    : "—"
+                }
+                readOnly
+              />
+            </FormField>
+          </>
+        ) : null}
+      </div>
 
-          {/* Remaining — DISPLAY-only, reservation currency, never editable (§31). */}
-          {estimatedTotal ? (
-            <Alert tone="info">
-              <span className="stack-tight">
-                <span>
-                  {b.remaining}: <strong>{remainingDisplay}</strong>
-                </span>
-                <span className="muted small">{b.reservationTotalEstimate}</span>
-              </span>
-            </Alert>
-          ) : null}
+      {onRoomAccount ? <Alert tone="info">{b.onRoomAccountHint}</Alert> : null}
+      {takesDeposit && !immediate ? (
+        <Alert tone="info">{b.depositForFutureHint}</Alert>
+      ) : null}
+
+      {/* Compact live totals — the in-step summary replacing the old review. */}
+      {estimatedTotal ? (
+        <>
+          <dl className="resform-book__totals">
+            <div className="resform-book__total">
+              <dt>{b.reservationTotal}</dt>
+              <dd>{totalDisplay}</dd>
+            </div>
+            <div className="resform-book__total">
+              <dt>{b.paidLabel}</dt>
+              <dd>{paidDisplay}</dd>
+            </div>
+            <div className="resform-book__total resform-book__total--accent">
+              <dt>{b.remaining}</dt>
+              <dd>{remainingDisplay}</dd>
+            </div>
+          </dl>
+          <p className="muted small">{b.reservationTotalEstimate}</p>
         </>
       ) : null}
-    </SectionCard>
+    </section>
   );
 }

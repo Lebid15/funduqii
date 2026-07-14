@@ -120,6 +120,7 @@ export function ReservationFormShell({
   const editContext: BookingEditContext | null =
     isEdit && reservation
       ? {
+          reservationNumber: reservation.reservation_number,
           stayLocked: Boolean(stayLocked),
           allowNewDeposit: !stayLocked && can("finance.payment_create"),
           financialSummary: financialSummary ?? null,
@@ -305,10 +306,11 @@ export function ReservationFormShell({
           "error",
         );
       }
+      const savedNumber = outcome.reservation.reservation_number;
       if (outcome.checkIn) {
-        notify(w.booking.checkInSuccess);
+        notify(w.booking.checkInSuccessNumber.replace("{number}", savedNumber));
       } else {
-        notify(t.reservations.saved);
+        notify(t.reservations.savedWithNumber.replace("{number}", savedNumber));
       }
       afterSave();
     } catch (err) {
@@ -320,11 +322,10 @@ export function ReservationFormShell({
 
   const isLast = step === STEPS.length - 1;
   const title = isEdit ? w.editTitle : w.createTitle;
-  const saveLabel = isEdit
-    ? w.submitEdit
-    : draft.booking.immediate_check_in
-      ? w.submitCheckIn
-      : w.submit;
+  // Save is the single final action (§32): the SAME label whether or not an
+  // immediate check-in is toggled — the existing submit runs the right atomic
+  // backend call (the immediate group already explains the one-step behaviour).
+  const saveLabel = isEdit ? w.submitEdit : w.submit;
 
   if (typeof document === "undefined") return null;
 
@@ -416,7 +417,6 @@ export function ReservationFormShell({
               <BookingStep
                 draft={draft}
                 actions={actions}
-                onEditStep={goToStep}
                 editContext={editContext}
               />
             ) : null}

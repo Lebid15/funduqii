@@ -1005,6 +1005,10 @@
         "reservationNumber": "رقم الحجز",
         "autoAssigned": "يُحدَّد تلقائيًا",
         "autoAssignedHint": "يُخصَّص رقم الحجز بواسطة النظام.",
+        "numberOnSave": "يُنشأ عند الحفظ",
+        "checkoutTime": "وقت المغادرة المتوقع",
+        "persons": "إجمالي الأشخاص",
+        "reservationCurrency": "عملة الحجز",
         "checkIn": "تاريخ الوصول",
         "checkOut": "تاريخ المغادرة",
         "arrivalTime": "وقت الوصول المتوقع",
@@ -1092,42 +1096,11 @@
           "partial": "مدفوع جزئياً",
           "paid": "مدفوع"
         },
-        "noPaymentsYet": "لا توجد مدفوعات مسجَّلة بعد."
-      },
-      "review": {
-        "title": "المراجعة قبل الحفظ",
-        "description": "راجع كل ما يلي، ثم احفظ الحجز.",
-        "edit": "تعديل",
-        "guestSection": "النزيل",
-        "companionsSection": "المرافقون",
-        "documentsSection": "الوثائق",
-        "staySection": "الإقامة والغرفة",
-        "financialSection": "السعر والدفع",
-        "guestName": "الاسم",
-        "phone": "الهاتف",
-        "adults": "المرافقون البالغون",
-        "children": "الأطفال",
-        "documentsCount": "الوثائق المرفوعة",
-        "checkIn": "الدخول",
-        "checkOut": "المغادرة",
-        "floor": "الطابق",
-        "room": "الغرفة",
-        "nights": "الليالي",
-        "persons": "إجمالي الأشخاص",
-        "nightlyPrice": "سعر الليلة",
-        "total": "الإجمالي",
-        "paid": "المدفوع",
-        "paymentCurrency": "عملة الدفع",
-        "exchangeRate": "سعر الصرف",
-        "remaining": "المتبقي",
-        "immediate": "الدخول الفوري",
-        "yes": "نعم",
-        "no": "لا",
-        "none": "لا يوجد",
-        "notPriced": "غير مُسعَّر بعد",
-        "noRoom": "لم تُختَر غرفة"
+        "noPaymentsYet": "لا توجد مدفوعات مسجَّلة بعد.",
+        "checkInSuccessNumber": "تم إنشاء الحجز {number} وتسجيل دخول النزيل."
       }
-    }
+    },
+    "savedWithNumber": "تم حفظ الحجز {number}."
   },
   "guests": {
     "nav": "النزلاء",

@@ -1005,6 +1005,10 @@
         "reservationNumber": "Rezervasyon numarası",
         "autoAssigned": "Otomatik atanır",
         "autoAssignedHint": "Rezervasyon numarası sistem tarafından atanır.",
+        "numberOnSave": "Kaydedince oluşturulur",
+        "checkoutTime": "Beklenen çıkış saati",
+        "persons": "Toplam kişi",
+        "reservationCurrency": "Rezervasyon para birimi",
         "checkIn": "Giriş tarihi",
         "checkOut": "Çıkış tarihi",
         "arrivalTime": "Beklenen varış saati",
@@ -1092,42 +1096,11 @@
           "partial": "Kısmen ödendi",
           "paid": "Ödendi"
         },
-        "noPaymentsYet": "Henüz kayıtlı ödeme yok."
-      },
-      "review": {
-        "title": "Kaydetmeden önce gözden geçir",
-        "description": "Aşağıdakileri kontrol edin, ardından rezervasyonu kaydedin.",
-        "edit": "Düzenle",
-        "guestSection": "Misafir",
-        "companionsSection": "Refakatçiler",
-        "documentsSection": "Belgeler",
-        "staySection": "Konaklama ve oda",
-        "financialSection": "Fiyat ve ödeme",
-        "guestName": "Ad",
-        "phone": "Telefon",
-        "adults": "Yetişkin refakatçiler",
-        "children": "Çocuklar",
-        "documentsCount": "Yüklenen belgeler",
-        "checkIn": "Giriş",
-        "checkOut": "Çıkış",
-        "floor": "Kat",
-        "room": "Oda",
-        "nights": "Gece",
-        "persons": "Toplam kişi",
-        "nightlyPrice": "Gecelik fiyat",
-        "total": "Toplam",
-        "paid": "Ödenen",
-        "paymentCurrency": "Ödeme para birimi",
-        "exchangeRate": "Döviz kuru",
-        "remaining": "Kalan",
-        "immediate": "Anlık giriş",
-        "yes": "Evet",
-        "no": "Hayır",
-        "none": "Yok",
-        "notPriced": "Henüz fiyatlandırılmadı",
-        "noRoom": "Oda seçilmedi"
+        "noPaymentsYet": "Henüz kayıtlı ödeme yok.",
+        "checkInSuccessNumber": "{number} numaralı rezervasyon oluşturuldu ve giriş yapıldı."
       }
-    }
+    },
+    "savedWithNumber": "{number} numaralı rezervasyon kaydedildi."
   },
   "guests": {
     "nav": "Misafirler",

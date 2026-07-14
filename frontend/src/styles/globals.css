@@ -4730,3 +4730,143 @@ a {
     margin-inline-start: 0;
   }
 }
+
+/* --- Step 4 (Booking) — Compact Premium layout ---------------------------- */
+/* RESERVATIONS · Step-4 rework: dense grouped fields (small uppercase heading
+   + hairline divider + a multi-column grid, 4-up on desktop) replace the stacked
+   `SectionCard`s so most of the booking data fits one desktop view — no separate
+   review step. Scoped to `.resform-book`; never changes field density elsewhere. */
+.resform-book {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resform-book__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border);
+}
+.resform-book__group:first-child {
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+.resform-book__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.resform-book__heading .icon {
+  color: var(--color-primary);
+}
+.resform-book__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+.resform-book__grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.resform-book__full {
+  grid-column: 1 / -1;
+}
+@media (max-width: 1100px) {
+  .resform-book__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 820px) {
+  .resform-book__grid,
+  .resform-book__grid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .resform-book__grid,
+  .resform-book__grid--3 {
+    grid-template-columns: 1fr;
+  }
+}
+/* Compact field density INSIDE step 4 only — moderate, still tappable/readable. */
+.resform-book .field {
+  gap: var(--space-1);
+}
+.resform-book .input,
+.resform-book .select,
+.resform-book .textarea {
+  padding: 0.5rem 0.7rem;
+}
+.resform-book .textarea {
+  min-height: 4.25rem;
+}
+/* Read-only display fields read as quiet, sunken, non-editable (but copyable). */
+.resform-book .input[readonly] {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-fg);
+  cursor: default;
+}
+.resform-book .input[readonly]:hover {
+  border-color: var(--color-border);
+}
+.resform-book .input[readonly]:focus {
+  box-shadow: none;
+  border-color: var(--color-border);
+}
+/* Compact available-room rows (number · type · capacity · price · currency). */
+.resform-book__rooms {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resform-book__room {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.resform-book__room--selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+/* Compact live totals strip (the in-step summary that replaces the old review). */
+.resform-book__totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+.resform-book__total {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.resform-book__total dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.resform-book__total dd {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+.resform-book__total--accent dd {
+  color: var(--color-primary);
+}
