@@ -648,19 +648,23 @@ def _compose_occupant_name(occupant) -> str:
 def _guest_from_occupant(hotel, occupant, *, user=None):
     """Get-or-create a hotel-scoped ``Guest`` for an occupant with no guest link.
 
-    Reuses an existing guest by EXACT national ID (so the partial per-hotel
-    national-id unique constraint is never violated and the promotion is
-    idempotent); otherwise creates a lightweight Guest from the occupant's
-    structured snapshot. The generic ``document_type``/``document_number`` are
-    deliberately NOT copied — that would risk tripping the per-hotel document
-    uniqueness constraint and roll the whole check-in back.
+    Reuses an existing guest by NORMALIZED national ID — the same key the partial
+    per-hotel national-id unique constraint uses (see ``_ensure_primary_guest``) —
+    so a differently-formatted national ID reuses the existing guest instead of
+    creating a duplicate that would then trip the constraint and roll the whole
+    check-in back; the promotion stays idempotent. Otherwise a lightweight Guest
+    is created from the occupant's structured snapshot. The generic
+    ``document_type``/``document_number`` are deliberately NOT copied — that would
+    risk tripping the per-hotel document uniqueness constraint and roll back.
     """
     from apps.guests.models import Guest
+    from apps.guests.normalize import normalize_id
 
     national_id = (occupant.national_id or "").strip()
-    if national_id:
+    national_id_normalized = normalize_id(national_id)
+    if national_id_normalized:
         existing = Guest.objects.filter(
-            hotel=hotel, national_id=national_id
+            hotel=hotel, national_id_normalized=national_id_normalized
         ).first()
         if existing is not None:
             return existing

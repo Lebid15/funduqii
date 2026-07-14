@@ -952,6 +952,15 @@ export function toUpdateBody(
   const { status, ...rest } = toCreateBody(draft);
   void status; // backend-owned on edit (§25)
   const body: ReservationUpdateBody = { ...rest };
+  // DI-F4 — on edit the companion list is authoritative. `toCreateBody` omits
+  // `occupants` when empty (correct for create: there is nothing to clear), but
+  // an edit that removed EVERY companion must send an explicit empty array so the
+  // backend clears the stored occupants and resyncs `adults`; without it the
+  // removal is silently dropped and stale occupant rows (with PII) survive and
+  // are later promoted at check-in.
+  if (body.occupants === undefined) {
+    body.occupants = [];
+  }
   if (options.lockStayFields) {
     delete body.check_in_date;
     delete body.check_out_date;
