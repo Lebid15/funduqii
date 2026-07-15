@@ -211,6 +211,11 @@ class FolioCharge(models.Model):
     total_amount = models.DecimalField(**MONEY_KW, default=ZERO)
     charge_date = models.DateField()
     source = models.CharField(max_length=16, blank=True, default="manual")
+    # The stay night this charge settles (owner correction §24). Set ONLY for
+    # room-night charges; it is the stable idempotency key (folio + room_night)
+    # that a partial unique index enforces so no night is ever double-posted,
+    # even under concurrent posting. NULL for every other charge type.
+    room_night = models.DateField(null=True, blank=True)
     # Folio closure round: a full counter-posting created AFTER the original
     # charge's void window closed. The original is never edited; the link is
     # the audit trail. Adjustments cannot themselves be adjusted (no chains).
@@ -253,6 +258,17 @@ class FolioCharge(models.Model):
                 fields=["adjusts"],
                 condition=models.Q(status="posted", adjusts__isnull=False),
                 name="unique_posted_adjustment_per_charge",
+            ),
+            # Owner concurrency guard §24: at most ONE POSTED charge per (folio,
+            # night). The partial condition means it constrains ONLY room-night
+            # charges (room_night set) and leaves voided rows free — so a
+            # reverse-check-in void + a later re-check-in re-post of the same
+            # night is allowed, while two concurrent posts of the same night can
+            # never both succeed.
+            models.UniqueConstraint(
+                fields=["folio", "room_night"],
+                condition=models.Q(status="posted", room_night__isnull=False),
+                name="uniq_posted_room_night_per_folio",
             ),
         ]
 

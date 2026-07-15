@@ -490,7 +490,7 @@ class ReverseCheckInService:
             FolioStatus,
             PostingStatus,
         )
-        from apps.finance.services import ROOM_NIGHT_SOURCE_PREFIX, void_charge
+        from apps.finance.services import void_charge
 
         open_folios = list(
             Folio.objects.select_for_update().filter(
@@ -507,7 +507,7 @@ class ReverseCheckInService:
             try:
                 for charge in folio.charges.filter(
                     type=ChargeType.ROOM,
-                    source__startswith=f"{ROOM_NIGHT_SOURCE_PREFIX}:",
+                    room_night__isnull=False,
                     status=PostingStatus.POSTED,
                 ):
                     void_charge(charge, reason=f"check-in reversed · {reason}", user=user)

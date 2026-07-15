@@ -1396,6 +1396,80 @@ class RoomChargePostingTests(APITestCase):
         self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
         self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
 
+    def test_room_night_unique_under_concurrent_posting(self):
+        """Owner concurrency guard — two interleaved posts of the SAME night can
+        never both succeed: the partial unique index (folio, room_night) rejects
+        the second, leaving exactly one posted charge."""
+        from django.db import IntegrityError, transaction
+
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import (
+            ROOM_NIGHT_SOURCE, add_charge, ensure_stay_folio,
+        )
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = ensure_stay_folio(stay, user=self.manager)
+        night = stay.planned_check_in_date
+        add_charge(
+            folio, charge_type=ChargeType.ROOM, description="night", quantity=1,
+            unit_amount="100.00", source=ROOM_NIGHT_SOURCE, room_night=night,
+            user=self.manager,
+        )
+        # A racer that read a stale "not posted" tries the same night.
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                add_charge(
+                    folio, charge_type=ChargeType.ROOM, description="dup", quantity=1,
+                    unit_amount="100.00", source=ROOM_NIGHT_SOURCE, room_night=night,
+                    user=self.manager,
+                )
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, room_night=night, status=PostingStatus.POSTED
+            ).count(),
+            1,
+        )
+        # A DIFFERENT charge type reusing a source is NOT constrained (room_night
+        # stays NULL) — the guard is scoped to room nights only.
+        add_charge(
+            folio, charge_type=ChargeType.SERVICE, description="svc", quantity=1,
+            unit_amount="10.00", user=self.manager,
+        )
+        add_charge(
+            folio, charge_type=ChargeType.SERVICE, description="svc2", quantity=1,
+            unit_amount="10.00", user=self.manager,
+        )  # no collision
+
+    def test_ensure_swallows_a_concurrent_night_conflict(self):
+        """A night charge that appears BETWEEN ensure's read and its insert (a
+        true race) is caught: ensure does not raise a 500 and does not duplicate."""
+        from unittest.mock import patch
+
+        from apps.finance import services as fin
+        from apps.finance.models import ChargeType, PostingStatus
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        real_add = fin.add_charge
+        injected = {"done": False}
+
+        def racing_add(folio, **kw):
+            if not injected["done"] and kw.get("room_night") is not None:
+                injected["done"] = True
+                real_add(folio, **kw)  # a competitor posts this night first
+                return real_add(folio, **kw)  # our insert now collides
+            return real_add(folio, **kw)
+
+        with patch.object(fin, "add_charge", side_effect=racing_add):
+            fin.ensure_due_room_charges(stay, as_of=D2, user=self.manager)  # must NOT raise
+
+        folio = stay.folios.get()
+        nights = folio.charges.filter(
+            type=ChargeType.ROOM, status=PostingStatus.POSTED, room_night__isnull=False
+        )
+        # No duplicate: one posted charge per distinct night.
+        self.assertEqual(nights.count(), nights.values("room_night").distinct().count())
+        self.assertEqual(nights.count(), 2)
+
 
 class FolioLifecycleGateTests(APITestCase):
     """§32/§38/§42 — awaiting-final-charges blocks check-out; a closed folio can

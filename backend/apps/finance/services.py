@@ -677,9 +677,11 @@ def reopen_folio(folio, *, reason, user=None) -> Folio:
 @transaction.atomic
 def add_charge(folio, *, charge_type, description, quantity, unit_amount,
                tax_rate=ZERO, tax_amount=None, source="manual", user=None,
-               adjusts=None, record_event=True) -> FolioCharge:
+               adjusts=None, room_night=None, record_event=True) -> FolioCharge:
     """Post a charge dated to the CURRENT open hotel business date (the
-    caller never chooses the date — no back- or future-dating)."""
+    caller never chooses the date — no back- or future-dating). ``room_night``
+    is set only for a room-night charge and is the idempotency key enforced by
+    the partial unique index (folio + room_night)."""
     folio = _lock_folio(folio)
     _guard_open(folio)
     business_date = _business_date(folio.hotel)
@@ -716,6 +718,7 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
         charge_date=business_date,
         source=source,
         adjusts=adjusts,
+        room_night=room_night,
         created_by=_actor(user),
     )
     if record_event:
@@ -755,15 +758,12 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
     )
 
 
-# STAYS-ARRIVALS-DEPARTURES — every room NIGHT is posted as its own charge, keyed
-# by night date in the ``source`` (``stay_room:<iso-date>``). This makes posting
-# idempotent per night and lets the daily close, a retry, or the pre-checkout
-# safety net all converge on the same set without ever double-posting.
-ROOM_NIGHT_SOURCE_PREFIX = "stay_room"
-
-
-def _room_night_source(night_date) -> str:
-    return f"{ROOM_NIGHT_SOURCE_PREFIX}:{night_date.isoformat()}"
+# STAYS-ARRIVALS-DEPARTURES — every room NIGHT is its own charge, marked with a
+# short ``source`` and its ``room_night`` date. The stable idempotency key is
+# (folio, room_night), enforced by a partial unique index, so the daily close, a
+# retry, the pre-checkout safety net, and any two CONCURRENT posters all converge
+# on exactly one charge per night.
+ROOM_NIGHT_SOURCE = "stay_room"
 
 
 def _stay_room_rate(stay):
@@ -793,6 +793,9 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     current business date (no back-dating); the ``source``/description carry the
     night it settles. Returns the number of night charges newly posted.
     """
+    # ``ensure_stay_folio`` locks the stay row (select_for_update), so concurrent
+    # calls for the SAME stay already serialize here; the partial unique index on
+    # (folio, room_night) is the DB backstop for any path that bypasses the lock.
     folio = ensure_stay_folio(stay, user=user)
     business_date = as_of or _business_date(stay.hotel)
     rate, label = _stay_room_rate(stay)
@@ -802,25 +805,34 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
         folio.charges.filter(
             type=ChargeType.ROOM,
             status=PostingStatus.POSTED,
-            source__startswith=f"{ROOM_NIGHT_SOURCE_PREFIX}:",
-        ).values_list("source", flat=True)
+            room_night__isnull=False,
+        ).values_list("room_night", flat=True)
     )
     night = stay.planned_check_in_date
     end = stay.planned_check_out_date
     count = 0
     while night < end and night < business_date:
-        src = _room_night_source(night)
-        if src not in posted:
-            add_charge(
-                folio,
-                charge_type=ChargeType.ROOM,
-                description=f"{label} — night {night.isoformat()}",
-                quantity=1,
-                unit_amount=rate,
-                source=src,
-                user=user,
-            )
-            count += 1
+        if night not in posted:
+            try:
+                # add_charge is @transaction.atomic -> a savepoint, so a unique
+                # collision from a concurrent poster rolls back only this insert
+                # and leaves the surrounding transaction usable.
+                add_charge(
+                    folio,
+                    charge_type=ChargeType.ROOM,
+                    description=f"{label} — night {night.isoformat()}",
+                    quantity=1,
+                    unit_amount=rate,
+                    source=ROOM_NIGHT_SOURCE,
+                    room_night=night,
+                    user=user,
+                )
+                count += 1
+            except IntegrityError:
+                # A concurrent process already posted this night: not an error —
+                # the invariant (one charge per night) holds. Treat as done.
+                pass
+            posted.add(night)
         night = night + timedelta(days=1)
     return count
 
