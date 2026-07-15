@@ -243,16 +243,23 @@ class StayFolioSummaryView(APIView):
         return [CanView()]
 
     def get(self, request: Request, pk: int) -> Response:
-        from apps.finance.models import Folio, FolioStatus
+        from apps.finance.models import (
+            Folio,
+            FolioStatus,
+            RefundableInsurance,
+        )
         from apps.finance.services import folio_balance
 
         stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
         folios = Folio.objects.filter(hotel=request.hotel, stay=stay)
         open_summaries = []
         total = 0
+        awaiting_final_charges = False
         for folio in folios.filter(status=FolioStatus.OPEN).order_by("id"):
             balance = folio_balance(folio)["balance"]
             total += balance
+            if folio.awaiting_final_charges:
+                awaiting_final_charges = True
             open_summaries.append(
                 {
                     "id": folio.id,
@@ -260,6 +267,30 @@ class StayFolioSummaryView(APIView):
                     "status": folio.status,
                     "currency": folio.currency,
                     "balance": str(balance),
+                    "awaiting_final_charges": folio.awaiting_final_charges,
+                    "awaiting_final_charges_note": folio.awaiting_final_charges_note,
+                }
+            )
+        # Refundable insurance held against this stay must be settled before the
+        # guest departs (§35). Surface held items so the checkout dialog can drive
+        # refund/deduction without a second round-trip.
+        insurances = []
+        insurance_pending = False
+        for ins in RefundableInsurance.objects.filter(
+            hotel=request.hotel, stay=stay
+        ).order_by("id"):
+            held = ins.held_amount
+            if held > 0:
+                insurance_pending = True
+            insurances.append(
+                {
+                    "id": ins.id,
+                    "currency": ins.currency,
+                    "amount": str(ins.amount),
+                    "deducted_amount": str(ins.deducted_amount),
+                    "refunded_amount": str(ins.refunded_amount),
+                    "held_amount": str(held),
+                    "status": ins.status,
                 }
             )
         business_date = get_business_date(request.hotel)
@@ -273,6 +304,9 @@ class StayFolioSummaryView(APIView):
                 "has_folio": folios.exists(),
                 "open_folios": open_summaries,
                 "balance": str(total),
+                "awaiting_final_charges": awaiting_final_charges,
+                "insurances": insurances,
+                "insurance_pending": insurance_pending,
             }
         )
 

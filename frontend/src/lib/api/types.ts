@@ -933,9 +933,25 @@ export interface StayFolioSummary {
     status: string;
     currency: string;
     balance: string;
+    awaiting_final_charges: boolean;
+    awaiting_final_charges_note: string;
   }[];
   /** Total balance across the stay's OPEN folios ("0" when settled/none). */
   balance: string;
+  /** True when any open folio is still flagged awaiting final charges (§32). */
+  awaiting_final_charges: boolean;
+  /** Refundable insurance held against the stay (§35). */
+  insurances: {
+    id: number;
+    currency: string;
+    amount: string;
+    deducted_amount: string;
+    refunded_amount: string;
+    held_amount: string;
+    status: "held" | "refunded" | "partially_deducted" | "consumed";
+  }[];
+  /** True when any insurance still has a held amount awaiting settlement. */
+  insurance_pending: boolean;
 }
 
 /** GET /stays/check-in-rooms and /stays/<id>/move-candidates. */

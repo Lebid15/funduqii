@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeftRight,
@@ -54,6 +53,13 @@ import {
 } from "@/lib/api/stays";
 import type { StaysOverview } from "@/lib/api/stays";
 import { StaysSummaryCards, type OpsCardKey } from "./StaysSummaryCards";
+import {
+  deductInsurance,
+  refundFolioCredit,
+  refundInsurance,
+  setFolioAwaitingCharges,
+  settleFolio,
+} from "@/lib/api/finance";
 import { createGuest, listGuests } from "@/lib/api/guests";
 import { markNoShow } from "@/lib/api/reservations";
 import { messageForError } from "@/lib/api/errors";
@@ -65,7 +71,7 @@ import type {
   StayFolioSummary,
   StayStatusLogEntry,
 } from "@/lib/api/types";
-import { formatDate, stayStatusLabel, stayStatusTone } from "@/lib/format";
+import { formatDate, formatDateTime, stayStatusLabel, stayStatusTone } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -745,6 +751,8 @@ function CheckInModal({
 // Check-out modal                                                             //
 // --------------------------------------------------------------------------- //
 
+type CoActionKind = "settle" | "refund" | "ins-refund" | "ins-deduct";
+
 function CheckOutModal({
   stay,
   onClose,
@@ -755,12 +763,28 @@ function CheckOutModal({
   onDone: () => void;
 }) {
   const { t, locale } = useI18n();
+  const c = t.frontDesk.checkOutModal;
+  const can = useCan();
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
   const [summary, setSummary] = useState<StayFolioSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [departedAt, setDepartedAt] = useState<string | null>(null);
+  // A single inline action form is open at a time (settle / refund / insurance).
+  const [action, setAction] = useState<{ kind: CoActionKind; id: number } | null>(null);
+  const [amountField, setAmountField] = useState("");
+  const [methodField, setMethodField] = useState("cash");
+  const [reasonField, setReasonField] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const open = stay !== null;
+
+  const methodOptions = (["cash", "card", "bank_transfer", "electronic", "other"] as const).map(
+    (v) => ({ value: v, label: t.finance.methods[v] }),
+  );
 
   useEffect(() => {
     if (!open || !stay) return;
@@ -768,24 +792,113 @@ function CheckOutModal({
     setReason("");
     setError(null);
     setSummary(null);
+    setDone(false);
+    setDepartedAt(null);
+    setAction(null);
     getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null));
   }, [open, stay]);
 
-  const balance = summary ? Number(summary.balance) : 0;
-  const blocked = summary !== null && balance !== 0;
-  const early = summary?.is_early_departure ?? false;
+  async function reload() {
+    if (!stay) return;
+    const next = await getStayFolioSummary(stay.id).catch(() => null);
+    setSummary(next);
+  }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  const balance = summary ? Number(summary.balance) : 0;
+  const early = summary?.is_early_departure ?? false;
+  const chargesReady = summary !== null && !summary.awaiting_final_charges;
+  const balanceReady = summary !== null && balance === 0;
+  const insuranceReady = summary !== null && !summary.insurance_pending;
+  const canDepart = chargesReady && balanceReady && insuranceReady;
+  const blocked = !canDepart;
+
+  function openSettle(folioId: number, folioBalance: string) {
+    setAction({ kind: "settle", id: folioId });
+    setAmountField(Math.abs(Number(folioBalance)).toFixed(2));
+    setMethodField("cash");
+    setReasonField("");
+    setActionError(null);
+  }
+  function openRefund(folioId: number, folioBalance: string) {
+    setAction({ kind: "refund", id: folioId });
+    setAmountField(Math.abs(Number(folioBalance)).toFixed(2));
+    setMethodField("cash");
+    setReasonField("");
+    setActionError(null);
+  }
+  function openInsAction(kind: "ins-refund" | "ins-deduct", insId: number, held: string) {
+    setAction({ kind, id: insId });
+    setAmountField(kind === "ins-refund" ? Number(held).toFixed(2) : "");
+    setReasonField("");
+    setActionError(null);
+  }
+
+  async function runAction() {
+    if (!action) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      if (action.kind === "settle") {
+        const folio = summary?.open_folios.find((f) => f.id === action.id);
+        await settleFolio(action.id, {
+          method: methodField,
+          amount: amountField.trim(),
+          currency: folio?.currency,
+        });
+      } else if (action.kind === "refund") {
+        await refundFolioCredit(action.id, {
+          reason: reasonField.trim(),
+          amount: amountField.trim() || undefined,
+          method: methodField,
+        });
+      } else if (action.kind === "ins-refund") {
+        await refundInsurance(action.id, {
+          reason: reasonField.trim() || undefined,
+          amount: amountField.trim() || undefined,
+        });
+      } else {
+        await deductInsurance(action.id, {
+          amount: amountField.trim(),
+          reason: reasonField.trim(),
+        });
+      }
+      setAction(null);
+      await reload();
+    } catch (err) {
+      setActionError(messageForError(err, t));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function confirmCharges(folioId: number) {
+    setToggleBusy(true);
+    setError(null);
+    try {
+      await setFolioAwaitingCharges(folioId, false);
+      await reload();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setToggleBusy(false);
+    }
+  }
+
+  async function submit() {
     if (!stay) return;
     if (early && !reason.trim()) {
-      setError(t.frontDesk.checkOutModal.reasonRequired);
+      setError(c.reasonRequired);
       return;
     }
     setBusy(true);
+    setError(null);
     try {
-      await checkOut(stay.id, { check_out_notes: notes.trim(), checkout_reason: reason.trim() });
-      onDone();
+      const result = await checkOut(stay.id, {
+        check_out_notes: notes.trim(),
+        checkout_reason: reason.trim(),
+      });
+      setDepartedAt(result.actual_check_out_at);
+      setDone(true);
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -793,69 +906,186 @@ function CheckOutModal({
     }
   }
 
+  // Inline action editor (settle / refund / insurance) — a plain block (NOT a
+  // nested form) so it lives safely inside the review body.
+  function actionEditor(kind: CoActionKind) {
+    const withAmount = kind !== "ins-refund";
+    const withReason = kind === "refund" || kind === "ins-deduct" || kind === "ins-refund";
+    const withMethod = kind === "settle" || kind === "refund";
+    const reasonRequired = kind === "refund" || kind === "ins-deduct";
+    const submitLabel =
+      kind === "settle" ? c.settleSubmit
+        : kind === "refund" ? c.refundSubmit
+        : kind === "ins-refund" ? c.insuranceRefund
+        : c.insuranceDeduct;
+    const disabled =
+      actionBusy
+      || (withAmount && !amountField.trim())
+      || (reasonRequired && !reasonField.trim());
+    return (
+      <div className="stack" style={{ gap: "0.5rem", padding: "0.5rem", background: "var(--surface-2)", borderRadius: "0.5rem" }}>
+        {actionError ? <Alert tone="error">{actionError}</Alert> : null}
+        {withAmount ? (
+          <FormField label={c.settleAmount} htmlFor="co-amount">
+            <Input id="co-amount" inputMode="decimal" value={amountField} onChange={(e) => setAmountField(e.target.value)} />
+          </FormField>
+        ) : null}
+        {withMethod ? (
+          <FormField label={c.settleMethod} htmlFor="co-method">
+            <Select id="co-method" value={methodField} options={methodOptions} onChange={(e) => setMethodField(e.target.value)} />
+          </FormField>
+        ) : null}
+        {withReason ? (
+          <FormField label={c.insuranceReason} htmlFor="co-action-reason">
+            <Input id="co-action-reason" value={reasonField} onChange={(e) => setReasonField(e.target.value)} required={reasonRequired} />
+          </FormField>
+        ) : null}
+        <div className="row" style={{ gap: "0.5rem" }}>
+          <Button type="button" size="sm" loading={actionBusy} disabled={disabled} onClick={runAction}>{submitLabel}</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setAction(null)}>{t.common.cancel}</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={`${t.frontDesk.checkOutModal.title} · ${stay?.room_number ?? ""}`}
+      title={`${c.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkout-form" type="submit" loading={busy} disabled={blocked}>{t.frontDesk.checkOutModal.submit}</Button>
-        </>
+        done ? (
+          <Button onClick={onDone}>{c.done}</Button>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+            <Button type="button" loading={busy} disabled={blocked} onClick={submit}>{c.submit}</Button>
+          </>
+        )
       }
     >
-      <form id="checkout-form" className="stack" onSubmit={submit} noValidate>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <Alert tone="info">{t.frontDesk.checkOutModal.body}</Alert>
-        {stay ? (
+      {done ? (
+        <div className="stack" role="status">
+          <Alert tone="success">{c.successHeading}</Alert>
+          <p>{c.successBody}</p>
           <dl className="detail-grid">
-            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
-            <div><dt>{t.frontDesk.checkOutModal.room}</dt><dd>{stay.room_number}</dd></div>
-            <div><dt>{t.frontDesk.checkOutModal.checkInDate}</dt><dd>{formatDate(stay.actual_check_in_at, locale)}</dd></div>
-            <div><dt>{t.frontDesk.checkOutModal.expectedCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+            <div><dt>{c.guest}</dt><dd>{stay?.primary_guest_name}</dd></div>
+            <div><dt>{c.room}</dt><dd>{stay?.room_number}</dd></div>
+            {summary && summary.open_folios.length > 0 ? (
+              <div><dt>{c.successFolio}</dt><dd>{summary.open_folios.map((f) => f.folio_number).join(", ")}</dd></div>
+            ) : null}
+            <div><dt>{c.successDeparted}</dt><dd>{formatDateTime(departedAt, locale)}</dd></div>
           </dl>
-        ) : null}
-        {summary ? (
-          <div className="stack" style={{ gap: "0.5rem" }}>
-            {summary.has_folio && summary.open_folios.length > 0 ? (
-              <dl className="detail-grid">
-                <div>
-                  <dt>{t.frontDesk.checkOutModal.folio}</dt>
-                  <dd>{summary.open_folios.map((f) => f.folio_number).join(", ")}</dd>
+          <div><Badge tone="success">{c.successPaid}</Badge></div>
+          <Alert tone="info">{c.successRoom}</Alert>
+        </div>
+      ) : (
+        <div className="stack">
+          {error ? <Alert tone="error">{error}</Alert> : null}
+          <Alert tone="info">{c.body}</Alert>
+          {stay ? (
+            <dl className="detail-grid">
+              <div><dt>{c.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+              <div><dt>{c.room}</dt><dd>{stay.room_number}</dd></div>
+              <div><dt>{c.checkInDate}</dt><dd>{formatDate(stay.actual_check_in_at, locale)}</dd></div>
+              <div><dt>{c.expectedCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+            </dl>
+          ) : null}
+
+          {summary === null ? (
+            <LoadingState label={t.common.loading} />
+          ) : (
+            <div className="stack" style={{ gap: "0.75rem" }}>
+              {/* Statement + per-folio settlement / refund (§17/§34/§37) */}
+              <div className="stack" style={{ gap: "0.5rem" }}>
+                <h4 style={{ margin: 0 }}>{c.statementHeading}</h4>
+                {summary.has_folio && summary.open_folios.length > 0 ? (
+                  summary.open_folios.map((f) => {
+                    const b = Number(f.balance);
+                    return (
+                      <div key={f.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
+                        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                          <span>{f.folio_number}</span>
+                          <strong>{f.balance} {f.currency}</strong>
+                        </div>
+                        {f.awaiting_final_charges ? (
+                          <div className="row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                            <Badge tone="warning">{c.awaitingBadge}</Badge>
+                            <Button type="button" size="sm" variant="secondary" loading={toggleBusy} onClick={() => confirmCharges(f.id)}>{c.confirmCharges}</Button>
+                          </div>
+                        ) : null}
+                        {b > 0 && can("finance.payment_create") ? (
+                          action?.kind === "settle" && action.id === f.id
+                            ? actionEditor("settle")
+                            : <div className="row"><Button type="button" size="sm" icon={Wallet} onClick={() => openSettle(f.id, f.balance)}>{c.settle}</Button></div>
+                        ) : null}
+                        {b < 0 && can("finance.refund") ? (
+                          action?.kind === "refund" && action.id === f.id
+                            ? actionEditor("refund")
+                            : <div className="row"><Button type="button" size="sm" variant="secondary" onClick={() => openRefund(f.id, f.balance)}>{c.refund}</Button></div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="muted">{c.folioNone}</p>
+                )}
+              </div>
+
+              {/* Refundable insurance (§35) */}
+              {summary.insurances.length > 0 ? (
+                <div className="stack" style={{ gap: "0.5rem" }}>
+                  <h4 style={{ margin: 0 }}>{c.insuranceHeading}</h4>
+                  {summary.insurances.map((ins) => {
+                    const held = Number(ins.held_amount);
+                    return (
+                      <div key={ins.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
+                        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                          <span>{c.insuranceHeld}: {ins.held_amount} {ins.currency}</span>
+                          {held <= 0 ? <Badge tone="success">{c.insuranceSettled}</Badge> : null}
+                        </div>
+                        {held > 0 && can("finance.insurance_manage") ? (
+                          action && (action.kind === "ins-refund" || action.kind === "ins-deduct") && action.id === ins.id ? (
+                            actionEditor(action.kind)
+                          ) : (
+                            <div className="row" style={{ gap: "0.5rem" }}>
+                              <Button type="button" size="sm" onClick={() => openInsAction("ins-refund", ins.id, ins.held_amount)}>{c.insuranceRefund}</Button>
+                              <Button type="button" size="sm" variant="secondary" onClick={() => openInsAction("ins-deduct", ins.id, ins.held_amount)}>{c.insuranceDeduct}</Button>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
-                <div>
-                  <dt>{t.frontDesk.checkOutModal.folioBalance}</dt>
-                  <dd>{summary.balance} {summary.open_folios[0]?.currency ?? ""}</dd>
+              ) : null}
+
+              {/* Departure checklist (§39) — color is never the only signal */}
+              <div className="stack" style={{ gap: "0.35rem" }}>
+                <h4 style={{ margin: 0 }}>{c.checklistHeading}</h4>
+                <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+                  <Badge tone={chargesReady ? "success" : "warning"}>{c.checkCharges}</Badge>
+                  <Badge tone={balanceReady ? "success" : "warning"}>{c.checkBalance}</Badge>
+                  <Badge tone={insuranceReady ? "success" : "warning"}>{c.checkInsurance}</Badge>
                 </div>
-              </dl>
-            ) : (
-              <p className="muted">{t.frontDesk.checkOutModal.folioNone}</p>
-            )}
-            {blocked ? (
-              <Alert tone="error">
-                {t.frontDesk.checkOutModal.folioBlocked}{" "}
-                <Link href="/hotel/finance?tab=folios" className="inline-link">
-                  <Wallet size={14} aria-hidden /> {t.frontDesk.checkOutModal.folioOpenBtn}
-                </Link>
-              </Alert>
-            ) : null}
-            {early ? (
-              <Alert tone="warning">{t.frontDesk.checkOutModal.earlyDeparture}</Alert>
-            ) : null}
-          </div>
-        ) : null}
-        <FormField label={t.frontDesk.checkOutModal.notes} htmlFor="co-notes">
-          <Input id="co-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </FormField>
-        {early || summary === null ? (
-          <FormField label={t.frontDesk.checkOutModal.reason} htmlFor="co-reason">
-            <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} required={early} />
+              </div>
+
+              {early ? <Alert tone="warning">{c.earlyDeparture}</Alert> : null}
+            </div>
+          )}
+
+          <FormField label={c.notes} htmlFor="co-notes">
+            <Input id="co-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </FormField>
-        ) : null}
-        <Alert tone="warning">{t.frontDesk.checkOutModal.financeNote}</Alert>
-      </form>
+          {early ? (
+            <FormField label={c.reason} htmlFor="co-reason">
+              <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+            </FormField>
+          ) : null}
+          <Alert tone="warning">{c.financeNote}</Alert>
+        </div>
+      )}
     </Modal>
   );
 }
