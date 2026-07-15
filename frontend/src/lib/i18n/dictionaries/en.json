@@ -1288,6 +1288,21 @@
     "title": "Front desk",
     "subtitle": "Arrivals, residents and departures",
     "saved": "Saved",
+    "cards": {
+      "groupLabel": "Operational summary",
+      "arriving": "Arriving today",
+      "arrivingCaption": "Expected arrivals",
+      "awaiting": "Awaiting check-in",
+      "awaitingCaption": "Due, not yet in",
+      "checkedInToday": "Checked in today",
+      "checkedInTodayCaption": "Arrived today",
+      "residents": "Current residents",
+      "residentsCaption": "In house now",
+      "departing": "Departing today",
+      "departingCaption": "Expected departures",
+      "attention": "Needs attention",
+      "attentionCaption": "Requires action"
+    },
     "tabs": {
       "arrivals": "Arrivals today",
       "current": "Current residents",

@@ -1288,6 +1288,21 @@
     "title": "الاستقبال",
     "subtitle": "الوصول والمقيمون والمغادرة",
     "saved": "تم الحفظ",
+    "cards": {
+      "groupLabel": "ملخص التشغيل",
+      "arriving": "الوصول اليوم",
+      "arrivingCaption": "الوصول المتوقع",
+      "awaiting": "بانتظار الدخول",
+      "awaitingCaption": "حان موعدهم ولم يدخلوا",
+      "checkedInToday": "تم الدخول اليوم",
+      "checkedInTodayCaption": "وصلوا اليوم",
+      "residents": "المقيمون حاليًا",
+      "residentsCaption": "داخل الفندق الآن",
+      "departing": "المغادرة اليوم",
+      "departingCaption": "المغادرة المتوقعة",
+      "attention": "تحتاج انتباهًا",
+      "attentionCaption": "تتطلب إجراءً"
+    },
     "tabs": {
       "arrivals": "وصول اليوم",
       "current": "المقيمون الحاليون",

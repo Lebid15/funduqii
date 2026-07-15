@@ -1288,6 +1288,21 @@
     "title": "Ön büro",
     "subtitle": "Girişler, konuklar ve çıkışlar",
     "saved": "Kaydedildi",
+    "cards": {
+      "groupLabel": "Operasyon özeti",
+      "arriving": "Bugün gelenler",
+      "arrivingCaption": "Beklenen gelişler",
+      "awaiting": "Girişi bekleyen",
+      "awaitingCaption": "Vakti geldi, girmedi",
+      "checkedInToday": "Bugün giriş yapan",
+      "checkedInTodayCaption": "Bugün geldi",
+      "residents": "Mevcut konuklar",
+      "residentsCaption": "Şu an otelde",
+      "departing": "Bugün çıkanlar",
+      "departingCaption": "Beklenen çıkışlar",
+      "attention": "Dikkat gerektirir",
+      "attentionCaption": "İşlem gerekli"
+    },
     "tabs": {
       "arrivals": "Bugünkü girişler",
       "current": "Mevcut konuklar",
