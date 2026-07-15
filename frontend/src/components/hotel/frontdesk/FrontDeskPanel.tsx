@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeftRight,
@@ -1016,6 +1016,8 @@ function CheckOutModal({
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
   const [summary, setSummary] = useState<StayFolioSummary | null>(null);
+  const [ensureFailed, setEnsureFailed] = useState(false);
+  const [ensureBusy, setEnsureBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toggleBusy, setToggleBusy] = useState(false);
@@ -1030,28 +1032,72 @@ function CheckOutModal({
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const open = stay !== null;
+  // The stay the dialog is currently targeting. Because CheckOutModal stays
+  // mounted, a slow request (esp. a manual Retry) must skip its writes once the
+  // dialog has moved to another stay — this ref is the "still the current stay"
+  // check the effect's `ignore` flag cannot cover on the Retry path.
+  const currentStayRef = useRef(stay?.id);
 
   const methodOptions = (["cash", "card", "bank_transfer", "electronic", "other"] as const).map(
     (v) => ({ value: v, label: t.finance.methods[v] }),
   );
 
+  // Post any room night that has become due FIRST (the safety net) so the front
+  // desk settles the COMPLETE amount. If that POST fails we must NOT silently
+  // show a plain read that may understate the balance: flag ensureFailed (which
+  // warns the agent and blocks departure), still fall back to a read so the
+  // agent sees something, and if even the read fails surface a real error
+  // instead of a permanent silent spinner. `isStale` guards against a slower
+  // ensure POST resolving after the dialog was reopened for another stay.
+  const runEnsure = useCallback(
+    async (stayId: number, isStale: () => boolean = () => false) => {
+      // A write is stale if the effect was torn down (`isStale`) OR the dialog
+      // has since moved to another stay (ref). The ref covers the Retry path,
+      // which has no per-call `ignore` flag of its own.
+      const stale = () => isStale() || currentStayRef.current !== stayId;
+      setError(null);
+      setEnsureBusy(true);
+      try {
+        const s = await ensureRoomCharges(stayId);
+        if (stale()) return;
+        setSummary(s);
+        setEnsureFailed(false);
+      } catch {
+        if (stale()) return;
+        setEnsureFailed(true);
+        try {
+          const s = await getStayFolioSummary(stayId);
+          if (stale()) return;
+          setSummary(s);
+        } catch (err) {
+          if (stale()) return;
+          setError(messageForError(err, t));
+        }
+      } finally {
+        if (!stale()) setEnsureBusy(false);
+      }
+    },
+    [t],
+  );
+
   useEffect(() => {
     if (!open || !stay) return;
+    let ignore = false;
+    currentStayRef.current = stay.id;
     setNotes("");
     setReason("");
     setError(null);
     setSummary(null);
+    setEnsureFailed(false);
     setDone(false);
     setDepartedAt(null);
     setPrintMode(null);
     setAction(null);
-    // Post any room night that has become due FIRST (the safety net), so the
-    // front desk settles the complete amount; fall back to a plain read if the
-    // ensure call is unavailable.
-    ensureRoomCharges(stay.id)
-      .then(setSummary)
-      .catch(() => getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null)));
-  }, [open, stay]);
+    void runEnsure(stay.id, () => ignore);
+    return () => {
+      ignore = true;
+    };
+  }, [open, stay, runEnsure]);
 
   async function reload() {
     if (!stay) return;
@@ -1070,7 +1116,10 @@ function CheckOutModal({
   const balanceReady = summary !== null && balance === 0;
   const insuranceReady = summary !== null && !summary.insurance_pending;
   const canDepart = chargesReady && balanceReady && insuranceReady;
-  const blocked = !canDepart;
+  // Departure stays blocked while the due charges could not be posted — the
+  // shown balance may be understated, so confirming it would check out on an
+  // incomplete amount. Cancel is never blocked.
+  const blocked = !canDepart || ensureFailed;
 
   function openSettle(folioId: number, folioBalance: string) {
     setAction({ kind: "settle", id: folioId });
@@ -1260,6 +1309,24 @@ function CheckOutModal({
         <div className="stack">
           {error ? <Alert tone="error">{error}</Alert> : null}
           <Alert tone="info">{c.body}</Alert>
+          {ensureFailed ? (
+            <div className="stack" style={{ gap: "0.5rem" }}>
+              <Alert tone="warning">
+                <strong>{c.ensureFailedTitle}</strong> — {c.ensureFailedBody}
+              </Alert>
+              <div className="row">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  loading={ensureBusy}
+                  onClick={() => { if (stay) void runEnsure(stay.id); }}
+                >
+                  {t.common.retry}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {stay ? (
             <dl className="detail-grid">
               <div><dt>{c.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
@@ -1270,7 +1337,9 @@ function CheckOutModal({
           ) : null}
 
           {summary === null ? (
-            <LoadingState label={t.common.loading} />
+            // No spinner once the ensure flow has failed: the warning + retry
+            // (and any error) above convey the state instead of a silent loader.
+            ensureFailed || error ? null : <LoadingState label={t.common.loading} />
           ) : (
             <div className="stack" style={{ gap: "0.75rem" }}>
               {/* Statement + per-folio settlement / refund (§17/§34/§37) */}

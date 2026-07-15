@@ -1432,6 +1432,8 @@
     "checkOutModal": {
       "title": "Çıkış yap",
       "body": "Konuğun hesabını gözden geçirin, bakiyeyi kapatın, ardından ayrılışı onaylayın. Çıkış odayı boşaltır (temizlik için kirli olur).",
+      "ensureFailedTitle": "Vadesi gelen ücretler işlenemedi",
+      "ensureFailedBody": "Vadesi gelen oda ücretleri işlenemedi, bu nedenle gösterilen bakiye eksik olabilir. Ayrılışı onaylamadan önce tekrar deneyin.",
       "notes": "Notlar",
       "reason": "Neden",
       "financeNote": "Ayrılış için tüm son ücretlerin işlenmiş, folyo bakiyesinin sıfır ve iade edilebilir teminatın kapatılmış olması gerekir.",

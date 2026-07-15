@@ -1432,6 +1432,8 @@
     "checkOutModal": {
       "title": "Check out",
       "body": "Review the guest's account, settle the balance, then confirm departure. Checking out frees the room (it becomes dirty for housekeeping).",
+      "ensureFailedTitle": "Due charges could not be posted",
+      "ensureFailedBody": "The room charges that had become due could not be posted, so the balance shown may be incomplete. Retry before confirming departure.",
       "notes": "Notes",
       "reason": "Reason",
       "financeNote": "Departure requires all final charges posted, a zero folio balance, and any refundable insurance settled.",
