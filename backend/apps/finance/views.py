@@ -34,6 +34,7 @@ from .models import (
     InvoiceStatus,
     Payment,
     PostingStatus,
+    RefundableInsurance,
 )
 from .serializers import (
     ChargeCreateSerializer,
@@ -42,6 +43,7 @@ from .serializers import (
     FolioCreateSerializer,
     FolioListSerializer,
     FolioSerializer,
+    InsuranceSerializer,
     InvoiceCreateSerializer,
     InvoiceSerializer,
     PaymentCreateSerializer,
@@ -774,3 +776,95 @@ class FinanceOverviewView(APIView):
                 "currency": hotel_currency,
             }
         )
+
+
+# --- Refundable insurance (STAYS §35) ---------------------------------------
+
+
+class InsuranceListCreateView(APIView):
+    """GET finance/insurances/?stay=&reservation= (finance.view) — list held
+    insurances; POST records one (finance.insurance_manage)."""
+
+    def get_permissions(self):
+        return [CanView()] if self.request.method == "GET" else [CanInsuranceManage()]
+
+    def get(self, request: Request) -> Response:
+        qs = RefundableInsurance.objects.filter(hotel=request.hotel)
+        stay = request.query_params.get("stay")
+        reservation = request.query_params.get("reservation")
+        if stay:
+            qs = qs.filter(stay_id=stay)
+        if reservation:
+            qs = qs.filter(reservation_id=reservation)
+        return Response(InsuranceSerializer(qs, many=True).data)
+
+    def post(self, request: Request) -> Response:
+        _guard_write(request)
+        data = request.data
+        reservation = stay = None
+        if data.get("reservation"):
+            from apps.reservations.models import Reservation
+
+            reservation = generics.get_object_or_404(
+                Reservation, pk=data["reservation"], hotel=request.hotel
+            )
+        if data.get("stay"):
+            from apps.stays.models import Stay
+
+            stay = generics.get_object_or_404(
+                Stay, pk=data["stay"], hotel=request.hotel
+            )
+        ins = services.record_insurance(
+            hotel=request.hotel,
+            amount=data.get("amount"),
+            currency=data.get("currency"),
+            method=data.get("method"),
+            reservation=reservation,
+            stay=stay,
+            reference=data.get("reference", ""),
+            notes=data.get("notes", ""),
+            user=request.user,
+        )
+        return Response(
+            InsuranceSerializer(ins).data, status=status.HTTP_201_CREATED
+        )
+
+
+class InsuranceRefundView(APIView):
+    """POST finance/insurances/<id>/refund/ (finance.insurance_manage) — refund
+    part/all held insurance to the guest."""
+
+    def get_permissions(self):
+        return [CanInsuranceManage()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        ins = _get(RefundableInsurance, request, pk)
+        services.refund_insurance(
+            ins,
+            amount=request.data.get("amount"),
+            reason=(request.data.get("reason") or ""),
+            user=request.user,
+        )
+        ins.refresh_from_db()
+        return Response(InsuranceSerializer(ins).data)
+
+
+class InsuranceDeductView(APIView):
+    """POST finance/insurances/<id>/deduct/ (finance.insurance_manage) — deduct a
+    documented portion (reason required); posts the deducted portion to the folio."""
+
+    def get_permissions(self):
+        return [CanInsuranceManage()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        ins = _get(RefundableInsurance, request, pk)
+        services.deduct_insurance(
+            ins,
+            amount=request.data.get("amount"),
+            reason=(request.data.get("reason") or ""),
+            user=request.user,
+        )
+        ins.refresh_from_db()
+        return Response(InsuranceSerializer(ins).data)

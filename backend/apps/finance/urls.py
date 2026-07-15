@@ -16,6 +16,9 @@ from .views import (
     FolioRefundView,
     FolioReopenView,
     FolioSettleView,
+    InsuranceDeductView,
+    InsuranceListCreateView,
+    InsuranceRefundView,
     FolioDetailView,
     FolioInvoiceCreateView,
     FolioListCreateView,
@@ -58,6 +61,21 @@ urlpatterns = [
     path("finance/charges/<int:pk>/void/", ChargeVoidView.as_view(), name="charge-void"),
     path("finance/charges/<int:pk>/adjust/", ChargeAdjustView.as_view(), name="charge-adjust"),
     # Payments
+    path(
+        "finance/insurances/",
+        InsuranceListCreateView.as_view(),
+        name="insurance-list-create",
+    ),
+    path(
+        "finance/insurances/<int:pk>/refund/",
+        InsuranceRefundView.as_view(),
+        name="insurance-refund",
+    ),
+    path(
+        "finance/insurances/<int:pk>/deduct/",
+        InsuranceDeductView.as_view(),
+        name="insurance-deduct",
+    ),
     path("finance/payments/", PaymentListView.as_view(), name="payment-list"),
     path("finance/payments/<int:pk>/void/", PaymentVoidView.as_view(), name="payment-void"),
     path("finance/payments/<int:pk>/reverse/", PaymentReverseView.as_view(), name="payment-reverse"),

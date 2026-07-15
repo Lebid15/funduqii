@@ -1581,6 +1581,28 @@ class InsuranceTests(APITestCase):
         out = CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
         self.assertEqual(out.status, StayStatus.CHECKED_OUT)
 
+    def test_insurance_endpoints(self):
+        stay = self._check_in()
+        self.client.force_authenticate(self.manager)
+        r = self.client.post(
+            reverse("finance:insurance-list-create"),
+            {"amount": "100.00", "stay": stay.id}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["status"], "held")
+        iid = r.json()["id"]
+        lst = self.client.get(
+            reverse("finance:insurance-list-create") + f"?stay={stay.id}",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(len(lst.json()), 1)
+        rf = self.client.post(
+            reverse("finance:insurance-refund", args=[iid]),
+            {"reason": "returned"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(rf.status_code, 200)
+        self.assertEqual(rf.json()["status"], "refunded")
+
 
 class SettlementAndRefundTests(APITestCase):
     """§34/§37 — settle a stay folio (multi-currency aware) and refund a credit."""
