@@ -34,7 +34,7 @@ from apps.finance import services as fin
 from apps.finance.models import ChargeType, FolioCharge, PostingStatus
 from apps.guests.models import Guest
 from apps.rooms.models import Floor, Room, RoomType
-from apps.stays.models import Stay
+from apps.stays.models import Stay, StayRatePeriod
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
 
 _PG_SKIP = (
@@ -77,10 +77,15 @@ class RoomNightConcurrencyTests(TransactionTestCase):
             hotel=self.hotel, room=self.room, primary_guest=self.guest,
             planned_check_in_date=timezone.localdate(),
             planned_check_out_date=timezone.localdate() + timedelta(days=2),
-            # A per-stay rate SNAPSHOT so ``_stay_room_rate`` resolves a rate
-            # without needing a reservation line (used by the ensure() test).
-            nightly_rate="100.00",
             actual_check_in_at=timezone.now(),
+        )
+        # A rate period covering the stay so ``_room_rate_for_night`` resolves a
+        # rate without needing a reservation line (used by the ensure() test).
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=self.stay,
+            start_date=self.stay.planned_check_in_date,
+            end_date=self.stay.planned_check_out_date,
+            nightly_rate="100.00", currency="USD", source="booking",
         )
         # The folio is created and COMMITTED in setUp so both worker
         # connections share the exact same folio row.
@@ -236,3 +241,83 @@ class RoomNightConcurrencyTests(TransactionTestCase):
         )
         self.assertEqual(nights.count(), 2)
         self.assertEqual(nights.values("room_night").distinct().count(), 2)
+
+
+class ConcurrentExtendRatePeriodTests(TransactionTestCase):
+    """STAYS item 8 — two CONCURRENT extends of the SAME stay never create
+    OVERLAPPING rate periods. The extend service locks the stay row first
+    (``_require_in_house`` -> select_for_update), so the two workers serialise; the
+    central rate-period service's overlap rejection + (stay, start_date) idempotency
+    are the backstops. PostgreSQL only (real multi-connection row locking)."""
+
+    def setUp(self):
+        self.hotel = Hotel.objects.create(
+            name="Hotel", slug="conc-ext", status=HotelStatus.ACTIVE
+        )
+        self.user = User.objects.create_user(
+            email="cext@x.com", password="StrongPass!234", full_name="CExt"
+        )
+        HotelMembership.objects.create(
+            user=self.user, hotel=self.hotel,
+            membership_type=MembershipType.MANAGER, is_active=True,
+        )
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        floor = Floor.objects.create(hotel=self.hotel, name="G", number="0")
+        self.room = Room.objects.create(
+            hotel=self.hotel, floor=floor, room_type=self.rtype, number="101"
+        )
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Guest One")
+        self.stay = Stay.objects.create(
+            hotel=self.hotel, room=self.room, primary_guest=self.guest,
+            status="in_house",
+            planned_check_in_date=timezone.localdate(),
+            planned_check_out_date=timezone.localdate() + timedelta(days=2),
+            actual_check_in_at=timezone.now(),
+        )
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=self.stay,
+            start_date=self.stay.planned_check_in_date,
+            end_date=self.stay.planned_check_out_date,
+            nightly_rate="100.00", currency="USD", source="booking",
+        )
+        self.new_end = self.stay.planned_check_out_date + timedelta(days=1)
+
+    def _extend_worker(self, barrier, results, index):
+        from apps.stays.services import ExtendStayService
+
+        try:
+            barrier.wait(timeout=15)
+            ExtendStayService.execute(
+                self.stay, new_check_out_date=self.new_end, user=self.user
+            )
+            results[index] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"{type(exc).__name__}"
+        finally:
+            connections["default"].close()
+
+    def test_concurrent_extends_do_not_overlap(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        barrier = threading.Barrier(2)
+        results = ["", ""]
+        threads = [
+            threading.Thread(target=self._extend_worker, args=(barrier, results, i))
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        for t in threads:
+            self.assertFalse(t.is_alive(), "an extend worker deadlocked")
+
+        # Exactly one extension period (start_date == old end); no duplicate/overlap.
+        periods = list(StayRatePeriod.objects.filter(stay=self.stay).order_by("start_date"))
+        self.assertEqual(len(periods), 2)  # booking + ONE extension
+        for a, b in zip(periods, periods[1:]):
+            self.assertLessEqual(a.end_date, b.start_date)  # disjoint

@@ -267,6 +267,18 @@ class ReservationRoomLine(models.Model):
     adults = models.PositiveSmallIntegerField(null=True, blank=True)
     children = models.PositiveSmallIntegerField(null=True, blank=True)
     notes = models.CharField(max_length=255, blank=True, default="")
+    # STAYS rate-integrity round — the AGREED nightly rate captured ONCE at
+    # BOOKING time from ``room_type.base_rate`` (quantized). It is an INDEPENDENT
+    # snapshot: a later catalog change to ``base_rate`` must NEVER alter it, so the
+    # hotel always bills the price agreed when the booking was made. ``NULL`` means
+    # the room type was unpriced (base_rate NULL / <= 0) at booking — an explicitly
+    # UNPRICED line, never a signal to fall back to the live catalog rate.
+    # ``agreed_rate_currency`` is the hotel default currency at booking time (the
+    # SAME source ``finance`` uses for ``folio.currency``).
+    agreed_nightly_rate = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    agreed_rate_currency = models.CharField(max_length=3, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

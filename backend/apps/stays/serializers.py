@@ -1,6 +1,8 @@
 """DRF serializers for stays / front desk (Phase 7)."""
 from __future__ import annotations
 
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from apps.reservations.serializers import ReservationWriteSerializer
@@ -43,6 +45,11 @@ class StaySerializer(serializers.ModelSerializer):
     # list stays cheap; a front-desk view opts in via context ``with_folio`` and
     # the viewer must hold ``finance.view`` — otherwise this is null.
     folio_summary = serializers.SerializerMethodField()
+    # STAYS rate-integrity remediation — an OPERATIONAL flag (not a money amount):
+    # true when a DUE/consumed billable night lacks a positive-rate period. Visible
+    # to every operational viewer (NOT gated behind finance.view) so the front desk
+    # can act; the amount itself stays finance-gated in ``folio_summary``.
+    requires_rate_remediation = serializers.SerializerMethodField()
 
     class Meta:
         model = Stay
@@ -71,10 +78,34 @@ class StaySerializer(serializers.ModelSerializer):
             "guests",
             "document_count",
             "folio_summary",
+            "requires_rate_remediation",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def _business_date_for(self, hotel):
+        """Resolve the hotel business date ONCE per response (not per row)."""
+        cache = getattr(self, "_business_date_cache", None)
+        if cache is None:
+            cache = {}
+            self._business_date_cache = cache
+        if hotel.id not in cache:
+            from apps.shifts.services import get_business_date
+
+            cache[hotel.id] = get_business_date(hotel)
+        return cache[hotel.id]
+
+    def get_requires_rate_remediation(self, obj) -> bool:
+        # Only an in-house stay has an actionable rate gap; a departed/cancelled
+        # stay is not something the front desk remediates operationally.
+        if obj.status != "in_house":
+            return False
+        from apps.stays.rate_periods import stay_requires_rate_remediation
+
+        return stay_requires_rate_remediation(
+            obj, business_date=self._business_date_for(obj.hotel)
+        )
 
     def get_document_count(self, obj) -> int:
         if obj.reservation_id is None:
@@ -203,6 +234,19 @@ class StaySerializer(serializers.ModelSerializer):
         else:
             payment_status = "partial"
         first = open_folios[0]
+        # STAYS owner item 6 — surface the CURRENT nightly rate (the latest rate
+        # period's rate + currency, the value an extension defaults from) so the
+        # extend dialog can SHOW it. finance.view ONLY (this whole branch is
+        # already gated); NULL when the stay has no period (never from base_rate).
+        from apps.stays.services import latest_rate_period
+
+        period = latest_rate_period(obj)
+        current_nightly_rate = (
+            str(period.nightly_rate)
+            if period is not None and period.nightly_rate is not None
+            else None
+        )
+        current_rate_currency = period.currency if period is not None else None
         return {
             "financial_details_visible": True,
             "folio_number": first.folio_number,
@@ -212,6 +256,8 @@ class StaySerializer(serializers.ModelSerializer):
             "balance": str(balance),
             "payment_status": payment_status,
             "awaiting_final_charges": awaiting,
+            "current_nightly_rate": current_nightly_rate,
+            "current_rate_currency": current_rate_currency,
         }
 
 
@@ -246,11 +292,26 @@ class StayNotesSerializer(serializers.ModelSerializer):
 
 
 class StayDateChangeSerializer(serializers.Serializer):
-    """Extend / shorten an in-house stay (the services enforce direction)."""
+    """Extend / shorten an in-house stay (the services enforce direction).
+
+    ``nightly_rate`` is OPTIONAL and used only by EXTEND: absent => the added
+    nights inherit the stay's latest agreed rate (no special permission); a value
+    that differs from that default is a priced OVERRIDE that the service gates on a
+    finance permission + a reason. Shorten ignores it.
+    """
 
     new_check_out_date = serializers.DateField()
     reason = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""
+    )
+    nightly_rate = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        # FIX 3 — an override rate must be strictly positive; reject at the API
+        # boundary (the service re-guards defensively too).
+        min_value=Decimal("0.01"),
     )
 
 
@@ -259,6 +320,29 @@ class StayMoveRoomSerializer(serializers.Serializer):
 
     room = serializers.IntegerField()
     reason = serializers.CharField(max_length=255, allow_blank=False)
+
+
+class StayRemediateRateSerializer(serializers.Serializer):
+    """Legacy rate remediation for a stay (STAYS rate-integrity remediation).
+
+    Sets a POSITIVE agreed rate for an unbilled ``[start_date, end_date)`` window.
+    The service enforces the rest (permission, no posted-night, no overlap, currency
+    == folio, audit). The rate is strictly positive and the reason mandatory."""
+
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    nightly_rate = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
+    )
+    currency = serializers.CharField(max_length=3, allow_blank=False)
+    reason = serializers.CharField(max_length=255, allow_blank=False)
+
+    def validate(self, attrs):
+        if attrs["end_date"] <= attrs["start_date"]:
+            raise serializers.ValidationError(
+                {"end_date": "end_date must be after start_date."}
+            )
+        return attrs
 
 
 class StayStatusLogSerializer(serializers.Serializer):

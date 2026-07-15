@@ -34,6 +34,7 @@ from .serializers import (
     StayDateChangeSerializer,
     StayMoveRoomSerializer,
     StayNotesSerializer,
+    StayRemediateRateSerializer,
     StaySerializer,
     StayStatusLogSerializer,
 )
@@ -54,6 +55,7 @@ CanExtend = HasHotelPermission("stays.extend")
 CanShorten = HasHotelPermission("stays.shorten")
 CanMoveRoom = HasHotelPermission("stays.move_room")
 CanReverseCheckIn = HasHotelPermission("stays.reverse_check_in")
+CanRateOverride = HasHotelPermission("stays.rate_override")
 # Immediate atomic check-in performs BOTH a reservation create and a check-in,
 # so it requires BOTH capabilities (a deposit adds finance.payment_create, and a
 # foreign-currency manual FX rate adds exchange_rate.override — enforced below).
@@ -71,7 +73,18 @@ def _stay_qs(hotel, *, with_folio=False):
     qs = Stay.objects.filter(hotel=hotel).select_related(
         "room", "room__room_type", "primary_guest", "reservation",
         "checked_in_by", "checked_out_by",
-    ).prefetch_related("guests__guest", "reservation__documents")
+        # STAYS rate-integrity remediation — the operational
+        # ``requires_rate_remediation`` flag reads the hotel business date +
+        # timezone (``hotel.settings``); join them so the list stays fixed-query.
+        "hotel", "hotel__settings",
+    ).prefetch_related(
+        "guests__guest",
+        "reservation__documents",
+        # STAYS rate-integrity remediation — the operational
+        # ``requires_rate_remediation`` flag reads each stay's rate periods, so
+        # prefetch them to keep the list a fixed-query render (no per-row query).
+        "rate_periods",
+    )
     if with_folio:
         # Operational-card finance block (§12): prefetch each stay's OPEN folio
         # with its POSTED charges + payments so the whole list builds its folio
@@ -391,18 +404,28 @@ def _stay_folio_summary(request, stay) -> dict:
         summary["awaiting_final_charges"] = awaiting_final_charges
         summary["insurances"] = insurances
         summary["insurance_pending"] = insurance_pending
+        # STAYS owner item 6 — the CURRENT nightly rate (latest rate period's rate
+        # + currency, what an extension defaults from) so the extend dialog can
+        # SHOW it. finance.view ONLY; NULL when the stay has no period (never
+        # computed from the live catalog rate).
+        from .services import latest_rate_period
+
+        period = latest_rate_period(stay)
+        summary["current_nightly_rate"] = (
+            str(period.nightly_rate)
+            if period is not None and period.nightly_rate is not None
+            else None
+        )
+        summary["current_rate_currency"] = (
+            period.currency if period is not None else None
+        )
     else:
-        # Non-monetary operational skeleton only: folio identifiers + the
-        # awaiting flag (NO balance, NO currency, NO status, NO note); the
-        # awaiting bool; and NOTHING about insurance amounts or existence.
-        summary["open_folios"] = [
-            {
-                "id": f["id"],
-                "folio_number": f["folio_number"],
-                "awaiting_final_charges": f["awaiting_final_charges"],
-            }
-            for f in open_summaries
-        ]
+        # STAYS Item 10 — a non-finance viewer gets NO folio list at all: the
+        # ``open_folios`` skeleton leaked internal financial identifiers (folio
+        # ``id`` + ``folio_number``). Keep ONLY the abstract operational states
+        # already on ``summary`` (has_folio, financial_details_visible,
+        # financial_clearance_complete, requires_financial_action, can_check_out)
+        # plus the awaiting-final-charges bool — no amount, currency, id, or number.
         summary["awaiting_final_charges"] = awaiting_final_charges
     return summary
 
@@ -595,7 +618,15 @@ class ImmediateCheckInView(APIView):
 
         folio = result["folio"]
         folio_data = None
-        if folio is not None:
+        # STAYS Item 11 (financial-detail RBAC): the folio's internal identifiers
+        # (id / folio_number), currency and derived balance are returned ONLY to a
+        # viewer holding ``finance.view`` — consistent with Item 4/Item 10. A
+        # front-desk user with reservations.create + stays.check_in but WITHOUT
+        # finance.view gets ``folio: null`` (no amount/number/currency leak), never
+        # a placeholder. The reservation + stay are always returned.
+        if folio is not None and has_hotel_permission(
+            request.user, request.hotel, "finance.view"
+        ):
             folio_data = {
                 "id": folio.id,
                 "folio_number": folio.folio_number,
@@ -665,6 +696,7 @@ class StayExtendView(APIView):
             stay,
             new_check_out_date=serializer.validated_data["new_check_out_date"],
             reason=serializer.validated_data.get("reason", ""),
+            nightly_rate=serializer.validated_data.get("nightly_rate"),
             user=request.user,
         )
         stay.refresh_from_db()
@@ -771,3 +803,37 @@ class StayMoveCandidatesView(APIView):
                 )
         candidates.sort(key=lambda c: c["number"])
         return Response(candidates)
+
+
+class StayRemediateRateView(APIView):
+    """POST stays/<id>/remediate-rate/ — set a POSITIVE agreed rate for an unbilled
+    window of a stay that lacked reliable rate coverage (legacy remediation).
+
+    Requires ``stays.rate_override``; tenant-scoped. Creates a StayRatePeriod ONLY
+    (never back-dates a charge / never touches an already-posted night — the normal
+    posting service bills later). This is a LIMITED corrective endpoint, NOT a
+    general price-management page.
+    """
+
+    def get_permissions(self):
+        return [CanRateOverride()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        from apps.stays.services import remediate_stay_rate
+
+        stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
+        serializer = StayRemediateRateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        remediate_stay_rate(
+            stay,
+            start_date=data["start_date"],
+            end_date=data["end_date"],
+            nightly_rate=data["nightly_rate"],
+            currency=data["currency"],
+            reason=data["reason"],
+            user=request.user,
+        )
+        stay.refresh_from_db()
+        return Response(StaySerializer(stay, context={"request": request}).data)

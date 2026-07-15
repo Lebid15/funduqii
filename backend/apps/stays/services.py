@@ -36,6 +36,7 @@ from apps.common.exceptions import (
     InvalidCheckIn,
     InvalidCheckOut,
     InvalidStayChange,
+    PermissionDenied,
     ReverseCheckInReasonRequired,
     ReservationLineFull,
     RoomAssignmentConflict,
@@ -55,7 +56,28 @@ from apps.rooms.models import Room, RoomStatus
 from apps.rooms.services import change_room_status
 from apps.shifts.services import get_business_date
 
-from .models import Stay, StayGuest, StayGuestRole, StayStatus, StayStatusLog
+from .models import (
+    Stay,
+    StayGuest,
+    StayGuestRole,
+    StayRatePeriod,
+    StayRatePeriodSource,
+    StayStatus,
+    StayStatusLog,
+)
+
+
+# STAYS rate-integrity remediation (item 8): ALL StayRatePeriod writes route
+# through the central service in ``apps.stays.rate_periods``. These are re-exported
+# so existing callers (views/serializers) can keep importing from ``services``.
+from .rate_periods import (  # noqa: E402
+    create_booking_period,
+    create_extension_period,
+    latest_rate_period,
+    remediate_stay_rate,
+    stay_requires_rate_remediation,
+    trim_rate_periods,
+)
 
 # A room may only be checked into when it is manually `available`. dirty/cleaning
 # (and the hard-blocked maintenance/out_of_service/archived) are refused —
@@ -95,7 +117,11 @@ def _record(stay, *, event_type, severity, title, message, user=None):
 
 def _require_in_house(stay) -> Stay:
     """Re-read the stay under a row lock and require it to be in-house."""
-    stay = Stay.objects.select_for_update().select_related(
+    # FIX 6 (PG-safe): lock ONLY the stays row (``of=("self",)``). ``reservation``
+    # is a nullable FK, so a plain ``select_for_update`` over this ``select_related``
+    # asks PostgreSQL to lock the nullable side of an OUTER JOIN (``NotSupportedError``);
+    # ``of`` restricts the lock to the base table. SQLite ignores ``of``.
+    stay = Stay.objects.select_for_update(of=("self",)).select_related(
         "room", "room__room_type", "primary_guest", "reservation", "hotel"
     ).get(pk=stay.pk)
     if stay.status != StayStatus.IN_HOUSE:
@@ -268,30 +294,6 @@ class CheckInService:
         ensure_guest_not_blocked(primary_guest, *companions)
 
         actor = user if getattr(user, "is_authenticated", False) else None
-        # STAYS ITEM-3: snapshot the AGREED nightly rate ONCE, at admission, from
-        # the reservation line's room type. ``ensure_due_room_charges`` bills every
-        # night from this snapshot, so a later ``RoomType.base_rate`` change never
-        # changes an in-progress stay's nightly charge. An unpriced room type
-        # (base_rate NULL/<=0) — or no reservation line — leaves it NULL, and the
-        # night service then falls back to the live rate (backward compatible).
-        from apps.finance.models import ZERO as MONEY_ZERO
-        from apps.finance.services import money as _money
-
-        snapshot_type = (
-            reservation_line.room_type if reservation_line is not None else None
-        )
-        snapshot_base_rate = getattr(snapshot_type, "base_rate", None)
-        # Quantize once (not twice in the same expression), then keep it only when
-        # it is a real priced rate — otherwise leave the snapshot NULL so the night
-        # service falls back to the live rate (legacy / unpriced-at-admission).
-        snapshot_rate = (
-            _money(snapshot_base_rate) if snapshot_base_rate is not None else None
-        )
-        nightly_rate = (
-            snapshot_rate
-            if snapshot_rate is not None and snapshot_rate > MONEY_ZERO
-            else None
-        )
         stay = Stay.objects.create(
             hotel=hotel,
             reservation=reservation,
@@ -301,7 +303,6 @@ class CheckInService:
             status=StayStatus.IN_HOUSE,
             planned_check_in_date=reservation.check_in_date,
             planned_check_out_date=reservation.check_out_date,
-            nightly_rate=nightly_rate,
             actual_check_in_at=timezone.now(),
             checked_in_by=actor,
             check_in_notes=check_in_notes or "",
@@ -323,6 +324,12 @@ class CheckInService:
         from apps.finance.services import ensure_due_room_charges, ensure_stay_folio
 
         ensure_stay_folio(stay, user=user)
+        # STAYS rate-integrity remediation: the ORIGINAL rate period is created ONLY
+        # through the central rate-period service, from the reservation line's
+        # BOOKING snapshot — NEVER the live catalog rate. A NULL agreed rate becomes
+        # a NULL-rate booking period that BLOCKS billing until remediated (it is
+        # never a free night, never billed at a live rate).
+        create_booking_period(stay, reservation_line=reservation_line)
         # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner correction): post only the
         # room nights already DUE by the hotel business date — never front-load
         # the whole planned stay. On the arrival day this normally posts nothing;
@@ -359,8 +366,10 @@ class CheckOutService:
     @transaction.atomic
     def execute(stay, *, check_out_notes="", checkout_reason="", user=None) -> Stay:
         # Row lock: concurrent check-outs of the same stay serialize; the
-        # loser then fails the in-house test instead of double-logging.
-        stay = Stay.objects.select_for_update().select_related(
+        # loser then fails the in-house test instead of double-logging. FIX 6:
+        # lock ONLY the stays row (``of=("self",)``) — ``reservation`` is nullable,
+        # so locking the whole OUTER JOIN is rejected on PostgreSQL.
+        stay = Stay.objects.select_for_update(of=("self",)).select_related(
             "room", "primary_guest", "reservation", "hotel"
         ).get(pk=stay.pk)
         if stay.status != StayStatus.IN_HOUSE:
@@ -500,8 +509,10 @@ class ReverseCheckInService:
         if not (reason or "").strip():
             raise ReverseCheckInReasonRequired()
         reason = reason.strip()
+        # FIX 6: lock ONLY the stays row (``of=("self",)``) — ``reservation`` is a
+        # nullable FK, so locking the whole OUTER JOIN is rejected on PostgreSQL.
         stay = (
-            Stay.objects.select_for_update()
+            Stay.objects.select_for_update(of=("self",))
             .select_related("room", "reservation", "hotel")
             .get(pk=stay.pk)
         )
@@ -585,7 +596,9 @@ class ExtendStayService:
 
     @staticmethod
     @transaction.atomic
-    def execute(stay, *, new_check_out_date, reason="", user=None) -> Stay:
+    def execute(
+        stay, *, new_check_out_date, reason="", nightly_rate=None, user=None
+    ) -> Stay:
         stay = _require_in_house(stay)
         old_end = stay.planned_check_out_date
         if new_check_out_date <= old_end:
@@ -616,6 +629,19 @@ class ExtendStayService:
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
         _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
+        # STAYS rate-integrity remediation: the added window gets its OWN rate
+        # period via the central service — never the live catalog rate, and the
+        # ORIGINAL nights' periods are never touched. Default = the stay's latest
+        # period rate/currency (source="extension"); an explicit DIFFERENT rate is
+        # an OVERRIDE requiring ``stays.rate_override`` + a reason + audit.
+        create_extension_period(
+            stay,
+            old_end=old_end,
+            new_end=new_check_out_date,
+            requested_rate=nightly_rate,
+            reason=reason,
+            user=user,
+        )
         # §25 (owner correction): extending only updates the plan + availability.
         # The added nights are NOT posted now — they become real folio charges as
         # each one is consumed, posted by the pre-checkout safety net in
@@ -676,6 +702,10 @@ class ShortenStayService:
             )
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
+        # STAYS rate-integrity round (FIX 1): move the rate periods with the plan so
+        # a later extend cannot overlap a still-long period and silently bill the
+        # OLD rate for re-added nights (masking an audited override).
+        trim_rate_periods(stay, new_check_out_date)
         _shrink_reservation_end(stay.reservation, business_date=business_date)
         note = f"shortened {old_end} -> {new_check_out_date}"
         if (reason or "").strip():

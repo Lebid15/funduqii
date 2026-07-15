@@ -18,6 +18,7 @@ from .views import (
     StayLogsView,
     StayMoveCandidatesView,
     StayMoveRoomView,
+    StayRemediateRateView,
     StaysOverviewView,
     StayShortenView,
 )
@@ -77,6 +78,11 @@ urlpatterns = [
         "stays/<int:pk>/ensure-room-charges/",
         StayEnsureRoomChargesView.as_view(),
         name="stay-ensure-room-charges",
+    ),
+    path(
+        "stays/<int:pk>/remediate-rate/",
+        StayRemediateRateView.as_view(),
+        name="stay-remediate-rate",
     ),
     path("stays/<int:pk>/logs/", StayLogsView.as_view(), name="stay-logs"),
 ]

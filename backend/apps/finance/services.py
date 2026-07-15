@@ -36,6 +36,7 @@ from apps.common.exceptions import (
     FolioNotBalanced,
     InvalidAmount,
     InvalidFinanceOperation,
+    MissingAgreedNightlyRate,
     PaymentAlreadyReversed,
     ReservationFolioNotSupported,
     StayNotInHouse,
@@ -774,26 +775,51 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
 ROOM_NIGHT_SOURCE = "stay_room"
 
 
-def _stay_room_rate(stay):
-    """The nightly rate + a display label for a stay.
+def _room_rate_for_night(stay, night):
+    """Resolve ``(rate, currency, label)`` for one room night from the stay's rate
+    periods — the AGREED price for that date, NEVER the live catalog rate.
 
-    STAYS ITEM-3: prefer the AGREED rate SNAPSHOT captured at check-in
-    (``stay.nightly_rate``), so a later ``RoomType.base_rate`` change never alters
-    an in-progress stay's nightly bill (nor its already-posted, immutable nights).
-    Fall back to the LIVE room-type ``base_rate`` ONLY when the snapshot is NULL —
-    i.e. stays created before this field existed, or an unpriced room type at
-    admission. Returns ``(None, label)`` for an UNPRICED stay (no snapshot and no
-    live rate). The display label always comes from the room type when known."""
+    STAYS rate-integrity round: every night is billed from the ``StayRatePeriod``
+    whose half-open range ``[start_date, end_date)`` covers ``night`` (the booking
+    period, an extension, or an override). The periods are read from the
+    (preferably prefetched) ``stay.rate_periods`` relation, evaluated once and
+    cached on the instance so a multi-night loop issues no per-night query.
+
+    * period found, rate > 0 -> ``(money(rate), currency, label)`` — bill it.
+    * period found, rate NULL -> raise :class:`MissingAgreedNightlyRate`. NULL is
+      the agreed price MISSING (must be remediated), NOT a free night: it is NEVER
+      skipped and NEVER posted as zero.
+    * NO period covers the night -> raise :class:`MissingAgreedNightlyRate`.
+
+    Either gap must fail posting (and therefore checkout / daily close) so nothing
+    settles short and no live-catalog rate is ever used. The display label always
+    comes from the room type when known.
+    """
     line = stay.reservation_line
     room_type = getattr(line, "room_type", None) if line is not None else None
     label = room_type.name if room_type is not None else "Room"
-    snapshot = getattr(stay, "nightly_rate", None)
-    if snapshot is not None and money(snapshot) > ZERO:
-        return money(snapshot), label
-    rate = room_type.base_rate if room_type is not None else None
-    if rate is None or money(rate) <= ZERO:
-        return None, label
-    return money(rate), label
+    # Prefer the per-call cache ``ensure_due_room_charges`` sets (kept fresh each
+    # call so an extension that just added a period is never missed); fall back to
+    # a direct read for a standalone call. Never write the cache here, so a reused
+    # stay instance can never carry a STALE period list between calls.
+    periods = getattr(stay, "_rate_periods_cache", None)
+    if periods is None:
+        periods = list(stay.rate_periods.all())
+    for period in periods:
+        if period.start_date <= night < period.end_date:
+            if period.nightly_rate is None:
+                # A covering-but-unpriced period: agreed price MISSING, not free.
+                raise MissingAgreedNightlyRate(
+                    {
+                        "stay": stay.id,
+                        "room_night": night.isoformat(),
+                        "reason": "unpriced_period",
+                    }
+                )
+            return money(period.nightly_rate), period.currency, label
+    raise MissingAgreedNightlyRate(
+        {"stay": stay.id, "room_night": night.isoformat()}
+    )
 
 
 @transaction.atomic
@@ -820,9 +846,11 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     # (folio, room_night) is the DB backstop for any path that bypasses the lock.
     folio = ensure_stay_folio(stay, user=user)
     business_date = as_of or _business_date(stay.hotel)
-    rate, label = _stay_room_rate(stay)
-    if rate is None:
-        return 0
+    # STAYS rate-integrity round: load THIS stay's rate periods once, FRESH for
+    # this call (an extension may have added one since this in-memory instance was
+    # last billed), so the per-night resolver issues no per-night query and never
+    # reads a stale list. Uses the prefetched relation when the caller provided it.
+    stay._rate_periods_cache = list(stay.rate_periods.all())
     # FIX-2 (legacy double-billing guard): an OLDER design posted ONE aggregated
     # ROOM charge for the whole stay with no ``room_night`` (room_night IS NULL).
     # If such a POSTED aggregated charge already exists on this folio, posting
@@ -865,6 +893,31 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     count = 0
     while night < end and night < business_date:
         if night not in posted:
+            # STAYS rate-integrity remediation: resolve THIS night's agreed rate
+            # from the stay's rate periods. The resolver RAISES
+            # MissingAgreedNightlyRate for either a night with NO covering period OR
+            # a covering period whose rate is NULL (agreed price missing — never a
+            # free night, never a live-catalog fallback), so a rate gap correctly
+            # fails checkout / daily close instead of settling short.
+            rate, currency, label = _room_rate_for_night(stay, night)
+            # ITEM 7 (currency hardening): a priced period MUST carry an explicit
+            # currency equal to the folio currency — the room charge posts in the
+            # folio currency and there is no FX conversion for room nights here. An
+            # empty OR mismatched currency is refused (never a silent wrong-currency
+            # post).
+            if not currency or currency != folio.currency:
+                raise InvalidFinanceOperation(
+                    {
+                        "reason": (
+                            "rate_currency_required"
+                            if not currency
+                            else "rate_currency_mismatch"
+                        ),
+                        "room_night": night.isoformat(),
+                        "rate_currency": currency,
+                        "folio_currency": folio.currency,
+                    }
+                )
             try:
                 # add_charge is @transaction.atomic -> a savepoint, so a unique
                 # collision from a concurrent poster rolls back only this insert
@@ -942,6 +995,10 @@ def post_due_room_charges_for_hotel(hotel, *, business_date=None, user=None) -> 
             "reservation_line",
             "reservation_line__room_type",
         )
+        # STAYS rate-integrity round: the per-night resolver reads each stay's
+        # rate periods, so prefetch them here to keep this a fixed-query pass
+        # (no per-stay rate-period query).
+        .prefetch_related("rate_periods")
         .order_by("id")
     )
     total = 0

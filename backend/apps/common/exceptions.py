@@ -657,6 +657,60 @@ class InvalidAmount(FunduqiiAPIException):
     default_code = "invalid_amount"
 
 
+class MissingAgreedNightlyRate(FunduqiiAPIException):
+    """A due room night has NO covering rate period with a POSITIVE agreed rate —
+    either no period covers it, or the covering period's rate is NULL (agreed price
+    MISSING, never a free night). The posting service raises this (rather than
+    falling back to the live catalog rate or silently posting zero) so a checkout /
+    daily close cannot settle short: the night must be given a positive rate
+    (booking snapshot / extension / override / remediation) before it can be
+    billed. ``details`` carries the ``stay`` and the missing ``room_night``.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay has a room night with no agreed nightly rate. Set the room "
+        "rate before posting charges, checking out, or closing the day."
+    )
+    default_code = "missing_agreed_nightly_rate"
+
+
+class RatePeriodOverlap(FunduqiiAPIException):
+    """A new stay rate period would overlap an existing one for the same stay.
+    Rate periods per stay must be non-overlapping half-open ranges ``[start, end)``;
+    the central rate-period service refuses any intersecting write."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This rate period overlaps an existing period for the stay."
+    default_code = "rate_period_overlap"
+
+
+class RatePeriodConflict(FunduqiiAPIException):
+    """A rate period already exists at ``(stay, start_date)`` with DIFFERENT data
+    (rate / currency / end_date / source). The central service refuses a silent
+    no-op that would drop the requested change — an IDENTICAL re-request stays
+    idempotent; a conflicting one must be resolved explicitly."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "A different rate period already exists for this stay at that start date."
+    )
+    default_code = "rate_period_conflict"
+
+
+class RatePeriodCoversPostedNight(FunduqiiAPIException):
+    """A rate-remediation window covers a night that already has a POSTED room
+    charge. Remediation only fills FUTURE/unbilled coverage gaps — it never
+    back-dates or rewrites an already-billed night (correct that in finance)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This rate window covers a night that has already been billed. "
+        "Remediation cannot change an already-posted room night."
+    )
+    default_code = "rate_period_covers_posted_night"
+
+
 # --- Finance (folio final closure round) --------------------------------------
 
 

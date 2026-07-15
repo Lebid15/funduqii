@@ -74,8 +74,18 @@ def make_reservation(hotel, rtype, *, room=None, status=ReservationStatus.CONFIR
         check_out_date=co,
         primary_guest_name="Res Guest",
     )
+    # Mirror production ``create_reservation``: freeze the AGREED nightly rate +
+    # the hotel default currency on the line at booking time (NULL when unpriced).
+    base = rtype.base_rate
+    agreed = Decimal(base).quantize(Decimal("0.01")) if base is not None else None
+    if agreed is not None and agreed <= 0:
+        agreed = None
+    currency = (
+        getattr(getattr(hotel, "settings", None), "default_currency", "") or ""
+    ) or "USD"
     line = ReservationRoomLine.objects.create(
-        hotel=hotel, reservation=res, room_type=rtype, room=room, quantity=qty
+        hotel=hotel, reservation=res, room_type=rtype, room=room, quantity=qty,
+        agreed_nightly_rate=agreed, agreed_rate_currency=currency,
     )
     return res, line
 
@@ -679,6 +689,17 @@ class ExtendStayTests(StayChangeBase):
         r = self._post("stay-extend", {"new_check_out_date": str(D1 + timedelta(days=2))})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.data["code"], "invalid_stay_change")
+
+    def test_extend_rejects_non_positive_override_rate(self):
+        """FIX 3 — a zero/negative override rate is rejected at the API boundary
+        (serializer min_value), never deferred to billing."""
+        new_end = str(D1 + timedelta(days=5))
+        for bad in ("-10.00", "0.00"):
+            r = self._post(
+                "stay-extend",
+                {"new_check_out_date": new_end, "nightly_rate": bad, "reason": "x"},
+            )
+            self.assertEqual(r.status_code, 400, bad)
 
     def test_extend_blocked_by_next_reservation_on_room(self):
         # Back-to-back next booking pinned to the same room.
@@ -1385,7 +1406,11 @@ class RoomChargePostingTests(APITestCase):
         )
         self.assertEqual(str(folio_balance(folio)["balance"]), "300.00")
 
-    def test_unpriced_room_posts_no_charge(self):
+    def test_unpriced_room_blocks_posting(self):
+        # STAYS rate-integrity remediation: a NULL-rate (unpriced) booking period is
+        # the agreed price MISSING, NOT a free night — a due night RAISES and posts
+        # nothing (so checkout / daily close surface it), never settles zero.
+        from apps.common.exceptions import MissingAgreedNightlyRate
         from apps.finance.models import ChargeType
         from apps.finance.services import ensure_due_room_charges
 
@@ -1394,7 +1419,8 @@ class RoomChargePostingTests(APITestCase):
         res2, line2 = make_reservation(self.hotel, rtype2, room=room2)
         stay = self._check_in(res2, line2, room2, make_guest(self.hotel, name="G2"))
         folio = stay.folios.get()
-        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
+        with self.assertRaises(MissingAgreedNightlyRate):
+            ensure_due_room_charges(stay, as_of=D2, user=self.manager)
         self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
 
     def test_room_night_unique_under_concurrent_posting(self):
@@ -2227,50 +2253,96 @@ def _set_arrival(stay, arrival_date):
     stay.save(update_fields=["actual_check_in_at"])
 
 
-class NightlyRateSnapshotTests(APITestCase):
-    """ITEM 3 — the AGREED nightly rate is snapshotted at check-in
-    (``Stay.nightly_rate``); a later ``RoomType.base_rate`` change never alters an
-    in-progress stay's nightly bill. A legacy stay (NULL snapshot) falls back to
-    the live rate."""
+class StayRatePeriodBillingTests(APITestCase):
+    """STAYS rate-integrity round — the AGREED nightly rate is captured at BOOKING
+    on the reservation line and materialised into a ``StayRatePeriod`` at check-in.
+    Every night bills from the period that covers it; a later ``RoomType.base_rate``
+    change never alters the bill, and there is NO live-catalog fallback."""
 
     def setUp(self):
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "snap@x.com", kind=MembershipType.MANAGER)
 
-    def test_snapshot_captured_at_check_in(self):
+    def test_agreed_rate_and_currency_captured_at_booking(self):
+        """create_reservation freezes the agreed rate + hotel currency on the line;
+        a later catalog change never rewrites the snapshot."""
+        from apps.reservations.services import create_reservation
+
+        rtype = _priced_type(self.hotel, code="BKG", rate="100.00")
+        make_room(self.hotel, rtype, number="401")  # availability for the book
+        res = create_reservation(
+            self.hotel,
+            lines=[{"room_type": rtype, "quantity": 1}],
+            status=ReservationStatus.CONFIRMED,
+            user=self.manager,
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Booker",
+        )
+        line = res.lines.get()
+        self.assertEqual(line.agreed_nightly_rate, Decimal("100.00"))
+        self.assertEqual(line.agreed_rate_currency, "USD")  # hotel default captured
+        # Catalog change AFTER booking must NOT alter the frozen snapshot.
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("150.00"))
+        line.refresh_from_db()
+        self.assertEqual(line.agreed_nightly_rate, Decimal("100.00"))
+
+    def test_original_period_created_at_check_in(self):
         rtype = _priced_type(self.hotel, code="CAP", rate="100.00")
         stay = _check_in(self.hotel, self.manager, rtype, number="300")
-        self.assertEqual(stay.nightly_rate, Decimal("100.00"))
-        stay.refresh_from_db()
-        self.assertEqual(stay.nightly_rate, Decimal("100.00"))
+        period = stay.rate_periods.get()
+        self.assertEqual(period.nightly_rate, Decimal("100.00"))
+        self.assertEqual(period.currency, "USD")
+        self.assertEqual(period.source, "booking")
+        self.assertEqual(period.start_date, stay.planned_check_in_date)
+        self.assertEqual(period.end_date, stay.planned_check_out_date)
 
-    def test_snapshot_beats_later_rate_change(self):
+    def test_booking_price_beats_change_between_booking_and_check_in(self):
+        """The agreed price is frozen at BOOKING: a catalog change between booking
+        and check-in bills the AGREED price, never the changed one."""
         from apps.finance.models import ChargeType
         from apps.finance.services import ensure_due_room_charges, folio_balance
+        from apps.stays.services import CheckInService
 
         rtype = _priced_type(self.hotel, code="SNP", rate="100.00")
-        stay = _check_in(self.hotel, self.manager, rtype, number="301")
-        # Catalog changes AFTER admission.
-        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
+        room = make_room(self.hotel, rtype, number="301")
+        res, line = make_reservation(self.hotel, rtype, room=room, ci=D1, co=D2)
+        # Price changes AFTER the booking but BEFORE the guest arrives.
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("150.00"))
+        stay = CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="G"), companions=(),
+            user=self.manager,
+        )
         posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
         self.assertEqual(posted, 2)
         folio = stay.folios.get()
         for c in folio.charges.filter(type=ChargeType.ROOM):
-            self.assertEqual(c.total_amount, Decimal("100.00"))  # OLD snapshot
+            self.assertEqual(c.total_amount, Decimal("100.00"))  # AGREED, not 150
         self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
 
-    def test_posted_nights_unchanged_by_rate_change(self):
+    def test_no_live_fallback_after_check_in(self):
+        """A catalog change AFTER check-in never changes the bill — no fallback."""
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        rtype = _priced_type(self.hotel, code="NLF", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="302")
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(posted, 2)
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")  # 2*100
+
+    def test_posted_nights_immutable_across_rate_change(self):
         from apps.finance.models import ChargeType
         from apps.finance.services import ensure_due_room_charges
 
         rtype = _priced_type(self.hotel, code="UNC", rate="100.00")
-        stay = _check_in(self.hotel, self.manager, rtype, number="302")
-        # Post only night D1.
+        stay = _check_in(self.hotel, self.manager, rtype, number="303")
         ensure_due_room_charges(stay, as_of=D1 + timedelta(days=1), user=self.manager)
         folio = stay.folios.get()
         first = folio.charges.get(type=ChargeType.ROOM, room_night=D1)
         self.assertEqual(first.total_amount, Decimal("100.00"))
-        # Rate change after the night is already posted (immutable charge).
         RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
         ensure_due_room_charges(stay, as_of=D2, user=self.manager)
         first.refresh_from_db()
@@ -2278,61 +2350,75 @@ class NightlyRateSnapshotTests(APITestCase):
         nights = folio.charges.filter(type=ChargeType.ROOM)
         self.assertEqual(nights.count(), 2)
         for c in nights:
-            self.assertEqual(c.total_amount, Decimal("100.00"))  # both from snapshot
+            self.assertEqual(c.total_amount, Decimal("100.00"))  # both from period
 
-    def test_late_arrival_bills_from_snapshot(self):
+    def test_late_arrival_bills_from_period(self):
         from apps.finance.services import ensure_due_room_charges, folio_balance
 
         rtype = _priced_type(self.hotel, code="LAT", rate="100.00")
-        stay = _check_in(self.hotel, self.manager, rtype, number="303")
+        stay = _check_in(self.hotel, self.manager, rtype, number="304")
         _set_arrival(stay, D1 + timedelta(days=1))  # only the 2nd night consumed
         RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
         posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
         self.assertEqual(posted, 1)
         folio = stay.folios.get()
-        self.assertEqual(str(folio_balance(folio)["balance"]), "100.00")  # snapshot
+        self.assertEqual(str(folio_balance(folio)["balance"]), "100.00")  # period
 
-    def test_unpriced_room_snapshot_null_posts_nothing(self):
+    def test_unpriced_null_period_blocks_posting(self):
+        """A booking-time UNPRICED line (agreed rate NULL) creates a NULL-rate
+        booking period: NULL is the agreed price MISSING, NOT a free night, so a due
+        night RAISES MissingAgreedNightlyRate and posts nothing (never zero)."""
+        from apps.common.exceptions import MissingAgreedNightlyRate
         from apps.finance.models import ChargeType
         from apps.finance.services import ensure_due_room_charges
 
         rtype = make_type(self.hotel, code="UNP")  # no base_rate
-        stay = _check_in(self.hotel, self.manager, rtype, number="304")
-        self.assertIsNone(stay.nightly_rate)
-        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
+        stay = _check_in(self.hotel, self.manager, rtype, number="305")
+        period = stay.rate_periods.get()
+        self.assertIsNone(period.nightly_rate)  # explicitly unpriced
+        self.assertEqual(period.source, "booking")
+        with self.assertRaises(MissingAgreedNightlyRate) as ctx:
+            ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(ctx.exception.default_code, "missing_agreed_nightly_rate")
         self.assertEqual(
             stay.folios.get().charges.filter(type=ChargeType.ROOM).count(), 0
         )
 
-    def test_legacy_stay_without_snapshot_uses_live_rate(self):
-        """Backward compatibility — a stay created BEFORE the snapshot field
-        (``nightly_rate`` NULL) bills from the LIVE room-type ``base_rate``."""
-        from apps.finance.services import ensure_due_room_charges, folio_balance
+    def test_missing_rate_raises_and_posts_nothing(self):
+        """A DUE night with NO covering period is a data gap: it raises
+        MissingAgreedNightlyRate (machine code, 4xx not 500) and posts nothing —
+        so checkout / daily close surface it rather than settling short."""
+        from apps.common.exceptions import MissingAgreedNightlyRate
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges, ensure_stay_folio
 
-        rtype = _priced_type(self.hotel, code="LEG", rate="120.00")
-        room = make_room(self.hotel, rtype, number="811")
+        rtype = _priced_type(self.hotel, code="MIS", rate="100.00")
+        room = make_room(self.hotel, rtype, number="306")
         res, line = make_reservation(self.hotel, rtype, room=room, ci=D1, co=D2)
+        # A stay with a DUE night but NO rate period (created directly, no check-in).
         stay = Stay.objects.create(
             hotel=self.hotel, reservation=res, reservation_line=line, room=room,
-            primary_guest=make_guest(self.hotel, name="Legacy"),
+            primary_guest=make_guest(self.hotel, name="Gap"),
             status=StayStatus.IN_HOUSE,
             planned_check_in_date=D1, planned_check_out_date=D2,
-            nightly_rate=None,  # legacy: no snapshot captured
             actual_check_in_at=timezone.now(),
         )
-        ensure_due_room_charges(stay, as_of=D2, user=self.manager)
-        folio = stay.folios.get()
-        self.assertEqual(str(folio_balance(folio)["balance"]), "240.00")  # 2 * live 120
+        folio = ensure_stay_folio(stay, user=self.manager)
+        with self.assertRaises(MissingAgreedNightlyRate) as ctx:
+            ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(ctx.exception.default_code, "missing_agreed_nightly_rate")
+        self.assertEqual(ctx.exception.status_code, 409)  # a 4xx, never a 500
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
 
-    def test_snapshot_is_tenant_isolated(self):
+    def test_billing_is_tenant_isolated(self):
         from apps.finance.services import ensure_due_room_charges, folio_balance
 
         hotel_b = make_hotel(slug="snap-b")
         mgr_b = add_member(hotel_b, "snapb@x.com", kind=MembershipType.MANAGER)
         rtype_a = _priced_type(self.hotel, code="TA", rate="100.00")
         rtype_b = _priced_type(hotel_b, code="TB", rate="200.00")
-        stay_a = _check_in(self.hotel, self.manager, rtype_a, number="305")
-        stay_b = _check_in(hotel_b, mgr_b, rtype_b, number="305")
+        stay_a = _check_in(self.hotel, self.manager, rtype_a, number="307")
+        stay_b = _check_in(hotel_b, mgr_b, rtype_b, number="307")
         # Both catalogs change after admission — neither stay is affected.
         RoomType.objects.filter(pk=rtype_a.pk).update(base_rate=Decimal("999.00"))
         RoomType.objects.filter(pk=rtype_b.pk).update(base_rate=Decimal("999.00"))
@@ -2347,6 +2433,228 @@ class NightlyRateSnapshotTests(APITestCase):
         # No cross-tenant charge leakage.
         self.assertFalse(folio_a.charges.exclude(hotel=self.hotel).exists())
         self.assertFalse(folio_b.charges.exclude(hotel=hotel_b).exists())
+
+    def test_rate_currency_mismatch_refused(self):
+        """FIX 2 — a rate period whose currency differs from the folio currency is
+        refused (no silent wrong-currency posting); the room charge posts nothing."""
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges, ensure_stay_folio
+        from apps.stays.models import StayRatePeriod
+
+        rtype = _priced_type(self.hotel, code="CUR", rate="100.00")
+        room = make_room(self.hotel, rtype, number="340")
+        res, line = make_reservation(self.hotel, rtype, room=room, ci=D1, co=D2)
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="Cur"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1, planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        folio = ensure_stay_folio(stay, user=self.manager)  # folio currency USD
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=stay, start_date=D1, end_date=D2,
+            nightly_rate=Decimal("100.00"), currency="EUR", source="booking",
+        )
+        with self.assertRaises(InvalidFinanceOperation) as ctx:
+            ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(ctx.exception.detail["reason"], "rate_currency_mismatch")
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+
+
+class StayExtensionPricingTests(APITestCase):
+    """STAYS rate-integrity round — an extension adds a NEW rate period. Default
+    inherits the latest period rate (no special permission); an explicit rate that
+    differs is an audited OVERRIDE gated on ``stays.rate_override`` + a reason."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ext@x.com", kind=MembershipType.MANAGER)
+
+    def test_default_extension_inherits_latest_rate(self):
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX1", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="320")  # D1..D2
+        ExtendStayService.execute(
+            stay, new_check_out_date=D2 + timedelta(days=1), user=self.manager
+        )
+        stay.refresh_from_db()
+        periods = list(stay.rate_periods.order_by("start_date"))
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(periods[1].source, "extension")
+        self.assertEqual(periods[1].nightly_rate, Decimal("100.00"))
+        posted = ensure_due_room_charges(
+            stay, as_of=D2 + timedelta(days=1), user=self.manager
+        )
+        self.assertEqual(posted, 3)
+        self.assertEqual(
+            str(folio_balance(stay.folios.get())["balance"]), "300.00"  # 3*100
+        )
+
+    def test_override_prices_added_nights_and_audits(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX2", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="321")  # D1..D2
+        ExtendStayService.execute(
+            stay,
+            new_check_out_date=D2 + timedelta(days=1),
+            nightly_rate=Decimal("120.00"),
+            reason="peak season",
+            user=self.manager,
+        )
+        stay.refresh_from_db()
+        added = stay.rate_periods.get(start_date=D2)
+        self.assertEqual(added.source, "override")
+        self.assertEqual(added.nightly_rate, Decimal("120.00"))
+        self.assertEqual(added.approved_by, self.manager)
+        self.assertIsNotNone(added.approved_at)
+        self.assertEqual(added.override_reason, "peak season")
+        # Original nights bill 100, the added night bills 120.
+        posted = ensure_due_room_charges(
+            stay, as_of=D2 + timedelta(days=1), user=self.manager
+        )
+        self.assertEqual(posted, 3)
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "320.00")  # 100+100+120
+        # A re-run neither changes nor duplicates any charge.
+        again = ensure_due_room_charges(
+            stay, as_of=D2 + timedelta(days=1), user=self.manager
+        )
+        self.assertEqual(again, 0)
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            3,
+        )
+
+    def test_override_requires_permission(self):
+        from apps.common.exceptions import PermissionDenied
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX3", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="322")
+        # A user who may extend but does NOT hold stays.rate_override.
+        clerk = add_member(self.hotel, "clerk@x.com", perms=["stays.extend"])
+        with self.assertRaises(PermissionDenied):
+            ExtendStayService.execute(
+                stay,
+                new_check_out_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"),
+                reason="peak season",
+                user=clerk,
+            )
+
+    def test_finance_charge_create_alone_cannot_override(self):
+        """FIX B — the OVERRIDE gate is ``stays.rate_override`` (NOT
+        ``finance.charge_create``): holding finance.charge_create WITHOUT
+        rate_override is rejected for an extension override."""
+        from apps.common.exceptions import PermissionDenied
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX6", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="325")
+        actor = add_member(
+            self.hotel, "fc-only@x.com",
+            perms=["stays.extend", "finance.charge_create"],  # NOT rate_override
+        )
+        with self.assertRaises(PermissionDenied):
+            ExtendStayService.execute(
+                stay,
+                new_check_out_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"),
+                reason="peak season",
+                user=actor,
+            )
+
+    def test_override_requires_reason(self):
+        from apps.common.exceptions import InvalidStayChange
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX4", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="323")
+        with self.assertRaises(InvalidStayChange):
+            ExtendStayService.execute(
+                stay,
+                new_check_out_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"),
+                reason="",
+                user=self.manager,
+            )
+
+    def test_default_extension_needs_no_finance_permission(self):
+        from apps.stays.services import ExtendStayService
+
+        rtype = _priced_type(self.hotel, code="EX5", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="324")
+        clerk = add_member(self.hotel, "clerk2@x.com", perms=["stays.extend"])
+        # No rate provided => default extension, no special permission required.
+        ExtendStayService.execute(
+            stay, new_check_out_date=D2 + timedelta(days=1), user=clerk
+        )
+        stay.refresh_from_db()
+        added = stay.rate_periods.get(start_date=D2)
+        self.assertEqual(added.source, "extension")
+        self.assertEqual(added.nightly_rate, Decimal("100.00"))
+
+    def test_shorten_then_extend_no_overlap_and_correct_billing(self):
+        """FIX 1 — shortening trims the rate periods, so a later extend cannot
+        overlap a still-long period and silently bill the OLD rate for re-added
+        nights (which would mask the audited override)."""
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+        from apps.stays.services import ExtendStayService, ShortenStayService
+
+        rtype = _priced_type(self.hotel, code="SEX", rate="100.00")
+        stay = _check_in(
+            self.hotel, self.manager, rtype, number="330",
+            ci=D1, co=D1 + timedelta(days=4),  # original [D1, D5) @ 100
+        )
+        _set_arrival(stay, D1)
+        # Shorten [D1,D5) -> [D1,D3): the original period is trimmed to end at D3.
+        ShortenStayService.execute(
+            stay, new_check_out_date=D1 + timedelta(days=2), user=self.manager
+        )
+        # Extend [D1,D3) -> [D1,D6) at an OVERRIDE 150 for the re-added nights.
+        ExtendStayService.execute(
+            stay,
+            new_check_out_date=D1 + timedelta(days=5),  # D6
+            nightly_rate=Decimal("150.00"),
+            reason="rebooked longer",
+            user=self.manager,
+        )
+        stay.refresh_from_db()
+        periods = list(stay.rate_periods.order_by("start_date"))
+        # Exactly two DISJOINT periods remain (no overlap).
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(
+            (periods[0].start_date, periods[0].end_date, periods[0].nightly_rate),
+            (D1, D1 + timedelta(days=2), Decimal("100.00")),
+        )
+        self.assertEqual(
+            (periods[1].start_date, periods[1].end_date, periods[1].nightly_rate),
+            (D1 + timedelta(days=2), D1 + timedelta(days=5), Decimal("150.00")),
+        )
+        self.assertLessEqual(periods[0].end_date, periods[1].start_date)  # disjoint
+        # Billing: D1,D1+1 @100 ; D1+2,D1+3,D1+4 @150 — the override is NOT masked.
+        posted = ensure_due_room_charges(
+            stay, as_of=D1 + timedelta(days=5), user=self.manager
+        )
+        self.assertEqual(posted, 5)
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "650.00")  # 200 + 450
+        # Idempotent re-run: no duplicate, no change.
+        self.assertEqual(
+            ensure_due_room_charges(
+                stay, as_of=D1 + timedelta(days=5), user=self.manager
+            ),
+            0,
+        )
 
 
 class RoomAccountChargeGuardTests(APITestCase):
@@ -2673,14 +2981,20 @@ class FinancialDetailRBACTests(APITestCase):
 
     # Monetary/sensitive keys that must be ABSENT for a non-finance viewer in the
     # checkout-dialog folio-summary payload (endpoint + ensure-room-charges).
+    # STAYS Item 10 — the folio list itself (``open_folios``) and the folio
+    # ``folio_number`` are internal financial identifiers, so they are gone too.
     ENDPOINT_MONEY_KEYS = (
         "balance", "total_charges", "total_payments",
         "insurances", "insurance_pending", "payment_status",
+        "open_folios", "folio_number",
+        # STAYS owner item 6 — the current nightly rate is finance-only too.
+        "current_nightly_rate", "current_rate_currency",
     )
     # …and in the §12 resident-card block.
     CARD_MONEY_KEYS = (
         "balance", "total_charges", "total_payments", "currency",
         "payment_status", "folio_number", "awaiting_final_charges",
+        "current_nightly_rate", "current_rate_currency",
     )
 
     def setUp(self):
@@ -2735,15 +3049,13 @@ class FinancialDetailRBACTests(APITestCase):
         self.assertTrue(r.data["requires_financial_action"])
         self.assertFalse(r.data["can_check_out"])
         self._assert_no_money(r.data, self.ENDPOINT_MONEY_KEYS)
-        # The non-monetary skeleton carries folio identifiers ONLY — no money.
-        self.assertEqual(len(r.data["open_folios"]), 1)
-        skeleton = r.data["open_folios"][0]
-        self.assertEqual(
-            set(skeleton), {"id", "folio_number", "awaiting_final_charges"}
-        )
-        self._assert_no_money(
-            skeleton, ("balance", "currency", "status", "awaiting_final_charges_note")
-        )
+        # STAYS Item 10 — a non-finance viewer gets NO folio list at all: the
+        # ``open_folios`` skeleton (which leaked folio ``id`` + ``folio_number``)
+        # is removed. Only the abstract states + the awaiting bool remain.
+        self.assertNotIn("open_folios", r.data)
+        self.assertNotIn("folio_number", r.data)
+        self.assertTrue(r.data["has_folio"])  # existence flag is still honest
+        self.assertIn("awaiting_final_charges", r.data)
 
     def test_view_only_current_residents_card_is_abstract(self):
         summary = self._current_row(self.viewer)["folio_summary"]
@@ -2813,6 +3125,45 @@ class FinancialDetailRBACTests(APITestCase):
         summary = self._current_row(self.manager)["folio_summary"]
         self.assertTrue(summary["financial_details_visible"])
         self.assertEqual(summary["balance"], "200.00")
+
+    # ---- owner item 6: current nightly rate (finance-view only) -----------
+    def test_finance_viewer_sees_current_nightly_rate(self):
+        from apps.stays.services import latest_rate_period
+
+        # The setUp stay's only (booking) period is priced at 100 in USD.
+        self.assertEqual(latest_rate_period(self.stay).nightly_rate, Decimal("100.00"))
+        r = self._folio_summary(self.finance_viewer)
+        self.assertEqual(r.data["current_nightly_rate"], "100.00")
+        self.assertEqual(r.data["current_rate_currency"], "USD")
+        card = self._current_row(self.finance_viewer)["folio_summary"]
+        self.assertEqual(card["current_nightly_rate"], "100.00")
+        self.assertEqual(card["current_rate_currency"], "USD")
+
+    def test_current_rate_reflects_latest_extension_period(self):
+        from apps.stays.services import ExtendStayService
+
+        # Extend at a NEW override rate; the current rate is the LATEST period's —
+        # exactly what a further extension would default from.
+        ExtendStayService.execute(
+            self.stay,
+            new_check_out_date=self.stay.planned_check_out_date + timedelta(days=1),
+            nightly_rate=Decimal("175.00"),
+            reason="peak season",
+            user=self.manager,
+        )
+        r = self._folio_summary(self.finance_viewer)
+        self.assertEqual(r.data["current_nightly_rate"], "175.00")
+
+    def test_non_finance_viewer_never_sees_current_rate(self):
+        r = self._folio_summary(self.viewer)
+        self.assertFalse(r.data["financial_details_visible"])
+        self._assert_no_money(
+            r.data, ("current_nightly_rate", "current_rate_currency")
+        )
+        card = self._current_row(self.viewer)["folio_summary"]
+        self._assert_no_money(
+            card, ("current_nightly_rate", "current_rate_currency")
+        )
 
     # ---- clearance flips on settlement, amount stays hidden ---------------
     def test_clearance_flips_after_settlement_for_non_finance_viewer(self):
@@ -2992,10 +3343,12 @@ class ReservationInsuranceClearanceTests(APITestCase):
         self.assertEqual(out.status, StayStatus.CHECKED_OUT)
 
 
-class NightlyRateBackfillTests(APITestCase):
-    """FIX-6 — the 0003 data migration backfills ``Stay.nightly_rate`` for
-    pre-existing IN_HOUSE stays from their reservation line's room type base rate
-    (priced only), idempotently, without disturbing already-snapshotted stays."""
+class StayRatePeriodBackfillTests(APITestCase):
+    """STAYS rate-integrity round — the 0005 data migration materialises a
+    ``StayRatePeriod`` for pre-existing IN_HOUSE stays ONLY from a RELIABLE agreed
+    source (``reservation_line.agreed_nightly_rate``). It NEVER fabricates a rate:
+    a stay with no reliable source gets NO period (an honest 'needs attention'
+    gap). Idempotent (get_or_create on (stay, start_date))."""
 
     def setUp(self):
         self.hotel = make_hotel()
@@ -3008,38 +3361,498 @@ class NightlyRateBackfillTests(APITestCase):
         from django.apps import apps as global_apps
         from django.db import connection
 
-        mod = import_module("apps.stays.migrations.0003_backfill_nightly_rate")
-        # The migration only needs ``schema_editor.connection.alias`` — pass a thin
+        mod = import_module("apps.stays.migrations.0005_drop_stay_nightly_rate")
+        # The data step only needs ``schema_editor.connection.alias`` — pass a thin
         # shim so no DDL/transaction is opened inside the test's own transaction.
-        mod.backfill_nightly_rate(
+        mod.create_periods_from_agreed_rate(
             global_apps, SimpleNamespace(connection=connection)
         )
 
-    def test_backfill_sets_rate_for_legacy_in_house_stay(self):
+    def test_backfill_creates_period_from_reliable_agreed_rate(self):
         rtype = _priced_type(self.hotel, code="BF1", rate="130.00")
         stay = _check_in(self.hotel, self.manager, rtype, number="810")
-        # Simulate a stay admitted BEFORE the snapshot field existed: clear it.
-        Stay.objects.filter(pk=stay.pk).update(nightly_rate=None)
+        # Simulate a stay admitted BEFORE the rate-period table existed.
+        stay.rate_periods.all().delete()
         self._run_backfill()
-        stay.refresh_from_db()
-        self.assertEqual(stay.nightly_rate, Decimal("130.00"))
+        period = stay.rate_periods.get()
+        self.assertEqual(period.nightly_rate, Decimal("130.00"))
+        self.assertEqual(period.source, "booking")
+        self.assertEqual(period.start_date, stay.planned_check_in_date)
 
-    def test_backfill_leaves_existing_snapshot_untouched(self):
-        rtype = _priced_type(self.hotel, code="BF2", rate="130.00")
+    def test_backfill_creates_no_period_without_reliable_source(self):
+        rtype = make_type(self.hotel, code="BF2")  # unpriced -> agreed rate NULL
         stay = _check_in(self.hotel, self.manager, rtype, number="811")
-        # Snapshot already captured at check-in (130). Move the LIVE rate…
-        rtype.base_rate = Decimal("999.00")
-        rtype.save(update_fields=["base_rate"])
-        # …the backfill must NOT overwrite it (only NULL snapshots are touched).
+        stay.rate_periods.all().delete()
         self._run_backfill()
-        stay.refresh_from_db()
-        self.assertEqual(stay.nightly_rate, Decimal("130.00"))
+        # No fabricated rate: the honest gap is left to surface as needs-attention.
+        self.assertEqual(stay.rate_periods.count(), 0)
 
-    def test_backfill_skips_unpriced_stay(self):
-        rtype = make_type(self.hotel, code="BF3")  # no base_rate
+    def test_backfill_is_idempotent(self):
+        rtype = _priced_type(self.hotel, code="BF3", rate="130.00")
         stay = _check_in(self.hotel, self.manager, rtype, number="812")
-        # Unpriced at admission -> snapshot NULL; the backfill leaves it NULL.
-        self.assertIsNone(stay.nightly_rate)
+        stay.rate_periods.all().delete()
         self._run_backfill()
+        self._run_backfill()  # a second run must not duplicate
+        self.assertEqual(stay.rate_periods.count(), 1)
+
+
+class ImmediateCheckInFolioRBACTests(APITestCase):
+    """STAYS Item 11 — the immediate-check-in RESULT exposes folio identifiers /
+    currency / balance ONLY to a viewer holding ``finance.view``. A front-desk user
+    with reservations.create + stays.check_in but WITHOUT finance.view gets
+    ``folio: null`` (no id/number/currency/balance leak), never a placeholder."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.rtype = _priced_type(self.hotel, code="IMR", rate="100.00")
+        self.room = make_room(self.hotel, self.rtype, number="330")
+
+    def _payload(self):
+        return {
+            "reservation": {
+                "check_in_date": D1.isoformat(),
+                "check_out_date": D2.isoformat(),
+                "primary_guest_name": "Imm Guest",
+                "adults": 1,
+                "children": 0,
+                "lines": [
+                    {"room_type": self.rtype.id, "quantity": 1, "room": self.room.id}
+                ],
+            },
+            "room": self.room.id,
+        }
+
+    def _post(self, user):
+        self.client.force_authenticate(user)
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            self._payload(), format="json", **HDR(self.hotel),
+        )
+
+    def test_non_finance_user_gets_no_folio_detail(self):
+        clerk = add_member(
+            self.hotel, "imr-clerk@x.com",
+            perms=["reservations.create", "stays.check_in"],
+        )
+        r = self._post(clerk)
+        self.assertEqual(r.status_code, 201, r.data)
+        # The stay + reservation are returned; the folio detail is withheld.
+        self.assertIsNotNone(r.data["stay"])
+        self.assertIsNone(r.data["folio"])  # no id/number/currency/balance leak
+
+    def test_finance_user_gets_folio_detail(self):
+        fin = add_member(
+            self.hotel, "imr-fin@x.com",
+            perms=["reservations.create", "stays.check_in", "finance.view"],
+        )
+        r = self._post(fin)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIsNotNone(r.data["folio"])
+        self.assertIn("folio_number", r.data["folio"])
+        self.assertIn("balance", r.data["folio"])
+
+
+class GapStayBlockFlowTests(APITestCase):
+    """FIX 4 — the missing-rate block is REAL end-to-end: a stay with a DUE night
+    and NO covering rate period blocks check-out (folio stays OPEN) and rolls back
+    the daily-close room posting entirely (nothing settles short)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "gap@x.com", kind=MembershipType.MANAGER)
+
+    def _gap_stay(self, number, *, guest="Gap"):
+        """An in-house stay whose window (D1-2 .. D1) elapsed by today (D1), with a
+        DUE night but NO rate period — a genuine data gap."""
+        rtype = _priced_type(self.hotel, code=f"G{number}", rate="100.00")
+        room = make_room(self.hotel, rtype, number=number)
+        res, line = make_reservation(
+            self.hotel, rtype, room=room, ci=D1 - timedelta(days=2), co=D1
+        )
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name=guest),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1 - timedelta(days=2), planned_check_out_date=D1,
+            actual_check_in_at=timezone.now(),
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        return stay
+
+    def test_checkout_blocked_and_folio_stays_open(self):
+        from apps.common.exceptions import MissingAgreedNightlyRate
+        from apps.finance.models import FolioStatus
+        from apps.finance.services import ensure_stay_folio
+        from apps.stays.services import CheckOutService
+
+        stay = self._gap_stay("360")
+        folio = ensure_stay_folio(stay, user=self.manager)  # OPEN, no rate period
+        with self.assertRaises(MissingAgreedNightlyRate):
+            CheckOutService.execute(stay, user=self.manager)
+        # The block is real: nothing settled — folio OPEN, stay still IN_HOUSE.
+        folio.refresh_from_db()
         stay.refresh_from_db()
-        self.assertIsNone(stay.nightly_rate)
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+        self.assertEqual(stay.status, StayStatus.IN_HOUSE)
+
+    def test_daily_close_room_posting_rolls_back_entirely(self):
+        from apps.common.exceptions import MissingAgreedNightlyRate
+        from apps.finance.models import ChargeType, FolioCharge, PostingStatus
+        from apps.finance.services import (
+            ensure_stay_folio, post_due_room_charges_for_hotel,
+        )
+
+        # A HEALTHY overstay (has a rate period, due nights) AND a GAP stay in the
+        # SAME hotel. The healthy one would post if the pass were not atomic.
+        rtype = _priced_type(self.hotel, code="OKS", rate="100.00")
+        healthy = _check_in(
+            self.hotel, self.manager, rtype, number="361",
+            ci=D1 - timedelta(days=2), co=D1,
+        )
+        _set_arrival(healthy, D1 - timedelta(days=2))
+        ensure_stay_folio(self._gap_stay("362"), user=self.manager)
+        with self.assertRaises(MissingAgreedNightlyRate):
+            post_due_room_charges_for_hotel(self.hotel)
+        # Atomic: the healthy stay's nights were rolled back too — nothing posted,
+        # so the daily close cannot settle short (it would fail and not close).
+        self.assertEqual(
+            FolioCharge.objects.filter(
+                hotel=self.hotel, type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            0,
+        )
+
+
+class NullRatePeriodBlockTests(APITestCase):
+    """STAYS item 2 — a NULL-rate (unpriced) COVERING period is the agreed price
+    MISSING, not a free night: it blocks posting/checkout/daily close, surfaces as
+    needs-rate-remediation, and never creates a zero/short charge."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "np@x.com", kind=MembershipType.MANAGER)
+
+    def _unpriced_overstay(self, number):
+        # In-house stay whose window elapsed by today, with a NULL-rate booking
+        # period (unpriced room type) — a due night with no positive rate. Arrival
+        # is set AFTER check-in so the check-in-day post sees no due night.
+        rtype = make_type(self.hotel, code=f"N{number}")  # no base_rate -> NULL
+        stay = _check_in(
+            self.hotel, self.manager, rtype, number=number,
+            ci=D1 - timedelta(days=2), co=D1,
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        return stay
+
+    def test_null_period_blocks_checkout_folio_open(self):
+        from apps.common.exceptions import MissingAgreedNightlyRate
+        from apps.finance.models import ChargeType, FolioStatus
+        from apps.stays.services import CheckOutService
+
+        stay = self._unpriced_overstay("370")
+        folio = stay.folios.get()
+        with self.assertRaises(MissingAgreedNightlyRate):
+            CheckOutService.execute(stay, user=self.manager)
+        folio.refresh_from_db()
+        stay.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.OPEN)
+        self.assertEqual(stay.status, StayStatus.IN_HOUSE)
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+
+    def test_null_period_blocks_daily_close(self):
+        from apps.common.exceptions import MissingAgreedNightlyRate
+        from apps.finance.models import ChargeType, FolioCharge, PostingStatus
+        from apps.finance.services import post_due_room_charges_for_hotel
+
+        self._unpriced_overstay("371")
+        with self.assertRaises(MissingAgreedNightlyRate):
+            post_due_room_charges_for_hotel(self.hotel)
+        self.assertEqual(
+            FolioCharge.objects.filter(
+                hotel=self.hotel, type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            0,
+        )
+
+    def test_null_period_surfaces_as_needs_rate_remediation(self):
+        from apps.stays.rate_periods import stay_requires_rate_remediation
+
+        stay = self._unpriced_overstay("372")
+        self.assertTrue(stay_requires_rate_remediation(stay))
+        # Operational flag exposed on the serializer (NOT finance-gated).
+        self.client.force_authenticate(self.manager)
+        r = self.client.get(
+            reverse("stays:stay-detail", args=[stay.id]), **HDR(self.hotel)
+        )
+        self.assertTrue(r.data["requires_rate_remediation"])
+
+
+class CentralRatePeriodServiceTests(APITestCase):
+    """STAYS item 8/7 — the central rate-period service validates rate + currency
+    and rejects overlaps (all StayRatePeriod writes route through it)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "crp@x.com", kind=MembershipType.MANAGER)
+        self.rtype = _priced_type(self.hotel, code="CRP", rate="100.00")
+        # Booking period [D1, D2) @ 100 USD.
+        self.stay = _check_in(self.hotel, self.manager, self.rtype, number="380")
+
+    def test_overlapping_period_different_start_rejected(self):
+        from apps.common.exceptions import RatePeriodOverlap
+        from apps.stays.models import StayRatePeriodSource
+        from apps.stays.rate_periods import create_rate_period
+
+        with self.assertRaises(RatePeriodOverlap):
+            create_rate_period(
+                self.stay,
+                start_date=D1 + timedelta(days=1),  # inside [D1, D2)
+                end_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"),
+                currency="USD",
+                source=StayRatePeriodSource.OVERRIDE,
+            )
+
+    def test_empty_currency_priced_period_rejected(self):
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.stays.models import StayRatePeriodSource
+        from apps.stays.rate_periods import create_rate_period
+
+        with self.assertRaises(InvalidFinanceOperation):
+            create_rate_period(
+                self.stay, start_date=D2, end_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"), currency="",  # priced but empty
+                source=StayRatePeriodSource.EXTENSION,
+            )
+
+    def test_mismatched_currency_priced_period_rejected(self):
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.stays.models import StayRatePeriodSource
+        from apps.stays.rate_periods import create_rate_period
+
+        with self.assertRaises(InvalidFinanceOperation):
+            create_rate_period(
+                self.stay, start_date=D2, end_date=D2 + timedelta(days=1),
+                nightly_rate=Decimal("120.00"), currency="EUR",  # != folio USD
+                source=StayRatePeriodSource.EXTENSION,
+            )
+
+    def test_priced_booking_empty_currency_rejected(self):
+        # FIX E — a PRICED booking snapshot with EMPTY currency is rejected at
+        # check-in (create_booking_period passes the RAW currency; no silent
+        # folio-currency fallback).
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.reservations.models import ReservationRoomLine
+        from apps.stays.services import CheckInService
+
+        rtype = _priced_type(self.hotel, code="FE", rate="100.00")
+        room = make_room(self.hotel, rtype, number="900")
+        res, line = make_reservation(self.hotel, rtype, room=room)
+        # Simulate a legacy PRICED line whose captured currency is EMPTY.
+        ReservationRoomLine.objects.filter(pk=line.pk).update(agreed_rate_currency="")
+        line.refresh_from_db()
+        with self.assertRaises(InvalidFinanceOperation):
+            CheckInService.execute(
+                self.hotel, reservation=res, reservation_line=line, room=room,
+                primary_guest=make_guest(self.hotel, name="FE"), companions=(),
+                user=self.manager,
+            )
+
+    def test_conflicting_data_same_start_rejected(self):
+        # FIX C — a second write at the SAME start_date with DIFFERENT data is a
+        # conflict (not a silent no-op). The booking period is [D1, D2) @ 100.
+        from apps.common.exceptions import RatePeriodConflict
+        from apps.stays.models import StayRatePeriodSource
+        from apps.stays.rate_periods import create_rate_period
+
+        with self.assertRaises(RatePeriodConflict):
+            create_rate_period(
+                self.stay, start_date=D1, end_date=D2,
+                nightly_rate=Decimal("175.00"), currency="USD",  # differs from 100
+                source=StayRatePeriodSource.BOOKING,
+            )
+
+    def test_identical_re_request_is_idempotent(self):
+        # FIX C — an IDENTICAL re-request returns the existing period, created=False.
+        from apps.stays.models import StayRatePeriodSource
+        from apps.stays.rate_periods import create_rate_period
+
+        existing = self.stay.rate_periods.get()
+        period, created = create_rate_period(
+            self.stay, start_date=D1, end_date=D2,
+            nightly_rate=Decimal("100.00"), currency="USD",
+            source=StayRatePeriodSource.BOOKING,
+        )
+        self.assertEqual(period.id, existing.id)
+        self.assertFalse(created)
+
+
+class StayRateRemediationTests(APITestCase):
+    """STAYS item 3 — the audited legacy rate-remediation service + endpoint."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "rr@x.com", kind=MembershipType.MANAGER)
+
+    def _gap_stay(self, number):
+        from apps.finance.services import ensure_stay_folio
+
+        rtype = _priced_type(self.hotel, code=f"R{number}", rate="100.00")
+        room = make_room(self.hotel, rtype, number=number)
+        res, line = make_reservation(
+            self.hotel, rtype, room=room, ci=D1 - timedelta(days=2), co=D1
+        )
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="Rem"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1 - timedelta(days=2), planned_check_out_date=D1,
+            actual_check_in_at=timezone.now(),
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        ensure_stay_folio(stay, user=self.manager)
+        return stay
+
+    def _body(self, **over):
+        body = {
+            "start_date": str(D1 - timedelta(days=2)),
+            "end_date": str(D1),
+            "nightly_rate": "100.00",
+            "currency": "USD",
+            "reason": "legacy import gap",
+        }
+        body.update(over)
+        return body
+
+    def _remediate(self, stay, user, **over):
+        self.client.force_authenticate(user)
+        return self.client.post(
+            reverse("stays:stay-remediate-rate", args=[stay.id]),
+            self._body(**over), format="json", **HDR(self.hotel),
+        )
+
+    def test_requires_permission(self):
+        stay = self._gap_stay("390")
+        clerk = add_member(self.hotel, "rr-clerk@x.com", perms=["stays.view"])
+        self.assertEqual(self._remediate(stay, clerk).status_code, 403)
+
+    def test_requires_reason(self):
+        stay = self._gap_stay("391")
+        actor = add_member(self.hotel, "rr-act@x.com", perms=["stays.rate_override"])
+        self.assertEqual(self._remediate(stay, actor, reason="").status_code, 400)
+
+    def test_creates_period_and_enables_billing(self):
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        stay = self._gap_stay("392")
+        r = self._remediate(stay, self.manager)
+        self.assertEqual(r.status_code, 200, r.data)
+        period = stay.rate_periods.get()
+        self.assertEqual(period.source, "legacy_remediation")
+        self.assertEqual(period.nightly_rate, Decimal("100.00"))
+        self.assertEqual(period.approved_by, self.manager)
+        self.assertTrue(period.override_reason)
+        posted = ensure_due_room_charges(stay, as_of=D1, user=self.manager)
+        self.assertEqual(posted, 2)  # both due nights now billable
+        self.assertEqual(str(folio_balance(stay.folios.get())["balance"]), "200.00")
+
+    def test_rejects_already_posted_night(self):
+        from apps.common.exceptions import RatePeriodCoversPostedNight
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ROOM_NIGHT_SOURCE, add_charge
+        from apps.stays.rate_periods import remediate_stay_rate
+
+        stay = self._gap_stay("393")
+        folio = stay.folios.get()
+        add_charge(
+            folio, charge_type=ChargeType.ROOM, description="n", quantity=1,
+            unit_amount="100.00", source=ROOM_NIGHT_SOURCE,
+            room_night=D1 - timedelta(days=2), user=self.manager,
+        )
+        with self.assertRaises(RatePeriodCoversPostedNight):
+            remediate_stay_rate(
+                stay, start_date=D1 - timedelta(days=2), end_date=D1,
+                nightly_rate=Decimal("100.00"), currency="USD", reason="x",
+                user=self.manager,
+            )
+
+    def test_is_idempotent_and_audits_once(self):
+        # FIX D — two IDENTICAL remediations create ONE period and emit exactly ONE
+        # ``stay.rate_remediated`` audit event (no duplicate on the idempotent retry).
+        from apps.notifications.models import ActivityEvent
+
+        stay = self._gap_stay("394")
+        self.assertEqual(self._remediate(stay, self.manager).status_code, 200)
+        self.assertEqual(self._remediate(stay, self.manager).status_code, 200)
+        self.assertEqual(stay.rate_periods.count(), 1)
+        self.assertEqual(
+            ActivityEvent.objects.filter(
+                hotel=self.hotel, event_type="stay.rate_remediated"
+            ).count(),
+            1,
+        )
+
+    def test_conflicting_re_remediation_rejected(self):
+        # FIX C — re-remediating the SAME window with a DIFFERENT rate is a 409
+        # conflict, never a silent no-op that drops the new value.
+        stay = self._gap_stay("396")
+        self.assertEqual(self._remediate(stay, self.manager).status_code, 200)
+        r = self._remediate(stay, self.manager, nightly_rate="180.00")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "rate_period_conflict")
+        # The original period is untouched.
+        self.assertEqual(stay.rate_periods.get().nightly_rate, Decimal("100.00"))
+
+    def test_finance_charge_create_alone_cannot_remediate(self):
+        # FIX B — legacy remediation is gated on stays.rate_override, NOT
+        # finance.charge_create.
+        stay = self._gap_stay("397")
+        actor = add_member(
+            self.hotel, "rr-fc@x.com", perms=["stays.view", "finance.charge_create"]
+        )
+        self.assertEqual(self._remediate(stay, actor).status_code, 403)
+
+    def test_tenant_scoped(self):
+        stay = self._gap_stay("395")
+        other = make_hotel(slug="rr-other")
+        outsider = add_member(other, "rr-out@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(outsider)
+        r = self.client.post(
+            reverse("stays:stay-remediate-rate", args=[stay.id]),
+            self._body(), format="json", **HDR(other),
+        )
+        self.assertIn(r.status_code, (403, 404))
+
+
+class CheckMissingStayRatesCommandTests(APITestCase):
+    """STAYS item 4 — the read-only pre-release audit command."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "cmd@x.com", kind=MembershipType.MANAGER)
+
+    def test_exit_nonzero_when_a_stay_has_a_gap(self):
+        from django.core.management import call_command
+
+        # A NULL-rate overstay = a due night with no positive rate.
+        rtype = make_type(self.hotel, code="CMDN")
+        stay = _check_in(
+            self.hotel, self.manager, rtype, number="360",
+            ci=D1 - timedelta(days=2), co=D1,
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        with self.assertRaises(SystemExit) as ctx:
+            call_command("check_missing_stay_rates")
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_exit_zero_when_all_covered(self):
+        from django.core.management import call_command
+
+        rtype = _priced_type(self.hotel, code="CMDP", rate="100.00")
+        stay = _check_in(
+            self.hotel, self.manager, rtype, number="361",
+            ci=D1 - timedelta(days=2), co=D1,
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        # A priced booking period covers every due night -> clean exit (no raise).
+        call_command("check_missing_stay_rates")

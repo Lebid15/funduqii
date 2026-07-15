@@ -54,6 +54,11 @@ PERMISSIONS_BY_SECTION: dict[str, list[str]] = {
         # and room state with a mandatory reason + audit. Deliberately separate
         # from check_out.
         "reverse_check_in",
+        # STAYS rate-integrity remediation — set/override an agreed nightly rate on
+        # a stay (an extension OVERRIDE at a different rate, or legacy rate
+        # remediation). Deliberately separate from extend/finance: a precise
+        # pricing authorisation, always with a reason + audit.
+        "rate_override",
     ],
     # Internal finance (Phase 8). Folios/charges/payments/invoices live under
     # one clear `finance` section; expenses have their own.
