@@ -1466,6 +1466,8 @@
       "checkCharges": "All charges posted",
       "checkBalance": "Balance settled to zero",
       "checkInsurance": "Insurance settled",
+      "checkMet": "done",
+      "checkUnmet": "still pending",
       "successHeading": "Departure complete",
       "successBody": "The guest has checked out and the account is fully settled.",
       "successRoom": "The room now needs housekeeping.",

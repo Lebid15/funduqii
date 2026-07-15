@@ -2523,6 +2523,14 @@ a {
   color: var(--color-fg-muted);
 }
 @media print {
+  /* Default page box: A4 with comfortable margins so every `.print-doc`
+   * document (finance vouchers + the stay registration card / statements,
+   * §44) prints on A4 regardless of the browser's locale default (e.g.
+   * Letter). Named pages like `@page resv-confirmation` still override this. */
+  @page {
+    size: A4;
+    margin: 14mm 15mm 16mm;
+  }
   body * {
     visibility: hidden;
   }

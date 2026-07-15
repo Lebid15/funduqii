@@ -1466,6 +1466,8 @@
       "checkCharges": "كل الرسوم مُرحّلة",
       "checkBalance": "الرصيد مُسوّى إلى صفر",
       "checkInsurance": "التأمين مُسوّى",
+      "checkMet": "منجز",
+      "checkUnmet": "ما زال معلّقًا",
       "successHeading": "اكتملت المغادرة",
       "successBody": "سجّل الضيف خروجه والحساب مُسوّى بالكامل.",
       "successRoom": "الغرفة الآن بحاجة إلى تنظيف.",

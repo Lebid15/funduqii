@@ -6,6 +6,8 @@ import {
   ArrowLeftRight,
   CalendarMinus,
   CalendarPlus,
+  Check,
+  Clock,
   DoorOpen,
   FileText,
   LogOut,
@@ -77,7 +79,7 @@ import type {
   StayFolioSummary,
   StayStatusLogEntry,
 } from "@/lib/api/types";
-import { formatDate, formatDateTime, stayStatusLabel, stayStatusTone } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, stayStatusLabel, stayStatusTone } from "@/lib/format";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -106,7 +108,7 @@ function useCan() {
  * Renders nothing when the viewer lacks `finance.view` (backend nulls it).
  */
 function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | undefined }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   if (!folio) return null;
   const f = t.frontDesk.finance;
   return (
@@ -116,9 +118,9 @@ function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | unde
         {folio.awaiting_final_charges ? <Badge tone="warning">{f.awaiting}</Badge> : null}
       </div>
       <div className="stay-card__meta">
-        <span>{f.total}: {folio.total_charges} {folio.currency}</span>
-        <span>{f.paid}: {folio.total_payments} {folio.currency}</span>
-        <span>{f.remaining}: {folio.balance} {folio.currency}</span>
+        <span>{f.total}: {formatMoney(folio.total_charges, folio.currency, locale)}</span>
+        <span>{f.paid}: {formatMoney(folio.total_payments, folio.currency, locale)}</span>
+        <span>{f.remaining}: {formatMoney(folio.balance, folio.currency, locale)}</span>
       </div>
     </div>
   );
@@ -166,8 +168,13 @@ function FrontDeskFilters({
   onChange: (next: BoardFilters) => void;
 }) {
   const { t } = useI18n();
+  const can = useCan();
   const f = t.frontDesk.filters;
   const s = t.frontDesk.finance.status;
+  // The payment filter reads folio_summary.payment_status, which the backend
+  // only exposes to finance.view. Hiding it for others avoids a filter that
+  // would silently empty the list (folio_summary is null without permission).
+  const showPayment = can("finance.view");
   const paymentOptions = [
     { value: "", label: f.allPayments },
     { value: "paid", label: s.paid },
@@ -186,14 +193,16 @@ function FrontDeskFilters({
           onChange={(e) => onChange({ ...filters, q: e.target.value })}
         />
       </FormField>
-      <FormField label={f.payment} htmlFor="fd-payment">
-        <Select
-          id="fd-payment"
-          value={filters.payment}
-          options={paymentOptions}
-          onChange={(e) => onChange({ ...filters, payment: e.target.value })}
-        />
-      </FormField>
+      {showPayment ? (
+        <FormField label={f.payment} htmlFor="fd-payment">
+          <Select
+            id="fd-payment"
+            value={filters.payment}
+            options={paymentOptions}
+            onChange={(e) => onChange({ ...filters, payment: e.target.value })}
+          />
+        </FormField>
+      ) : null}
       {active ? (
         <Button variant="ghost" size="sm" onClick={() => onChange({ q: "", payment: "" })}>{f.clear}</Button>
       ) : null}
@@ -264,7 +273,7 @@ export function FrontDeskPanel() {
         active={activeCard}
         onSelect={handleCardSelect}
       />
-      <Tabs tabs={tabs} active={tab} onChange={setTab} />
+      <Tabs tabs={tabs} active={tab} onChange={(k) => { setTab(k); setActiveCard(null); }} />
       <FrontDeskFilters filters={filters} onChange={setFilters} />
       {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
       {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
@@ -867,7 +876,7 @@ function CheckInModal({
     return (
       <Modal
         open={open}
-        onClose={onClose}
+        onClose={onDone}
         title={ci.title}
         closeLabel={t.common.close}
         footer={
@@ -888,7 +897,7 @@ function CheckInModal({
             <div><dt>{ci.successCheckInTime}</dt><dd>{formatDateTime(result.actual_check_in_at, locale)}</dd></div>
             <div>
               <dt>{ci.successFolio}</dt>
-              <dd>{folioBalance !== null ? `${folioBalance} ${folioCurrency}` : "—"}</dd>
+              <dd>{folioBalance !== null ? formatMoney(folioBalance, folioCurrency, locale) : "—"}</dd>
             </div>
           </dl>
           <Alert tone="info">{ci.successHint}</Alert>
@@ -939,7 +948,7 @@ function CheckInModal({
           <Select id="ci-guest" value={guestId} placeholder={t.frontDesk.checkInModal.selectGuest} options={guestOptions} onChange={(e) => setGuestId(e.target.value)} />
         </FormField>
         {showQuick ? (
-          <div className="line-row">
+          <div className="line-row" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); quickAdd(); } }}>
             <FormField label={t.guests.form.fullName} htmlFor="ci-qname">
               <Input id="ci-qname" value={quickName} onChange={(e) => setQuickName(e.target.value)} />
             </FormField>
@@ -1040,8 +1049,13 @@ function CheckOutModal({
 
   async function reload() {
     if (!stay) return;
-    const next = await getStayFolioSummary(stay.id).catch(() => null);
-    setSummary(next);
+    // Keep the last-known summary on a transient fetch failure — an action
+    // already succeeded, so blanking to a permanent spinner would be worse.
+    try {
+      setSummary(await getStayFolioSummary(stay.id));
+    } catch (err) {
+      setError(messageForError(err, t));
+    }
   }
 
   const balance = summary ? Number(summary.balance) : 0;
@@ -1188,10 +1202,21 @@ function CheckOutModal({
     );
   }
 
+  // Checklist item — never signals met/unmet by colour alone: a distinct icon
+  // plus an sr-only state word so the label ("All charges posted") is not read
+  // as already-true by assistive tech when the item is still pending.
+  function checklistBadge(ok: boolean, label: string) {
+    return (
+      <Badge tone={ok ? "success" : "warning"} icon={ok ? Check : Clock}>
+        {label} <span className="sr-only">— {ok ? c.checkMet : c.checkUnmet}</span>
+      </Badge>
+    );
+  }
+
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={done ? onDone : onClose}
       title={`${c.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
       footer={
@@ -1257,7 +1282,7 @@ function CheckOutModal({
                       <div key={f.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
                         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                           <span>{f.folio_number}</span>
-                          <strong>{f.balance} {f.currency}</strong>
+                          <strong>{formatMoney(f.balance, f.currency, locale)}</strong>
                         </div>
                         {f.awaiting_final_charges ? (
                           <div className="row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -1292,7 +1317,7 @@ function CheckOutModal({
                     return (
                       <div key={ins.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
                         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                          <span>{c.insuranceHeld}: {ins.held_amount} {ins.currency}</span>
+                          <span>{c.insuranceHeld}: {formatMoney(ins.held_amount, ins.currency, locale)}</span>
                           {held <= 0 ? <Badge tone="success">{c.insuranceSettled}</Badge> : null}
                         </div>
                         {held > 0 && can("finance.insurance_manage") ? (
@@ -1315,9 +1340,9 @@ function CheckOutModal({
               <div className="stack" style={{ gap: "0.35rem" }}>
                 <h4 style={{ margin: 0 }}>{c.checklistHeading}</h4>
                 <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
-                  <Badge tone={chargesReady ? "success" : "warning"}>{c.checkCharges}</Badge>
-                  <Badge tone={balanceReady ? "success" : "warning"}>{c.checkBalance}</Badge>
-                  <Badge tone={insuranceReady ? "success" : "warning"}>{c.checkInsurance}</Badge>
+                  {checklistBadge(chargesReady, c.checkCharges)}
+                  {checklistBadge(balanceReady, c.checkBalance)}
+                  {checklistBadge(insuranceReady, c.checkInsurance)}
                 </div>
               </div>
 

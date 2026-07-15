@@ -1466,6 +1466,8 @@
       "checkCharges": "Tüm ücretler işlendi",
       "checkBalance": "Bakiye sıfıra kapatıldı",
       "checkInsurance": "Teminat kapatıldı",
+      "checkMet": "tamam",
+      "checkUnmet": "hâlâ bekliyor",
       "successHeading": "Ayrılış tamamlandı",
       "successBody": "Konuk çıkış yaptı ve hesap tamamen kapatıldı.",
       "successRoom": "Oda şimdi temizlik gerektiriyor.",
