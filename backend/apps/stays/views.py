@@ -70,7 +70,7 @@ def _guard_write(request: Request) -> None:
 def _stay_qs(hotel):
     return Stay.objects.filter(hotel=hotel).select_related(
         "room", "room__room_type", "primary_guest", "reservation"
-    ).prefetch_related("guests__guest")
+    ).prefetch_related("guests__guest", "reservation__documents")
 
 
 def _free_rooms(hotel, room_type, check_in, check_out, *, exclude_reservation_id):

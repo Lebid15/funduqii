@@ -1782,6 +1782,7 @@ class FolioCycleEndpointsTests(APITestCase):
         r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
         self.assertEqual(r.status_code, 200)
         row = next(x for x in r.data["results"] if x["id"] == stay.id)
+        self.assertEqual(row["document_count"], 0)  # §13 — no docs on this booking
         summary = row["folio_summary"]
         self.assertIsNotNone(summary)
         self.assertEqual(summary["balance"], "200.00")  # 2 nights * 100, unpaid

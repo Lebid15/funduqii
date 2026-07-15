@@ -1288,6 +1288,7 @@
     "title": "Front desk",
     "subtitle": "Arrivals, residents and departures",
     "saved": "Saved",
+    "documents": "Documents",
     "cards": {
       "groupLabel": "Operational summary",
       "arriving": "Arriving today",

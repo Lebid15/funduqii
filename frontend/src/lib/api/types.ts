@@ -918,6 +918,8 @@ export interface Stay {
   checked_in_by: string | null;
   checked_out_by: string | null;
   guests: StayGuestLink[];
+  /** Count of the linked reservation's documents (§13) — 0 for a walk-in. */
+  document_count: number;
   /**
    * Operational-card finance block (§12) — present only on the front-desk
    * resident/departure lists, and only for viewers with `finance.view`.

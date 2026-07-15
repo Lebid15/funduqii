@@ -7,6 +7,7 @@ import {
   CalendarMinus,
   CalendarPlus,
   DoorOpen,
+  FileText,
   LogOut,
   PlaneLanding,
   PlaneTakeoff,
@@ -62,7 +63,8 @@ import {
   settleFolio,
 } from "@/lib/api/finance";
 import { createGuest, listGuests } from "@/lib/api/guests";
-import { markNoShow } from "@/lib/api/reservations";
+import { getReservation, markNoShow } from "@/lib/api/reservations";
+import { ReservationDocumentsModal } from "@/components/hotel/reservations/ReservationDocumentsModal";
 import { messageForError } from "@/lib/api/errors";
 import type {
   AdmissibleRoom,
@@ -282,6 +284,7 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<Reservation | null>(null);
   const [noShowTarget, setNoShowTarget] = useState<Reservation | null>(null);
+  const [docsRes, setDocsRes] = useState<Reservation | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -322,6 +325,11 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
             description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
             action={
               <div className="cluster">
+                {can("reservation_documents.view") && res.document_count > 0 ? (
+                  <Button variant="ghost" size="sm" icon={FileText} onClick={() => setDocsRes(res)}>
+                    {t.frontDesk.documents}
+                  </Button>
+                ) : null}
                 {can("stays.check_in") ? (
                   <Button icon={DoorOpen} size="sm" onClick={() => setTarget(res)}>
                     {t.frontDesk.arrivals.checkIn}
@@ -346,6 +354,11 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
         reservation={noShowTarget}
         onClose={() => setNoShowTarget(null)}
         onDone={() => { setNoShowTarget(null); notify(t.frontDesk.saved); onChange(); }}
+      />
+      <ReservationDocumentsModal
+        open={docsRes !== null}
+        reservation={docsRes ?? undefined}
+        onClose={() => setDocsRes(null)}
       />
     </>
   );
@@ -504,6 +517,20 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
   const [shortenTarget, setShortenTarget] = useState<Stay | null>(null);
   const [moveTarget, setMoveTarget] = useState<Stay | null>(null);
   const [reverseTarget, setReverseTarget] = useState<Stay | null>(null);
+  const [docsRes, setDocsRes] = useState<Reservation | null>(null);
+  const [docsBusy, setDocsBusy] = useState<number | null>(null);
+
+  const openDocs = async (stay: Stay) => {
+    if (stay.reservation === null) return;
+    setDocsBusy(stay.id);
+    try {
+      setDocsRes(await getReservation(stay.reservation));
+    } catch (err) {
+      notify(messageForError(err, t));
+    } finally {
+      setDocsBusy(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -560,6 +587,9 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
             </div>
             <FolioCardSummary folio={stay.folio_summary} />
             <div className="stay-card__actions">
+              {can("reservation_documents.view") && stay.document_count > 0 ? (
+                <Button variant="ghost" size="sm" icon={FileText} loading={docsBusy === stay.id} onClick={() => openDocs(stay)}>{t.frontDesk.documents}</Button>
+              ) : null}
               <Button variant="secondary" size="sm" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
               {can("stays.extend") ? (
                 <Button variant="ghost" size="sm" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
@@ -581,6 +611,11 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
         ))}
       </div>
       <StayDetailsModal stay={details} onClose={() => setDetails(null)} />
+      <ReservationDocumentsModal
+        open={docsRes !== null}
+        reservation={docsRes ?? undefined}
+        onClose={() => setDocsRes(null)}
+      />
       <CheckOutModal
         stay={checkoutTarget}
         onClose={() => setCheckoutTarget(null)}
@@ -622,6 +657,20 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [checkoutTarget, setCheckoutTarget] = useState<Stay | null>(null);
+  const [docsRes, setDocsRes] = useState<Reservation | null>(null);
+  const [docsBusy, setDocsBusy] = useState<number | null>(null);
+
+  const openDocs = async (stay: Stay) => {
+    if (stay.reservation === null) return;
+    setDocsBusy(stay.id);
+    try {
+      setDocsRes(await getReservation(stay.reservation));
+    } catch (err) {
+      notify(messageForError(err, t));
+    } finally {
+      setDocsBusy(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -662,9 +711,14 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
             meta={<FolioCardSummary folio={stay.folio_summary} />}
             action={
-              can("stays.check_out") ? (
-                <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
-              ) : undefined
+              <div className="cluster">
+                {can("reservation_documents.view") && stay.document_count > 0 ? (
+                  <Button variant="ghost" size="sm" icon={FileText} loading={docsBusy === stay.id} onClick={() => openDocs(stay)}>{t.frontDesk.documents}</Button>
+                ) : null}
+                {can("stays.check_out") ? (
+                  <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
+                ) : null}
+              </div>
             }
           />
         ))}
@@ -673,6 +727,11 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
         stay={checkoutTarget}
         onClose={() => setCheckoutTarget(null)}
         onDone={() => { setCheckoutTarget(null); notify(t.frontDesk.saved); onChange(); }}
+      />
+      <ReservationDocumentsModal
+        open={docsRes !== null}
+        reservation={docsRes ?? undefined}
+        onClose={() => setDocsRes(null)}
       />
     </>
   );

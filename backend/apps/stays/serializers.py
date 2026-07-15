@@ -35,6 +35,10 @@ class StaySerializer(serializers.ModelSerializer):
     guests = StayGuestReadSerializer(many=True, read_only=True)
     checked_in_by = serializers.SerializerMethodField()
     checked_out_by = serializers.SerializerMethodField()
+    # Count of the linked reservation's uploaded documents (§13) — drives the
+    # operational card's documents button. Zero for a walk-in stay with no
+    # reservation. Uses the prefetched relation, so no extra query per row.
+    document_count = serializers.SerializerMethodField()
     # Operational-card finance block (§12). Off by default so the broad /stays
     # list stays cheap; a front-desk view opts in via context ``with_folio`` and
     # the viewer must hold ``finance.view`` — otherwise this is null.
@@ -65,11 +69,17 @@ class StaySerializer(serializers.ModelSerializer):
             "checked_in_by",
             "checked_out_by",
             "guests",
+            "document_count",
             "folio_summary",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_document_count(self, obj) -> int:
+        if obj.reservation_id is None:
+            return 0
+        return len(obj.reservation.documents.all())
 
     def get_checked_in_by(self, obj):
         return obj.checked_in_by.email if obj.checked_in_by_id else None
