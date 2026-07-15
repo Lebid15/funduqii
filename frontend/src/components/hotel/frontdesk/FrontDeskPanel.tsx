@@ -567,7 +567,8 @@ function CheckInModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const ci = t.frontDesk.checkInModal;
   const [lineId, setLineId] = useState("");
   const [roomId, setRoomId] = useState("");
   const [guestId, setGuestId] = useState("");
@@ -581,6 +582,8 @@ function CheckInModal({
   const [showQuick, setShowQuick] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<Stay | null>(null);
+  const [resultFolio, setResultFolio] = useState<StayFolioSummary | null>(null);
 
   const open = reservation !== null;
   const line = reservation?.lines.find((l) => String(l.id) === lineId) ?? reservation?.lines[0];
@@ -598,6 +601,8 @@ function CheckInModal({
     setShowQuick(false);
     setQuickName("");
     setQuickPhone("");
+    setResult(null);
+    setResultFolio(null);
     listGuests({ page_size: 200, is_active: "true" }).then((r) => setGuests(r.results)).catch(() => setGuests([]));
   }, [open, reservation]);
 
@@ -639,7 +644,7 @@ function CheckInModal({
     if (!guestId) return setError(t.frontDesk.checkInModal.guestRequired);
     setBusy(true);
     try {
-      await checkIn({
+      const stay = await checkIn({
         reservation: reservation.id,
         reservation_line: line.id,
         room,
@@ -647,7 +652,10 @@ function CheckInModal({
         companions,
         check_in_notes: notes.trim(),
       });
-      onDone();
+      // §19 — don't vanish without a result. Surface the created stay + its
+      // folio state on a success screen; the parent list refreshes on close.
+      setResult(stay);
+      getStayFolioSummary(stay.id).then(setResultFolio).catch(() => setResultFolio(null));
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -665,16 +673,45 @@ function CheckInModal({
     (o) => o.value !== guestId && !companions.includes(Number(o.value)),
   );
 
+  if (result) {
+    const folioBalance = resultFolio?.balance ?? null;
+    const folioCurrency = resultFolio?.open_folios[0]?.currency ?? "";
+    return (
+      <Modal
+        open={open}
+        onClose={onClose}
+        title={ci.title}
+        closeLabel={t.common.close}
+        footer={<Button onClick={onDone}>{ci.successDone}</Button>}
+      >
+        <div className="stack" role="status">
+          <Alert tone="success">{ci.successHeading}</Alert>
+          <dl className="detail-grid">
+            <div><dt>{ci.successGuest}</dt><dd>{result.primary_guest_name}</dd></div>
+            <div><dt>{ci.successRoom}</dt><dd>{result.room_number}</dd></div>
+            <div><dt>{ci.reservation}</dt><dd>{result.reservation_number ?? "—"}</dd></div>
+            <div><dt>{ci.successCheckInTime}</dt><dd>{formatDateTime(result.actual_check_in_at, locale)}</dd></div>
+            <div>
+              <dt>{ci.successFolio}</dt>
+              <dd>{folioBalance !== null ? `${folioBalance} ${folioCurrency}` : "—"}</dd>
+            </div>
+          </dl>
+          <Alert tone="info">{ci.successHint}</Alert>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={t.frontDesk.checkInModal.title}
+      title={ci.title}
       closeLabel={t.common.close}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="checkin-form" type="submit" loading={busy}>{t.frontDesk.checkInModal.submit}</Button>
+          <Button form="checkin-form" type="submit" loading={busy}>{ci.submit}</Button>
         </>
       }
     >

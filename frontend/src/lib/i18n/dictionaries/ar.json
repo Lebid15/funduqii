@@ -1363,7 +1363,14 @@
       "submit": "تسجيل الدخول",
       "roomRequired": "اختر غرفة لتسجيل الدخول إليها.",
       "guestRequired": "اختر الضيف الرئيسي.",
-      "noRooms": "لا غرف متاحة من هذا النوع."
+      "noRooms": "لا غرف متاحة من هذا النوع.",
+      "successHeading": "اكتمل تسجيل الدخول",
+      "successGuest": "الضيف",
+      "successRoom": "الغرفة",
+      "successCheckInTime": "وقت الدخول",
+      "successFolio": "رصيد الفوليو",
+      "successHint": "الغرفة الآن مشغولة والفوليو مفتوح لاستقبال الرسوم.",
+      "successDone": "تم"
     },
     "checkOutModal": {
       "title": "تسجيل الخروج",

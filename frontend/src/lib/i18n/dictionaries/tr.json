@@ -1363,7 +1363,14 @@
       "submit": "Giriş yap",
       "roomRequired": "Giriş yapılacak bir oda seçin.",
       "guestRequired": "Ana misafiri seçin.",
-      "noRooms": "Bu tipte müsait oda yok."
+      "noRooms": "Bu tipte müsait oda yok.",
+      "successHeading": "Giriş tamamlandı",
+      "successGuest": "Konuk",
+      "successRoom": "Oda",
+      "successCheckInTime": "Giriş zamanı",
+      "successFolio": "Folyo bakiyesi",
+      "successHint": "Oda artık dolu ve folyo ücretler için açık.",
+      "successDone": "Tamam"
     },
     "checkOutModal": {
       "title": "Çıkış yap",
