@@ -922,7 +922,10 @@ export interface Stay {
   document_count: number;
   /**
    * Operational-card finance block (§12) — present only on the front-desk
-   * resident/departure lists, and only for viewers with `finance.view`.
+   * resident/departure lists. A DISCRIMINATED UNION on `financial_details_visible`:
+   * a finance viewer (`finance.view`) gets the full monetary block; every other
+   * viewer gets only abstract operational clearance states (no amounts, currency,
+   * folio number or payment status). Null when the stay has no open folio.
    * Derived from the folio ledger; the client never recomputes it.
    */
   folio_summary?: StayFolioCardSummary | null;
@@ -930,7 +933,20 @@ export interface Stay {
   updated_at: string;
 }
 
-export interface StayFolioCardSummary {
+/**
+ * Operational-card finance block (§12) — a DISCRIMINATED UNION on
+ * `financial_details_visible`. A finance viewer receives the full monetary
+ * block; every other viewer receives ONLY abstract operational clearance states.
+ * The monetary fields are OMITTED for a non-finance viewer (never zeroed), so
+ * the UI can never print `0` for a hidden value.
+ */
+export type StayFolioCardSummary =
+  | StayFolioCardSummaryVisible
+  | StayFolioCardSummaryHidden;
+
+/** Finance viewer — full monetary detail (backend derives it from the ledger). */
+export interface StayFolioCardSummaryVisible {
+  financial_details_visible: true;
   folio_number: string;
   currency: string;
   total_charges: string;
@@ -941,11 +957,45 @@ export interface StayFolioCardSummary {
   awaiting_final_charges: boolean;
 }
 
-/** GET /stays/<id>/folio-summary — check-out dialog context. */
-export interface StayFolioSummary {
+/** Non-finance viewer — abstract operational states only (no money at all). */
+export interface StayFolioCardSummaryHidden {
+  financial_details_visible: false;
+  /** True when balance is zero, no folio awaits final charges, no insurance held. */
+  financial_clearance_complete: boolean;
+  /** True when the account still needs a finance action before departure. */
+  requires_financial_action: boolean;
+}
+
+/**
+ * GET /stays/<id>/folio-summary and POST /stays/<id>/ensure-room-charges — the
+ * check-out dialog context. A DISCRIMINATED UNION on `financial_details_visible`.
+ * The base fields (including the backend-authoritative `can_check_out`) are
+ * always present; a finance viewer additionally receives the monetary block
+ * (balances, insurances). A non-finance viewer receives a money-free
+ * `open_folios` skeleton and no balance/insurance fields — they are OMITTED,
+ * never zeroed.
+ */
+export type StayFolioSummary = StayFolioSummaryVisible | StayFolioSummaryHidden;
+
+interface StayFolioSummaryBase {
   business_date: string;
   is_early_departure: boolean;
   has_folio: boolean;
+  /** True when balance is zero, nothing awaits final charges, no insurance held. */
+  financial_clearance_complete: boolean;
+  /** True when a finance action is still required before departure. */
+  requires_financial_action: boolean;
+  /** Backend-authoritative checkout readiness — the UI gates the confirm button
+   * on this (NOT a money-derived flag), so a non-finance actor can still depart a
+   * financially-cleared stay. */
+  can_check_out: boolean;
+  /** True when any open folio is still flagged awaiting final charges (§32). */
+  awaiting_final_charges: boolean;
+}
+
+/** Finance viewer — full monetary detail. */
+export interface StayFolioSummaryVisible extends StayFolioSummaryBase {
+  financial_details_visible: true;
   open_folios: {
     id: number;
     folio_number: string;
@@ -957,8 +1007,6 @@ export interface StayFolioSummary {
   }[];
   /** Total balance across the stay's OPEN folios ("0" when settled/none). */
   balance: string;
-  /** True when any open folio is still flagged awaiting final charges (§32). */
-  awaiting_final_charges: boolean;
   /** Refundable insurance held against the stay (§35). */
   insurances: {
     id: number;
@@ -971,6 +1019,16 @@ export interface StayFolioSummary {
   }[];
   /** True when any insurance still has a held amount awaiting settlement. */
   insurance_pending: boolean;
+}
+
+/** Non-finance viewer — money-free operational skeleton. */
+export interface StayFolioSummaryHidden extends StayFolioSummaryBase {
+  financial_details_visible: false;
+  open_folios: {
+    id: number;
+    folio_number: string;
+    awaiting_final_charges: boolean;
+  }[];
 }
 
 /** GET /stays/check-in-rooms and /stays/<id>/move-candidates. */

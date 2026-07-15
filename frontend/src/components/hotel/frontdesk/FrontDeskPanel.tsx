@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeftRight,
+  CalendarClock,
   CalendarMinus,
   CalendarPlus,
   Check,
@@ -112,6 +113,22 @@ function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | unde
   const { t, locale } = useI18n();
   if (!folio) return null;
   const f = t.frontDesk.finance;
+  // Non-finance viewer: the backend sends NO amounts — render an operational
+  // clearance chip (icon + label, never colour alone) plus a muted permission
+  // note. Never print `0`/empty for a hidden amount and never the money rows.
+  if (!folio.financial_details_visible) {
+    const cleared = folio.financial_clearance_complete;
+    return (
+      <div className="stack" style={{ gap: "0.35rem" }}>
+        <div className="cluster" style={{ gap: "0.35rem" }}>
+          <Badge tone={cleared ? "success" : "warning"} icon={cleared ? Check : Clock}>
+            {cleared ? f.clearanceComplete : f.clearancePending}
+          </Badge>
+        </div>
+        <span className="muted small">{f.detailsHidden}</span>
+      </div>
+    );
+  }
   return (
     <div className="stack" style={{ gap: "0.35rem" }}>
       <div className="cluster" style={{ gap: "0.35rem" }}>
@@ -155,7 +172,13 @@ function reservationMatches(res: Reservation, filters: BoardFilters): boolean {
 }
 
 function stayMatches(stay: Stay, filters: BoardFilters): boolean {
-  if (filters.payment && stay.folio_summary?.payment_status !== filters.payment) return false;
+  if (filters.payment) {
+    // payment_status exists only on the finance-visible variant; a non-finance
+    // viewer never has it (and the payment filter is hidden for them anyway).
+    const fs = stay.folio_summary;
+    const status = fs && fs.financial_details_visible ? fs.payment_status : undefined;
+    if (status !== filters.payment) return false;
+  }
   const q = filters.q.trim().toLowerCase();
   if (!q) return true;
   return hay(stay.room_number, stay.primary_guest_name, stay.reservation_number).includes(q);
@@ -172,9 +195,11 @@ function FrontDeskFilters({
   const can = useCan();
   const f = t.frontDesk.filters;
   const s = t.frontDesk.finance.status;
-  // The payment filter reads folio_summary.payment_status, which the backend
-  // only exposes to finance.view. Hiding it for others avoids a filter that
-  // would silently empty the list (folio_summary is null without permission).
+  // The payment filter reads folio_summary.payment_status, which exists only on
+  // the finance-visible variant of folio_summary (financial_details_visible:
+  // true). A viewer without finance.view instead receives the HIDDEN variant
+  // (financial_details_visible: false) that omits payment_status entirely, so the
+  // filter would match nothing and silently empty the list — hence it is hidden.
   const showPayment = can("finance.view");
   const paymentOptions = [
     { value: "", label: f.allPayments },
@@ -277,7 +302,7 @@ export function FrontDeskPanel() {
       <Tabs tabs={tabs} active={tab} onChange={(k) => { setTab(k); setActiveCard(null); }} />
       <FrontDeskFilters filters={filters} onChange={setFilters} />
       {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
-      {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
+      {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} filters={filters} businessDate={overview?.business_date ?? null} /> : null}
       {tab === "departures" ? <DeparturesTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
     </>
   );
@@ -516,7 +541,7 @@ function ReverseCheckInModal({
 // Current residents                                                           //
 // --------------------------------------------------------------------------- //
 
-function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onChange: () => void; filters: BoardFilters }) {
+function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey: number; onChange: () => void; filters: BoardFilters; businessDate: string | null }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const can = useCan();
@@ -581,13 +606,21 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
         <EmptyState title={t.frontDesk.filters.noMatches} hint={t.frontDesk.filters.noMatchesHint} icon={DoorOpen} />
       ) : null}
       <div className="stay-grid">
-        {visible.map((stay) => (
+        {visible.map((stay) => {
+          // Overstay = past the planned check-out against the HOTEL business
+          // date (both are yyyy-mm-dd, so a lexicographic compare is exact).
+          // Display only — nothing is billed or re-dated on the client.
+          const overstay = businessDate !== null && stay.planned_check_out_date < businessDate;
+          return (
           <article className="stay-card" key={stay.id}>
             <div className="stay-card__head">
               <span className="stay-card__room">{stay.room_number}</span>
               <span className="cluster" style={{ gap: "0.35rem" }}>
                 {stay.primary_guest_is_vip ? (
                   <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
+                ) : null}
+                {overstay ? (
+                  <Badge tone="danger" icon={CalendarClock}>{t.frontDesk.current.overstay}</Badge>
                 ) : null}
                 <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
               </span>
@@ -604,7 +637,9 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
               ) : null}
               <Button variant="secondary" size="sm" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
               {can("stays.extend") ? (
-                <Button variant="ghost" size="sm" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
+                // An overstay makes the extend action prominent (primary), so the
+                // agent can resolve the overdue stay without a new action.
+                <Button variant={overstay ? "primary" : "ghost"} size="sm" icon={CalendarPlus} onClick={() => setExtendTarget(stay)}>{t.frontDesk.current.extend}</Button>
               ) : null}
               {can("stays.shorten") ? (
                 <Button variant="ghost" size="sm" icon={CalendarMinus} onClick={() => setShortenTarget(stay)}>{t.frontDesk.current.shorten}</Button>
@@ -620,7 +655,8 @@ function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onCha
               ) : null}
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
       <StayDetailsModal stay={details} onClose={() => setDetails(null)} />
       <ReservationDocumentsModal
@@ -871,9 +907,11 @@ function CheckInModal({
   );
 
   if (result) {
-    const folioBalance = resultFolio?.balance ?? null;
-    const folioCurrency = resultFolio?.open_folios[0]?.currency ?? "";
-    const folioId = resultFolio?.open_folios[0]?.id ?? null;
+    // Amounts (and the money-bearing registration print) are shown only to a
+    // finance viewer; a non-finance viewer receives no monetary fields at all.
+    const finFolio = resultFolio && resultFolio.financial_details_visible ? resultFolio : null;
+    const folioCurrency = finFolio?.open_folios[0]?.currency ?? "";
+    const folioId = finFolio?.open_folios[0]?.id ?? null;
     return (
       <Modal
         open={open}
@@ -896,10 +934,12 @@ function CheckInModal({
             <div><dt>{ci.successRoom}</dt><dd>{result.room_number}</dd></div>
             <div><dt>{ci.reservation}</dt><dd>{result.reservation_number ?? "—"}</dd></div>
             <div><dt>{ci.successCheckInTime}</dt><dd>{formatDateTime(result.actual_check_in_at, locale)}</dd></div>
-            <div>
-              <dt>{ci.successFolio}</dt>
-              <dd>{folioBalance !== null ? formatMoney(folioBalance, folioCurrency, locale) : "—"}</dd>
-            </div>
+            {finFolio ? (
+              <div>
+                <dt>{ci.successFolio}</dt>
+                <dd>{formatMoney(finFolio.balance, folioCurrency, locale)}</dd>
+              </div>
+            ) : null}
           </dl>
           <Alert tone="info">{ci.successHint}</Alert>
         </div>
@@ -1012,6 +1052,7 @@ function CheckOutModal({
 }) {
   const { t, locale } = useI18n();
   const c = t.frontDesk.checkOutModal;
+  const finLbl = t.frontDesk.finance;
   const can = useCan();
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
@@ -1110,15 +1151,21 @@ function CheckOutModal({
     }
   }
 
-  const balance = summary ? Number(summary.balance) : 0;
+  // A finance viewer receives the monetary block; a non-finance viewer receives
+  // only abstract operational states. `finSummary` narrows to the finance-visible
+  // variant so every money access below is type-safe (and hidden for others).
+  const finSummary = summary && summary.financial_details_visible ? summary : null;
   const early = summary?.is_early_departure ?? false;
+  const balance = finSummary ? Number(finSummary.balance) : 0;
   const chargesReady = summary !== null && !summary.awaiting_final_charges;
-  const balanceReady = summary !== null && balance === 0;
-  const insuranceReady = summary !== null && !summary.insurance_pending;
-  const canDepart = chargesReady && balanceReady && insuranceReady;
-  // Departure stays blocked while the due charges could not be posted — the
-  // shown balance may be understated, so confirming it would check out on an
-  // incomplete amount. Cancel is never blocked.
+  const balanceReady = finSummary !== null && balance === 0;
+  const insuranceReady = finSummary !== null && !finSummary.insurance_pending;
+  const canDepartFinance = chargesReady && balanceReady && insuranceReady;
+  // The backend is the single checkout-readiness authority: a non-finance viewer
+  // has no amounts, so gate on can_check_out; a finance viewer keeps the existing
+  // money-derived checklist. Either way a failed ensure POST still blocks (the
+  // shown state may be understated). Cancel is never blocked.
+  const canDepart = summary !== null && (finSummary ? canDepartFinance : summary.can_check_out);
   const blocked = !canDepart || ensureFailed;
 
   function openSettle(folioId: number, folioBalance: string) {
@@ -1148,7 +1195,7 @@ function CheckOutModal({
     setActionError(null);
     try {
       if (action.kind === "settle") {
-        const folio = summary?.open_folios.find((f) => f.id === action.id);
+        const folio = finSummary?.open_folios.find((f) => f.id === action.id);
         await settleFolio(action.id, {
           method: methodField,
           amount: amountField.trim(),
@@ -1277,7 +1324,7 @@ function CheckOutModal({
       footer={
         done ? (
           <>
-            {summary && summary.open_folios.length > 0 ? (
+            {finSummary && finSummary.open_folios.length > 0 ? (
               <Button variant="secondary" icon={Printer} onClick={() => setPrintMode("final")}>{c.printFinal}</Button>
             ) : null}
             <Button onClick={onDone}>{c.done}</Button>
@@ -1293,16 +1340,18 @@ function CheckOutModal({
       {done ? (
         <div className="stack" role="status">
           <Alert tone="success">{c.successHeading}</Alert>
-          <p>{c.successBody}</p>
+          {/* Only a finance viewer gets the monetary "fully settled" confirmation
+              and the folio number; others get a money-free departure notice. */}
+          <p>{finSummary ? c.successBody : c.successCleared}</p>
           <dl className="detail-grid">
             <div><dt>{c.guest}</dt><dd>{stay?.primary_guest_name}</dd></div>
             <div><dt>{c.room}</dt><dd>{stay?.room_number}</dd></div>
-            {summary && summary.open_folios.length > 0 ? (
-              <div><dt>{c.successFolio}</dt><dd>{summary.open_folios.map((f) => f.folio_number).join(", ")}</dd></div>
+            {finSummary && finSummary.open_folios.length > 0 ? (
+              <div><dt>{c.successFolio}</dt><dd>{finSummary.open_folios.map((f) => f.folio_number).join(", ")}</dd></div>
             ) : null}
             <div><dt>{c.successDeparted}</dt><dd>{formatDateTime(departedAt, locale)}</dd></div>
           </dl>
-          <div><Badge tone="success">{c.successPaid}</Badge></div>
+          {finSummary ? <div><Badge tone="success">{c.successPaid}</Badge></div> : null}
           <Alert tone="info">{c.successRoom}</Alert>
         </div>
       ) : (
@@ -1340,19 +1389,19 @@ function CheckOutModal({
             // No spinner once the ensure flow has failed: the warning + retry
             // (and any error) above convey the state instead of a silent loader.
             ensureFailed || error ? null : <LoadingState label={t.common.loading} />
-          ) : (
+          ) : finSummary ? (
             <div className="stack" style={{ gap: "0.75rem" }}>
               {/* Statement + per-folio settlement / refund (§17/§34/§37) */}
               <div className="stack" style={{ gap: "0.5rem" }}>
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                   <h4 style={{ margin: 0 }}>{c.statementHeading}</h4>
-                  {summary.open_folios.length > 0 ? (
+                  {finSummary.open_folios.length > 0 ? (
                     <Button type="button" size="sm" variant="ghost" icon={Printer} onClick={() => setPrintMode("preliminary")}>{c.printPreliminary}</Button>
                   ) : null}
                 </div>
                 <p className="muted small">{c.statementNote}</p>
-                {summary.has_folio && summary.open_folios.length > 0 ? (
-                  summary.open_folios.map((f) => {
+                {finSummary.has_folio && finSummary.open_folios.length > 0 ? (
+                  finSummary.open_folios.map((f) => {
                     const b = Number(f.balance);
                     return (
                       <div key={f.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
@@ -1385,10 +1434,10 @@ function CheckOutModal({
               </div>
 
               {/* Refundable insurance (§35) */}
-              {summary.insurances.length > 0 ? (
+              {finSummary.insurances.length > 0 ? (
                 <div className="stack" style={{ gap: "0.5rem" }}>
                   <h4 style={{ margin: 0 }}>{c.insuranceHeading}</h4>
-                  {summary.insurances.map((ins) => {
+                  {finSummary.insurances.map((ins) => {
                     const held = Number(ins.held_amount);
                     return (
                       <div key={ins.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
@@ -1424,6 +1473,21 @@ function CheckOutModal({
 
               {early ? <Alert tone="warning">{c.earlyDeparture}</Alert> : null}
             </div>
+          ) : (
+            // Non-finance viewer — the backend sent NO amounts. Show only the
+            // operational clearance state + a permission note; departure is
+            // authorised by the backend's can_check_out (see `blocked`), never by
+            // a money-derived flag. No statement/settlement/refund/insurance UI.
+            <div className="stack" style={{ gap: "0.5rem" }}>
+              <div className="cluster" style={{ gap: "0.35rem" }}>
+                {checklistBadge(
+                  summary.financial_clearance_complete,
+                  summary.financial_clearance_complete ? finLbl.clearanceComplete : finLbl.clearancePending,
+                )}
+              </div>
+              <Alert tone="info">{finLbl.detailsHidden}</Alert>
+              {early ? <Alert tone="warning">{c.earlyDeparture}</Alert> : null}
+            </div>
           )}
 
           <FormField label={c.notes} htmlFor="co-notes">
@@ -1434,12 +1498,12 @@ function CheckOutModal({
               <Input id="co-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
             </FormField>
           ) : null}
-          <Alert tone="warning">{c.financeNote}</Alert>
+          {finSummary ? <Alert tone="warning">{c.financeNote}</Alert> : null}
         </div>
       )}
       <StayStatementPrintModal
         open={printMode !== null}
-        folioId={summary?.open_folios[0]?.id ?? null}
+        folioId={finSummary?.open_folios[0]?.id ?? null}
         mode={printMode ?? "preliminary"}
         onClose={() => setPrintMode(null)}
       />
