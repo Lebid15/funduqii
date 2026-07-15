@@ -1338,7 +1338,12 @@
       "checkOut": "Çıkış yap",
       "extend": "Konaklamayı uzat",
       "shorten": "Konaklamayı kısalt",
-      "move": "Oda değiştir"
+      "move": "Oda değiştir",
+      "reverse": "Girişi geri al",
+      "reverseTitle": "Girişi geri al",
+      "reverseHint": "Hatalı bir girişi geri al: giriş oda ücretlerini iptal eder (varsa depozitoyu korur) ve odayı boşaltır. Neden gerekli.",
+      "reverseReason": "Neden",
+      "reverseConfirm": "Girişi geri al"
     },
     "departures": {
       "empty": "Bugün çıkış yok",

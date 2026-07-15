@@ -13,6 +13,7 @@ import {
   PlaneTakeoff,
   Plus,
   Star,
+  Undo2,
   Users,
   Wallet,
 } from "lucide-react";
@@ -48,6 +49,7 @@ import {
   listDeparturesToday,
   listMoveCandidates,
   moveStayRoom,
+  reverseCheckIn,
   shortenStay,
 } from "@/lib/api/stays";
 import type { StaysOverview } from "@/lib/api/stays";
@@ -299,6 +301,74 @@ function NoShowModal({
   );
 }
 
+function ReverseCheckInModal({
+  stay,
+  onClose,
+  onDone,
+}: {
+  stay: Stay | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setReason("");
+    setError(null);
+  }, [stay]);
+  if (!stay) return null;
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await reverseCheckIn(stay.id, { reason });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={t.frontDesk.current.reverseTitle}
+      closeLabel={t.common.close}
+    >
+      <div className="stack">
+        <p className="muted">{t.frontDesk.current.reverseHint}</p>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField
+          label={t.frontDesk.current.reverseReason}
+          htmlFor="reverse-reason"
+        >
+          <Textarea
+            id="reverse-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+          />
+        </FormField>
+        <div className="cluster cluster--end">
+          <Button variant="ghost" onClick={onClose}>
+            {t.common.cancel}
+          </Button>
+          <Button
+            variant="danger"
+            disabled={busy || !reason.trim()}
+            onClick={submit}
+          >
+            {t.frontDesk.current.reverseConfirm}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // --------------------------------------------------------------------------- //
 // Current residents                                                           //
 // --------------------------------------------------------------------------- //
@@ -315,6 +385,7 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
   const [extendTarget, setExtendTarget] = useState<Stay | null>(null);
   const [shortenTarget, setShortenTarget] = useState<Stay | null>(null);
   const [moveTarget, setMoveTarget] = useState<Stay | null>(null);
+  const [reverseTarget, setReverseTarget] = useState<Stay | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -378,6 +449,9 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
               {can("stays.check_out") ? (
                 <Button variant="ghost" size="sm" icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
               ) : null}
+              {can("stays.reverse_check_in") ? (
+                <Button variant="ghost" size="sm" icon={Undo2} onClick={() => setReverseTarget(stay)}>{t.frontDesk.current.reverse}</Button>
+              ) : null}
             </div>
           </article>
         ))}
@@ -392,6 +466,11 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
         stay={extendTarget}
         onClose={() => setExtendTarget(null)}
         onDone={done(setExtendTarget)}
+      />
+      <ReverseCheckInModal
+        stay={reverseTarget}
+        onClose={() => setReverseTarget(null)}
+        onDone={done(setReverseTarget)}
       />
       <ShortenStayModal
         stay={shortenTarget}

@@ -1338,7 +1338,12 @@
       "checkOut": "Check out",
       "extend": "Extend stay",
       "shorten": "Shorten stay",
-      "move": "Move room"
+      "move": "Move room",
+      "reverse": "Reverse check-in",
+      "reverseTitle": "Reverse check-in",
+      "reverseHint": "Undo a mistaken check-in: it voids the check-in's room charges (keeping any deposit) and frees the room. Requires a reason.",
+      "reverseReason": "Reason",
+      "reverseConfirm": "Reverse check-in"
     },
     "departures": {
       "empty": "No departures today",
