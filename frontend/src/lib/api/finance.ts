@@ -75,6 +75,118 @@ export function getFolioStatement(id: number): Promise<FolioStatement> {
   return hotelJson<FolioStatement>(`${B}/folios/${id}/statement`);
 }
 
+// --- STAYS-ARRIVALS-DEPARTURES: folio lifecycle + settlement + insurance ----
+
+/** Reopen a closed folio (§42) — mandatory reason. */
+export function reopenFolio(id: number, reason: string): Promise<Folio> {
+  return hotelJson<Folio>(`${B}/folios/${id}/reopen`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Toggle the awaiting-final-charges flag (§32). */
+export function setFolioAwaitingCharges(
+  id: number,
+  awaiting: boolean,
+  note = "",
+): Promise<Folio> {
+  return hotelJson<Folio>(`${B}/folios/${id}/awaiting-final-charges`, {
+    method: "POST",
+    body: JSON.stringify({ awaiting, note }),
+  });
+}
+
+export interface SettleBody {
+  method: string;
+  amount?: string;
+  currency?: string;
+  original_amount?: string;
+  exchange_rate?: string;
+  rate_basis?: string;
+  payer_name?: string;
+  reference?: string;
+  notes?: string;
+}
+
+/** Settle a folio balance (§34), multi-currency aware. */
+export function settleFolio(id: number, body: SettleBody): Promise<Folio> {
+  return hotelJson<Folio>(`${B}/folios/${id}/settle`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Refund a folio credit balance (§37) — mandatory reason. */
+export function refundFolioCredit(
+  id: number,
+  body: { reason: string; amount?: string; method?: string },
+): Promise<Folio> {
+  return hotelJson<Folio>(`${B}/folios/${id}/refund`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface RefundableInsurance {
+  id: number;
+  reservation: number | null;
+  stay: number | null;
+  currency: string;
+  amount: string;
+  deducted_amount: string;
+  refunded_amount: string;
+  held_amount: string;
+  status: "held" | "refunded" | "partially_deducted" | "consumed";
+  method: string;
+  reference: string;
+  notes: string;
+  received_at: string;
+  settled_at: string | null;
+}
+
+export function listInsurances(params?: {
+  stay?: number;
+  reservation?: number;
+}): Promise<RefundableInsurance[]> {
+  return hotelJson<RefundableInsurance[]>(`${B}/insurances${toQuery(params)}`);
+}
+
+export function recordInsurance(body: {
+  amount: string;
+  stay?: number;
+  reservation?: number;
+  currency?: string;
+  method?: string;
+  reference?: string;
+  notes?: string;
+}): Promise<RefundableInsurance> {
+  return hotelJson<RefundableInsurance>(`${B}/insurances`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function refundInsurance(
+  id: number,
+  body: { reason?: string; amount?: string },
+): Promise<RefundableInsurance> {
+  return hotelJson<RefundableInsurance>(`${B}/insurances/${id}/refund`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deductInsurance(
+  id: number,
+  body: { amount: string; reason: string },
+): Promise<RefundableInsurance> {
+  return hotelJson<RefundableInsurance>(`${B}/insurances/${id}/deduct`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 // --- Charges ----------------------------------------------------------------
 
 export interface ChargeBody {

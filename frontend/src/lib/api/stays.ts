@@ -137,3 +137,29 @@ export function listMoveCandidates(id: number): Promise<AdmissibleRoom[]> {
 export function getStayFolioSummary(id: number): Promise<StayFolioSummary> {
   return hotelJson<StayFolioSummary>(`/stays/${id}/folio-summary`);
 }
+
+/** Counts for the six operational cards (§6/§50) — from the backend, one call. */
+export interface StaysOverview {
+  business_date: string;
+  arriving_today: number;
+  awaiting_check_in: number;
+  checked_in_today: number;
+  current_residents: number;
+  departing_today: number;
+  needs_attention: number;
+}
+
+export function getStaysOverview(): Promise<StaysOverview> {
+  return hotelJson<StaysOverview>("/stays/overview");
+}
+
+/** Reverse a mistaken check-in (§30) — a mandatory reason. */
+export function reverseCheckIn(
+  id: number,
+  body: { reason: string },
+): Promise<Stay> {
+  return hotelJson<Stay>(`/stays/${id}/reverse-check-in`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
