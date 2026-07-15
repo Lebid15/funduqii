@@ -1769,3 +1769,25 @@ class FolioCycleEndpointsTests(APITestCase):
         resp = self._post("finance:folio-refund", folio, {"reason": "overpayment"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_current_residents_folio_summary(self):
+        """§12 — the resident list carries a derived folio finance block."""
+        from apps.finance.services import record_folio_settlement
+        from apps.stays.services import CheckInService
+
+        stay = CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
+        )
+        r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
+        self.assertEqual(r.status_code, 200)
+        row = next(x for x in r.data["results"] if x["id"] == stay.id)
+        summary = row["folio_summary"]
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["balance"], "200.00")  # 2 nights * 100, unpaid
+        self.assertEqual(summary["payment_status"], "unpaid")
+
+        record_folio_settlement(stay.folios.get(), method="cash", amount="200.00", user=self.manager)
+        r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
+        row = next(x for x in r.data["results"] if x["id"] == stay.id)
+        self.assertEqual(row["folio_summary"]["payment_status"], "paid")

@@ -1303,6 +1303,18 @@
       "attention": "Needs attention",
       "attentionCaption": "Requires action"
     },
+    "finance": {
+      "total": "Folio total",
+      "paid": "Paid",
+      "remaining": "Remaining",
+      "awaiting": "Awaiting final charges",
+      "status": {
+        "paid": "Paid",
+        "partial": "Partly paid",
+        "unpaid": "Unpaid",
+        "overpaid": "Credit due"
+      }
+    },
     "tabs": {
       "arrivals": "Arrivals today",
       "current": "Current residents",

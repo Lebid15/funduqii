@@ -1303,6 +1303,18 @@
       "attention": "تحتاج انتباهًا",
       "attentionCaption": "تتطلب إجراءً"
     },
+    "finance": {
+      "total": "إجمالي الفوليو",
+      "paid": "المدفوع",
+      "remaining": "المتبقي",
+      "awaiting": "بانتظار رسوم أخيرة",
+      "status": {
+        "paid": "مدفوع",
+        "partial": "مدفوع جزئيًا",
+        "unpaid": "غير مدفوع",
+        "overpaid": "رصيد دائن مستحق"
+      }
+    },
     "tabs": {
       "arrivals": "وصول اليوم",
       "current": "المقيمون الحاليون",

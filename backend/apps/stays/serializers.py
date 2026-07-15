@@ -35,6 +35,10 @@ class StaySerializer(serializers.ModelSerializer):
     guests = StayGuestReadSerializer(many=True, read_only=True)
     checked_in_by = serializers.SerializerMethodField()
     checked_out_by = serializers.SerializerMethodField()
+    # Operational-card finance block (§12). Off by default so the broad /stays
+    # list stays cheap; a front-desk view opts in via context ``with_folio`` and
+    # the viewer must hold ``finance.view`` — otherwise this is null.
+    folio_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = Stay
@@ -61,6 +65,7 @@ class StaySerializer(serializers.ModelSerializer):
             "checked_in_by",
             "checked_out_by",
             "guests",
+            "folio_summary",
             "created_at",
             "updated_at",
         ]
@@ -71,6 +76,59 @@ class StaySerializer(serializers.ModelSerializer):
 
     def get_checked_out_by(self, obj):
         return obj.checked_out_by.email if obj.checked_out_by_id else None
+
+    def get_folio_summary(self, obj):
+        if not self.context.get("with_folio"):
+            return None
+        request = self.context.get("request")
+        if request is None or getattr(request, "hotel", None) is None:
+            return None
+        from apps.finance.models import Folio, FolioStatus
+        from apps.finance.services import ZERO, folio_balance, money
+        from apps.rbac.services import has_hotel_permission
+
+        if not has_hotel_permission(request.user, request.hotel, "finance.view"):
+            return None
+        open_folios = list(
+            Folio.objects.filter(
+                hotel=obj.hotel, stay=obj, status=FolioStatus.OPEN
+            ).order_by("id")
+        )
+        if not open_folios:
+            return None
+        total_charges = ZERO
+        total_payments = ZERO
+        awaiting = False
+        for folio in open_folios:
+            totals = folio_balance(folio)
+            total_charges += totals["total_charges"]
+            total_payments += totals["total_payments"]
+            if folio.awaiting_final_charges:
+                awaiting = True
+        balance = money(total_charges - total_payments)
+        # Payment status is DERIVED from the folio's own totals — never a second
+        # local rule that could disagree with the ledger (§12). ``overpaid`` is
+        # the existing enum for a credit / refund-due balance (no new state).
+        if total_charges <= ZERO and total_payments <= ZERO:
+            payment_status = "unpaid"
+        elif balance < ZERO:
+            payment_status = "overpaid"
+        elif balance <= ZERO:
+            payment_status = "paid"
+        elif total_payments <= ZERO:
+            payment_status = "unpaid"
+        else:
+            payment_status = "partial"
+        first = open_folios[0]
+        return {
+            "folio_number": first.folio_number,
+            "currency": first.currency,
+            "total_charges": str(total_charges),
+            "total_payments": str(total_payments),
+            "balance": str(balance),
+            "payment_status": payment_status,
+            "awaiting_final_charges": awaiting,
+        }
 
 
 class CheckInSerializer(serializers.Serializer):

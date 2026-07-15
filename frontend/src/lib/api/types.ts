@@ -918,8 +918,25 @@ export interface Stay {
   checked_in_by: string | null;
   checked_out_by: string | null;
   guests: StayGuestLink[];
+  /**
+   * Operational-card finance block (§12) — present only on the front-desk
+   * resident/departure lists, and only for viewers with `finance.view`.
+   * Derived from the folio ledger; the client never recomputes it.
+   */
+  folio_summary?: StayFolioCardSummary | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface StayFolioCardSummary {
+  folio_number: string;
+  currency: string;
+  total_charges: string;
+  total_payments: string;
+  balance: string;
+  /** Derived from the folio's own totals (§12). `overpaid` = credit/refund-due. */
+  payment_status: "paid" | "partial" | "unpaid" | "overpaid";
+  awaiting_final_charges: boolean;
 }
 
 /** GET /stays/<id>/folio-summary — check-out dialog context. */

@@ -141,6 +141,9 @@ class CurrentResidentsView(generics.ListAPIView):
     def get_permissions(self):
         return [CanView()]
 
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), "with_folio": True}
+
     def get_queryset(self):
         return _stay_qs(self.request.hotel).filter(status=StayStatus.IN_HOUSE)
 
@@ -163,6 +166,9 @@ class DeparturesTodayView(generics.ListAPIView):
 
     def get_permissions(self):
         return [CanView()]
+
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), "with_folio": True}
 
     def get_queryset(self):
         today = get_business_date(self.request.hotel)

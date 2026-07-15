@@ -1303,6 +1303,18 @@
       "attention": "Dikkat gerektirir",
       "attentionCaption": "İşlem gerekli"
     },
+    "finance": {
+      "total": "Folyo toplamı",
+      "paid": "Ödenen",
+      "remaining": "Kalan",
+      "awaiting": "Son ücretler bekleniyor",
+      "status": {
+        "paid": "Ödendi",
+        "partial": "Kısmen ödendi",
+        "unpaid": "Ödenmedi",
+        "overpaid": "Alacak var"
+      }
+    },
     "tabs": {
       "arrivals": "Bugünkü girişler",
       "current": "Mevcut konuklar",

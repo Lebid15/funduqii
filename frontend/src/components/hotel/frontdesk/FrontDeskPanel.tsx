@@ -28,6 +28,7 @@ import {
   Input,
   LoadingState,
   Modal,
+  PaymentStatusBadge,
   SectionHeader,
   Select,
   Tabs,
@@ -68,6 +69,7 @@ import type {
   Guest,
   Reservation,
   Stay,
+  StayFolioCardSummary,
   StayFolioSummary,
   StayStatusLogEntry,
 } from "@/lib/api/types";
@@ -90,6 +92,32 @@ function useCan() {
   const access = useHotelAccess();
   return (...codes: string[]) =>
     access === null || (!access.loading && access.can(...codes));
+}
+
+/**
+ * Operational-card finance block (§12). Renders the folio total / paid /
+ * remaining plus the CENTRAL PaymentStatusBadge — status and amounts come
+ * straight from the folio ledger (backend), never recomputed here. An
+ * awaiting-final-charges operational badge is shown as a distinct signal.
+ * Renders nothing when the viewer lacks `finance.view` (backend nulls it).
+ */
+function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | undefined }) {
+  const { t } = useI18n();
+  if (!folio) return null;
+  const f = t.frontDesk.finance;
+  return (
+    <div className="stack" style={{ gap: "0.35rem" }}>
+      <div className="cluster" style={{ gap: "0.35rem" }}>
+        <PaymentStatusBadge status={folio.payment_status} labels={f.status} />
+        {folio.awaiting_final_charges ? <Badge tone="warning">{f.awaiting}</Badge> : null}
+      </div>
+      <div className="stay-card__meta">
+        <span>{f.total}: {folio.total_charges} {folio.currency}</span>
+        <span>{f.paid}: {folio.total_payments} {folio.currency}</span>
+        <span>{f.remaining}: {folio.balance} {folio.currency}</span>
+      </div>
+    </div>
+  );
 }
 
 export function FrontDeskPanel() {
@@ -441,6 +469,7 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
               <span>{t.frontDesk.current.checkInDate}: {formatDate(stay.actual_check_in_at, locale)}</span>
               <span>{t.frontDesk.current.checkOutDate}: {formatDate(stay.planned_check_out_date, locale)} · {stay.nights} {t.frontDesk.current.nights}</span>
             </div>
+            <FolioCardSummary folio={stay.folio_summary} />
             <div className="stay-card__actions">
               <Button variant="secondary" size="sm" onClick={() => setDetails(stay)}>{t.frontDesk.current.details}</Button>
               {can("stays.extend") ? (
@@ -537,6 +566,7 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
             icon={PlaneTakeoff}
             title={`${stay.room_number} · ${stay.primary_guest_name}`}
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
+            meta={<FolioCardSummary folio={stay.folio_summary} />}
             action={
               can("stays.check_out") ? (
                 <Button icon={LogOut} onClick={() => setCheckoutTarget(stay)}>{t.frontDesk.current.checkOut}</Button>
