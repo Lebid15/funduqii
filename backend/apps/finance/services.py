@@ -760,9 +760,10 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
 
 # STAYS-ARRIVALS-DEPARTURES — every room NIGHT is its own charge, marked with a
 # short ``source`` and its ``room_night`` date. The stable idempotency key is
-# (folio, room_night), enforced by a partial unique index, so the daily close, a
-# retry, the pre-checkout safety net, and any two CONCURRENT posters all converge
-# on exactly one charge per night.
+# (folio, room_night), enforced by a partial unique index, so check-in, a retry,
+# the pre-checkout safety net, the manual ensure-room-charges endpoint, and any
+# two CONCURRENT posters all converge on exactly one charge per night (there is no
+# daily-close caller yet; that wiring is future).
 ROOM_NIGHT_SOURCE = "stay_room"
 
 
@@ -781,17 +782,21 @@ def _stay_room_rate(stay):
 @transaction.atomic
 def ensure_due_room_charges(stay, *, as_of=None, user=None):
     """Idempotently post one ROOM charge per CONSUMED night (owner correction to
-    §24/§31): a night dated ``D`` is due once the hotel business date has passed
-    it (``D < business_date``) and falls before the stay's planned departure.
-    Future nights are NEVER pre-posted — the folio only ever holds the nights the
-    guest has actually stayed by the hotel's clock, so an early departure owes
-    exactly the nights it consumed.
+    §24/§31): billing runs from the guest's ACTUAL arrival up to — but not
+    including — the planned departure, and only for nights the hotel business date
+    has already passed (``D < business_date``). Future nights are NEVER pre-posted
+    — the folio only ever holds the nights the guest has actually stayed by the
+    hotel's clock, so an early departure owes exactly the nights it consumed.
 
-    Each night is keyed by its date via the charge ``source`` so the daily close,
-    a retry, or the pre-checkout safety net can all call this and never
-    double-post. Skips an UNPRICED room type. The charge itself is dated to the
-    current business date (no back-dating); the ``source``/description carry the
-    night it settles. Returns the number of night charges newly posted.
+    Each night is keyed by its ``room_night`` date; the partial unique index on
+    (folio, room_night) is the idempotency backstop, so a retry or a concurrent
+    poster never double-posts. This function is invoked at CHECK-IN, by the
+    pre-checkout safety net in ``CheckOutService``, and by the manual
+    ``stays/<id>/ensure-room-charges`` endpoint — there is NO daily-close caller
+    yet (that wiring is deferred/future). Skips an UNPRICED room type. The charge
+    itself is dated to the current business date (no back-dating); the
+    ``room_night``/description carry the night it settles. Returns the number of
+    night charges newly posted.
     """
     # ``ensure_stay_folio`` locks the stay row (select_for_update), so concurrent
     # calls for the SAME stay already serialize here; the partial unique index on
@@ -801,6 +806,16 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     rate, label = _stay_room_rate(stay)
     if rate is None:
         return 0
+    # FIX-2 (legacy double-billing guard): an OLDER design posted ONE aggregated
+    # ROOM charge for the whole stay with no ``room_night`` (room_night IS NULL).
+    # If such a POSTED aggregated charge already exists on this folio, posting
+    # per-night charges now would DOUBLE-BILL the room — so post nothing and bail.
+    if folio.charges.filter(
+        type=ChargeType.ROOM,
+        status=PostingStatus.POSTED,
+        room_night__isnull=True,
+    ).exists():
+        return 0
     posted = set(
         folio.charges.filter(
             type=ChargeType.ROOM,
@@ -808,7 +823,27 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
             room_night__isnull=False,
         ).values_list("room_night", flat=True)
     )
-    night = stay.planned_check_in_date
+    # FIX-1 (billing window START): billing begins at the guest's ACTUAL arrival,
+    # so nights before check-in are never billed (consumed nights only). Convert
+    # the aware ``actual_check_in_at`` to the hotel-local date; when no arrival is
+    # recorded — or the hotel carries an INVALID timezone string (the ``timezone``
+    # field has no validators) — fall back to the planned check-in, mirroring the
+    # ``_computed_business_date`` guard so a bad tz never breaks check-in/-out. The
+    # upper bound (planned check-out) is deliberately left unchanged — overstay is
+    # a separate decision.
+    from apps.shifts.services import _hotel_timezone
+
+    arrival_date = stay.planned_check_in_date
+    if stay.actual_check_in_at is not None:
+        try:
+            arrival_date = timezone.localtime(
+                stay.actual_check_in_at, ZoneInfo(_hotel_timezone(stay.hotel))
+            ).date()
+        except (KeyError, ValueError):
+            # ZoneInfoNotFoundError subclasses KeyError; a bad tz name keeps the
+            # safe planned-check-in fallback rather than failing the posting path.
+            arrival_date = stay.planned_check_in_date
+    night = max(stay.planned_check_in_date, arrival_date)
     end = stay.planned_check_out_date
     count = 0
     while night < end and night < business_date:
@@ -829,9 +864,18 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
                 )
                 count += 1
             except IntegrityError:
-                # A concurrent process already posted this night: not an error —
-                # the invariant (one charge per night) holds. Treat as done.
-                pass
+                # FIX-3: a concurrent poster may have inserted THIS night between
+                # our read and our insert, so the partial unique index (folio,
+                # room_night) rejected the duplicate. Re-query: if the night is now
+                # POSTED the invariant (one charge per night) holds and we treat it
+                # as done. But if it is NOT posted then this IntegrityError is not a
+                # uniqueness collision — do not silently swallow it; re-raise.
+                if not folio.charges.filter(
+                    type=ChargeType.ROOM,
+                    room_night=night,
+                    status=PostingStatus.POSTED,
+                ).exists():
+                    raise
             posted.add(night)
         night = night + timedelta(days=1)
     return count

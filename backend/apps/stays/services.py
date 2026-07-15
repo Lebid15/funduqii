@@ -301,8 +301,10 @@ class CheckInService:
         # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner correction): post only the
         # room nights already DUE by the hotel business date — never front-load
         # the whole planned stay. On the arrival day this normally posts nothing;
-        # each later night is posted when it is consumed (daily close / the
-        # pre-checkout safety net). Same transaction — a failure rolls check-in back.
+        # each later night is posted when it is consumed — by this check-in call,
+        # by the pre-checkout safety net in CheckOutService, or by the manual
+        # stays/<id>/ensure-room-charges endpoint (there is NO daily-close caller
+        # yet; that wiring is future). Same transaction — a failure rolls check-in back.
         ensure_due_room_charges(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
@@ -358,9 +360,11 @@ class CheckOutService:
 
         # Safety net (owner correction): make sure every room night consumed by
         # the hotel's clock is posted before we read the balance and settle — a
-        # departure must never skip a due night just because the daily close has
-        # not yet run. Idempotent, so it never double-posts. No night on/after the
-        # departure business date is posted.
+        # departure must never skip a due night. This safety net (together with the
+        # check-in call and the manual stays/<id>/ensure-room-charges endpoint) is
+        # what actually posts the due nights; there is NO daily-close caller yet
+        # (that wiring is future). Idempotent, so it never double-posts. No night
+        # on/after the departure business date is posted.
         ensure_due_room_charges(stay, user=user)
 
         open_folios = list(
@@ -590,8 +594,10 @@ class ExtendStayService:
         _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
         # §25 (owner correction): extending only updates the plan + availability.
         # The added nights are NOT posted now — they become real folio charges as
-        # each one is consumed (daily close / the pre-checkout safety net), so the
-        # folio never front-loads a future night that has not yet happened.
+        # each one is consumed, posted by the pre-checkout safety net in
+        # CheckOutService or the manual stays/<id>/ensure-room-charges endpoint (no
+        # daily-close caller yet; that wiring is future), so the folio never
+        # front-loads a future night that has not yet happened.
         note = f"extended {old_end} -> {new_check_out_date}"
         if (reason or "").strip():
             note = f"{note} · {reason.strip()}"

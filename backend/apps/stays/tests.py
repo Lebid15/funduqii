@@ -1470,6 +1470,132 @@ class RoomChargePostingTests(APITestCase):
         self.assertEqual(nights.count(), nights.values("room_night").distinct().count())
         self.assertEqual(nights.count(), 2)
 
+    def test_late_arrival_excludes_pre_arrival_nights(self):
+        """FIX-1 — a LATE arrival is billed only from the actual arrival date on:
+        nights before the guest physically checked in (unoccupied) are never
+        posted, even though they fall inside the planned window."""
+        from datetime import datetime
+
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        # Planned check-in is D1; the guest actually arrives one day LATER (D1+1).
+        # Build an aware datetime whose hotel-local date (UTC here) is D1+1.
+        arrival = datetime.combine(
+            D1 + timedelta(days=1),
+            datetime.min.time().replace(hour=12),
+            tzinfo=dt_timezone.utc,
+        )
+        stay.actual_check_in_at = arrival
+        stay.save(update_fields=["actual_check_in_at"])
+
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        # Only the single night from the actual arrival (D1+1) is billed.
+        self.assertEqual(posted, 1)
+        folio = stay.folios.get()
+        nights = set(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).values_list("room_night", flat=True)
+        )
+        self.assertEqual(nights, {D1 + timedelta(days=1)})
+        self.assertNotIn(D1, nights)  # the pre-arrival night is NOT billed
+
+    def test_legacy_aggregated_charge_prevents_double_billing(self):
+        """FIX-2 — if the folio already holds a legacy aggregated ROOM charge
+        (whole stay on one line, no room_night), per-night posting bails out with
+        0 so the room is never double-billed."""
+        from apps.finance.models import ChargeType
+        from apps.finance.services import add_charge, ensure_due_room_charges
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        # Legacy-style aggregated room charge: the whole stay on ONE line with no
+        # room_night (room_night stays NULL).
+        add_charge(
+            folio,
+            charge_type=ChargeType.ROOM,
+            description="Room (legacy aggregate)",
+            quantity=2,
+            unit_amount="100.00",
+            source="stay_room",
+            user=self.manager,
+        )
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
+        posted = ensure_due_room_charges(
+            stay, as_of=stay.planned_check_out_date, user=self.manager
+        )
+        self.assertEqual(posted, 0)  # nothing posted — the legacy line already bills
+        # No per-night (room_night set) charge was added.
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, room_night__isnull=False
+            ).count(),
+            0,
+        )
+
+    def test_safety_net_posts_via_real_business_date(self):
+        """FIX-5 — the safety net posts consumed nights via the REAL business date
+        (NO as_of): a guest who genuinely arrived 2 days ago owes both nights that
+        the hotel clock has already passed, proving the real-business-date path."""
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        room2 = make_room(self.hotel, self.rtype, number="777")
+        res2, line2 = make_reservation(
+            self.hotel, self.rtype, room=room2,
+            ci=D1 - timedelta(days=2), co=D1,  # nights D1-2, D1-1
+        )
+        guest2 = make_guest(self.hotel, name="Past Guest")
+        stay = self._check_in(res2, line2, room2, guest2)
+        # The guest actually arrived 2 days ago: FIX-1's window opens at D1-2, so
+        # both nights are genuinely consumed by today's business date.
+        stay.actual_check_in_at = timezone.now() - timedelta(days=2)
+        stay.save(update_fields=["actual_check_in_at"])
+
+        # No as_of: ensure must use the REAL business date (today) to decide which
+        # nights are due — proving the safety-net path without an as_of override.
+        posted = ensure_due_room_charges(stay, user=self.manager)
+        self.assertEqual(posted, 2)
+        folio = stay.folios.get()
+        nights = set(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).values_list("room_night", flat=True)
+        )
+        self.assertEqual(
+            nights, {D1 - timedelta(days=2), D1 - timedelta(days=1)}
+        )
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
+
+    def test_invalid_hotel_timezone_falls_back_safely(self):
+        """FIX-1 robustness — a hotel carrying an INVALID timezone string (the
+        field has no validators) must NOT break room-charge posting: the arrival
+        derivation falls back to the planned check-in instead of raising
+        ZoneInfoNotFoundError, so check-in/-out never fail for that hotel."""
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges
+        from apps.hotels.models import HotelSettings
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        # Poison the hotel timezone AFTER a clean check-in.
+        HotelSettings.objects.update_or_create(
+            hotel=self.hotel, defaults={"timezone": "Not/AZone"}
+        )
+        # Must NOT raise: arrival_date falls back to planned check-in (D1), so both
+        # nights (D1, D1+1) are due as of D2.
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(posted, 2)
+        folio = stay.folios.get()
+        nights = set(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).values_list("room_night", flat=True)
+        )
+        self.assertEqual(nights, {D1, D1 + timedelta(days=1)})
+
 
 class FolioLifecycleGateTests(APITestCase):
     """§32/§38/§42 — awaiting-final-charges blocks check-out; a closed folio can
@@ -2010,7 +2136,10 @@ class FolioCycleEndpointsTests(APITestCase):
         self.assertEqual(row["folio_summary"]["payment_status"], "paid")
 
     def _check_in_past_arrival(self, number):
-        """A stay whose two nights are already consumed by the business date."""
+        """A stay whose two nights are genuinely consumed: the guest actually
+        ARRIVED two days ago (``actual_check_in_at`` back-dated), so under FIX-1
+        the billing window starts at D1-2 and nights D1-2, D1-1 are real consumed
+        nights before today's business date."""
         from apps.stays.services import CheckInService
 
         room = make_room(self.hotel, self.rtype, number=number)
@@ -2018,17 +2147,23 @@ class FolioCycleEndpointsTests(APITestCase):
             self.hotel, self.rtype, room=room,
             ci=D1 - timedelta(days=2), co=D1,  # nights D1-2, D1-1 (both due at D1)
         )
-        return CheckInService.execute(
+        stay = CheckInService.execute(
             self.hotel, reservation=res, reservation_line=line, room=room,
             primary_guest=make_guest(self.hotel, name=f"G{number}"),
             companions=(), user=self.manager,
         )
+        # Realistic: the guest physically arrived 2 days ago, so FIX-1's window
+        # opens at D1-2 (not today) and both nights are genuinely consumed.
+        stay.actual_check_in_at = timezone.now() - timedelta(days=2)
+        stay.save(update_fields=["actual_check_in_at"])
+        return stay
 
     def test_ensure_room_charges_endpoint_posts_due_nights(self):
-        """Owner correction — check-in posts the already-due nights, and the
-        ensure endpoint is an idempotent safety net that returns the summary."""
+        """Owner correction — the two genuinely-consumed nights (arrival 2 days
+        ago) are posted via the real business date, and the ensure endpoint is an
+        idempotent safety net that returns the summary."""
         stay = self._check_in_past_arrival("909")
-        # Both past nights were due at check-in -> already posted (200).
+        # Both consumed nights are due at today's business date -> posted (200).
         r = self.client.post(
             reverse("stays:stay-ensure-room-charges", args=[stay.id]), **HDR(self.hotel)
         )
