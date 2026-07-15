@@ -85,6 +85,7 @@ def _stay_qs(hotel, *, with_folio=False):
             FolioStatus,
             Payment,
             PostingStatus,
+            RefundableInsurance,
         )
 
         qs = qs.prefetch_related(
@@ -103,7 +104,24 @@ def _stay_qs(hotel, *, with_folio=False):
                     ),
                 ),
                 to_attr="open_folios_prefetched",
-            )
+            ),
+            # FIX-3 (§12 card clearance must account for held insurance). Two
+            # BOUNDED prefetches — one for insurance linked directly to the stay,
+            # one for insurance taken at booking against the reservation while the
+            # stay was not yet linked (``stay`` NULL) — mirror ``held_insurance_qs``
+            # so the card's non-finance clearance flag is honest WITHOUT a per-card
+            # query (no N+1). ``held_amount`` is derived, so the rows are fetched
+            # and the held test is done in Python (a handful of rows per stay).
+            Prefetch(
+                "insurances",
+                queryset=RefundableInsurance.objects.all(),
+                to_attr="held_insurances_prefetched",
+            ),
+            Prefetch(
+                "reservation__insurances",
+                queryset=RefundableInsurance.objects.filter(stay__isnull=True),
+                to_attr="reservation_held_insurances_prefetched",
+            ),
         )
     return qs
 
@@ -279,9 +297,22 @@ class StayLogsView(APIView):
 
 
 def _stay_folio_summary(request, stay) -> dict:
-    """Build the checkout dialog's folio + insurance snapshot for a stay."""
-    from apps.finance.models import Folio, FolioStatus, RefundableInsurance
-    from apps.finance.services import folio_balance
+    """Build the checkout dialog's folio + insurance snapshot for a stay.
+
+    STAYS ITEM-4 (financial-detail RBAC). Every MONETARY value below — balances,
+    currencies, insurance amounts, settlement/payment detail — is returned ONLY to
+    a viewer holding ``finance.view``. A viewer with ``stays.view`` /
+    ``stays.check_out`` but WITHOUT ``finance.view`` receives abstract OPERATIONAL
+    states only; the monetary keys are OMITTED entirely (never zeroed/nulled) so no
+    amount, currency or sensitive movement leaks through a placeholder.
+
+    The clearance flags are computed the SAME way regardless of who is looking, so
+    the backend stays the single, final arbiter of checkout readiness:
+    ``can_check_out`` mirrors the financial gate the checkout service enforces
+    (a settled balance, no folio awaiting final charges, no insurance still held).
+    """
+    from apps.finance.models import Folio, FolioStatus
+    from apps.finance.services import folio_balance, held_insurance_qs
 
     folios = Folio.objects.filter(hotel=request.hotel, stay=stay)
     open_summaries = []
@@ -303,17 +334,21 @@ def _stay_folio_summary(request, stay) -> dict:
                 "awaiting_final_charges_note": folio.awaiting_final_charges_note,
             }
         )
-    # Refundable insurance held against this stay must be settled before the
-    # guest departs (§35). Surface held items so the checkout dialog can drive
-    # refund/deduction without a second round-trip.
+    # Refundable insurance that blocks this stay must be settled before the
+    # guest departs (§35). This uses the SAME shared query as
+    # ``CheckOutService.execute`` (``held_insurance_qs``) — including insurance
+    # taken at booking against the reservation while the stay was not yet linked
+    # (``stay`` NULL) — so ``can_check_out`` here can never disagree with the
+    # gate the checkout service actually enforces. Surface held items so the
+    # checkout dialog can drive refund/deduction without a second round-trip.
     insurances = []
     insurance_pending = False
-    for ins in RefundableInsurance.objects.filter(
-        hotel=request.hotel, stay=stay
-    ).order_by("id"):
+    insurance_held = False
+    for ins in held_insurance_qs(stay).order_by("id"):
         held = ins.held_amount
         if held > 0:
             insurance_pending = True
+            insurance_held = True
         insurances.append(
             {
                 "id": ins.id,
@@ -326,19 +361,50 @@ def _stay_folio_summary(request, stay) -> dict:
             }
         )
     business_date = get_business_date(request.hotel)
-    return {
+
+    # Financial clearance = a settled balance AND no folio awaiting final charges
+    # AND no insurance still held. This is the same truth for every viewer.
+    financial_clearance_complete = (
+        total == 0 and not awaiting_final_charges and not insurance_held
+    )
+    can_see_finance = has_hotel_permission(
+        request.user, request.hotel, "finance.view"
+    )
+
+    summary = {
         "business_date": str(business_date),
         "is_early_departure": (
             stay.status == StayStatus.IN_HOUSE
             and business_date < stay.planned_check_out_date
         ),
         "has_folio": folios.exists(),
-        "open_folios": open_summaries,
-        "balance": str(total),
-        "awaiting_final_charges": awaiting_final_charges,
-        "insurances": insurances,
-        "insurance_pending": insurance_pending,
+        # Operational, non-monetary states — always present for every viewer.
+        "financial_details_visible": can_see_finance,
+        "financial_clearance_complete": financial_clearance_complete,
+        "requires_financial_action": not financial_clearance_complete,
+        "can_check_out": financial_clearance_complete,
     }
+    if can_see_finance:
+        # Full monetary detail exactly as before (unchanged shape).
+        summary["open_folios"] = open_summaries
+        summary["balance"] = str(total)
+        summary["awaiting_final_charges"] = awaiting_final_charges
+        summary["insurances"] = insurances
+        summary["insurance_pending"] = insurance_pending
+    else:
+        # Non-monetary operational skeleton only: folio identifiers + the
+        # awaiting flag (NO balance, NO currency, NO status, NO note); the
+        # awaiting bool; and NOTHING about insurance amounts or existence.
+        summary["open_folios"] = [
+            {
+                "id": f["id"],
+                "folio_number": f["folio_number"],
+                "awaiting_final_charges": f["awaiting_final_charges"],
+            }
+            for f in open_summaries
+        ]
+        summary["awaiting_final_charges"] = awaiting_final_charges
+    return summary
 
 
 class StayFolioSummaryView(APIView):

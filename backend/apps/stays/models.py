@@ -56,6 +56,16 @@ class Stay(models.Model):
     )
     planned_check_in_date = models.DateField()
     planned_check_out_date = models.DateField()
+    # STAYS ITEM-3 — the AGREED nightly rate captured ONCE at check-in from the
+    # reservation line's room type (``RoomType.base_rate``). It is the single
+    # source of truth for this stay's per-night room bill: a later catalog
+    # change to ``base_rate`` never alters an in-progress stay's nightly charge.
+    # NULL for an unpriced room type at admission, and for stays created before
+    # this field existed (the night service then falls back to the live rate).
+    # ``max_digits``/``decimal_places`` mirror finance ``MONEY_KW`` (12, 2).
+    nightly_rate = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     actual_check_in_at = models.DateTimeField()
     actual_check_out_at = models.DateTimeField(null=True, blank=True)
     checked_in_by = models.ForeignKey(

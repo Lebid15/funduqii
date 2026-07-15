@@ -5,6 +5,7 @@ arrivals/departures on the hotel business date, and regression."""
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone as dt_timezone
+from decimal import Decimal
 from unittest import mock
 
 from django.urls import reverse
@@ -2188,3 +2189,857 @@ class FolioCycleEndpointsTests(APITestCase):
             self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
         # Prefetch + a once-per-response permission check => constant query count.
         self.assertEqual(len(q1.captured_queries), len(q2.captured_queries))
+
+
+# --------------------------------------------------------------------------- #
+# STAYS FINAL HARDENING (PR #43) — helpers                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _priced_type(hotel, *, code="STD", rate="100.00"):
+    """A room type WITH a base rate (so nights are billable)."""
+    return RoomType.objects.create(
+        hotel=hotel, name="Standard", code=code,
+        base_capacity=2, max_capacity=3, base_rate=rate,
+    )
+
+
+def _check_in(hotel, manager, rtype, *, number, ci=D1, co=D2, guest_name="G"):
+    """Check a fresh reservation into a fresh room and return the Stay."""
+    from apps.stays.services import CheckInService
+
+    room = make_room(hotel, rtype, number=number)
+    res, line = make_reservation(hotel, rtype, room=room, ci=ci, co=co)
+    return CheckInService.execute(
+        hotel, reservation=res, reservation_line=line, room=room,
+        primary_guest=make_guest(hotel, name=guest_name),
+        companions=(), user=manager,
+    )
+
+
+def _set_arrival(stay, arrival_date):
+    """Pin the actual arrival to NOON UTC on ``arrival_date`` so FIX-1's billing
+    window opens deterministically regardless of the server timezone (the hotel
+    tz defaults to UTC in these tests)."""
+    stay.actual_check_in_at = datetime.combine(
+        arrival_date, datetime.min.time().replace(hour=12), tzinfo=dt_timezone.utc
+    )
+    stay.save(update_fields=["actual_check_in_at"])
+
+
+class NightlyRateSnapshotTests(APITestCase):
+    """ITEM 3 — the AGREED nightly rate is snapshotted at check-in
+    (``Stay.nightly_rate``); a later ``RoomType.base_rate`` change never alters an
+    in-progress stay's nightly bill. A legacy stay (NULL snapshot) falls back to
+    the live rate."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "snap@x.com", kind=MembershipType.MANAGER)
+
+    def test_snapshot_captured_at_check_in(self):
+        rtype = _priced_type(self.hotel, code="CAP", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="300")
+        self.assertEqual(stay.nightly_rate, Decimal("100.00"))
+        stay.refresh_from_db()
+        self.assertEqual(stay.nightly_rate, Decimal("100.00"))
+
+    def test_snapshot_beats_later_rate_change(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        rtype = _priced_type(self.hotel, code="SNP", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="301")
+        # Catalog changes AFTER admission.
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(posted, 2)
+        folio = stay.folios.get()
+        for c in folio.charges.filter(type=ChargeType.ROOM):
+            self.assertEqual(c.total_amount, Decimal("100.00"))  # OLD snapshot
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
+
+    def test_posted_nights_unchanged_by_rate_change(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges
+
+        rtype = _priced_type(self.hotel, code="UNC", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="302")
+        # Post only night D1.
+        ensure_due_room_charges(stay, as_of=D1 + timedelta(days=1), user=self.manager)
+        folio = stay.folios.get()
+        first = folio.charges.get(type=ChargeType.ROOM, room_night=D1)
+        self.assertEqual(first.total_amount, Decimal("100.00"))
+        # Rate change after the night is already posted (immutable charge).
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
+        ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        first.refresh_from_db()
+        self.assertEqual(first.total_amount, Decimal("100.00"))  # unchanged
+        nights = folio.charges.filter(type=ChargeType.ROOM)
+        self.assertEqual(nights.count(), 2)
+        for c in nights:
+            self.assertEqual(c.total_amount, Decimal("100.00"))  # both from snapshot
+
+    def test_late_arrival_bills_from_snapshot(self):
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        rtype = _priced_type(self.hotel, code="LAT", rate="100.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="303")
+        _set_arrival(stay, D1 + timedelta(days=1))  # only the 2nd night consumed
+        RoomType.objects.filter(pk=rtype.pk).update(base_rate=Decimal("250.00"))
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(posted, 1)
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "100.00")  # snapshot
+
+    def test_unpriced_room_snapshot_null_posts_nothing(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges
+
+        rtype = make_type(self.hotel, code="UNP")  # no base_rate
+        stay = _check_in(self.hotel, self.manager, rtype, number="304")
+        self.assertIsNone(stay.nightly_rate)
+        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
+        self.assertEqual(
+            stay.folios.get().charges.filter(type=ChargeType.ROOM).count(), 0
+        )
+
+    def test_legacy_stay_without_snapshot_uses_live_rate(self):
+        """Backward compatibility — a stay created BEFORE the snapshot field
+        (``nightly_rate`` NULL) bills from the LIVE room-type ``base_rate``."""
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        rtype = _priced_type(self.hotel, code="LEG", rate="120.00")
+        room = make_room(self.hotel, rtype, number="811")
+        res, line = make_reservation(self.hotel, rtype, room=room, ci=D1, co=D2)
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="Legacy"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1, planned_check_out_date=D2,
+            nightly_rate=None,  # legacy: no snapshot captured
+            actual_check_in_at=timezone.now(),
+        )
+        ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        folio = stay.folios.get()
+        self.assertEqual(str(folio_balance(folio)["balance"]), "240.00")  # 2 * live 120
+
+    def test_snapshot_is_tenant_isolated(self):
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        hotel_b = make_hotel(slug="snap-b")
+        mgr_b = add_member(hotel_b, "snapb@x.com", kind=MembershipType.MANAGER)
+        rtype_a = _priced_type(self.hotel, code="TA", rate="100.00")
+        rtype_b = _priced_type(hotel_b, code="TB", rate="200.00")
+        stay_a = _check_in(self.hotel, self.manager, rtype_a, number="305")
+        stay_b = _check_in(hotel_b, mgr_b, rtype_b, number="305")
+        # Both catalogs change after admission — neither stay is affected.
+        RoomType.objects.filter(pk=rtype_a.pk).update(base_rate=Decimal("999.00"))
+        RoomType.objects.filter(pk=rtype_b.pk).update(base_rate=Decimal("999.00"))
+        ensure_due_room_charges(stay_a, as_of=D2, user=self.manager)
+        ensure_due_room_charges(stay_b, as_of=D2, user=mgr_b)
+        folio_a = stay_a.folios.get()
+        folio_b = stay_b.folios.get()
+        self.assertEqual(str(folio_balance(folio_a)["balance"]), "200.00")  # 2*100
+        self.assertEqual(str(folio_balance(folio_b)["balance"]), "400.00")  # 2*200
+        self.assertEqual(folio_a.hotel_id, self.hotel.id)
+        self.assertEqual(folio_b.hotel_id, hotel_b.id)
+        # No cross-tenant charge leakage.
+        self.assertFalse(folio_a.charges.exclude(hotel=self.hotel).exists())
+        self.assertFalse(folio_b.charges.exclude(hotel=hotel_b).exists())
+
+
+class RoomAccountChargeGuardTests(APITestCase):
+    """ITEM 7 — a non-night charge always has ``room_night`` NULL and never
+    collides on the room-night unique index; ``post_room_account_charge`` now
+    requires an explicit ``charge_type``."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "rag@x.com", kind=MembershipType.MANAGER)
+        self.rtype = _priced_type(self.hotel)
+        self.stay = _check_in(self.hotel, self.manager, self.rtype, number="401")
+
+    def test_non_night_charge_null_room_night_and_source_reuse_ok(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import (
+            ROOM_NIGHT_SOURCE, add_charge, ensure_stay_folio,
+        )
+
+        folio = ensure_stay_folio(self.stay, user=self.manager)
+        c1 = add_charge(
+            folio, charge_type=ChargeType.SERVICE, description="minibar",
+            quantity=1, unit_amount="10.00", source=ROOM_NIGHT_SOURCE, user=self.manager,
+        )
+        self.assertIsNone(c1.room_night)  # non-night charge => room_night NULL
+        # Reusing the SAME source on a second non-night charge does NOT trip the
+        # (folio, room_night) unique index — it only constrains room_night NOT NULL.
+        c2 = add_charge(
+            folio, charge_type=ChargeType.SERVICE, description="minibar2",
+            quantity=1, unit_amount="10.00", source=ROOM_NIGHT_SOURCE, user=self.manager,
+        )
+        self.assertIsNone(c2.room_night)
+        self.assertEqual(
+            folio.charges.filter(
+                source=ROOM_NIGHT_SOURCE, room_night__isnull=True
+            ).count(),
+            2,
+        )
+
+    def test_post_room_account_charge_requires_charge_type(self):
+        from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_stay_folio, post_room_account_charge
+
+        folio = ensure_stay_folio(self.stay, user=self.manager)
+        with self.assertRaises(TypeError):
+            post_room_account_charge(
+                folio, description="x", quantity=1, unit_amount="5.00",
+                user=self.manager,
+            )
+        # With an explicit type it posts and never sets room_night.
+        charge = post_room_account_charge(
+            folio, description="x", quantity=1, unit_amount="5.00",
+            charge_type=ChargeType.SERVICE, user=self.manager,
+        )
+        self.assertIsNone(charge.room_night)
+
+
+class OverstayBillingTests(APITestCase):
+    """ITEM 1 — overstay nights are NEVER auto-billed past the planned check-out;
+    an overstay shows in ``needs_attention``; an Extend makes the newly-in-window
+    night due; a conflicting later booking blocks the Extend."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ovs@x.com", kind=MembershipType.MANAGER)
+        self.rtype = _priced_type(self.hotel)
+
+    def _overstay(self, number):
+        """An in-house stay whose planned window (D1-3 .. D1-1) has fully elapsed
+        by today's business date (D1): a genuine overstay."""
+        stay = _check_in(
+            self.hotel, self.manager, self.rtype, number=number,
+            ci=D1 - timedelta(days=3), co=D1 - timedelta(days=1),
+            guest_name=f"OS{number}",
+        )
+        _set_arrival(stay, D1 - timedelta(days=3))
+        return stay
+
+    def test_overstay_bills_only_up_to_planned_check_out(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges
+
+        stay = self._overstay("501")
+        posted = ensure_due_room_charges(stay, user=self.manager)  # real business date
+        self.assertEqual(posted, 2)  # nights D1-3, D1-2 only
+        folio = stay.folios.get()
+        nights = set(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).values_list("room_night", flat=True)
+        )
+        self.assertEqual(nights, {D1 - timedelta(days=3), D1 - timedelta(days=2)})
+        # NOT one night on/after the planned check-out was billed.
+        self.assertFalse(any(n >= stay.planned_check_out_date for n in nights))
+
+    def test_overstay_counted_in_needs_attention(self):
+        from apps.stays.services import stays_overview
+
+        # Assert the overstay's SPECIFIC contribution (a delta of exactly one),
+        # not merely ">= 1": a single genuine overstay must raise needs_attention
+        # by exactly one over the pre-existing baseline.
+        before = stays_overview(self.hotel)["needs_attention"]
+        self._overstay("502")
+        after = stays_overview(self.hotel)["needs_attention"]
+        self.assertEqual(after - before, 1)
+
+    def test_extend_makes_newly_in_window_night_due(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges
+        from apps.stays.services import ExtendStayService
+
+        stay = self._overstay("503")
+        # Bill the two genuinely consumed nights first.
+        self.assertEqual(ensure_due_room_charges(stay, user=self.manager), 2)
+        # Extend past today: the former check-out night (D1-1) is now inside the
+        # window and already before today's business date, so it becomes due.
+        ExtendStayService.execute(
+            stay, new_check_out_date=D1 + timedelta(days=1), user=self.manager
+        )
+        stay.refresh_from_db()
+        posted = ensure_due_room_charges(stay, user=self.manager)
+        self.assertEqual(posted, 1)
+        folio = stay.folios.get()
+        nights = set(
+            folio.charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).values_list("room_night", flat=True)
+        )
+        self.assertIn(D1 - timedelta(days=1), nights)
+
+    def test_extend_rejects_conflicting_later_booking(self):
+        from apps.common.exceptions import RoomAssignmentConflict
+        from apps.stays.services import ExtendStayService
+
+        stay = _check_in(
+            self.hotel, self.manager, self.rtype, number="504",
+            ci=D1, co=D1 + timedelta(days=2),
+        )
+        # A back-to-back booking pinned to the SAME room blocks the extension.
+        make_reservation(
+            self.hotel, self.rtype, room=stay.room,
+            ci=D1 + timedelta(days=2), co=D1 + timedelta(days=4),
+        )
+        with self.assertRaises(RoomAssignmentConflict):
+            ExtendStayService.execute(
+                stay, new_check_out_date=D1 + timedelta(days=3), user=self.manager
+            )
+
+
+class DailyCloseRoomChargeTests(APITestCase):
+    """ITEM 2 — the daily close posts every due room night BEFORE building its
+    snapshot; it is idempotent, fail-safe (a posting failure rolls the whole close
+    back), and does not scale queries per stay."""
+
+    def _make_hotel(self, slug):
+        from apps.hotels.models import HotelSettings
+
+        hotel = make_hotel(slug=slug)
+        manager = add_member(hotel, f"dc-{slug}@x.com", kind=MembershipType.MANAGER)
+        HotelSettings.objects.update_or_create(
+            hotel=hotel,
+            defaults={
+                "default_currency": "USD", "timezone": "UTC", "business_date": D1,
+            },
+        )
+        return hotel, manager, _priced_type(hotel, code="DC")
+
+    def _consumed_stay(self, hotel, manager, rtype, number, *, nights_ago=2):
+        """An in-house stay with ``nights_ago`` nights consumed by business date D1."""
+        ci = D1 - timedelta(days=nights_ago)
+        stay = _check_in(
+            hotel, manager, rtype, number=number, ci=ci, co=D1,
+            guest_name=f"C{number}",
+        )
+        _set_arrival(stay, ci)
+        return stay
+
+    def test_close_posts_due_nights_before_snapshot(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import folio_balance
+        from apps.shifts.services import close_business_day
+
+        hotel, manager, rtype = self._make_hotel("dc1")
+        stay = self._consumed_stay(hotel, manager, rtype, "601")
+        folio = stay.folios.get()
+        # Arrival-day check-in posted nothing yet.
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+        close_business_day(hotel, D1, user=manager)
+        posted = folio.charges.filter(type=ChargeType.ROOM, status=PostingStatus.POSTED)
+        self.assertEqual(posted.count(), 2)  # both consumed nights posted BY the close
+        self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
+
+    def test_close_is_idempotent(self):
+        from apps.finance.models import ChargeType
+        from apps.shifts.services import close_business_day
+
+        hotel, manager, rtype = self._make_hotel("dc2")
+        stay = self._consumed_stay(hotel, manager, rtype, "602")
+        close_business_day(hotel, D1, user=manager)  # posts 2, rolls to D2
+        # The stay is still in-house (now overstaying); closing D2 must not
+        # double-post the two already-billed nights.
+        close_business_day(hotel, D1 + timedelta(days=1), user=manager)
+        self.assertEqual(
+            stay.folios.get().charges.filter(type=ChargeType.ROOM).count(), 2
+        )
+
+    def test_close_rolls_back_entirely_when_a_stay_fails(self):
+        from apps.finance import services as fin
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.hotels.models import HotelSettings
+        from apps.shifts.models import DailyClose, DailyCloseStatus
+        from apps.shifts.services import close_business_day
+
+        hotel, manager, rtype = self._make_hotel("dc3")
+        stay_a = self._consumed_stay(hotel, manager, rtype, "603")
+        stay_b = self._consumed_stay(hotel, manager, rtype, "604")
+        real_ensure = fin.ensure_due_room_charges
+
+        def failing(stay, **kw):
+            if stay.id == stay_b.id:
+                raise RuntimeError("controlled failure")
+            return real_ensure(stay, **kw)
+
+        with mock.patch.object(fin, "ensure_due_room_charges", side_effect=failing):
+            with self.assertRaises(RuntimeError):
+                close_business_day(hotel, D1, user=manager)
+
+        # Fail-safe: no CLOSED close, the business date did NOT roll, and stay A's
+        # charges (posted before B failed) rolled back with the whole close.
+        self.assertFalse(
+            DailyClose.objects.filter(
+                hotel=hotel, business_date=D1, status=DailyCloseStatus.CLOSED
+            ).exists()
+        )
+        self.assertEqual(HotelSettings.objects.get(hotel=hotel).business_date, D1)
+        self.assertEqual(
+            stay_a.folios.get().charges.filter(
+                type=ChargeType.ROOM, status=PostingStatus.POSTED
+            ).count(),
+            0,
+        )
+
+    def test_post_due_does_not_scale_queries_per_stay(self):
+        """No N+1 on active stays (owner requirement). FIX-2 reads the business
+        date ONCE (passed through / one lock, forwarded as ``as_of``) and joins
+        ``hotel__settings``, so the redundant PER-STAY business-date lock and
+        timezone read are gone.
+
+        Proven two ways:
+          (a) the OPTIMISED per-stay marginal is a CONSTANT — equal across 1/2/3
+              stays, i.e. queries scale linearly with no super-linear fan-out;
+          (b) with-vs-without the fix: the OLD path (no ``as_of``, no
+              ``hotel__settings`` join) issues STRICTLY MORE queries per stay —
+              exactly the two redundant reads the fix removed — directly measuring
+              what changed rather than trusting a loose absolute bound."""
+        from django.db import connection, transaction
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.finance.services import (
+            ensure_due_room_charges,
+            post_due_room_charges_for_hotel,
+        )
+        from apps.stays.models import Stay, StayStatus
+
+        def _seed(n_stays, slug):
+            hotel, mgr, rtype = self._make_hotel(slug)
+            for i in range(n_stays):
+                self._consumed_stay(hotel, mgr, rtype, f"{slug}{i}", nights_ago=1)
+            return hotel, mgr
+
+        def optimized_cost(n_stays, slug):
+            hotel, mgr = _seed(n_stays, slug)
+            with CaptureQueriesContext(connection) as ctx:
+                post_due_room_charges_for_hotel(
+                    hotel, business_date=D1, user=mgr
+                )
+            return len(ctx.captured_queries)
+
+        def unoptimized_cost(n_stays, slug):
+            # The OLD per-stay path: iterate WITHOUT ``as_of`` and WITHOUT the
+            # ``hotel__settings`` join, so each stay re-locks HotelSettings for the
+            # business date AND re-reads ``hotel.settings`` for the timezone. Same
+            # single-transaction shape as post_due so only the two reads differ.
+            hotel, mgr = _seed(n_stays, slug)
+            control_qs = (
+                Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+                .select_related(
+                    "hotel", "room", "room__room_type", "reservation",
+                    "reservation_line", "reservation_line__room_type",
+                )  # deliberately NO "hotel__settings"
+                .order_by("id")
+            )
+            with CaptureQueriesContext(connection) as ctx:
+                with transaction.atomic():
+                    for stay in control_qs:
+                        ensure_due_room_charges(stay, user=mgr)  # no as_of
+            return len(ctx.captured_queries)
+
+        o1, o2, o3 = (
+            optimized_cost(1, "dcqA"),
+            optimized_cost(2, "dcqB"),
+            optimized_cost(3, "dcqC"),
+        )
+        opt_marginal = o2 - o1
+        # (a) constant marginal ⇒ linear scaling, no super-linear per-stay fan-out.
+        self.assertEqual(opt_marginal, o3 - o2, (o1, o2, o3))
+
+        # (b) with vs without the fix: the unoptimised path costs strictly more
+        # per stay — the two redundant reads (business-date lock + settings tz).
+        u2, u3 = unoptimized_cost(2, "dcqD"), unoptimized_cost(3, "dcqE")
+        unopt_marginal = u3 - u2
+        self.assertGreater(unopt_marginal, opt_marginal, (opt_marginal, unopt_marginal))
+        self.assertGreaterEqual(unopt_marginal - opt_marginal, 2)
+
+
+class FinancialDetailRBACTests(APITestCase):
+    """ITEM 4 — a stay's folio/insurance detail is MONETARY-gated on
+    ``finance.view``. A viewer with ``stays.view`` / ``stays.check_out`` but
+    WITHOUT ``finance.view`` receives abstract OPERATIONAL states only — never a
+    balance, currency, insurance amount, settlement detail or ``payment_status``.
+    The backend stays the final arbiter of checkout readiness: the clearance flag
+    flips as money is settled WITHOUT ever exposing the amount. Tenant scoping is
+    unchanged (a stay from another hotel is 404)."""
+
+    # Monetary/sensitive keys that must be ABSENT for a non-finance viewer in the
+    # checkout-dialog folio-summary payload (endpoint + ensure-room-charges).
+    ENDPOINT_MONEY_KEYS = (
+        "balance", "total_charges", "total_payments",
+        "insurances", "insurance_pending", "payment_status",
+    )
+    # …and in the §12 resident-card block.
+    CARD_MONEY_KEYS = (
+        "balance", "total_charges", "total_payments", "currency",
+        "payment_status", "folio_number", "awaiting_final_charges",
+    )
+
+    def setUp(self):
+        from apps.finance.services import ensure_due_room_charges
+
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "rbac-mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = _priced_type(self.hotel)  # base_rate 100 -> billable nights
+        # ONE in-house stay with a genuine, non-zero balance (2 nights * 100).
+        self.stay = _check_in(self.hotel, self.manager, self.rtype, number="401")
+        ensure_due_room_charges(
+            self.stay, as_of=self.stay.planned_check_out_date, user=self.manager
+        )
+        # Members, each with a single, specific permission set. The finance
+        # viewer also holds ``stays.view`` because the read endpoints are gated on
+        # it — ``finance.view`` alone never opens a stays read route.
+        self.viewer = add_member(self.hotel, "view@x.com", perms=["stays.view"])
+        self.checker = add_member(
+            self.hotel, "chk@x.com", perms=["stays.check_out"]
+        )
+        self.finance_viewer = add_member(
+            self.hotel, "fin@x.com", perms=["stays.view", "finance.view"]
+        )
+
+    # ---- helpers ----------------------------------------------------------
+    def _folio_summary(self, user, stay_id=None):
+        self.client.force_authenticate(user)
+        return self.client.get(
+            reverse("stays:stay-folio-summary", args=[stay_id or self.stay.id]),
+            **HDR(self.hotel),
+        )
+
+    def _current_row(self, user, stay=None):
+        self.client.force_authenticate(user)
+        r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
+        assert r.status_code == 200, r.status_code
+        sid = (stay or self.stay).id
+        return next(x for x in r.data["results"] if x["id"] == sid)
+
+    def _assert_no_money(self, data, keys):
+        for k in keys:
+            self.assertNotIn(k, data, f"monetary key '{k}' leaked to a non-finance viewer")
+
+    # ---- view-only (stays.view) -------------------------------------------
+    def test_view_only_endpoint_is_abstract_and_money_free(self):
+        r = self._folio_summary(self.viewer)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["financial_details_visible"])
+        self.assertFalse(r.data["financial_clearance_complete"])  # balance 200
+        self.assertTrue(r.data["requires_financial_action"])
+        self.assertFalse(r.data["can_check_out"])
+        self._assert_no_money(r.data, self.ENDPOINT_MONEY_KEYS)
+        # The non-monetary skeleton carries folio identifiers ONLY — no money.
+        self.assertEqual(len(r.data["open_folios"]), 1)
+        skeleton = r.data["open_folios"][0]
+        self.assertEqual(
+            set(skeleton), {"id", "folio_number", "awaiting_final_charges"}
+        )
+        self._assert_no_money(
+            skeleton, ("balance", "currency", "status", "awaiting_final_charges_note")
+        )
+
+    def test_view_only_current_residents_card_is_abstract(self):
+        summary = self._current_row(self.viewer)["folio_summary"]
+        self.assertIsNotNone(summary)
+        self.assertEqual(
+            set(summary),
+            {
+                "financial_details_visible",
+                "financial_clearance_complete",
+                "requires_financial_action",
+            },
+        )
+        self.assertFalse(summary["financial_details_visible"])
+        self.assertTrue(summary["requires_financial_action"])
+        self._assert_no_money(summary, self.CARD_MONEY_KEYS)
+
+    # ---- check-out-only (stays.check_out) ---------------------------------
+    def test_check_out_only_member_never_sees_money(self):
+        # stays.view gating is UNCHANGED: check_out alone cannot READ the folio
+        # summary or the resident list (both are gated on stays.view)…
+        self.client.force_authenticate(self.checker)
+        self.assertEqual(
+            self.client.get(
+                reverse("stays:stay-folio-summary", args=[self.stay.id]),
+                **HDR(self.hotel),
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("stays:stay-current"), **HDR(self.hotel)
+            ).status_code,
+            403,
+        )
+        # …but the checkout-dialog opener it IS allowed to call
+        # (ensure-room-charges, gated on stays.check_out) returns the SAME
+        # money-free operational summary.
+        r = self.client.post(
+            reverse("stays:stay-ensure-room-charges", args=[self.stay.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["financial_details_visible"])
+        self.assertTrue(r.data["requires_financial_action"])
+        self._assert_no_money(r.data, self.ENDPOINT_MONEY_KEYS)
+
+    # ---- finance.view + manager -------------------------------------------
+    def test_finance_viewer_sees_full_monetary_detail(self):
+        r = self._folio_summary(self.finance_viewer)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.data["financial_details_visible"])
+        self.assertEqual(r.data["balance"], "200.00")
+        self.assertIn("insurances", r.data)
+        self.assertIn("insurance_pending", r.data)
+        self.assertEqual(r.data["open_folios"][0]["balance"], "200.00")
+        self.assertIn("currency", r.data["open_folios"][0])
+        # §12 card also carries the monetary block for a finance viewer.
+        summary = self._current_row(self.finance_viewer)["folio_summary"]
+        self.assertTrue(summary["financial_details_visible"])
+        self.assertEqual(summary["balance"], "200.00")
+        self.assertEqual(summary["payment_status"], "unpaid")
+
+    def test_manager_sees_full_monetary_detail(self):
+        r = self._folio_summary(self.manager)
+        self.assertTrue(r.data["financial_details_visible"])
+        self.assertEqual(r.data["balance"], "200.00")
+        summary = self._current_row(self.manager)["folio_summary"]
+        self.assertTrue(summary["financial_details_visible"])
+        self.assertEqual(summary["balance"], "200.00")
+
+    # ---- clearance flips on settlement, amount stays hidden ---------------
+    def test_clearance_flips_after_settlement_for_non_finance_viewer(self):
+        from apps.finance.services import record_folio_settlement
+
+        before = self._folio_summary(self.viewer)
+        self.assertTrue(before.data["requires_financial_action"])
+        self._assert_no_money(before.data, self.ENDPOINT_MONEY_KEYS)
+        # Settle the balance to zero via the finance service. The amount is 200,
+        # but the non-finance viewer must never see it — only the flag flips.
+        record_folio_settlement(
+            self.stay.folios.get(), method="cash", amount="200.00",
+            user=self.manager,
+        )
+        after = self._folio_summary(self.viewer)
+        self.assertTrue(after.data["financial_clearance_complete"])
+        self.assertFalse(after.data["requires_financial_action"])
+        self.assertTrue(after.data["can_check_out"])
+        self.assertFalse(after.data["financial_details_visible"])
+        self._assert_no_money(after.data, self.ENDPOINT_MONEY_KEYS)
+        # The resident card flips too — still money-free.
+        card = self._current_row(self.viewer)["folio_summary"]
+        self.assertTrue(card["financial_clearance_complete"])
+        self._assert_no_money(card, self.CARD_MONEY_KEYS)
+
+    def test_held_insurance_blocks_clearance_without_exposing_amount(self):
+        from apps.finance.services import record_folio_settlement, record_insurance
+
+        # Settle the room balance so ONLY the held insurance stands between the
+        # guest and clearance.
+        record_folio_settlement(
+            self.stay.folios.get(), method="cash", amount="200.00",
+            user=self.manager,
+        )
+        record_insurance(
+            hotel=self.hotel, amount="150.00", stay=self.stay, user=self.manager
+        )
+        r = self._folio_summary(self.viewer)
+        self.assertFalse(r.data["financial_clearance_complete"])  # insurance held
+        self.assertTrue(r.data["requires_financial_action"])
+        self.assertFalse(r.data["can_check_out"])
+        # No insurance amount OR existence leaks for a non-finance viewer.
+        self._assert_no_money(r.data, self.ENDPOINT_MONEY_KEYS)
+        # A finance viewer DOES see the held insurance and its amount.
+        fr = self._folio_summary(self.finance_viewer)
+        self.assertTrue(fr.data["insurance_pending"])
+        self.assertEqual(fr.data["insurances"][0]["held_amount"], "150.00")
+
+    # ---- FIX-3: §12 resident card clearance accounts for held insurance ----
+    def test_held_stay_insurance_blocks_card_clearance_non_finance_viewer(self):
+        from apps.finance.services import record_folio_settlement, record_insurance
+
+        # Settle the room balance so ONLY held insurance stands between the guest
+        # and clearance; a STAY-linked insurance is caught by the card prefetch.
+        record_folio_settlement(
+            self.stay.folios.get(), method="cash", amount="200.00",
+            user=self.manager,
+        )
+        record_insurance(
+            hotel=self.hotel, amount="150.00", stay=self.stay, user=self.manager
+        )
+        card = self._current_row(self.viewer)["folio_summary"]
+        self.assertFalse(card["financial_clearance_complete"])
+        self.assertTrue(card["requires_financial_action"])
+        self._assert_no_money(card, self.CARD_MONEY_KEYS)
+
+    def test_reservation_level_insurance_blocks_card_clearance(self):
+        from apps.finance.services import record_folio_settlement, record_insurance
+
+        record_folio_settlement(
+            self.stay.folios.get(), method="cash", amount="200.00",
+            user=self.manager,
+        )
+        # Insurance held against the RESERVATION (stay=None) — the card's bounded
+        # prefetch must catch it via the reservation branch, matching the checkout
+        # gate (so the card never claims clearance the service would refuse).
+        record_insurance(
+            hotel=self.hotel, amount="80.00",
+            reservation=self.stay.reservation, stay=None, user=self.manager,
+        )
+        card = self._current_row(self.viewer)["folio_summary"]
+        self.assertFalse(card["financial_clearance_complete"])
+        self.assertTrue(card["requires_financial_action"])
+        self._assert_no_money(card, self.CARD_MONEY_KEYS)
+
+    # ---- tenant isolation -------------------------------------------------
+    def test_stay_from_another_hotel_is_404(self):
+        other = make_hotel(slug="rbac-other")
+        other_mgr = add_member(
+            other, "other-mgr@x.com", kind=MembershipType.MANAGER
+        )
+        other_rtype = _priced_type(other, code="OTH")
+        other_stay = _check_in(other, other_mgr, other_rtype, number="901")
+        # Neither a non-finance viewer nor a finance viewer of THIS hotel can
+        # resolve a stay id from another hotel — permission never crosses tenants.
+        self.assertEqual(
+            self._folio_summary(self.viewer, other_stay.id).status_code, 404
+        )
+        self.assertEqual(
+            self._folio_summary(self.finance_viewer, other_stay.id).status_code, 404
+        )
+
+
+class ReservationInsuranceClearanceTests(APITestCase):
+    """FIX-1 — the checkout-dialog folio summary MUST use the same held-insurance
+    query as ``CheckOutService`` (``held_insurance_qs``), so RESERVATION-level
+    insurance (``stay`` NULL) blocks ``can_check_out`` instead of the endpoint
+    saying "ready" while the service raises ``InsuranceNotSettled``."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "resins@x.com", kind=MembershipType.MANAGER
+        )
+        # UNPRICED room type -> zero room balance, so ONLY the insurance can block.
+        self.rtype = make_type(self.hotel, code="RIN")
+        self.room = make_room(self.hotel, self.rtype, number="710")
+        self.res, self.line = make_reservation(
+            self.hotel, self.rtype, room=self.room
+        )
+
+    def _stay(self):
+        from apps.stays.services import CheckInService
+
+        return CheckInService.execute(
+            self.hotel, reservation=self.res, reservation_line=self.line,
+            room=self.room, primary_guest=make_guest(self.hotel),
+            companions=(), user=self.manager,
+        )
+
+    def _summary(self, stay):
+        self.client.force_authenticate(self.manager)
+        return self.client.get(
+            reverse("stays:stay-folio-summary", args=[stay.id]), **HDR(self.hotel)
+        )
+
+    def test_reservation_insurance_blocks_summary_and_matches_service(self):
+        from apps.common.exceptions import InsuranceNotSettled
+        from apps.finance.services import record_insurance
+        from apps.stays.services import CheckOutService
+
+        stay = self._stay()
+        # Insurance taken at BOOKING against the reservation, stay not yet linked.
+        record_insurance(
+            hotel=self.hotel, amount="120.00", reservation=self.res, stay=None,
+            user=self.manager,
+        )
+        # Zero folio balance (unpriced room) — the OLD stay=stay-only endpoint
+        # query would have said "ready"; the shared query must NOT.
+        r = self._summary(stay)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["financial_clearance_complete"])
+        self.assertFalse(r.data["can_check_out"])
+        # The endpoint's verdict matches the service, which BLOCKS on the same set.
+        with self.assertRaises(InsuranceNotSettled):
+            CheckOutService.execute(
+                stay, checkout_reason="early departure", user=self.manager
+            )
+
+    def test_summary_ready_once_reservation_insurance_refunded(self):
+        from apps.finance.services import record_insurance, refund_insurance
+        from apps.stays.services import CheckOutService
+
+        stay = self._stay()
+        ins = record_insurance(
+            hotel=self.hotel, amount="120.00", reservation=self.res, stay=None,
+            user=self.manager,
+        )
+        refund_insurance(ins, reason="no damage", user=self.manager)  # held -> 0
+        r = self._summary(stay)
+        self.assertTrue(r.data["financial_clearance_complete"])
+        self.assertTrue(r.data["can_check_out"])
+        # And the service now lets the guest depart (nothing held, zero balance).
+        out = CheckOutService.execute(
+            stay, checkout_reason="early departure", user=self.manager
+        )
+        self.assertEqual(out.status, StayStatus.CHECKED_OUT)
+
+
+class NightlyRateBackfillTests(APITestCase):
+    """FIX-6 — the 0003 data migration backfills ``Stay.nightly_rate`` for
+    pre-existing IN_HOUSE stays from their reservation line's room type base rate
+    (priced only), idempotently, without disturbing already-snapshotted stays."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "bf@x.com", kind=MembershipType.MANAGER)
+
+    def _run_backfill(self):
+        from importlib import import_module
+        from types import SimpleNamespace
+
+        from django.apps import apps as global_apps
+        from django.db import connection
+
+        mod = import_module("apps.stays.migrations.0003_backfill_nightly_rate")
+        # The migration only needs ``schema_editor.connection.alias`` — pass a thin
+        # shim so no DDL/transaction is opened inside the test's own transaction.
+        mod.backfill_nightly_rate(
+            global_apps, SimpleNamespace(connection=connection)
+        )
+
+    def test_backfill_sets_rate_for_legacy_in_house_stay(self):
+        rtype = _priced_type(self.hotel, code="BF1", rate="130.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="810")
+        # Simulate a stay admitted BEFORE the snapshot field existed: clear it.
+        Stay.objects.filter(pk=stay.pk).update(nightly_rate=None)
+        self._run_backfill()
+        stay.refresh_from_db()
+        self.assertEqual(stay.nightly_rate, Decimal("130.00"))
+
+    def test_backfill_leaves_existing_snapshot_untouched(self):
+        rtype = _priced_type(self.hotel, code="BF2", rate="130.00")
+        stay = _check_in(self.hotel, self.manager, rtype, number="811")
+        # Snapshot already captured at check-in (130). Move the LIVE rate…
+        rtype.base_rate = Decimal("999.00")
+        rtype.save(update_fields=["base_rate"])
+        # …the backfill must NOT overwrite it (only NULL snapshots are touched).
+        self._run_backfill()
+        stay.refresh_from_db()
+        self.assertEqual(stay.nightly_rate, Decimal("130.00"))
+
+    def test_backfill_skips_unpriced_stay(self):
+        rtype = make_type(self.hotel, code="BF3")  # no base_rate
+        stay = _check_in(self.hotel, self.manager, rtype, number="812")
+        # Unpriced at admission -> snapshot NULL; the backfill leaves it NULL.
+        self.assertIsNone(stay.nightly_rate)
+        self._run_backfill()
+        stay.refresh_from_db()
+        self.assertIsNone(stay.nightly_rate)

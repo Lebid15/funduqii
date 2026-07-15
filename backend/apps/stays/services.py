@@ -268,6 +268,30 @@ class CheckInService:
         ensure_guest_not_blocked(primary_guest, *companions)
 
         actor = user if getattr(user, "is_authenticated", False) else None
+        # STAYS ITEM-3: snapshot the AGREED nightly rate ONCE, at admission, from
+        # the reservation line's room type. ``ensure_due_room_charges`` bills every
+        # night from this snapshot, so a later ``RoomType.base_rate`` change never
+        # changes an in-progress stay's nightly charge. An unpriced room type
+        # (base_rate NULL/<=0) — or no reservation line — leaves it NULL, and the
+        # night service then falls back to the live rate (backward compatible).
+        from apps.finance.models import ZERO as MONEY_ZERO
+        from apps.finance.services import money as _money
+
+        snapshot_type = (
+            reservation_line.room_type if reservation_line is not None else None
+        )
+        snapshot_base_rate = getattr(snapshot_type, "base_rate", None)
+        # Quantize once (not twice in the same expression), then keep it only when
+        # it is a real priced rate — otherwise leave the snapshot NULL so the night
+        # service falls back to the live rate (legacy / unpriced-at-admission).
+        snapshot_rate = (
+            _money(snapshot_base_rate) if snapshot_base_rate is not None else None
+        )
+        nightly_rate = (
+            snapshot_rate
+            if snapshot_rate is not None and snapshot_rate > MONEY_ZERO
+            else None
+        )
         stay = Stay.objects.create(
             hotel=hotel,
             reservation=reservation,
@@ -277,6 +301,7 @@ class CheckInService:
             status=StayStatus.IN_HOUSE,
             planned_check_in_date=reservation.check_in_date,
             planned_check_out_date=reservation.check_out_date,
+            nightly_rate=nightly_rate,
             actual_check_in_at=timezone.now(),
             checked_in_by=actor,
             check_in_notes=check_in_notes or "",
@@ -302,9 +327,10 @@ class CheckInService:
         # room nights already DUE by the hotel business date — never front-load
         # the whole planned stay. On the arrival day this normally posts nothing;
         # each later night is posted when it is consumed — by this check-in call,
-        # by the pre-checkout safety net in CheckOutService, or by the manual
-        # stays/<id>/ensure-room-charges endpoint (there is NO daily-close caller
-        # yet; that wiring is future). Same transaction — a failure rolls check-in back.
+        # by the pre-checkout safety net in CheckOutService, by the manual
+        # stays/<id>/ensure-room-charges endpoint, or by the daily close
+        # (post_due_room_charges_for_hotel). Same transaction — a failure rolls
+        # check-in back.
         ensure_due_room_charges(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
@@ -360,11 +386,11 @@ class CheckOutService:
 
         # Safety net (owner correction): make sure every room night consumed by
         # the hotel's clock is posted before we read the balance and settle — a
-        # departure must never skip a due night. This safety net (together with the
-        # check-in call and the manual stays/<id>/ensure-room-charges endpoint) is
-        # what actually posts the due nights; there is NO daily-close caller yet
-        # (that wiring is future). Idempotent, so it never double-posts. No night
-        # on/after the departure business date is posted.
+        # departure must never skip a due night. The due nights are posted by
+        # several converging callers: check-in, this pre-checkout safety net, the
+        # manual stays/<id>/ensure-room-charges endpoint, and the daily close
+        # (post_due_room_charges_for_hotel). Idempotent, so it never double-posts.
+        # No night on/after the departure business date is posted.
         ensure_due_room_charges(stay, user=user)
 
         open_folios = list(
@@ -396,15 +422,13 @@ class CheckOutService:
 
         # §35/§38 — refundable insurance held for this stay must be fully refunded
         # or settled (held_amount == 0) before departure. This includes insurance
-        # taken at booking against the reservation (stay not yet linked).
-        from django.db.models import Q
+        # taken at booking against the reservation (stay not yet linked). The set
+        # of blocking insurance is defined ONCE in ``held_insurance_qs`` and reused
+        # by the checkout-dialog folio summary, so the readiness the front desk
+        # sees can never disagree with this gate.
+        from apps.finance.services import held_insurance_qs
 
-        from apps.finance.models import RefundableInsurance
-
-        held_filter = Q(stay=stay)
-        if stay.reservation_id:
-            held_filter |= Q(reservation_id=stay.reservation_id, stay__isnull=True)
-        for ins in RefundableInsurance.objects.filter(hotel=stay.hotel).filter(held_filter):
+        for ins in held_insurance_qs(stay):
             if ins.held_amount > 0:
                 raise InsuranceNotSettled(
                     {"insurance": ins.id, "held": str(ins.held_amount)}
@@ -595,8 +619,8 @@ class ExtendStayService:
         # §25 (owner correction): extending only updates the plan + availability.
         # The added nights are NOT posted now — they become real folio charges as
         # each one is consumed, posted by the pre-checkout safety net in
-        # CheckOutService or the manual stays/<id>/ensure-room-charges endpoint (no
-        # daily-close caller yet; that wiring is future), so the folio never
+        # CheckOutService, the manual stays/<id>/ensure-room-charges endpoint, or
+        # the daily close (post_due_room_charges_for_hotel), so the folio never
         # front-loads a future night that has not yet happened.
         note = f"extended {old_end} -> {new_check_out_date}"
         if (reason or "").strip():

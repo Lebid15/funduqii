@@ -101,6 +101,27 @@ class StaySerializer(serializers.ModelSerializer):
             self._can_finance_cache = cached
         return cached[0]
 
+    def _has_held_insurance(self, obj) -> bool:
+        """Whether ``obj`` (a stay) still has refundable insurance holding money —
+        computed from the list view's BOUNDED prefetches (``_stay_qs``), so no
+        query is issued per card. Covers BOTH insurance linked to the stay and
+        insurance taken at booking against its reservation while the stay was not
+        yet linked (``stay`` NULL) — the exact set ``held_insurance_qs`` (and thus
+        the checkout gate) uses. Falls back to a direct query ONLY when the
+        prefetch was not set up (defensive; the §12 card list always sets it)."""
+        stay_rows = getattr(obj, "held_insurances_prefetched", None)
+        if stay_rows is None:
+            from apps.finance.services import held_insurance_qs
+
+            return any(ins.held_amount > 0 for ins in held_insurance_qs(obj))
+        rows = list(stay_rows)
+        if obj.reservation_id is not None and obj.reservation is not None:
+            rows += list(
+                getattr(obj.reservation, "reservation_held_insurances_prefetched", [])
+                or []
+            )
+        return any(ins.held_amount > 0 for ins in rows)
+
     def get_folio_summary(self, obj):
         if not self.context.get("with_folio"):
             return None
@@ -110,11 +131,12 @@ class StaySerializer(serializers.ModelSerializer):
         from apps.finance.models import Folio, FolioStatus, PostingStatus
         from apps.finance.services import ZERO, money
 
-        if not self._may_see_finance(request):
-            return None
         # Prefer the list view's prefetch (open folios + POSTED charges/payments)
         # so a page of N residents never issues per-card folio queries. Fall back
-        # to a direct fetch only when the prefetch wasn't set up (defensive).
+        # to a direct fetch only when the prefetch wasn't set up (defensive). This
+        # runs BEFORE the permission branch so a non-finance viewer still gets the
+        # abstract clearance flag from the SAME prefetched rows (no extra query,
+        # no N+1) — and so "no open folio" returns None for everyone.
         open_folios = getattr(obj, "open_folios_prefetched", None)
         if open_folios is None:
             open_folios = list(
@@ -148,6 +170,25 @@ class StaySerializer(serializers.ModelSerializer):
             if folio.awaiting_final_charges:
                 awaiting = True
         balance = money(total_charges - total_payments)
+        # STAYS ITEM-4 (financial-detail RBAC): a viewer WITHOUT ``finance.view``
+        # gets ONLY abstract operational states — never an amount, currency or
+        # payment_status. The clearance flag is derived from a settled balance, no
+        # folio awaiting final charges, AND no still-held refundable insurance.
+        # FIX-3: the held-insurance rows are BOUNDED-prefetched by the list view
+        # (``_stay_qs`` — both stay-linked and reservation-linked-with-null-stay),
+        # mirroring ``held_insurance_qs``, so this card's clearance matches the
+        # checkout-dialog endpoint and the real checkout gate WITHOUT a per-card
+        # query. ``held_amount`` is derived, so the held test runs in Python.
+        if not self._may_see_finance(request):
+            insurance_held = self._has_held_insurance(obj)
+            financial_clearance_complete = (
+                balance == ZERO and not awaiting and not insurance_held
+            )
+            return {
+                "financial_details_visible": False,
+                "financial_clearance_complete": financial_clearance_complete,
+                "requires_financial_action": not financial_clearance_complete,
+            }
         # Payment status is DERIVED from the folio's own totals — never a second
         # local rule that could disagree with the ledger (§12). ``overpaid`` is
         # the existing enum for a credit / refund-due balance (no new state).
@@ -163,6 +204,7 @@ class StaySerializer(serializers.ModelSerializer):
             payment_status = "partial"
         first = open_folios[0]
         return {
+            "financial_details_visible": True,
             "folio_number": first.folio_number,
             "currency": first.currency,
             "total_charges": str(total_charges),

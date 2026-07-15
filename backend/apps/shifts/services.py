@@ -43,7 +43,7 @@ from apps.common.exceptions import (
     ShiftNotOpen,
 )
 from apps.finance.models import Expense, Payment, PaymentMethod, PostingStatus
-from apps.finance.services import money
+from apps.finance.services import money, post_due_room_charges_for_hotel
 from apps.rbac.services import get_active_membership
 from apps.tenancy.models import HotelMembership, MembershipType
 
@@ -1048,6 +1048,18 @@ def close_business_day(hotel, business_date, *, user=None, notes=""):
     ).count()
     if open_count:
         raise OpenShiftsPreventClose({"open_shifts": open_count})
+    # STAYS ITEM-2: post every room night ALREADY CONSUMED by in-house guests
+    # BEFORE the snapshot is built, so the day's folio balances and room revenue
+    # reflect those nights. "Consumed" means a night strictly BEFORE the closing
+    # date: closing business date D posts the nights up to D-1 — the night OF D is
+    # posted at the NEXT close (D+1), because a guest still in-house on the morning
+    # of D has not yet completed the night of D. ``current`` (the closing date) is
+    # passed through so the per-stay path does not re-lock ``HotelSettings`` — the
+    # lock is already held here and the date is fixed for the whole close (no N+1).
+    # This runs inside the close's atomic block: a failure posting any stay rolls
+    # the WHOLE close back (no partial snapshot, no CLOSED status, no business-date
+    # roll) and surfaces a diagnosable exception — the fail-safe requirement.
+    post_due_room_charges_for_hotel(hotel, business_date=current, user=user)
     # 10-11) build the final snapshot (warnings/info never block).
     snapshot, totals = build_daily_snapshot(hotel, current)
     # 12) persist the close.

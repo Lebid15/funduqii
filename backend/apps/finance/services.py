@@ -736,11 +736,18 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
 
 @transaction.atomic
 def post_room_account_charge(folio, *, description, quantity, unit_amount,
-                            charge_type=ChargeType.ROOM, tax_rate=ZERO,
+                            charge_type, tax_rate=ZERO,
                             tax_amount=None, source="room_account",
                             user=None) -> FolioCharge:
     """Post an "on room account" item: the charge is added to the folio and
     left OWING. This is a thin, intent-revealing delegate to ``add_charge``.
+
+    ``charge_type`` is a REQUIRED keyword (no default): the earlier ``ROOM``
+    default was ambiguous — a caller could silently post a ROOM charge that
+    would trip the room-night guard. The caller must now state the type
+    explicitly. This delegate NEVER sets ``room_night`` (it is left NULL); the
+    per-night idempotency key is owned solely by the central night service
+    ``ensure_due_room_charges``.
 
     Invariant #5: on-room-account is NOT a payment. This NEVER creates a
     ``Payment`` — doing so would falsely reduce the balance. The balance stays
@@ -761,19 +768,29 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
 # STAYS-ARRIVALS-DEPARTURES — every room NIGHT is its own charge, marked with a
 # short ``source`` and its ``room_night`` date. The stable idempotency key is
 # (folio, room_night), enforced by a partial unique index, so check-in, a retry,
-# the pre-checkout safety net, the manual ensure-room-charges endpoint, and any
-# two CONCURRENT posters all converge on exactly one charge per night (there is no
-# daily-close caller yet; that wiring is future).
+# the pre-checkout safety net, the manual ensure-room-charges endpoint, the daily
+# close (``post_due_room_charges_for_hotel`` in ``close_business_day``), and any
+# two CONCURRENT posters all converge on exactly one charge per night.
 ROOM_NIGHT_SOURCE = "stay_room"
 
 
 def _stay_room_rate(stay):
-    """The nightly rate + a display label for a stay, from its reservation line's
-    room type. Returns ``(None, label)`` for an UNPRICED room type."""
+    """The nightly rate + a display label for a stay.
+
+    STAYS ITEM-3: prefer the AGREED rate SNAPSHOT captured at check-in
+    (``stay.nightly_rate``), so a later ``RoomType.base_rate`` change never alters
+    an in-progress stay's nightly bill (nor its already-posted, immutable nights).
+    Fall back to the LIVE room-type ``base_rate`` ONLY when the snapshot is NULL —
+    i.e. stays created before this field existed, or an unpriced room type at
+    admission. Returns ``(None, label)`` for an UNPRICED stay (no snapshot and no
+    live rate). The display label always comes from the room type when known."""
     line = stay.reservation_line
     room_type = getattr(line, "room_type", None) if line is not None else None
-    rate = room_type.base_rate if room_type is not None else None
     label = room_type.name if room_type is not None else "Room"
+    snapshot = getattr(stay, "nightly_rate", None)
+    if snapshot is not None and money(snapshot) > ZERO:
+        return money(snapshot), label
+    rate = room_type.base_rate if room_type is not None else None
     if rate is None or money(rate) <= ZERO:
         return None, label
     return money(rate), label
@@ -791,12 +808,12 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     Each night is keyed by its ``room_night`` date; the partial unique index on
     (folio, room_night) is the idempotency backstop, so a retry or a concurrent
     poster never double-posts. This function is invoked at CHECK-IN, by the
-    pre-checkout safety net in ``CheckOutService``, and by the manual
-    ``stays/<id>/ensure-room-charges`` endpoint — there is NO daily-close caller
-    yet (that wiring is deferred/future). Skips an UNPRICED room type. The charge
-    itself is dated to the current business date (no back-dating); the
-    ``room_night``/description carry the night it settles. Returns the number of
-    night charges newly posted.
+    pre-checkout safety net in ``CheckOutService``, by the manual
+    ``stays/<id>/ensure-room-charges`` endpoint, AND by the daily close
+    (``post_due_room_charges_for_hotel`` in ``close_business_day``). Skips an
+    UNPRICED room type. The charge itself is dated to the current business date
+    (no back-dating); the ``room_night``/description carry the night it settles.
+    Returns the number of night charges newly posted.
     """
     # ``ensure_stay_folio`` locks the stay row (select_for_update), so concurrent
     # calls for the SAME stay already serialize here; the partial unique index on
@@ -879,6 +896,58 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
             posted.add(night)
         night = night + timedelta(days=1)
     return count
+
+
+@transaction.atomic
+def post_due_room_charges_for_hotel(hotel, *, business_date=None, user=None) -> int:
+    """STAYS ITEM-2 — post every room night now DUE for the hotel's IN-HOUSE
+    stays, in one tenant-scoped pass.
+
+    Iterates the hotel's in-house stays and runs the central idempotent
+    ``ensure_due_room_charges`` on each. That service decides which nights are due
+    (never a future night, never on/after the planned check-out — the billing cap
+    stays intact) and never double-posts.
+
+    NO N+1 on active stays (owner requirement):
+      * The business date is read ONCE here (not re-locked per stay). The daily
+        close already holds the ``HotelSettings`` lock and knows the closing date,
+        so it passes ``business_date`` and no per-stay ``lock_business_date`` runs;
+        called standalone, we take the lock exactly once. It is forwarded as
+        ``as_of`` so ``ensure_due_room_charges`` skips its own per-stay read. The
+        posted charge is still dated to the real business date by ``add_charge``
+        (``as_of`` only BOUNDS the night loop; the charge computes its own date).
+      * ``hotel__settings`` is ``select_related`` so the per-stay hotel-timezone
+        lookup (``_hotel_timezone`` in the arrival-window calc) is served from the
+        already-fetched row, not a query per stay. Room / room type / reservation /
+        line are joined for the same reason.
+
+    Designed to run INSIDE the daily close's atomic block, immediately before the
+    snapshot is built, so the day's folios and room revenue reflect the consumed
+    nights. Because the close is atomic, a failure posting ANY stay rolls the
+    whole close back (no partial snapshot, no CLOSED status, no date roll) and
+    surfaces a diagnosable exception. Returns the total night charges newly posted.
+    """
+    from apps.stays.models import Stay, StayStatus
+
+    if business_date is None:
+        business_date = _business_date(hotel)
+    stays = (
+        Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+        .select_related(
+            "hotel",
+            "hotel__settings",
+            "room",
+            "room__room_type",
+            "reservation",
+            "reservation_line",
+            "reservation_line__room_type",
+        )
+        .order_by("id")
+    )
+    total = 0
+    for stay in stays:
+        total += ensure_due_room_charges(stay, as_of=business_date, user=user)
+    return total
 
 
 @transaction.atomic
@@ -1518,6 +1587,31 @@ def reverse_expense(expense, *, reason, user=None) -> Expense:
 # Held SEPARATELY from the folio: never revenue, never on the folio balance. A
 # documented deduction posts ONLY the deducted portion to the folio (a payment
 # settling the account); a refund returns money to the guest (no folio movement).
+
+
+def held_insurance_qs(stay):
+    """The refundable-insurance rows that gate ``stay``'s checkout (§35/§38).
+
+    A stay is blocked from departure while ANY of these still hold money: the
+    insurance taken directly against the stay AND the insurance taken at booking
+    against the reservation while the stay was not yet linked (``stay`` NULL).
+
+    This is the SINGLE definition of "insurance that blocks this stay", used by
+    BOTH ``CheckOutService.execute`` (the settlement gate that actually raises
+    ``InsuranceNotSettled``) and the checkout-dialog folio summary
+    (``stays.views._stay_folio_summary``). Keeping one query means the endpoint's
+    ``can_check_out`` / ``financial_clearance_complete`` can never say "ready"
+    while the service would block on a reservation-level deposit (the earlier
+    ``stay=stay``-only endpoint query missed exactly that case).
+    """
+    from .models import RefundableInsurance
+
+    held_filter = models.Q(stay=stay)
+    if stay.reservation_id:
+        held_filter |= models.Q(
+            reservation_id=stay.reservation_id, stay__isnull=True
+        )
+    return RefundableInsurance.objects.filter(hotel=stay.hotel).filter(held_filter)
 
 
 def _refresh_insurance_status(ins) -> None:
