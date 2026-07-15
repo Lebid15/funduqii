@@ -6,11 +6,11 @@ finance services; there is no hard delete and no external gateway.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db.models import Q, Sum
 from rest_framework import generics, status
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -97,6 +97,28 @@ def _hotel_header(hotel) -> dict:
 
 def _get(model, request, pk):
     return generics.get_object_or_404(model, pk=pk, hotel=request.hotel)
+
+
+def _opt_decimal(data, field):
+    """Validate an optional money field: None/'' → None; a malformed value → a
+    400 (not a 500 from Decimal() deep in the service). Returns the raw string
+    so the service keeps its own quantization/FX handling."""
+    value = data.get(field)
+    if value is None or value == "":
+        return None
+    try:
+        Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValidationError({field: "must_be_a_number"})
+    return str(value)
+
+
+def _req_decimal(data, field):
+    """Same as :func:`_opt_decimal` but the field is mandatory (400 if absent)."""
+    value = _opt_decimal(data, field)
+    if value is None:
+        raise ValidationError({field: "required"})
+    return value
 
 
 # --- Folios -----------------------------------------------------------------
@@ -254,10 +276,10 @@ class FolioSettleView(APIView):
         services.record_folio_settlement(
             folio,
             method=data.get("method", "cash"),
-            amount=data.get("amount"),
+            amount=_opt_decimal(data, "amount"),
             currency=(currency or None),
-            original_amount=data.get("original_amount"),
-            exchange_rate=data.get("exchange_rate"),
+            original_amount=_opt_decimal(data, "original_amount"),
+            exchange_rate=_opt_decimal(data, "exchange_rate"),
             rate_basis=data.get("rate_basis", ""),
             payer_name=data.get("payer_name", ""),
             reference=data.get("reference", ""),
@@ -281,7 +303,7 @@ class FolioRefundView(APIView):
         folio = _get(Folio, request, pk)
         services.refund_folio_credit(
             folio,
-            amount=request.data.get("amount"),
+            amount=_opt_decimal(request.data, "amount"),
             reason=(request.data.get("reason") or ""),
             method=request.data.get("method"),
             user=request.user,
@@ -792,9 +814,9 @@ class InsuranceListCreateView(APIView):
         qs = RefundableInsurance.objects.filter(hotel=request.hotel)
         stay = request.query_params.get("stay")
         reservation = request.query_params.get("reservation")
-        if stay:
+        if stay and str(stay).isdigit():
             qs = qs.filter(stay_id=stay)
-        if reservation:
+        if reservation and str(reservation).isdigit():
             qs = qs.filter(reservation_id=reservation)
         return Response(InsuranceSerializer(qs, many=True).data)
 
@@ -816,7 +838,7 @@ class InsuranceListCreateView(APIView):
             )
         ins = services.record_insurance(
             hotel=request.hotel,
-            amount=data.get("amount"),
+            amount=_req_decimal(data, "amount"),
             currency=data.get("currency"),
             method=data.get("method"),
             reservation=reservation,
@@ -842,7 +864,7 @@ class InsuranceRefundView(APIView):
         ins = _get(RefundableInsurance, request, pk)
         services.refund_insurance(
             ins,
-            amount=request.data.get("amount"),
+            amount=_opt_decimal(request.data, "amount"),
             reason=(request.data.get("reason") or ""),
             user=request.user,
         )
@@ -862,7 +884,7 @@ class InsuranceDeductView(APIView):
         ins = _get(RefundableInsurance, request, pk)
         services.deduct_insurance(
             ins,
-            amount=request.data.get("amount"),
+            amount=_req_decimal(request.data, "amount"),
             reason=(request.data.get("reason") or ""),
             user=request.user,
         )

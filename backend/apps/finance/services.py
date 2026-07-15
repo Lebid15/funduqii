@@ -29,6 +29,7 @@ from apps.common.exceptions import (
     ActiveInvoiceExists,
     ChargeAlreadyAdjusted,
     ExpenseAlreadyReversed,
+    FolioAwaitingFinalCharges,
     FolioClosed,
     FolioHasPostings,
     FolioNotBalanced,
@@ -530,6 +531,17 @@ def _guard_open(folio):
 def close_folio(folio, *, user=None) -> Folio:
     folio = _lock_folio(folio)
     _guard_open(folio)
+    # §32/§38 — a folio still flagged awaiting final charges must NOT close. This
+    # is the single source of truth: the stay checkout gate also checks it, but
+    # enforcing it here protects the direct FolioCloseView path too.
+    if folio.awaiting_final_charges:
+        raise FolioAwaitingFinalCharges(
+            {
+                "folio": folio.id,
+                "folio_number": folio.folio_number,
+                "reason": folio.awaiting_final_charges_note,
+            }
+        )
     balance = folio_balance(folio)
     if balance["balance"] != ZERO:
         raise FolioNotBalanced({"folio": folio.id})
@@ -1478,11 +1490,20 @@ def record_insurance(*, hotel, amount, currency=None, method=None, reservation=N
     amt = money(amount)
     if amt <= ZERO:
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    cur = (currency or _hotel_currency(hotel)).upper()
+    if cur not in _accepted_currencies(hotel):
+        raise InvalidFinanceOperation({"reason": "currency_not_accepted", "currency": cur})
+    # Defence in depth: the linked reservation/stay must belong to the same hotel
+    # (the view already scopes them, but never trust a cross-hotel link here).
+    if reservation is not None and reservation.hotel_id != hotel.id:
+        raise InvalidFinanceOperation({"reason": "reservation_hotel_mismatch"})
+    if stay is not None and stay.hotel_id != hotel.id:
+        raise InvalidFinanceOperation({"reason": "stay_hotel_mismatch"})
     return RefundableInsurance.objects.create(
         hotel=hotel,
         reservation=reservation,
         stay=stay,
-        currency=(currency or _hotel_currency(hotel)).upper(),
+        currency=cur,
         amount=amt,
         method=(method or PaymentMethod.CASH),
         reference=reference or "",
@@ -1540,6 +1561,27 @@ def deduct_insurance(insurance, *, amount, reason, user=None):
     if insurance.stay_id is None:
         raise InvalidFinanceOperation({"reason": "insurance_not_linked_to_stay"})
     folio = ensure_stay_folio(insurance.stay, user=user)
+    # The deducted portion settles an OUTSTANDING folio charge — it must never
+    # exceed what the folio actually owes (else it would create a credit that
+    # refund_folio_credit could pay back = double payout), and it is posted in
+    # the folio's own currency, so the insurance must match it (no silent 1:1 FX).
+    if insurance.currency.upper() != folio.currency.upper():
+        raise InvalidFinanceOperation(
+            {
+                "reason": "insurance_currency_mismatch",
+                "insurance_currency": insurance.currency,
+                "folio_currency": folio.currency,
+            }
+        )
+    outstanding = folio_balance(folio)["balance"]
+    if outstanding <= ZERO:
+        raise InvalidFinanceOperation(
+            {"reason": "no_outstanding_balance", "balance": str(outstanding)}
+        )
+    if amt > outstanding:
+        raise InvalidFinanceOperation(
+            {"reason": "exceeds_folio_balance", "balance": str(outstanding)}
+        )
     record_payment(
         folio,
         amount=amt,
@@ -1647,6 +1689,8 @@ def refund_folio_credit(folio, *, amount=None, reason, method=None, user=None):
     (money out) that brings the balance toward zero; the original payments are
     NEVER deleted and the financial date is never changed silently. Requires a
     reason (finance.refund at the view layer)."""
+    from apps.shifts.services import get_open_shift_for
+
     from .models import PaymentMethod
 
     reason = _require_reason(reason)
@@ -1675,6 +1719,7 @@ def refund_folio_credit(folio, *, amount=None, reason, method=None, user=None):
         status=PostingStatus.POSTED,
         paid_at=timezone.now(),
         business_date=business_date,
+        shift=get_open_shift_for(user, folio.hotel),
         reference="refund",
         notes=reason[:255],
         created_by=_actor(user),

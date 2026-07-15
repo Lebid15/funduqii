@@ -1581,6 +1581,55 @@ class InsuranceTests(APITestCase):
         out = CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
         self.assertEqual(out.status, StayStatus.CHECKED_OUT)
 
+    def test_deduct_capped_at_outstanding_balance(self):
+        """§35 review-fix — deduction cannot exceed the folio's outstanding
+        balance (else it would create a credit that could be paid back)."""
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.finance.services import deduct_insurance, record_insurance
+
+        stay = self._check_in()  # unpriced -> folio balance 0
+        ins = record_insurance(hotel=self.hotel, amount="100.00", stay=stay, user=self.manager)
+        with self.assertRaises(InvalidFinanceOperation):
+            deduct_insurance(ins, amount="30.00", reason="damage", user=self.manager)
+
+    def test_record_rejects_unaccepted_currency(self):
+        """§35 review-fix — insurance currency is validated against the hotel's
+        accepted currencies."""
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.finance.services import record_insurance
+
+        stay = self._check_in()
+        with self.assertRaises(InvalidFinanceOperation):
+            record_insurance(
+                hotel=self.hotel, amount="100.00", currency="XXX",
+                stay=stay, user=self.manager,
+            )
+
+    def test_checkout_blocked_by_reservation_linked_insurance(self):
+        """§35 review-fix — insurance taken at booking (stay not yet linked)
+        still blocks the stay's departure."""
+        from apps.common.exceptions import InsuranceNotSettled
+        from apps.finance.services import record_insurance
+        from apps.stays.services import CheckOutService
+
+        stay = self._check_in()
+        record_insurance(
+            hotel=self.hotel, amount="50.00", reservation=self.res,
+            stay=None, user=self.manager,
+        )
+        with self.assertRaises(InsuranceNotSettled):
+            CheckOutService.execute(stay, checkout_reason="early", user=self.manager)
+
+    def test_record_endpoint_missing_amount_is_400(self):
+        """§35 review-fix — a malformed/missing amount is a 400, not a 500."""
+        self.client.force_authenticate(self.manager)
+        stay = self._check_in()
+        r = self.client.post(
+            reverse("finance:insurance-list-create"),
+            {"stay": stay.id}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 400)
+
     def test_insurance_endpoints(self):
         stay = self._check_in()
         self.client.force_authenticate(self.manager)
@@ -1769,6 +1818,21 @@ class FolioCycleEndpointsTests(APITestCase):
         resp = self._post("finance:folio-refund", folio, {"reason": "overpayment"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_close_folio_blocked_while_awaiting_final_charges(self):
+        """§32/§38 review-fix — the direct close path also honours the awaiting
+        flag (not only the stay checkout gate)."""
+        from apps.common.exceptions import FolioAwaitingFinalCharges
+        from apps.finance.services import (
+            close_folio, record_folio_settlement, set_folio_awaiting_final_charges,
+        )
+
+        folio = self._folio()
+        record_folio_settlement(folio, method="cash", amount="200.00", user=self.manager)
+        set_folio_awaiting_final_charges(folio, awaiting=True, note="restaurant", user=self.manager)
+        folio.refresh_from_db()
+        with self.assertRaises(FolioAwaitingFinalCharges):
+            close_folio(folio, user=self.manager)
 
     def test_current_residents_folio_summary(self):
         """§12 — the resident list carries a derived folio finance block."""

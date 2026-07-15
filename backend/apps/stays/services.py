@@ -377,11 +377,17 @@ class CheckOutService:
                     }
                 )
 
-        # §35/§38 — refundable insurance held against this stay must be fully
-        # refunded or settled (held_amount == 0) before departure.
+        # §35/§38 — refundable insurance held for this stay must be fully refunded
+        # or settled (held_amount == 0) before departure. This includes insurance
+        # taken at booking against the reservation (stay not yet linked).
+        from django.db.models import Q
+
         from apps.finance.models import RefundableInsurance
 
-        for ins in RefundableInsurance.objects.filter(hotel=stay.hotel, stay=stay):
+        held_filter = Q(stay=stay)
+        if stay.reservation_id:
+            held_filter |= Q(reservation_id=stay.reservation_id, stay__isnull=True)
+        for ins in RefundableInsurance.objects.filter(hotel=stay.hotel).filter(held_filter):
             if ins.held_amount > 0:
                 raise InsuranceNotSettled(
                     {"insurance": ins.id, "held": str(ins.held_amount)}
