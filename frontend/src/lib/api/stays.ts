@@ -102,7 +102,16 @@ export interface StayDateChangeBody {
   reason?: string;
 }
 
-export function extendStay(id: number, body: StayDateChangeBody): Promise<Stay> {
+export interface StayExtendBody extends StayDateChangeBody {
+  /** Optional pricing OVERRIDE for the ADDED nights (decimal string). Sent ONLY
+   * when a viewer holding `finance.charge_create` edits the added-period rate
+   * away from the stay's current default; the backend then requires a non-empty
+   * `reason` (409/403 otherwise). Omit it entirely to inherit the current rate —
+   * fully backward compatible with the old date-only extend. */
+  nightly_rate?: string;
+}
+
+export function extendStay(id: number, body: StayExtendBody): Promise<Stay> {
   return hotelJson<Stay>(`/stays/${id}/extend`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -131,6 +140,31 @@ export function moveStayRoom(id: number, body: MoveRoomBody): Promise<Stay> {
 /** Rooms a stay can move into right now (room-move dialog). */
 export function listMoveCandidates(id: number): Promise<AdmissibleRoom[]> {
   return hotelJson<AdmissibleRoom[]>(`/stays/${id}/move-candidates`);
+}
+
+/** Legacy rate remediation (STAYS rate-integrity). Sets a POSITIVE agreed nightly
+ * rate for the given uncovered `[start_date, end_date)` window of a "stuck" stay
+ * (one with a consumed billable night lacking rate coverage). The backend gates
+ * it on `stays.rate_override`, requires a non-empty `reason`, and enforces that
+ * `currency` matches the folio. On success it returns the refreshed stay — the
+ * caller MUST then refetch the folio + operational state. The frontend never
+ * computes night charges; this only records the agreed rate period. */
+export interface StayRemediateRateBody {
+  start_date: string;
+  end_date: string;
+  nightly_rate: string;
+  currency: string;
+  reason: string;
+}
+
+export function remediateStayRate(
+  id: number,
+  body: StayRemediateRateBody,
+): Promise<Stay> {
+  return hotelJson<Stay>(`/stays/${id}/remediate-rate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 /** Open-folio balance + business-date context for the check-out dialog. */

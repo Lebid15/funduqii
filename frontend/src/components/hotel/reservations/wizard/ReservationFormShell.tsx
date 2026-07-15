@@ -161,6 +161,10 @@ export function ReservationFormShell({
           allowNewDeposit: !stayLocked && can("finance.payment_create"),
           financialSummary: financialSummary ?? null,
           lockedRoomLabel,
+          // The draft seeds `booking.lines[0]` from `reservation.lines[0]`, so the
+          // ORIGINAL type is that same first line's room_type (compared against the
+          // current selection to detect an explicit pre-arrival RoomType change).
+          originalRoomTypeId: reservation.lines[0]?.room_type ?? null,
         }
       : null;
 

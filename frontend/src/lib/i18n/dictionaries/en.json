@@ -1128,6 +1128,8 @@
         "nightlyPrice": "Nightly price",
         "reservationTotal": "Reservation total",
         "reservationTotalEstimate": "Estimated from the room rate — the backend total is authoritative.",
+        "rateChangeTitle": "Room type changed",
+        "rateChangeBody": "The nightly rate will change from {previous} to {proposed} when you save. Review before confirming.",
         "remaining": "Remaining",
         "paidAmount": "Paid amount ({currency})",
         "paymentMethod": "Payment method",
@@ -1513,7 +1515,11 @@
       "arrivalFuture": "This reservation's arrival date has not been reached yet (hotel business date).",
       "invalidStayChange": "This stay change is not allowed.",
       "folioOutstanding": "The folio has an unsettled balance — settle it in Finance before check-out.",
-      "earlyReasonRequired": "An early-departure reason is required."
+      "earlyReasonRequired": "An early-departure reason is required.",
+      "rateOverlap": "This rate window overlaps an existing rate period for this stay.",
+      "rateConflict": "A different rate already exists for this start date.",
+      "rateCoversPostedNight": "This window includes an already-billed night — narrow the dates.",
+      "missingAgreedRate": "This stay needs an agreed nightly rate before it can be billed or checked out."
     },
     "workflow": {
       "arrivalsTitle": "Arrivals today",
@@ -1535,6 +1541,12 @@
       "currentCheckOut": "Current check-out",
       "newCheckOut": "New check-out date",
       "reason": "Reason (optional)",
+      "rateLabel": "Nightly rate for the added nights",
+      "rateCurrentHint": "Defaults to the current rate",
+      "overrideHint": "Changing this rate needs the pricing permission.",
+      "overrideReasonLabel": "Reason for the rate change",
+      "overrideReasonPlaceholder": "Explain the rate override",
+      "reasonRequired": "A reason is required to change the rate.",
       "submit": "Extend"
     },
     "shortenModal": {
@@ -1555,6 +1567,22 @@
       "reasonRequired": "A move reason is required.",
       "roomRequired": "Select the new room first.",
       "submit": "Move room"
+    },
+    "rateRemediation": {
+      "badge": "Rate needs remediation",
+      "amountPending": "Amount pending until the stay rate is set.",
+      "setRate": "Set stay rate",
+      "title": "Set stay rate",
+      "hint": "This stay has consumed nights with no agreed rate, which blocks check-out. Set the agreed nightly rate for the uncovered period.",
+      "periodStart": "Period start",
+      "periodEnd": "Period end",
+      "rate": "Nightly rate",
+      "currency": "Currency",
+      "reason": "Reason",
+      "reasonRequired": "A reason is required.",
+      "rateInvalid": "Enter a nightly rate greater than zero.",
+      "submit": "Save rate",
+      "blockedCheckout": "Check-out is blocked until this stay's rate is set."
     }
   },
   "finance": {

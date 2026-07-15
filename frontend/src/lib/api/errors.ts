@@ -105,6 +105,16 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.folioOutstanding;
     case "early_departure_reason_required":
       return t.frontDesk.errors.earlyReasonRequired;
+    // STAYS rate-integrity remediation — distinct, actionable messages instead of
+    // the generic 409 conflict line, so the agent knows how to correct the window.
+    case "rate_period_overlap":
+      return t.frontDesk.errors.rateOverlap;
+    case "rate_period_conflict":
+      return t.frontDesk.errors.rateConflict;
+    case "rate_period_covers_posted_night":
+      return t.frontDesk.errors.rateCoversPostedNight;
+    case "missing_agreed_nightly_rate":
+      return t.frontDesk.errors.missingAgreedRate;
     case "guest_blocked":
       return t.guests.errors.blocked;
     case "block_reason_required":

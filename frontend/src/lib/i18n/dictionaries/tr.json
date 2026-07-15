@@ -1128,6 +1128,8 @@
         "nightlyPrice": "Gecelik fiyat",
         "reservationTotal": "Rezervasyon toplamı",
         "reservationTotalEstimate": "Oda ücretinden tahmin — sunucu toplamı esastır.",
+        "rateChangeTitle": "Oda tipi değişti",
+        "rateChangeBody": "Gecelik ücret, kaydettiğinizde {previous} değerinden {proposed} değerine değişecek. Onaylamadan önce gözden geçirin.",
         "remaining": "Kalan",
         "paidAmount": "Ödenen tutar ({currency})",
         "paymentMethod": "Ödeme yöntemi",
@@ -1513,7 +1515,11 @@
       "arrivalFuture": "Bu rezervasyonun varış tarihi henüz gelmedi (otel iş günü).",
       "invalidStayChange": "Konaklamada bu değişikliğe izin verilmiyor.",
       "folioOutstanding": "Folyoda kapatılmamış bakiye var — çıkıştan önce Finans bölümünden kapatın.",
-      "earlyReasonRequired": "Erken ayrılış sebebi zorunludur."
+      "earlyReasonRequired": "Erken ayrılış sebebi zorunludur.",
+      "rateOverlap": "Bu dönem, bu konaklamanın mevcut bir ücret dönemiyle çakışıyor.",
+      "rateConflict": "Bu başlangıç tarihi için farklı bir ücret zaten mevcut.",
+      "rateCoversPostedNight": "Bu dönem, zaten faturalanmış bir gece içeriyor — tarihleri daraltın.",
+      "missingAgreedRate": "Bu konaklamanın faturalanmadan veya çıkış yapılmadan önce anlaşmalı bir gecelik ücrete ihtiyacı var."
     },
     "workflow": {
       "arrivalsTitle": "Bugünkü girişler",
@@ -1535,6 +1541,12 @@
       "currentCheckOut": "Mevcut çıkış",
       "newCheckOut": "Yeni çıkış tarihi",
       "reason": "Sebep (isteğe bağlı)",
+      "rateLabel": "Eklenen geceler için gecelik ücret",
+      "rateCurrentHint": "Varsayılan olarak mevcut ücret",
+      "overrideHint": "Bu ücreti değiştirmek fiyatlandırma yetkisi gerektirir.",
+      "overrideReasonLabel": "Ücret değişikliği sebebi",
+      "overrideReasonPlaceholder": "Ücret geçersiz kılmayı açıklayın",
+      "reasonRequired": "Ücreti değiştirmek için bir sebep gereklidir.",
       "submit": "Uzat"
     },
     "shortenModal": {
@@ -1555,6 +1567,22 @@
       "reasonRequired": "Taşıma sebebi zorunludur.",
       "roomRequired": "Önce yeni odayı seçin.",
       "submit": "Odayı taşı"
+    },
+    "rateRemediation": {
+      "badge": "Ücret düzeltme gerektiriyor",
+      "amountPending": "Konaklama ücreti belirlenene kadar tutar beklemede.",
+      "setRate": "Konaklama ücretini belirle",
+      "title": "Konaklama ücretini belirle",
+      "hint": "Bu konaklamada anlaşmalı ücreti olmayan tüketilmiş geceler var; bu durum çıkışı engelliyor. Kapsanmayan dönem için anlaşmalı gecelik ücreti belirleyin.",
+      "periodStart": "Dönem başlangıcı",
+      "periodEnd": "Dönem sonu",
+      "rate": "Gecelik ücret",
+      "currency": "Para birimi",
+      "reason": "Sebep",
+      "reasonRequired": "Sebep zorunludur.",
+      "rateInvalid": "Sıfırdan büyük bir gecelik ücret girin.",
+      "submit": "Ücreti kaydet",
+      "blockedCheckout": "Bu konaklamanın ücreti belirlenene kadar çıkış engellidir."
     }
   },
   "finance": {

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
   ArrowLeftRight,
   CalendarClock,
   CalendarMinus,
   CalendarPlus,
   Check,
   Clock,
+  Coins,
   DoorOpen,
   FileText,
   LogOut,
@@ -55,6 +57,7 @@ import {
   listDeparturesToday,
   listMoveCandidates,
   moveStayRoom,
+  remediateStayRate,
   reverseCheckIn,
   shortenStay,
 } from "@/lib/api/stays";
@@ -109,8 +112,29 @@ function useCan() {
  * awaiting-final-charges operational badge is shown as a distinct signal.
  * Renders nothing when the viewer lacks `finance.view` (backend nulls it).
  */
-function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | undefined }) {
+function FolioCardSummary({
+  folio,
+  requiresRemediation = false,
+}: {
+  folio: StayFolioCardSummary | null | undefined;
+  requiresRemediation?: boolean;
+}) {
   const { t, locale } = useI18n();
+  // STAYS rate-integrity — a "stuck" stay (a consumed night with no agreed rate).
+  // Show the OPERATIONAL badge (not finance-gated) and NEVER a settled/zero amount:
+  // the folio total would understate the real balance, so the money rows and the
+  // clearance chip are both suppressed until a rate is set.
+  if (requiresRemediation) {
+    const rr = t.frontDesk.rateRemediation;
+    return (
+      <div className="stack" style={{ gap: "0.35rem" }}>
+        <div className="cluster" style={{ gap: "0.35rem" }}>
+          <Badge tone="danger" icon={AlertTriangle}>{rr.badge}</Badge>
+        </div>
+        <span className="muted small">{rr.amountPending}</span>
+      </div>
+    );
+  }
   if (!folio) return null;
   const f = t.frontDesk.finance;
   // Non-finance viewer: the backend sends NO amounts — render an operational
@@ -554,6 +578,7 @@ function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey:
   const [shortenTarget, setShortenTarget] = useState<Stay | null>(null);
   const [moveTarget, setMoveTarget] = useState<Stay | null>(null);
   const [reverseTarget, setReverseTarget] = useState<Stay | null>(null);
+  const [remediateTarget, setRemediateTarget] = useState<Stay | null>(null);
   const [docsRes, setDocsRes] = useState<Reservation | null>(null);
   const [docsBusy, setDocsBusy] = useState<number | null>(null);
 
@@ -630,8 +655,13 @@ function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey:
               <span>{t.frontDesk.current.checkInDate}: {formatDate(stay.actual_check_in_at, locale)}</span>
               <span>{t.frontDesk.current.checkOutDate}: {formatDate(stay.planned_check_out_date, locale)} · {stay.nights} {t.frontDesk.current.nights}</span>
             </div>
-            <FolioCardSummary folio={stay.folio_summary} />
+            <FolioCardSummary folio={stay.folio_summary} requiresRemediation={stay.requires_rate_remediation} />
             <div className="stay-card__actions">
+              {stay.requires_rate_remediation && can("stays.rate_override") ? (
+                // STAYS rate-integrity — only a `stays.rate_override` holder can set
+                // the missing agreed rate; the backend re-checks the permission.
+                <Button variant="primary" size="sm" icon={Coins} onClick={() => setRemediateTarget(stay)}>{t.frontDesk.rateRemediation.setRate}</Button>
+              ) : null}
               {can("reservation_documents.view") && stay.document_count > 0 ? (
                 <Button variant="ghost" size="sm" icon={FileText} loading={docsBusy === stay.id} onClick={() => openDocs(stay)}>{t.frontDesk.documents}</Button>
               ) : null}
@@ -689,6 +719,11 @@ function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey:
         onClose={() => setMoveTarget(null)}
         onDone={done(setMoveTarget)}
       />
+      <RemediateRateModal
+        stay={remediateTarget}
+        onClose={() => setRemediateTarget(null)}
+        onDone={done(setRemediateTarget)}
+      />
     </>
   );
 }
@@ -705,6 +740,7 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [checkoutTarget, setCheckoutTarget] = useState<Stay | null>(null);
+  const [remediateTarget, setRemediateTarget] = useState<Stay | null>(null);
   const [docsRes, setDocsRes] = useState<Reservation | null>(null);
   const [docsBusy, setDocsBusy] = useState<number | null>(null);
 
@@ -757,9 +793,12 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
             icon={PlaneTakeoff}
             title={`${stay.room_number} · ${stay.primary_guest_name}`}
             description={`${formatDate(stay.actual_check_in_at, locale)} → ${formatDate(stay.planned_check_out_date, locale)}`}
-            meta={<FolioCardSummary folio={stay.folio_summary} />}
+            meta={<FolioCardSummary folio={stay.folio_summary} requiresRemediation={stay.requires_rate_remediation} />}
             action={
               <div className="cluster">
+                {stay.requires_rate_remediation && can("stays.rate_override") ? (
+                  <Button variant="primary" size="sm" icon={Coins} onClick={() => setRemediateTarget(stay)}>{t.frontDesk.rateRemediation.setRate}</Button>
+                ) : null}
                 {can("reservation_documents.view") && stay.document_count > 0 ? (
                   <Button variant="ghost" size="sm" icon={FileText} loading={docsBusy === stay.id} onClick={() => openDocs(stay)}>{t.frontDesk.documents}</Button>
                 ) : null}
@@ -775,6 +814,11 @@ function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; on
         stay={checkoutTarget}
         onClose={() => setCheckoutTarget(null)}
         onDone={() => { setCheckoutTarget(null); notify(t.frontDesk.saved); onChange(); }}
+      />
+      <RemediateRateModal
+        stay={remediateTarget}
+        onClose={() => setRemediateTarget(null)}
+        onDone={() => { setRemediateTarget(null); notify(t.frontDesk.saved); onChange(); }}
       />
       <ReservationDocumentsModal
         open={docsRes !== null}
@@ -1166,7 +1210,12 @@ function CheckOutModal({
   // money-derived checklist. Either way a failed ensure POST still blocks (the
   // shown state may be understated). Cancel is never blocked.
   const canDepart = summary !== null && (finSummary ? canDepartFinance : summary.can_check_out);
-  const blocked = !canDepart || ensureFailed;
+  // STAYS rate-integrity — a "stuck" stay (a consumed night with no agreed rate)
+  // is refused server-side (MissingAgreedNightlyRate, 409). Block the confirm
+  // button locally too and show a clear reason so the agent remediates the rate
+  // first. This is an OPERATIONAL flag on the stay (not finance-gated).
+  const rateRemediationNeeded = stay?.requires_rate_remediation ?? false;
+  const blocked = !canDepart || ensureFailed || rateRemediationNeeded;
 
   function openSettle(folioId: number, folioBalance: string) {
     setAction({ kind: "settle", id: folioId });
@@ -1357,6 +1406,9 @@ function CheckOutModal({
       ) : (
         <div className="stack">
           {error ? <Alert tone="error">{error}</Alert> : null}
+          {rateRemediationNeeded ? (
+            <Alert tone="warning">{t.frontDesk.rateRemediation.blockedCheckout}</Alert>
+          ) : null}
           <Alert tone="info">{c.body}</Alert>
           {ensureFailed ? (
             <div className="stack" style={{ gap: "0.5rem" }}>
@@ -1525,27 +1577,81 @@ function ExtendStayModal({
   onDone: () => void;
 }) {
   const { t, locale } = useI18n();
+  const can = useCan();
+  const em = t.frontDesk.extendModal;
   const [newDate, setNewDate] = useState("");
   const [reason, setReason] = useState("");
+  const [rate, setRate] = useState("");
+  const [triedSubmit, setTriedSubmit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const open = stay !== null;
 
+  // The stay's CURRENT nightly rate (the value an extension defaults from) comes
+  // straight from the backend folio summary — finance.view ONLY, and NEVER
+  // recomputed here. It rides on the finance-visible variant of the card summary
+  // already loaded with the residents list, so no extra request/permission.
+  const finFolio =
+    stay?.folio_summary && stay.folio_summary.financial_details_visible
+      ? stay.folio_summary
+      : null;
+  const showRate = can("finance.view");
+  // The added-period rate OVERRIDE is gated on `stays.rate_override` (the backend
+  // moved this off `finance.charge_create`). Displaying the current rate value
+  // still requires `finance.view` (it is finance-derived data), so a viewer needs
+  // BOTH to edit it; the backend re-checks `stays.rate_override` on submit.
+  const canOverride = can("stays.rate_override");
+  const defaultRate = finFolio?.current_nightly_rate ?? null;
+  const rateCurrency = finFolio?.current_rate_currency ?? null;
+
   useEffect(() => {
     if (open && stay) {
+      const ff =
+        stay.folio_summary && stay.folio_summary.financial_details_visible
+          ? stay.folio_summary
+          : null;
       setNewDate(addDays(stay.planned_check_out_date, 1));
       setReason("");
+      // Seed the editable rate with the backend default so an unchanged submit is
+      // never treated as an override (empty when there is no current rate).
+      setRate(ff?.current_nightly_rate ?? "");
+      setTriedSubmit(false);
       setError(null);
     }
   }, [open, stay]);
 
+  const trimmedRate = rate.trim();
+  // Mirror the backend gate (apps.stays.services._apply_extension): an OVERRIDE is
+  // a `stays.rate_override` holder setting a rate that differs from the default
+  // (or ANY rate when the stay has no default). Only an override sends
+  // nightly_rate and demands a non-empty reason; everything else stays the plain,
+  // backward-compatible date-only extend.
+  const isOverride =
+    canOverride &&
+    trimmedRate !== "" &&
+    (defaultRate === null || Number(trimmedRate) !== Number(defaultRate));
+  const reasonMissing = isOverride && !reason.trim();
+  // An override rate must be a positive number (backend min 0.01). Block submit
+  // locally with an inline error instead of relying only on the server.
+  const rateInvalid =
+    isOverride &&
+    (!Number.isFinite(Number(trimmedRate)) || Number(trimmedRate) <= 0);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!stay || !newDate) return;
+    setTriedSubmit(true);
+    // Block submit locally when an override lacks its mandatory reason or carries a
+    // non-positive rate — the inline errors explain why (the backend also rejects).
+    if (reasonMissing || rateInvalid) return;
     setBusy(true);
     setError(null);
     try {
-      await extendStay(stay.id, { new_check_out_date: newDate, reason: reason.trim() });
+      await extendStay(stay.id, {
+        new_check_out_date: newDate,
+        reason: reason.trim(),
+        ...(isOverride ? { nightly_rate: trimmedRate } : {}),
+      });
       onDone();
     } catch (err) {
       setError(messageForError(err, t));
@@ -1558,12 +1664,12 @@ function ExtendStayModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`${t.frontDesk.extendModal.title} · ${stay?.room_number ?? ""}`}
+      title={`${em.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="extend-form" type="submit" loading={busy}>{t.frontDesk.extendModal.submit}</Button>
+          <Button form="extend-form" type="submit" loading={busy}>{em.submit}</Button>
         </>
       }
     >
@@ -1572,10 +1678,10 @@ function ExtendStayModal({
         {stay ? (
           <dl className="detail-grid">
             <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
-            <div><dt>{t.frontDesk.extendModal.currentCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
+            <div><dt>{em.currentCheckOut}</dt><dd>{formatDate(stay.planned_check_out_date, locale)}</dd></div>
           </dl>
         ) : null}
-        <FormField label={t.frontDesk.extendModal.newCheckOut} htmlFor="ext-date">
+        <FormField label={em.newCheckOut} htmlFor="ext-date">
           <Input
             id="ext-date"
             type="date"
@@ -1584,8 +1690,46 @@ function ExtendStayModal({
             onChange={(e) => setNewDate(e.target.value)}
           />
         </FormField>
-        <FormField label={t.frontDesk.extendModal.reason} htmlFor="ext-reason">
-          <Input id="ext-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+        {/* Added-period nightly rate — finance.view ONLY. The value is DISPLAYED
+            from the backend (never computed); a viewer without the pricing
+            permission sees it read-only, and a non-finance viewer sees nothing. */}
+        {showRate ? (
+          <FormField
+            label={em.rateLabel}
+            htmlFor="ext-rate"
+            hint={canOverride ? em.rateCurrentHint : em.overrideHint}
+            error={triedSubmit && rateInvalid ? t.frontDesk.rateRemediation.rateInvalid : undefined}
+          >
+            {canOverride ? (
+              <Input
+                id="ext-rate"
+                inputMode="decimal"
+                value={rate}
+                placeholder={defaultRate ?? em.rateCurrentHint}
+                onChange={(e) => setRate(e.target.value)}
+              />
+            ) : (
+              <Input
+                id="ext-rate"
+                value={defaultRate ? formatMoney(defaultRate, rateCurrency ?? "", locale) : em.rateCurrentHint}
+                disabled
+                readOnly
+              />
+            )}
+          </FormField>
+        ) : null}
+        <FormField
+          label={isOverride ? em.overrideReasonLabel : em.reason}
+          htmlFor="ext-reason"
+          error={triedSubmit && reasonMissing ? em.reasonRequired : undefined}
+        >
+          <Input
+            id="ext-reason"
+            value={reason}
+            placeholder={isOverride ? em.overrideReasonPlaceholder : undefined}
+            required={isOverride}
+            onChange={(e) => setReason(e.target.value)}
+          />
         </FormField>
       </form>
     </Modal>
@@ -1754,6 +1898,146 @@ function MoveRoomModal({
         </FormField>
         <FormField label={t.frontDesk.moveModal.reason} htmlFor="mv-reason">
           <Input id="mv-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Rate remediation modal (STAYS rate-integrity)                               //
+// --------------------------------------------------------------------------- //
+
+/**
+ * A LIMITED corrective form (NOT a price-management page): a `stays.rate_override`
+ * holder sets the missing agreed nightly rate for a "stuck" stay's uncovered
+ * window. The frontend NEVER computes night charges — it only records the agreed
+ * rate; the backend re-checks the permission, requires the reason, and enforces
+ * that the currency matches the folio. On success the parent refetches the folio +
+ * operational state (via `onDone`). The period defaults to the stay's own dates
+ * (the backend does not expose the specific uncovered nights on the serializer).
+ */
+function RemediateRateModal({
+  stay,
+  onClose,
+  onDone,
+}: {
+  stay: Stay | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const rr = t.frontDesk.rateRemediation;
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [rate, setRate] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [reason, setReason] = useState("");
+  const [triedSubmit, setTriedSubmit] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const open = stay !== null;
+
+  useEffect(() => {
+    if (!open || !stay) return;
+    setStartDate(stay.planned_check_in_date);
+    setEndDate(stay.planned_check_out_date);
+    setRate("");
+    // Prefill the currency from the folio when the viewer can see it (finance
+    // viewer); a rate_override-only viewer types it and the backend validates it
+    // against the folio currency.
+    const fin =
+      stay.folio_summary && stay.folio_summary.financial_details_visible
+        ? stay.folio_summary
+        : null;
+    setCurrency(fin?.currency ?? "");
+    setReason("");
+    setTriedSubmit(false);
+    setError(null);
+  }, [open, stay]);
+
+  const reasonMissing = !reason.trim();
+  // Inline positive-rate guard — block submit locally (the backend also enforces a
+  // strictly-positive min 0.01) so the agent gets an immediate, specific error.
+  const rateValue = rate.trim();
+  const rateInvalid =
+    rateValue === "" ||
+    !Number.isFinite(Number(rateValue)) ||
+    Number(rateValue) <= 0;
+  const incomplete =
+    reasonMissing || rateInvalid || !currency.trim() || !startDate || !endDate;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!stay) return;
+    setTriedSubmit(true);
+    if (incomplete) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await remediateStayRate(stay.id, {
+        start_date: startDate,
+        end_date: endDate,
+        nightly_rate: rate.trim(),
+        currency: currency.trim(),
+        reason: reason.trim(),
+      });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`${rr.title} · ${stay?.room_number ?? ""}`}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="remediate-form" type="submit" loading={busy}>{rr.submit}</Button>
+        </>
+      }
+    >
+      <form id="remediate-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <Alert tone="info">{rr.hint}</Alert>
+        {stay ? (
+          <dl className="detail-grid">
+            <div><dt>{t.frontDesk.checkOutModal.guest}</dt><dd>{stay.primary_guest_name}</dd></div>
+            <div><dt>{t.frontDesk.checkOutModal.room}</dt><dd>{stay.room_number}</dd></div>
+          </dl>
+        ) : null}
+        <div className="line-row">
+          <FormField label={rr.periodStart} htmlFor="rr-start">
+            <Input id="rr-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </FormField>
+          <FormField label={rr.periodEnd} htmlFor="rr-end">
+            <Input id="rr-end" type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} />
+          </FormField>
+        </div>
+        <div className="line-row">
+          <FormField
+            label={rr.rate}
+            htmlFor="rr-rate"
+            error={triedSubmit && rateInvalid ? rr.rateInvalid : undefined}
+          >
+            <Input id="rr-rate" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+          </FormField>
+          <FormField label={rr.currency} htmlFor="rr-currency">
+            <Input id="rr-currency" value={currency} maxLength={3} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
+          </FormField>
+        </div>
+        <FormField
+          label={rr.reason}
+          htmlFor="rr-reason"
+          error={triedSubmit && reasonMissing ? rr.reasonRequired : undefined}
+        >
+          <Input id="rr-reason" value={reason} required onChange={(e) => setReason(e.target.value)} />
         </FormField>
       </form>
     </Modal>

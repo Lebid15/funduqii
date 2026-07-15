@@ -929,6 +929,15 @@ export interface Stay {
    * Derived from the folio ledger; the client never recomputes it.
    */
   folio_summary?: StayFolioCardSummary | null;
+  /**
+   * STAYS rate-integrity remediation — an OPERATIONAL flag (NOT finance-gated):
+   * true when an in-house stay has a DUE/consumed billable night with no
+   * positive-rate coverage (a "stuck" stay). Such a stay blocks check-out and its
+   * folio must never be shown as settled/zero; a `stays.rate_override` holder can
+   * remediate it via POST /stays/<id>/remediate-rate/. Backend-derived — never
+   * recomputed on the client.
+   */
+  requires_rate_remediation: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -955,6 +964,12 @@ export interface StayFolioCardSummaryVisible {
   /** Derived from the folio's own totals (§12). `overpaid` = credit/refund-due. */
   payment_status: "paid" | "partial" | "unpaid" | "overpaid";
   awaiting_final_charges: boolean;
+  /** The stay's CURRENT nightly rate (the latest rate period's rate/currency —
+   * the value an extension defaults from) so the extend dialog can SHOW it.
+   * finance.view ONLY; NULL when the stay has no rate period. Backend-derived —
+   * NEVER recomputed on the client. */
+  current_nightly_rate: string | null;
+  current_rate_currency: string | null;
 }
 
 /** Non-finance viewer — abstract operational states only (no money at all). */
@@ -1019,16 +1034,20 @@ export interface StayFolioSummaryVisible extends StayFolioSummaryBase {
   }[];
   /** True when any insurance still has a held amount awaiting settlement. */
   insurance_pending: boolean;
+  /** The stay's CURRENT nightly rate (latest rate period rate/currency — the
+   * value an extension defaults from) so the extend dialog can SHOW it.
+   * finance.view ONLY; NULL when the stay has no rate period. Backend-derived —
+   * NEVER recomputed on the client. */
+  current_nightly_rate: string | null;
+  current_rate_currency: string | null;
 }
 
-/** Non-finance viewer — money-free operational skeleton. */
+/** Non-finance viewer — money-free operational skeleton. Item 10: NO folio list
+ * (`open_folios`) at all — it leaked internal financial identifiers (folio id +
+ * folio_number). Only the abstract operational states on the base survive; no
+ * amount, currency, folio number, or nightly rate is ever sent. */
 export interface StayFolioSummaryHidden extends StayFolioSummaryBase {
   financial_details_visible: false;
-  open_folios: {
-    id: number;
-    folio_number: string;
-    awaiting_final_charges: boolean;
-  }[];
 }
 
 /** GET /stays/check-in-rooms and /stays/<id>/move-candidates. */
