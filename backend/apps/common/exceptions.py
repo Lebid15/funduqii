@@ -531,6 +531,20 @@ class ReverseCheckInReasonRequired(FunduqiiAPIException):
     default_code = "reverse_check_in_reason_required"
 
 
+class ReverseCheckInDayClosed(FunduqiiAPIException):
+    """A check-in cannot be reversed once its room-night charges fall in a closed
+    business day (STAYS-ARRIVALS-DEPARTURES): voiding closed financial history is
+    not allowed here. A correction after the day closed needs a separate
+    accounting-correction cycle with its own permission — out of this scope."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This check-in cannot be reversed: its room charges are in a closed "
+        "business day. Use an accounting correction instead."
+    )
+    default_code = "reverse_check_in_day_closed"
+
+
 class FolioBalanceOutstanding(FunduqiiAPIException):
     """Check-out is blocked while the stay's open folio holds a non-zero
     balance — settlement happens in Finance, never at the front desk."""

@@ -1273,9 +1273,10 @@ class ImmediateCheckInRegressionTests(APITestCase):
 
 
 class RoomChargePostingTests(APITestCase):
-    """STAYS-ARRIVALS-DEPARTURES §24/§31 (owner D1) — the room/night charge is
-    posted to the stay folio at check-in so the folio is the COMPLETE account;
-    an extension posts the added nights; an unpriced room posts nothing."""
+    """STAYS-ARRIVALS-DEPARTURES §24/§31 (owner correction) — room nights are
+    posted PER NIGHT as they become due by the hotel business date, never all
+    front-loaded at check-in; each night is its own idempotent charge; an
+    extension defers its nights; an unpriced room posts nothing."""
 
     def setUp(self):
         self.hotel = make_hotel()
@@ -1288,7 +1289,7 @@ class RoomChargePostingTests(APITestCase):
         self.guest = make_guest(self.hotel)
         self.res, self.line = make_reservation(
             self.hotel, self.rtype, room=self.room
-        )  # D1 -> D2 = 2 nights
+        )  # D1 -> D2 = nights D1, D1+1
 
     def _check_in(self, res, line, room, guest):
         from apps.stays.services import CheckInService
@@ -1303,35 +1304,65 @@ class RoomChargePostingTests(APITestCase):
             user=self.manager,
         )
 
-    def test_room_charge_posted_at_check_in(self):
-        from apps.finance.models import ChargeType, PostingStatus
+    def test_no_future_nights_posted_at_check_in(self):
+        from apps.finance.models import ChargeType
         from apps.finance.services import folio_balance
+
+        # Arrival day (business_date == D1): no night has been consumed yet, so
+        # the folio must NOT be pre-loaded with the whole planned stay.
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+        self.assertEqual(str(folio_balance(folio)["balance"]), "0.00")
+
+    def test_due_nights_posted_each_as_its_own_charge(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges, folio_balance
 
         stay = self._check_in(self.res, self.line, self.room, self.guest)
         folio = stay.folios.get()
-        room_charges = folio.charges.filter(
+        # As of the departure date, both nights (D1, D1+1) are due.
+        posted = ensure_due_room_charges(stay, as_of=D2, user=self.manager)
+        self.assertEqual(posted, 2)
+        charges = folio.charges.filter(
             type=ChargeType.ROOM, status=PostingStatus.POSTED
         )
-        self.assertEqual(room_charges.count(), 1)
-        # 100/night x 2 nights (D1 -> D2).
-        self.assertEqual(str(room_charges.get().total_amount), "200.00")
-        # No payment yet -> the guest owes the room charge.
+        self.assertEqual(charges.count(), 2)  # one charge PER night
+        for c in charges:
+            self.assertEqual(str(c.total_amount), "100.00")
         self.assertEqual(str(folio_balance(folio)["balance"]), "200.00")
 
-    def test_room_charge_is_idempotent(self):
+    def test_posting_is_idempotent(self):
         from apps.finance.models import ChargeType
-        from apps.finance.services import post_stay_room_charge
+        from apps.finance.services import ensure_due_room_charges
 
         stay = self._check_in(self.res, self.line, self.room, self.guest)
         folio = stay.folios.get()
-        post_stay_room_charge(stay, user=self.manager)  # second call must not re-post
-        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
+        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 2)
+        # A retry / daily close / pre-checkout net must never double-post.
+        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 2)
 
-    def test_extension_posts_added_nights(self):
-        from datetime import timedelta
-
+    def test_early_departure_charges_only_consumed_nights(self):
         from apps.finance.models import ChargeType, PostingStatus
-        from apps.finance.services import folio_balance
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+
+        stay = self._check_in(self.res, self.line, self.room, self.guest)
+        folio = stay.folios.get()
+        # Leaving on D1+1: only night D1 was consumed; the future night is NOT posted.
+        posted = ensure_due_room_charges(
+            stay, as_of=D1 + timedelta(days=1), user=self.manager
+        )
+        self.assertEqual(posted, 1)
+        self.assertEqual(
+            folio.charges.filter(type=ChargeType.ROOM, status=PostingStatus.POSTED).count(),
+            1,
+        )
+        self.assertEqual(str(folio_balance(folio)["balance"]), "100.00")
+
+    def test_extension_defers_its_nights(self):
+        from apps.finance.models import ChargeType, PostingStatus
+        from apps.finance.services import ensure_due_room_charges, folio_balance
         from apps.stays.services import ExtendStayService
 
         stay = self._check_in(self.res, self.line, self.room, self.guest)
@@ -1339,23 +1370,30 @@ class RoomChargePostingTests(APITestCase):
         ExtendStayService.execute(
             stay, new_check_out_date=D2 + timedelta(days=1), user=self.manager
         )
-        # initial (2 nights = 200) + extension (1 night = 100).
+        stay.refresh_from_db()  # pick up the new planned_check_out_date
+        # Extending posts NOTHING immediately (business_date is still D1).
+        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
+        # As of the new departure, the 3 nights (D1, D1+1, D2) are due.
+        posted = ensure_due_room_charges(
+            stay, as_of=D2 + timedelta(days=1), user=self.manager
+        )
+        self.assertEqual(posted, 3)
         self.assertEqual(
-            folio.charges.filter(
-                type=ChargeType.ROOM, status=PostingStatus.POSTED
-            ).count(),
-            2,
+            folio.charges.filter(type=ChargeType.ROOM, status=PostingStatus.POSTED).count(),
+            3,
         )
         self.assertEqual(str(folio_balance(folio)["balance"]), "300.00")
 
     def test_unpriced_room_posts_no_charge(self):
         from apps.finance.models import ChargeType
+        from apps.finance.services import ensure_due_room_charges
 
         rtype2 = make_type(self.hotel, code="UNP")  # no base_rate
         room2 = make_room(self.hotel, rtype2, number="102")
         res2, line2 = make_reservation(self.hotel, rtype2, room=room2)
         stay = self._check_in(res2, line2, room2, make_guest(self.hotel, name="G2"))
         folio = stay.folios.get()
+        self.assertEqual(ensure_due_room_charges(stay, as_of=D2, user=self.manager), 0)
         self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 0)
 
 
@@ -1451,11 +1489,14 @@ class ReverseCheckInTests(APITestCase):
         from apps.finance.services import folio_balance, record_reservation_payment
         from apps.stays.services import ReverseCheckInService
 
+        from apps.finance.services import ensure_due_room_charges
+
         # Deposit before arrival -> opens the reservation's pre-arrival folio.
         record_reservation_payment(
             self.res, amount="40.00", method="cash", user=self.manager
         )
-        stay = self._check_in()  # reuses the deposit folio, posts a 200 room charge
+        stay = self._check_in()  # reuses the deposit folio
+        ensure_due_room_charges(stay, as_of=stay.planned_check_out_date, user=self.manager)
         folio = stay.folios.get()
         self.assertEqual(str(folio_balance(folio)["balance"]), "160.00")  # 200 - 40
 
@@ -1489,6 +1530,32 @@ class ReverseCheckInTests(APITestCase):
         ReverseCheckInService.execute(stay, reason="x", user=self.manager)  # -> cancelled
         with self.assertRaises(InvalidStayChange):
             ReverseCheckInService.execute(stay, reason="again", user=self.manager)
+
+    def test_reverse_refused_after_business_day_closed(self):
+        """Owner correction — a check-in whose room charges are in a CLOSED
+        business day cannot be reversed (no voiding of closed history); the stay
+        and folio are left untouched."""
+        from apps.common.exceptions import ReverseCheckInDayClosed
+        from apps.finance.services import ensure_due_room_charges, folio_balance
+        from apps.shifts.models import DailyClose, DailyCloseStatus
+        from apps.stays.services import ReverseCheckInService
+
+        stay = self._check_in()
+        ensure_due_room_charges(stay, as_of=stay.planned_check_out_date, user=self.manager)
+        folio = stay.folios.get()
+        before = str(folio_balance(folio)["balance"])
+        # The room charges were posted on business date D1; close that day.
+        DailyClose.objects.create(
+            hotel=self.hotel, close_number="DCREV01", business_date=D1,
+            status=DailyCloseStatus.CLOSED, snapshot_json={}, totals_json={},
+        )
+        with self.assertRaises(ReverseCheckInDayClosed):
+            ReverseCheckInService.execute(stay, reason="too late", user=self.manager)
+        stay.refresh_from_db()
+        self.assertEqual(stay.status, StayStatus.IN_HOUSE)  # unchanged
+        folio.refresh_from_db()
+        self.assertIsNotNone(folio.stay_id)  # not detached
+        self.assertEqual(str(folio_balance(folio)["balance"]), before)  # unchanged
 
     def test_reverse_requires_a_reason(self):
         from apps.common.exceptions import ReverseCheckInReasonRequired
@@ -1668,12 +1735,16 @@ class SettlementAndRefundTests(APITestCase):
         self.res, self.line = make_reservation(self.hotel, self.rtype, room=self.room)
 
     def _check_in(self):
+        from apps.finance.services import ensure_due_room_charges
         from apps.stays.services import CheckInService
 
-        return CheckInService.execute(
+        stay = CheckInService.execute(
             self.hotel, reservation=self.res, reservation_line=self.line,
             room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
         )
+        # Post the two planned nights so the folio holds a 200 room charge.
+        ensure_due_room_charges(stay, as_of=stay.planned_check_out_date, user=self.manager)
+        return stay
 
     def test_settle_folio_to_zero(self):
         from apps.finance.services import folio_balance, record_folio_settlement
@@ -1768,13 +1839,17 @@ class FolioCycleEndpointsTests(APITestCase):
         self.client.force_authenticate(self.manager)
 
     def _folio(self):
+        from apps.finance.services import ensure_due_room_charges
         from apps.stays.services import CheckInService
 
         stay = CheckInService.execute(
             self.hotel, reservation=self.res, reservation_line=self.line,
             room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
         )
-        return stay.folios.get()  # holds a 200 room charge
+        # Post the two planned nights (as if the stay's nights are all consumed)
+        # so the folio holds a 200 room charge for the lifecycle tests.
+        ensure_due_room_charges(stay, as_of=stay.planned_check_out_date, user=self.manager)
+        return stay.folios.get()
 
     def _post(self, name, folio, body):
         return self.client.post(
@@ -1836,13 +1911,16 @@ class FolioCycleEndpointsTests(APITestCase):
 
     def test_current_residents_folio_summary(self):
         """§12 — the resident list carries a derived folio finance block."""
-        from apps.finance.services import record_folio_settlement
+        from apps.finance.services import (
+            ensure_due_room_charges, record_folio_settlement,
+        )
         from apps.stays.services import CheckInService
 
         stay = CheckInService.execute(
             self.hotel, reservation=self.res, reservation_line=self.line,
             room=self.room, primary_guest=self.guest, companions=(), user=self.manager,
         )
+        ensure_due_room_charges(stay, as_of=stay.planned_check_out_date, user=self.manager)
         r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
         self.assertEqual(r.status_code, 200)
         row = next(x for x in r.data["results"] if x["id"] == stay.id)
@@ -1856,3 +1934,48 @@ class FolioCycleEndpointsTests(APITestCase):
         r = self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
         row = next(x for x in r.data["results"] if x["id"] == stay.id)
         self.assertEqual(row["folio_summary"]["payment_status"], "paid")
+
+    def _check_in_past_arrival(self, number):
+        """A stay whose two nights are already consumed by the business date."""
+        from apps.stays.services import CheckInService
+
+        room = make_room(self.hotel, self.rtype, number=number)
+        res, line = make_reservation(
+            self.hotel, self.rtype, room=room,
+            ci=D1 - timedelta(days=2), co=D1,  # nights D1-2, D1-1 (both due at D1)
+        )
+        return CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name=f"G{number}"),
+            companions=(), user=self.manager,
+        )
+
+    def test_ensure_room_charges_endpoint_posts_due_nights(self):
+        """Owner correction — check-in posts the already-due nights, and the
+        ensure endpoint is an idempotent safety net that returns the summary."""
+        stay = self._check_in_past_arrival("909")
+        # Both past nights were due at check-in -> already posted (200).
+        r = self.client.post(
+            reverse("stays:stay-ensure-room-charges", args=[stay.id]), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["balance"], "200.00")
+        # Idempotent: calling again does not double-post.
+        r2 = self.client.post(
+            reverse("stays:stay-ensure-room-charges", args=[stay.id]), **HDR(self.hotel)
+        )
+        self.assertEqual(r2.data["balance"], "200.00")
+
+    def test_folio_summary_has_no_n_plus_one(self):
+        """§12 review-fix — adding residents does not add per-card folio queries."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self._check_in_past_arrival("701")
+        with CaptureQueriesContext(connection) as q1:
+            self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
+        self._check_in_past_arrival("702")
+        with CaptureQueriesContext(connection) as q2:
+            self.client.get(reverse("stays:stay-current"), **HDR(self.hotel))
+        # Prefetch + a once-per-response permission check => constant query count.
+        self.assertEqual(len(q1.captured_queries), len(q2.captured_queries))

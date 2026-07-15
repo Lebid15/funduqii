@@ -138,6 +138,20 @@ export function getStayFolioSummary(id: number): Promise<StayFolioSummary> {
   return hotelJson<StayFolioSummary>(`/stays/${id}/folio-summary`);
 }
 
+/**
+ * Post every room night that has become due by the hotel business date, then
+ * return the refreshed folio summary (§24 owner correction). The checkout dialog
+ * calls this on open so the front desk always settles the complete amount — the
+ * folio is never missing a consumed night because the daily close has not run.
+ * Idempotent; never posts a future night. Requires `stays.check_out`.
+ */
+export function ensureRoomCharges(id: number): Promise<StayFolioSummary> {
+  return hotelJson<StayFolioSummary>(`/stays/${id}/ensure-room-charges`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
 /** Counts for the six operational cards (§6/§50) — from the backend, one call. */
 export interface StaysOverview {
   business_date: string;

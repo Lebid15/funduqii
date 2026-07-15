@@ -87,32 +87,64 @@ class StaySerializer(serializers.ModelSerializer):
     def get_checked_out_by(self, obj):
         return obj.checked_out_by.email if obj.checked_out_by_id else None
 
+    def _may_see_finance(self, request) -> bool:
+        """Evaluate ``finance.view`` ONCE per response, not per row. The child
+        serializer instance is shared across a ``many=True`` list render, so a
+        page of residents makes one permission query, not one per card."""
+        cached = getattr(self, "_can_finance_cache", None)
+        if cached is None:
+            from apps.rbac.services import has_hotel_permission
+
+            cached = (
+                bool(has_hotel_permission(request.user, request.hotel, "finance.view")),
+            )
+            self._can_finance_cache = cached
+        return cached[0]
+
     def get_folio_summary(self, obj):
         if not self.context.get("with_folio"):
             return None
         request = self.context.get("request")
         if request is None or getattr(request, "hotel", None) is None:
             return None
-        from apps.finance.models import Folio, FolioStatus
-        from apps.finance.services import ZERO, folio_balance, money
-        from apps.rbac.services import has_hotel_permission
+        from apps.finance.models import Folio, FolioStatus, PostingStatus
+        from apps.finance.services import ZERO, money
 
-        if not has_hotel_permission(request.user, request.hotel, "finance.view"):
+        if not self._may_see_finance(request):
             return None
-        open_folios = list(
-            Folio.objects.filter(
-                hotel=obj.hotel, stay=obj, status=FolioStatus.OPEN
-            ).order_by("id")
-        )
+        # Prefer the list view's prefetch (open folios + POSTED charges/payments)
+        # so a page of N residents never issues per-card folio queries. Fall back
+        # to a direct fetch only when the prefetch wasn't set up (defensive).
+        open_folios = getattr(obj, "open_folios_prefetched", None)
+        if open_folios is None:
+            open_folios = list(
+                Folio.objects.filter(
+                    hotel=obj.hotel, stay=obj, status=FolioStatus.OPEN
+                ).order_by("id").prefetch_related("charges", "payments")
+            )
         if not open_folios:
             return None
         total_charges = ZERO
         total_payments = ZERO
         awaiting = False
         for folio in open_folios:
-            totals = folio_balance(folio)
-            total_charges += totals["total_charges"]
-            total_payments += totals["total_payments"]
+            # Derive the same way folio_balance does, but from the prefetched
+            # rows (filtered by status in Python so the fallback path is correct
+            # too) — no query per folio.
+            total_charges += money(
+                sum(
+                    (c.total_amount for c in folio.charges.all()
+                     if c.status == PostingStatus.POSTED),
+                    ZERO,
+                )
+            )
+            total_payments += money(
+                sum(
+                    (p.amount for p in folio.payments.all()
+                     if p.status == PostingStatus.POSTED),
+                    ZERO,
+                )
+            )
             if folio.awaiting_final_charges:
                 awaiting = True
         balance = money(total_charges - total_payments)

@@ -19,6 +19,7 @@ Finality rules (folio final closure round):
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
@@ -754,74 +755,74 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
     )
 
 
-# STAYS-ARRIVALS-DEPARTURES — source markers for the stay's own room charges so
-# the initial charge is idempotent while later extensions post distinct rows.
-ROOM_CHARGE_SOURCE = "stay_room"
-ROOM_EXTENSION_SOURCE = "stay_room_extension"
+# STAYS-ARRIVALS-DEPARTURES — every room NIGHT is posted as its own charge, keyed
+# by night date in the ``source`` (``stay_room:<iso-date>``). This makes posting
+# idempotent per night and lets the daily close, a retry, or the pre-checkout
+# safety net all converge on the same set without ever double-posting.
+ROOM_NIGHT_SOURCE_PREFIX = "stay_room"
 
 
-@transaction.atomic
-def post_stay_room_charge(stay, *, user=None):
-    """Post the stay's initial ROOM charge (nightly rate × nights) to its open
-    folio (STAYS-ARRIVALS-DEPARTURES §24/§31 / owner decision D1).
+def _room_night_source(night_date) -> str:
+    return f"{ROOM_NIGHT_SOURCE_PREFIX}:{night_date.isoformat()}"
 
-    The folio must hold the COMPLETE account: without the room charge the balance
-    understates what the guest owes and the check-out "balance == 0" gate would be
-    wrong. Idempotent — skips if this stay's folio already holds a ``stay_room``
-    ROOM charge. Skips an UNPRICED room (``base_rate`` NULL/<=0) so the statement
-    honestly shows no room line (matching reservation ``is_priced=False``).
-    Returns the ``FolioCharge`` or ``None``.
-    """
-    folio = ensure_stay_folio(stay, user=user)
-    if folio.charges.filter(
-        type=ChargeType.ROOM,
-        source=ROOM_CHARGE_SOURCE,
-        status=PostingStatus.POSTED,
-    ).exists():
-        return None
+
+def _stay_room_rate(stay):
+    """The nightly rate + a display label for a stay, from its reservation line's
+    room type. Returns ``(None, label)`` for an UNPRICED room type."""
     line = stay.reservation_line
     room_type = getattr(line, "room_type", None) if line is not None else None
     rate = room_type.base_rate if room_type is not None else None
-    nights = stay.nights
-    if rate is None or money(rate) <= ZERO or nights <= 0:
-        return None
     label = room_type.name if room_type is not None else "Room"
-    return add_charge(
-        folio,
-        charge_type=ChargeType.ROOM,
-        description=f"{label} — {nights} night(s)",
-        quantity=nights,
-        unit_amount=money(rate),
-        source=ROOM_CHARGE_SOURCE,
-        user=user,
-    )
-
-
-@transaction.atomic
-def post_stay_extension_charge(stay, *, added_nights, user=None):
-    """Post a ROOM charge for ADDED nights when a stay is extended (§25). Distinct
-    from the initial charge (its own ``stay_room_extension`` source), so each
-    extension is a real, separately-audited folio movement. Skips an unpriced room
-    or a non-positive ``added_nights``. Returns the ``FolioCharge`` or ``None``.
-    """
-    if added_nights is None or int(added_nights) <= 0:
-        return None
-    folio = ensure_stay_folio(stay, user=user)
-    line = stay.reservation_line
-    room_type = getattr(line, "room_type", None) if line is not None else None
-    rate = room_type.base_rate if room_type is not None else None
     if rate is None or money(rate) <= ZERO:
-        return None
-    label = room_type.name if room_type is not None else "Room"
-    return add_charge(
-        folio,
-        charge_type=ChargeType.ROOM,
-        description=f"{label} — extension ({int(added_nights)} night(s))",
-        quantity=int(added_nights),
-        unit_amount=money(rate),
-        source=ROOM_EXTENSION_SOURCE,
-        user=user,
+        return None, label
+    return money(rate), label
+
+
+@transaction.atomic
+def ensure_due_room_charges(stay, *, as_of=None, user=None):
+    """Idempotently post one ROOM charge per CONSUMED night (owner correction to
+    §24/§31): a night dated ``D`` is due once the hotel business date has passed
+    it (``D < business_date``) and falls before the stay's planned departure.
+    Future nights are NEVER pre-posted — the folio only ever holds the nights the
+    guest has actually stayed by the hotel's clock, so an early departure owes
+    exactly the nights it consumed.
+
+    Each night is keyed by its date via the charge ``source`` so the daily close,
+    a retry, or the pre-checkout safety net can all call this and never
+    double-post. Skips an UNPRICED room type. The charge itself is dated to the
+    current business date (no back-dating); the ``source``/description carry the
+    night it settles. Returns the number of night charges newly posted.
+    """
+    folio = ensure_stay_folio(stay, user=user)
+    business_date = as_of or _business_date(stay.hotel)
+    rate, label = _stay_room_rate(stay)
+    if rate is None:
+        return 0
+    posted = set(
+        folio.charges.filter(
+            type=ChargeType.ROOM,
+            status=PostingStatus.POSTED,
+            source__startswith=f"{ROOM_NIGHT_SOURCE_PREFIX}:",
+        ).values_list("source", flat=True)
     )
+    night = stay.planned_check_in_date
+    end = stay.planned_check_out_date
+    count = 0
+    while night < end and night < business_date:
+        src = _room_night_source(night)
+        if src not in posted:
+            add_charge(
+                folio,
+                charge_type=ChargeType.ROOM,
+                description=f"{label} — night {night.isoformat()}",
+                quantity=1,
+                unit_amount=rate,
+                source=src,
+                user=user,
+            )
+            count += 1
+        night = night + timedelta(days=1)
+    return count
 
 
 @transaction.atomic
@@ -1514,10 +1515,18 @@ def record_insurance(*, hotel, amount, currency=None, method=None, reservation=N
     )
 
 
+# Standard, audit-visible reason for the routine return of a deposit at
+# departure — the front desk is not asked to re-type a reason for it (owner
+# rule §35); a manual out-of-cycle refund may still pass its own reason.
+INSURANCE_RETURN_ON_CHECKOUT_REASON = "insurance_return_on_checkout"
+
+
 @transaction.atomic
 def refund_insurance(insurance, *, amount=None, reason="", user=None):
     """Refund held insurance to the guest (§35). The money returns to the guest —
-    NOT a folio movement. ``amount`` defaults to the full remaining held amount."""
+    NOT a folio movement. ``amount`` defaults to the full remaining held amount.
+    A blank reason (the normal deposit return at departure) is recorded under a
+    standard reason so the movement is always audited without staff friction."""
     from .models import RefundableInsurance
 
     insurance = RefundableInsurance.objects.select_for_update().get(pk=insurance.pk)
@@ -1527,6 +1536,7 @@ def refund_insurance(insurance, *, amount=None, reason="", user=None):
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
     if amt > held:
         raise InvalidAmount({"field": "amount", "reason": "exceeds_held"})
+    reason = (reason or "").strip() or INSURANCE_RETURN_ON_CHECKOUT_REASON
     insurance.refunded_amount += amt
     _refresh_insurance_status(insurance)
     insurance.settled_by = _actor(user)
@@ -1536,7 +1546,7 @@ def refund_insurance(insurance, *, amount=None, reason="", user=None):
         event_type="insurance.refunded",
         severity="info",
         title=f"Insurance refunded {amt} {insurance.currency}",
-        message=reason or "",
+        message=reason,
         user=user,
         obj=insurance,
     )

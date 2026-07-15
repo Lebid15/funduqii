@@ -295,13 +295,15 @@ class CheckInService:
         # Folio closure round: every stay opens with its ONE operational folio
         # (same transaction — a failed folio rolls the whole check-in back).
         # Lazy import: finance is a later phase.
-        from apps.finance.services import ensure_stay_folio, post_stay_room_charge
+        from apps.finance.services import ensure_due_room_charges, ensure_stay_folio
 
         ensure_stay_folio(stay, user=user)
-        # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner D1): post the room/night charge
-        # so the folio is the COMPLETE account (skipped for an unpriced room).
-        # Same transaction — a failure rolls the whole check-in back.
-        post_stay_room_charge(stay, user=user)
+        # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner correction): post only the
+        # room nights already DUE by the hotel business date — never front-load
+        # the whole planned stay. On the arrival day this normally posts nothing;
+        # each later night is posted when it is consumed (daily close / the
+        # pre-checkout safety net). Same transaction — a failure rolls check-in back.
+        ensure_due_room_charges(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
             stay,
@@ -348,7 +350,18 @@ class CheckOutService:
 
         # Folio gate (final closure). Lazy import: finance is a later phase.
         from apps.finance.models import Folio, FolioStatus
-        from apps.finance.services import close_folio, folio_balance
+        from apps.finance.services import (
+            close_folio,
+            ensure_due_room_charges,
+            folio_balance,
+        )
+
+        # Safety net (owner correction): make sure every room night consumed by
+        # the hotel's clock is posted before we read the balance and settle — a
+        # departure must never skip a due night just because the daily close has
+        # not yet run. Idempotent, so it never double-posts. No night on/after the
+        # departure business date is posted.
+        ensure_due_room_charges(stay, user=user)
 
         open_folios = list(
             Folio.objects.select_for_update().filter(
@@ -467,17 +480,17 @@ class ReverseCheckInService:
         if stay.status != StayStatus.IN_HOUSE:
             raise InvalidStayChange({"reason": "not_in_house", "status": stay.status})
 
+        from apps.common.exceptions import (
+            ReverseCheckInDayClosed,
+            VoidWindowClosed,
+        )
         from apps.finance.models import (
             ChargeType,
             Folio,
             FolioStatus,
             PostingStatus,
         )
-        from apps.finance.services import (
-            ROOM_CHARGE_SOURCE,
-            ROOM_EXTENSION_SOURCE,
-            void_charge,
-        )
+        from apps.finance.services import ROOM_NIGHT_SOURCE_PREFIX, void_charge
 
         open_folios = list(
             Folio.objects.select_for_update().filter(
@@ -485,14 +498,21 @@ class ReverseCheckInService:
             )
         )
         for folio in open_folios:
-            # Void the check-in's room charges (reverses the financial effect).
-            # Payments/deposits are NEVER deleted — no silent loss of history.
-            for charge in folio.charges.filter(
-                type=ChargeType.ROOM,
-                source__in=[ROOM_CHARGE_SOURCE, ROOM_EXTENSION_SOURCE],
-                status=PostingStatus.POSTED,
-            ):
-                void_charge(charge, reason=f"check-in reversed · {reason}", user=user)
+            # Void the check-in's room-night charges (reverses the financial
+            # effect). Payments/deposits are NEVER deleted — no silent loss of
+            # history. If any of these charges is already in a CLOSED business day,
+            # a plain void is not allowed: surface a clear domain error rather than
+            # a confusing finance one, and (being atomic) change nothing. Correcting
+            # closed history is a separate accounting-correction cycle.
+            try:
+                for charge in folio.charges.filter(
+                    type=ChargeType.ROOM,
+                    source__startswith=f"{ROOM_NIGHT_SOURCE_PREFIX}:",
+                    status=PostingStatus.POSTED,
+                ):
+                    void_charge(charge, reason=f"check-in reversed · {reason}", user=user)
+            except VoidWindowClosed as exc:
+                raise ReverseCheckInDayClosed(getattr(exc, "detail", None))
             # Detach the folio from the stay: it reverts to the reservation's ONE
             # pre-arrival folio (reservation set, stay NULL), so any deposit lives
             # on as a pre-arrival deposit and a future re-check-in reuses it (never
@@ -568,13 +588,10 @@ class ExtendStayService:
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
         _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
-        # §25 (owner D1): the ADDED nights are a real folio charge so the account
-        # (and the check-out balance gate) stays correct. Same transaction.
-        from apps.finance.services import post_stay_extension_charge
-
-        post_stay_extension_charge(
-            stay, added_nights=(new_check_out_date - old_end).days, user=user
-        )
+        # §25 (owner correction): extending only updates the plan + availability.
+        # The added nights are NOT posted now — they become real folio charges as
+        # each one is consumed (daily close / the pre-checkout safety net), so the
+        # folio never front-loads a future night that has not yet happened.
         note = f"extended {old_end} -> {new_check_out_date}"
         if (reason or "").strip():
             note = f"{note} · {reason.strip()}"

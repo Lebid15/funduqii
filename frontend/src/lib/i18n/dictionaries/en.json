@@ -1448,6 +1448,7 @@
       "earlyDeparture": "Early departure — the expected check-out date has not arrived. A reason is required.",
       "reasonRequired": "An early-departure reason is required.",
       "statementHeading": "Guest statement",
+      "statementNote": "Amounts are the charges due so far (nights consumed by the hotel date). Remaining nights are billed as they occur — never charged in advance.",
       "awaitingBadge": "Awaiting final charges",
       "confirmCharges": "All charges posted",
       "settle": "Settle balance",

@@ -1448,6 +1448,7 @@
       "earlyDeparture": "Erken ayrılış — beklenen çıkış tarihi henüz gelmedi. Sebep zorunludur.",
       "reasonRequired": "Erken ayrılış sebebi zorunludur.",
       "statementHeading": "Konuk hesap özeti",
+      "statementNote": "Tutarlar şu ana kadar tahakkuk eden ücretlerdir (otel tarihine göre geçirilen geceler). Kalan geceler gerçekleştikçe faturalanır — asla önceden tahsil edilmez.",
       "awaitingBadge": "Son ücretler bekleniyor",
       "confirmCharges": "Tüm ücretler işlendi",
       "settle": "Bakiyeyi kapat",

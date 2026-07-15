@@ -487,6 +487,33 @@ class RefundableInsurance(models.Model):
             models.Index(fields=["stay"], name="insurance_stay_idx"),
             models.Index(fields=["reservation"], name="insurance_reservation_idx"),
         ]
+        constraints = [
+            # DB backstop for the money invariants (owner §35): the service layer
+            # enforces them under a row lock, but the database refuses a corrupt
+            # row from any path (admin, import, a future service, a bug).
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name="insurance_amount_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(deducted_amount__gte=0),
+                name="insurance_deducted_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(refunded_amount__gte=0),
+                name="insurance_refunded_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    amount__gte=models.F("deducted_amount") + models.F("refunded_amount")
+                ),
+                name="insurance_settled_within_amount",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(currency=""),
+                name="insurance_currency_present",
+            ),
+        ]
 
     @property
     def held_amount(self) -> Decimal:

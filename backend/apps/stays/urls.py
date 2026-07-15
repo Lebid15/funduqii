@@ -11,6 +11,7 @@ from .views import (
     DeparturesTodayView,
     ImmediateCheckInView,
     StayDetailView,
+    StayEnsureRoomChargesView,
     StayExtendView,
     StayFolioSummaryView,
     StayListView,
@@ -71,6 +72,11 @@ urlpatterns = [
         "stays/<int:pk>/folio-summary/",
         StayFolioSummaryView.as_view(),
         name="stay-folio-summary",
+    ),
+    path(
+        "stays/<int:pk>/ensure-room-charges/",
+        StayEnsureRoomChargesView.as_view(),
+        name="stay-ensure-room-charges",
     ),
     path("stays/<int:pk>/logs/", StayLogsView.as_view(), name="stay-logs"),
 ]

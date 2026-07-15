@@ -67,10 +67,45 @@ def _guard_write(request: Request) -> None:
     ensure_hotel_operational(request.hotel)
 
 
-def _stay_qs(hotel):
-    return Stay.objects.filter(hotel=hotel).select_related(
-        "room", "room__room_type", "primary_guest", "reservation"
+def _stay_qs(hotel, *, with_folio=False):
+    qs = Stay.objects.filter(hotel=hotel).select_related(
+        "room", "room__room_type", "primary_guest", "reservation",
+        "checked_in_by", "checked_out_by",
     ).prefetch_related("guests__guest", "reservation__documents")
+    if with_folio:
+        # Operational-card finance block (§12): prefetch each stay's OPEN folio
+        # with its POSTED charges + payments so the whole list builds its folio
+        # summaries with a fixed number of queries — never one (or three) per
+        # card. Adding residents must not grow the query count linearly.
+        from django.db.models import Prefetch
+
+        from apps.finance.models import (
+            Folio,
+            FolioCharge,
+            FolioStatus,
+            Payment,
+            PostingStatus,
+        )
+
+        qs = qs.prefetch_related(
+            Prefetch(
+                "folios",
+                queryset=Folio.objects.filter(status=FolioStatus.OPEN)
+                .order_by("id")
+                .prefetch_related(
+                    Prefetch(
+                        "charges",
+                        queryset=FolioCharge.objects.filter(status=PostingStatus.POSTED),
+                    ),
+                    Prefetch(
+                        "payments",
+                        queryset=Payment.objects.filter(status=PostingStatus.POSTED),
+                    ),
+                ),
+                to_attr="open_folios_prefetched",
+            )
+        )
+    return qs
 
 
 def _free_rooms(hotel, room_type, check_in, check_out, *, exclude_reservation_id):
@@ -145,7 +180,9 @@ class CurrentResidentsView(generics.ListAPIView):
         return {**super().get_serializer_context(), "with_folio": True}
 
     def get_queryset(self):
-        return _stay_qs(self.request.hotel).filter(status=StayStatus.IN_HOUSE)
+        return _stay_qs(self.request.hotel, with_folio=True).filter(
+            status=StayStatus.IN_HOUSE
+        )
 
 
 class StaysOverviewView(APIView):
@@ -172,7 +209,7 @@ class DeparturesTodayView(generics.ListAPIView):
 
     def get_queryset(self):
         today = get_business_date(self.request.hotel)
-        return _stay_qs(self.request.hotel).filter(
+        return _stay_qs(self.request.hotel, with_folio=True).filter(
             status=StayStatus.IN_HOUSE, planned_check_out_date=today
         )
 
@@ -241,6 +278,69 @@ class StayLogsView(APIView):
         )
 
 
+def _stay_folio_summary(request, stay) -> dict:
+    """Build the checkout dialog's folio + insurance snapshot for a stay."""
+    from apps.finance.models import Folio, FolioStatus, RefundableInsurance
+    from apps.finance.services import folio_balance
+
+    folios = Folio.objects.filter(hotel=request.hotel, stay=stay)
+    open_summaries = []
+    total = 0
+    awaiting_final_charges = False
+    for folio in folios.filter(status=FolioStatus.OPEN).order_by("id"):
+        balance = folio_balance(folio)["balance"]
+        total += balance
+        if folio.awaiting_final_charges:
+            awaiting_final_charges = True
+        open_summaries.append(
+            {
+                "id": folio.id,
+                "folio_number": folio.folio_number,
+                "status": folio.status,
+                "currency": folio.currency,
+                "balance": str(balance),
+                "awaiting_final_charges": folio.awaiting_final_charges,
+                "awaiting_final_charges_note": folio.awaiting_final_charges_note,
+            }
+        )
+    # Refundable insurance held against this stay must be settled before the
+    # guest departs (§35). Surface held items so the checkout dialog can drive
+    # refund/deduction without a second round-trip.
+    insurances = []
+    insurance_pending = False
+    for ins in RefundableInsurance.objects.filter(
+        hotel=request.hotel, stay=stay
+    ).order_by("id"):
+        held = ins.held_amount
+        if held > 0:
+            insurance_pending = True
+        insurances.append(
+            {
+                "id": ins.id,
+                "currency": ins.currency,
+                "amount": str(ins.amount),
+                "deducted_amount": str(ins.deducted_amount),
+                "refunded_amount": str(ins.refunded_amount),
+                "held_amount": str(held),
+                "status": ins.status,
+            }
+        )
+    business_date = get_business_date(request.hotel)
+    return {
+        "business_date": str(business_date),
+        "is_early_departure": (
+            stay.status == StayStatus.IN_HOUSE
+            and business_date < stay.planned_check_out_date
+        ),
+        "has_folio": folios.exists(),
+        "open_folios": open_summaries,
+        "balance": str(total),
+        "awaiting_final_charges": awaiting_final_charges,
+        "insurances": insurances,
+        "insurance_pending": insurance_pending,
+    }
+
+
 class StayFolioSummaryView(APIView):
     """The stay's open-folio balance + business-date context for the checkout
     dialog. Read-only; nothing is created here."""
@@ -249,72 +349,27 @@ class StayFolioSummaryView(APIView):
         return [CanView()]
 
     def get(self, request: Request, pk: int) -> Response:
-        from apps.finance.models import (
-            Folio,
-            FolioStatus,
-            RefundableInsurance,
-        )
-        from apps.finance.services import folio_balance
+        stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
+        return Response(_stay_folio_summary(request, stay))
+
+
+class StayEnsureRoomChargesView(APIView):
+    """Post every room night that has become DUE by the hotel business date, then
+    return the refreshed folio summary (owner correction §24): the checkout dialog
+    calls this on open so the front desk always settles the real, complete amount
+    — the folio is never missing a consumed night just because the daily close has
+    not run. Idempotent; never posts a future night. Requires ``stays.check_out``."""
+
+    def get_permissions(self):
+        return [CanCheckOut()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        from apps.finance.services import ensure_due_room_charges
 
         stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
-        folios = Folio.objects.filter(hotel=request.hotel, stay=stay)
-        open_summaries = []
-        total = 0
-        awaiting_final_charges = False
-        for folio in folios.filter(status=FolioStatus.OPEN).order_by("id"):
-            balance = folio_balance(folio)["balance"]
-            total += balance
-            if folio.awaiting_final_charges:
-                awaiting_final_charges = True
-            open_summaries.append(
-                {
-                    "id": folio.id,
-                    "folio_number": folio.folio_number,
-                    "status": folio.status,
-                    "currency": folio.currency,
-                    "balance": str(balance),
-                    "awaiting_final_charges": folio.awaiting_final_charges,
-                    "awaiting_final_charges_note": folio.awaiting_final_charges_note,
-                }
-            )
-        # Refundable insurance held against this stay must be settled before the
-        # guest departs (§35). Surface held items so the checkout dialog can drive
-        # refund/deduction without a second round-trip.
-        insurances = []
-        insurance_pending = False
-        for ins in RefundableInsurance.objects.filter(
-            hotel=request.hotel, stay=stay
-        ).order_by("id"):
-            held = ins.held_amount
-            if held > 0:
-                insurance_pending = True
-            insurances.append(
-                {
-                    "id": ins.id,
-                    "currency": ins.currency,
-                    "amount": str(ins.amount),
-                    "deducted_amount": str(ins.deducted_amount),
-                    "refunded_amount": str(ins.refunded_amount),
-                    "held_amount": str(held),
-                    "status": ins.status,
-                }
-            )
-        business_date = get_business_date(request.hotel)
-        return Response(
-            {
-                "business_date": str(business_date),
-                "is_early_departure": (
-                    stay.status == StayStatus.IN_HOUSE
-                    and business_date < stay.planned_check_out_date
-                ),
-                "has_folio": folios.exists(),
-                "open_folios": open_summaries,
-                "balance": str(total),
-                "awaiting_final_charges": awaiting_final_charges,
-                "insurances": insurances,
-                "insurance_pending": insurance_pending,
-            }
-        )
+        ensure_due_room_charges(stay, user=request.user)
+        return Response(_stay_folio_summary(request, stay))
 
 
 # --- Check-in / check-out ---------------------------------------------------

@@ -43,6 +43,7 @@ import {
 import {
   checkIn,
   checkOut,
+  ensureRoomCharges,
   extendStay,
   getStayFolioSummary,
   getStayLogs,
@@ -1044,7 +1045,12 @@ function CheckOutModal({
     setDepartedAt(null);
     setPrintMode(null);
     setAction(null);
-    getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null));
+    // Post any room night that has become due FIRST (the safety net), so the
+    // front desk settles the complete amount; fall back to a plain read if the
+    // ensure call is unavailable.
+    ensureRoomCharges(stay.id)
+      .then(setSummary)
+      .catch(() => getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null)));
   }, [open, stay]);
 
   async function reload() {
@@ -1275,6 +1281,7 @@ function CheckOutModal({
                     <Button type="button" size="sm" variant="ghost" icon={Printer} onClick={() => setPrintMode("preliminary")}>{c.printPreliminary}</Button>
                   ) : null}
                 </div>
+                <p className="muted small">{c.statementNote}</p>
                 {summary.has_folio && summary.open_folios.length > 0 ? (
                   summary.open_folios.map((f) => {
                     const b = Number(f.balance);
