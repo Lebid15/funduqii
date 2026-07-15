@@ -120,6 +120,83 @@ function FolioCardSummary({ folio }: { folio: StayFolioCardSummary | null | unde
   );
 }
 
+// --------------------------------------------------------------------------- //
+// Search & filters (§7) — deliberately short: one search box (guest / phone / //
+// reservation / stay / room) + a payment-status filter + a clear button.      //
+// Applied client-side over the current tab's daily list.                      //
+// --------------------------------------------------------------------------- //
+
+interface BoardFilters {
+  q: string;
+  payment: string;
+}
+
+function hay(...parts: (string | null | undefined)[]): string {
+  return parts.filter(Boolean).join(" ").toLowerCase();
+}
+
+function reservationMatches(res: Reservation, filters: BoardFilters): boolean {
+  if (filters.payment && res.payment_status !== filters.payment) return false;
+  const q = filters.q.trim().toLowerCase();
+  if (!q) return true;
+  return hay(
+    res.reservation_number,
+    res.primary_guest_name,
+    res.primary_guest_phone,
+    ...res.lines.map((l) => l.room_number),
+  ).includes(q);
+}
+
+function stayMatches(stay: Stay, filters: BoardFilters): boolean {
+  if (filters.payment && stay.folio_summary?.payment_status !== filters.payment) return false;
+  const q = filters.q.trim().toLowerCase();
+  if (!q) return true;
+  return hay(stay.room_number, stay.primary_guest_name, stay.reservation_number).includes(q);
+}
+
+function FrontDeskFilters({
+  filters,
+  onChange,
+}: {
+  filters: BoardFilters;
+  onChange: (next: BoardFilters) => void;
+}) {
+  const { t } = useI18n();
+  const f = t.frontDesk.filters;
+  const s = t.frontDesk.finance.status;
+  const paymentOptions = [
+    { value: "", label: f.allPayments },
+    { value: "paid", label: s.paid },
+    { value: "partial", label: s.partial },
+    { value: "unpaid", label: s.unpaid },
+    { value: "overpaid", label: s.overpaid },
+  ];
+  const active = filters.q.trim() !== "" || filters.payment !== "";
+  return (
+    <div className="cluster" style={{ gap: "0.5rem", alignItems: "flex-end", flexWrap: "wrap", marginBlock: "0.75rem" }}>
+      <FormField label={f.search} htmlFor="fd-search">
+        <Input
+          id="fd-search"
+          value={filters.q}
+          placeholder={f.searchPlaceholder}
+          onChange={(e) => onChange({ ...filters, q: e.target.value })}
+        />
+      </FormField>
+      <FormField label={f.payment} htmlFor="fd-payment">
+        <Select
+          id="fd-payment"
+          value={filters.payment}
+          options={paymentOptions}
+          onChange={(e) => onChange({ ...filters, payment: e.target.value })}
+        />
+      </FormField>
+      {active ? (
+        <Button variant="ghost" size="sm" onClick={() => onChange({ q: "", payment: "" })}>{f.clear}</Button>
+      ) : null}
+    </div>
+  );
+}
+
 export function FrontDeskPanel() {
   const { t } = useI18n();
   // Deep-linkable tab (?tab=departures — the topbar quick actions): initial
@@ -139,6 +216,7 @@ export function FrontDeskPanel() {
   const refresh = () => setReloadKey((k) => k + 1);
   const [overview, setOverview] = useState<StaysOverview | null>(null);
   const [activeCard, setActiveCard] = useState<OpsCardKey | null>(null);
+  const [filters, setFilters] = useState<BoardFilters>({ q: "", payment: "" });
 
   useEffect(() => {
     let stale = false;
@@ -183,9 +261,10 @@ export function FrontDeskPanel() {
         onSelect={handleCardSelect}
       />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} /> : null}
-      {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} /> : null}
-      {tab === "departures" ? <DeparturesTab reloadKey={reloadKey} onChange={refresh} /> : null}
+      <FrontDeskFilters filters={filters} onChange={setFilters} />
+      {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
+      {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
+      {tab === "departures" ? <DeparturesTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
     </>
   );
 }
@@ -194,7 +273,7 @@ export function FrontDeskPanel() {
 // Arrivals today                                                              //
 // --------------------------------------------------------------------------- //
 
-function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
+function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onChange: () => void; filters: BoardFilters }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const can = useCan();
@@ -226,11 +305,16 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
     return <EmptyState title={t.frontDesk.arrivals.empty} hint={t.frontDesk.arrivals.emptyHint} icon={PlaneLanding} />;
   }
 
+  const visible = rows.filter((res) => reservationMatches(res, filters));
+
   return (
     <>
       <SectionHeader title={t.frontDesk.tabs.arrivals} icon={PlaneLanding} />
+      {visible.length === 0 ? (
+        <EmptyState title={t.frontDesk.filters.noMatches} hint={t.frontDesk.filters.noMatchesHint} icon={PlaneLanding} />
+      ) : null}
       <div className="stack">
-        {rows.map((res) => (
+        {visible.map((res) => (
           <ActionCard
             key={res.id}
             icon={PlaneLanding}
@@ -407,7 +491,7 @@ function ReverseCheckInModal({
 // Current residents                                                           //
 // --------------------------------------------------------------------------- //
 
-function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
+function CurrentTab({ reloadKey, onChange, filters }: { reloadKey: number; onChange: () => void; filters: BoardFilters }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const can = useCan();
@@ -449,11 +533,16 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
     onChange();
   };
 
+  const visible = rows.filter((stay) => stayMatches(stay, filters));
+
   return (
     <>
       <SectionHeader title={t.frontDesk.tabs.current} icon={DoorOpen} />
+      {visible.length === 0 ? (
+        <EmptyState title={t.frontDesk.filters.noMatches} hint={t.frontDesk.filters.noMatchesHint} icon={DoorOpen} />
+      ) : null}
       <div className="stay-grid">
-        {rows.map((stay) => (
+        {visible.map((stay) => (
           <article className="stay-card" key={stay.id}>
             <div className="stay-card__head">
               <span className="stay-card__room">{stay.room_number}</span>
@@ -525,7 +614,7 @@ function CurrentTab({ reloadKey, onChange }: { reloadKey: number; onChange: () =
 // Departures today                                                            //
 // --------------------------------------------------------------------------- //
 
-function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: () => void }) {
+function DeparturesTab({ reloadKey, onChange, filters }: { reloadKey: number; onChange: () => void; filters: BoardFilters }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const can = useCan();
@@ -556,11 +645,16 @@ function DeparturesTab({ reloadKey, onChange }: { reloadKey: number; onChange: (
     return <EmptyState title={t.frontDesk.departures.empty} hint={t.frontDesk.departures.emptyHint} icon={LogOut} />;
   }
 
+  const visible = rows.filter((stay) => stayMatches(stay, filters));
+
   return (
     <>
       <SectionHeader title={t.frontDesk.tabs.departures} icon={LogOut} />
+      {visible.length === 0 ? (
+        <EmptyState title={t.frontDesk.filters.noMatches} hint={t.frontDesk.filters.noMatchesHint} icon={LogOut} />
+      ) : null}
       <div className="stack">
-        {rows.map((stay) => (
+        {visible.map((stay) => (
           <ActionCard
             key={stay.id}
             icon={PlaneTakeoff}

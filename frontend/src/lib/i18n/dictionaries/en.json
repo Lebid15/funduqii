@@ -1315,6 +1315,15 @@
         "overpaid": "Credit due"
       }
     },
+    "filters": {
+      "search": "Search",
+      "searchPlaceholder": "Guest, phone, reservation or room…",
+      "payment": "Payment",
+      "allPayments": "All payments",
+      "clear": "Clear filters",
+      "noMatches": "No matches",
+      "noMatchesHint": "No cards match the current search and filters."
+    },
     "tabs": {
       "arrivals": "Arrivals today",
       "current": "Current residents",

@@ -1315,6 +1315,15 @@
         "overpaid": "رصيد دائن مستحق"
       }
     },
+    "filters": {
+      "search": "بحث",
+      "searchPlaceholder": "ضيف، هاتف، حجز أو غرفة…",
+      "payment": "الدفع",
+      "allPayments": "كل حالات الدفع",
+      "clear": "مسح الفلاتر",
+      "noMatches": "لا نتائج",
+      "noMatchesHint": "لا بطاقات تطابق البحث والفلاتر الحالية."
+    },
     "tabs": {
       "arrivals": "وصول اليوم",
       "current": "المقيمون الحاليون",

@@ -1315,6 +1315,15 @@
         "overpaid": "Alacak var"
       }
     },
+    "filters": {
+      "search": "Ara",
+      "searchPlaceholder": "Konuk, telefon, rezervasyon veya oda…",
+      "payment": "Ödeme",
+      "allPayments": "Tüm ödemeler",
+      "clear": "Filtreleri temizle",
+      "noMatches": "Eşleşme yok",
+      "noMatchesHint": "Mevcut arama ve filtrelerle eşleşen kart yok."
+    },
     "tabs": {
       "arrivals": "Bugünkü girişler",
       "current": "Mevcut konuklar",
