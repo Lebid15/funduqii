@@ -1325,6 +1325,40 @@
       "noMatches": "Eşleşme yok",
       "noMatchesHint": "Mevcut arama ve filtrelerle eşleşen kart yok."
     },
+    "print": {
+      "registrationTitle": "Kayıt kartı",
+      "preliminaryTitle": "Ön hesap özeti",
+      "finalTitle": "Nihai hesap özeti",
+      "guest": "Konuk",
+      "room": "Oda",
+      "roomType": "Oda tipi",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "checkInTime": "Giriş zamanı",
+      "reservation": "Rezervasyon",
+      "status": "Durum",
+      "fullyPaid": "Tamamen ödendi",
+      "issued": "Düzenlenme",
+      "totalCharges": "Toplam ücretler",
+      "totalPaid": "Toplam ödenen",
+      "remaining": "Kalan",
+      "deposit": "Depozito",
+      "charges": "Ücretler",
+      "payments": "Ödemeler",
+      "description": "Açıklama",
+      "type": "Tür",
+      "date": "Tarih",
+      "amount": "Tutar",
+      "method": "Yöntem",
+      "receipt": "Makbuz",
+      "noCharges": "Ücret yok.",
+      "noPayments": "Ödeme yok.",
+      "voided": "İptal edildi",
+      "guestSignature": "Konuk imzası",
+      "welcome": "Hoş geldiniz — lütfen bu kartı konaklamanız boyunca saklayın.",
+      "thanks": "Bizi tercih ettiğiniz için teşekkürler.",
+      "error": "Belge yüklenemedi."
+    },
     "tabs": {
       "arrivals": "Bugünkü girişler",
       "current": "Mevcut konuklar",
@@ -1392,7 +1426,8 @@
       "successCheckInTime": "Giriş zamanı",
       "successFolio": "Folyo bakiyesi",
       "successHint": "Oda artık dolu ve folyo ücretler için açık.",
-      "successDone": "Tamam"
+      "successDone": "Tamam",
+      "successPrint": "Kayıt kartını yazdır"
     },
     "checkOutModal": {
       "title": "Çıkış yap",
@@ -1437,7 +1472,9 @@
       "successFolio": "Folyo",
       "successPaid": "Tamamen ödendi",
       "successDeparted": "Ayrılış zamanı",
-      "done": "Tamam"
+      "done": "Tamam",
+      "printPreliminary": "Ön hesap özetini yazdır",
+      "printFinal": "Nihai hesap özetini yazdır"
     },
     "details": {
       "title": "Konaklama",

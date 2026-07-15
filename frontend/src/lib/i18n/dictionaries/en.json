@@ -1325,6 +1325,40 @@
       "noMatches": "No matches",
       "noMatchesHint": "No cards match the current search and filters."
     },
+    "print": {
+      "registrationTitle": "Registration card",
+      "preliminaryTitle": "Preliminary statement",
+      "finalTitle": "Final statement",
+      "guest": "Guest",
+      "room": "Room",
+      "roomType": "Room type",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "checkInTime": "Checked in at",
+      "reservation": "Reservation",
+      "status": "Status",
+      "fullyPaid": "Fully paid",
+      "issued": "Issued",
+      "totalCharges": "Total charges",
+      "totalPaid": "Total paid",
+      "remaining": "Remaining",
+      "deposit": "Deposit",
+      "charges": "Charges",
+      "payments": "Payments",
+      "description": "Description",
+      "type": "Type",
+      "date": "Date",
+      "amount": "Amount",
+      "method": "Method",
+      "receipt": "Receipt",
+      "noCharges": "No charges.",
+      "noPayments": "No payments.",
+      "voided": "Voided",
+      "guestSignature": "Guest signature",
+      "welcome": "Welcome — please keep this card for your stay.",
+      "thanks": "Thank you for staying with us.",
+      "error": "Could not load the document."
+    },
     "tabs": {
       "arrivals": "Arrivals today",
       "current": "Current residents",
@@ -1392,7 +1426,8 @@
       "successCheckInTime": "Checked in at",
       "successFolio": "Folio balance",
       "successHint": "The room is now occupied and the folio is open for charges.",
-      "successDone": "Done"
+      "successDone": "Done",
+      "successPrint": "Print registration card"
     },
     "checkOutModal": {
       "title": "Check out",
@@ -1437,7 +1472,9 @@
       "successFolio": "Folio",
       "successPaid": "Fully paid",
       "successDeparted": "Departed at",
-      "done": "Done"
+      "done": "Done",
+      "printPreliminary": "Print preliminary statement",
+      "printFinal": "Print final statement"
     },
     "details": {
       "title": "Stay",

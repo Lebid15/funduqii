@@ -12,6 +12,7 @@ import {
   PlaneLanding,
   PlaneTakeoff,
   Plus,
+  Printer,
   Star,
   Undo2,
   Users,
@@ -55,6 +56,7 @@ import {
 } from "@/lib/api/stays";
 import type { StaysOverview } from "@/lib/api/stays";
 import { StaysSummaryCards, type OpsCardKey } from "./StaysSummaryCards";
+import { StayRegistrationPrintModal, StayStatementPrintModal } from "./StayPrints";
 import {
   deductInsurance,
   refundFolioCredit,
@@ -767,6 +769,7 @@ function CheckInModal({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Stay | null>(null);
   const [resultFolio, setResultFolio] = useState<StayFolioSummary | null>(null);
+  const [printReg, setPrintReg] = useState(false);
 
   const open = reservation !== null;
   const line = reservation?.lines.find((l) => String(l.id) === lineId) ?? reservation?.lines[0];
@@ -786,6 +789,7 @@ function CheckInModal({
     setQuickPhone("");
     setResult(null);
     setResultFolio(null);
+    setPrintReg(false);
     listGuests({ page_size: 200, is_active: "true" }).then((r) => setGuests(r.results)).catch(() => setGuests([]));
   }, [open, reservation]);
 
@@ -859,13 +863,21 @@ function CheckInModal({
   if (result) {
     const folioBalance = resultFolio?.balance ?? null;
     const folioCurrency = resultFolio?.open_folios[0]?.currency ?? "";
+    const folioId = resultFolio?.open_folios[0]?.id ?? null;
     return (
       <Modal
         open={open}
         onClose={onClose}
         title={ci.title}
         closeLabel={t.common.close}
-        footer={<Button onClick={onDone}>{ci.successDone}</Button>}
+        footer={
+          <>
+            {folioId !== null ? (
+              <Button variant="secondary" icon={Printer} onClick={() => setPrintReg(true)}>{ci.successPrint}</Button>
+            ) : null}
+            <Button onClick={onDone}>{ci.successDone}</Button>
+          </>
+        }
       >
         <div className="stack" role="status">
           <Alert tone="success">{ci.successHeading}</Alert>
@@ -881,6 +893,12 @@ function CheckInModal({
           </dl>
           <Alert tone="info">{ci.successHint}</Alert>
         </div>
+        <StayRegistrationPrintModal
+          open={printReg}
+          stay={result}
+          folioId={folioId}
+          onClose={() => setPrintReg(false)}
+        />
       </Modal>
     );
   }
@@ -993,6 +1011,7 @@ function CheckOutModal({
   const [toggleBusy, setToggleBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [departedAt, setDepartedAt] = useState<string | null>(null);
+  const [printMode, setPrintMode] = useState<"preliminary" | "final" | null>(null);
   // A single inline action form is open at a time (settle / refund / insurance).
   const [action, setAction] = useState<{ kind: CoActionKind; id: number } | null>(null);
   const [amountField, setAmountField] = useState("");
@@ -1014,6 +1033,7 @@ function CheckOutModal({
     setSummary(null);
     setDone(false);
     setDepartedAt(null);
+    setPrintMode(null);
     setAction(null);
     getStayFolioSummary(stay.id).then(setSummary).catch(() => setSummary(null));
   }, [open, stay]);
@@ -1176,7 +1196,12 @@ function CheckOutModal({
       closeLabel={t.common.close}
       footer={
         done ? (
-          <Button onClick={onDone}>{c.done}</Button>
+          <>
+            {summary && summary.open_folios.length > 0 ? (
+              <Button variant="secondary" icon={Printer} onClick={() => setPrintMode("final")}>{c.printFinal}</Button>
+            ) : null}
+            <Button onClick={onDone}>{c.done}</Button>
+          </>
         ) : (
           <>
             <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
@@ -1219,7 +1244,12 @@ function CheckOutModal({
             <div className="stack" style={{ gap: "0.75rem" }}>
               {/* Statement + per-folio settlement / refund (§17/§34/§37) */}
               <div className="stack" style={{ gap: "0.5rem" }}>
-                <h4 style={{ margin: 0 }}>{c.statementHeading}</h4>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <h4 style={{ margin: 0 }}>{c.statementHeading}</h4>
+                  {summary.open_folios.length > 0 ? (
+                    <Button type="button" size="sm" variant="ghost" icon={Printer} onClick={() => setPrintMode("preliminary")}>{c.printPreliminary}</Button>
+                  ) : null}
+                </div>
                 {summary.has_folio && summary.open_folios.length > 0 ? (
                   summary.open_folios.map((f) => {
                     const b = Number(f.balance);
@@ -1306,6 +1336,12 @@ function CheckOutModal({
           <Alert tone="warning">{c.financeNote}</Alert>
         </div>
       )}
+      <StayStatementPrintModal
+        open={printMode !== null}
+        folioId={summary?.open_folios[0]?.id ?? null}
+        mode={printMode ?? "preliminary"}
+        onClose={() => setPrintMode(null)}
+      />
     </Modal>
   );
 }

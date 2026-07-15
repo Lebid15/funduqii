@@ -1325,6 +1325,40 @@
       "noMatches": "لا نتائج",
       "noMatchesHint": "لا بطاقات تطابق البحث والفلاتر الحالية."
     },
+    "print": {
+      "registrationTitle": "بطاقة تسجيل الإقامة",
+      "preliminaryTitle": "كشف حساب أولي",
+      "finalTitle": "كشف حساب نهائي",
+      "guest": "الضيف",
+      "room": "الغرفة",
+      "roomType": "نوع الغرفة",
+      "checkIn": "الوصول",
+      "checkOut": "المغادرة",
+      "checkInTime": "وقت الدخول",
+      "reservation": "الحجز",
+      "status": "الحالة",
+      "fullyPaid": "مدفوع بالكامل",
+      "issued": "صدر في",
+      "totalCharges": "إجمالي الرسوم",
+      "totalPaid": "إجمالي المدفوع",
+      "remaining": "المتبقي",
+      "deposit": "العربون",
+      "charges": "الرسوم",
+      "payments": "المدفوعات",
+      "description": "الوصف",
+      "type": "النوع",
+      "date": "التاريخ",
+      "amount": "المبلغ",
+      "method": "الطريقة",
+      "receipt": "الإيصال",
+      "noCharges": "لا رسوم.",
+      "noPayments": "لا مدفوعات.",
+      "voided": "ملغى",
+      "guestSignature": "توقيع الضيف",
+      "welcome": "أهلًا بك — يُرجى الاحتفاظ بهذه البطاقة طوال إقامتك.",
+      "thanks": "شكرًا لإقامتك معنا.",
+      "error": "تعذّر تحميل المستند."
+    },
     "tabs": {
       "arrivals": "وصول اليوم",
       "current": "المقيمون الحاليون",
@@ -1392,7 +1426,8 @@
       "successCheckInTime": "وقت الدخول",
       "successFolio": "رصيد الفوليو",
       "successHint": "الغرفة الآن مشغولة والفوليو مفتوح لاستقبال الرسوم.",
-      "successDone": "تم"
+      "successDone": "تم",
+      "successPrint": "طباعة بطاقة التسجيل"
     },
     "checkOutModal": {
       "title": "تسجيل الخروج",
@@ -1437,7 +1472,9 @@
       "successFolio": "الفوليو",
       "successPaid": "مدفوع بالكامل",
       "successDeparted": "غادر في",
-      "done": "تم"
+      "done": "تم",
+      "printPreliminary": "طباعة كشف حساب أولي",
+      "printFinal": "طباعة كشف حساب نهائي"
     },
     "details": {
       "title": "الإقامة",
