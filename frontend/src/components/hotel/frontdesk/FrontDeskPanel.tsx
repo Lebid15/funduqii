@@ -33,7 +33,6 @@ import {
   Tabs,
   Textarea,
   useToast,
-  WorkflowCard,
   type TabItem,
 } from "@/components/ui";
 import {
@@ -42,6 +41,7 @@ import {
   extendStay,
   getStayFolioSummary,
   getStayLogs,
+  getStaysOverview,
   listArrivalsToday,
   listCheckInRooms,
   listCurrentResidents,
@@ -50,6 +50,8 @@ import {
   moveStayRoom,
   shortenStay,
 } from "@/lib/api/stays";
+import type { StaysOverview } from "@/lib/api/stays";
+import { StaysSummaryCards, type OpsCardKey } from "./StaysSummaryCards";
 import { createGuest, listGuests } from "@/lib/api/guests";
 import { messageForError } from "@/lib/api/errors";
 import type {
@@ -98,25 +100,37 @@ export function FrontDeskPanel() {
   }, [search]);
   const [reloadKey, setReloadKey] = useState(0);
   const refresh = () => setReloadKey((k) => k + 1);
-  const [counts, setCounts] = useState<{
-    arrivals: number;
-    current: number;
-    departures: number;
-  } | null>(null);
+  const [overview, setOverview] = useState<StaysOverview | null>(null);
+  const [activeCard, setActiveCard] = useState<OpsCardKey | null>(null);
 
   useEffect(() => {
     let stale = false;
-    Promise.all([listArrivalsToday(), listCurrentResidents(), listDeparturesToday()])
-      .then(([a, c, d]) => {
-        if (!stale) setCounts({ arrivals: a.length, current: c.count, departures: d.count });
+    getStaysOverview()
+      .then((o) => {
+        if (!stale) setOverview(o);
       })
       .catch(() => {
-        if (!stale) setCounts(null);
+        if (!stale) setOverview(null);
       });
     return () => {
       stale = true;
     };
   }, [reloadKey]);
+
+  // §6 — clicking a card applies its filter. Until per-state filtered lists
+  // land, each card maps to the tab that shows its guests.
+  const CARD_TAB: Record<OpsCardKey, string> = {
+    arriving: "arrivals",
+    awaiting: "arrivals",
+    checked_in_today: "current",
+    residents: "current",
+    departing: "departures",
+    attention: "current",
+  };
+  const handleCardSelect = (card: OpsCardKey) => {
+    setActiveCard(card);
+    setTab(CARD_TAB[card]);
+  };
 
   const tabs: TabItem[] = [
     { key: "arrivals", label: t.frontDesk.tabs.arrivals, icon: PlaneLanding },
@@ -126,66 +140,11 @@ export function FrontDeskPanel() {
 
   return (
     <>
-      <div className="workflow-grid">
-        <WorkflowCard
-          icon={PlaneLanding}
-          tone="info"
-          title={t.frontDesk.workflow.arrivalsTitle}
-          value={counts ? counts.arrivals : "—"}
-          description={t.frontDesk.workflow.arrivalsDesc}
-          action={
-            <Button variant="secondary" size="sm" onClick={() => setTab("arrivals")}>
-              {t.frontDesk.workflow.view}
-            </Button>
-          }
-        />
-        <WorkflowCard
-          icon={Users}
-          tone="success"
-          title={t.frontDesk.workflow.currentTitle}
-          value={counts ? counts.current : "—"}
-          description={t.frontDesk.workflow.currentDesc}
-          action={
-            <Button variant="secondary" size="sm" onClick={() => setTab("current")}>
-              {t.frontDesk.workflow.view}
-            </Button>
-          }
-        />
-        <WorkflowCard
-          icon={PlaneTakeoff}
-          tone="warning"
-          title={t.frontDesk.workflow.departuresTitle}
-          value={counts ? counts.departures : "—"}
-          description={t.frontDesk.workflow.departuresDesc}
-          action={
-            <Button variant="secondary" size="sm" onClick={() => setTab("departures")}>
-              {t.frontDesk.workflow.view}
-            </Button>
-          }
-        />
-        <WorkflowCard
-          icon={DoorOpen}
-          tone="primary"
-          title={t.frontDesk.workflow.checkInTitle}
-          description={t.frontDesk.workflow.checkInDesc}
-          action={
-            <Button size="sm" onClick={() => setTab("arrivals")}>
-              {t.frontDesk.workflow.checkInAction}
-            </Button>
-          }
-        />
-        <WorkflowCard
-          icon={LogOut}
-          tone="danger"
-          title={t.frontDesk.workflow.checkOutTitle}
-          description={t.frontDesk.workflow.checkOutDesc}
-          action={
-            <Button size="sm" onClick={() => setTab("departures")}>
-              {t.frontDesk.workflow.checkOutAction}
-            </Button>
-          }
-        />
-      </div>
+      <StaysSummaryCards
+        overview={overview}
+        active={activeCard}
+        onSelect={handleCardSelect}
+      />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} /> : null}
       {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} /> : null}
