@@ -1319,7 +1319,12 @@
       "guest": "Misafir",
       "dates": "Tarihler",
       "rooms": "Odalar",
-      "checkIn": "Giriş yap"
+      "checkIn": "Giriş yap",
+      "noShow": "Gelmedi",
+      "noShowTitle": "Gelmedi olarak işaretle",
+      "noShowHint": "Konuk otel politikası içinde gelmedi. Bu, odayı boşaltır ve nedeni kaydeder.",
+      "noShowReason": "Neden",
+      "noShowConfirm": "Gelmedi işaretle"
     },
     "current": {
       "empty": "Giriş yapan yok",

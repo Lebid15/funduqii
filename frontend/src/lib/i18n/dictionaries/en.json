@@ -1319,7 +1319,12 @@
       "guest": "Guest",
       "dates": "Dates",
       "rooms": "Rooms",
-      "checkIn": "Check in"
+      "checkIn": "Check in",
+      "noShow": "No-show",
+      "noShowTitle": "Mark as no-show",
+      "noShowHint": "The guest did not arrive within the hotel's policy. This frees the room and records the reason.",
+      "noShowReason": "Reason",
+      "noShowConfirm": "Mark no-show"
     },
     "current": {
       "empty": "No one is checked in",

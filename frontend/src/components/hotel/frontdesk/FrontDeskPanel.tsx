@@ -53,6 +53,7 @@ import {
 import type { StaysOverview } from "@/lib/api/stays";
 import { StaysSummaryCards, type OpsCardKey } from "./StaysSummaryCards";
 import { createGuest, listGuests } from "@/lib/api/guests";
+import { markNoShow } from "@/lib/api/reservations";
 import { messageForError } from "@/lib/api/errors";
 import type {
   AdmissibleRoom,
@@ -165,6 +166,7 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<Reservation | null>(null);
+  const [noShowTarget, setNoShowTarget] = useState<Reservation | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -199,9 +201,18 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
             title={`${res.reservation_number} · ${res.primary_guest_name}`}
             description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
             action={
-              can("stays.check_in") ? (
-                <Button icon={DoorOpen} onClick={() => setTarget(res)}>{t.frontDesk.arrivals.checkIn}</Button>
-              ) : undefined
+              <div className="cluster">
+                {can("stays.check_in") ? (
+                  <Button icon={DoorOpen} size="sm" onClick={() => setTarget(res)}>
+                    {t.frontDesk.arrivals.checkIn}
+                  </Button>
+                ) : null}
+                {can("reservations.mark_no_show") ? (
+                  <Button variant="ghost" size="sm" onClick={() => setNoShowTarget(res)}>
+                    {t.frontDesk.arrivals.noShow}
+                  </Button>
+                ) : null}
+              </div>
             }
           />
         ))}
@@ -211,7 +222,80 @@ function ArrivalsTab({ reloadKey, onChange }: { reloadKey: number; onChange: () 
         onClose={() => setTarget(null)}
         onDone={() => { setTarget(null); notify(t.frontDesk.saved); onChange(); }}
       />
+      <NoShowModal
+        reservation={noShowTarget}
+        onClose={() => setNoShowTarget(null)}
+        onDone={() => { setNoShowTarget(null); notify(t.frontDesk.saved); onChange(); }}
+      />
     </>
+  );
+}
+
+function NoShowModal({
+  reservation,
+  onClose,
+  onDone,
+}: {
+  reservation: Reservation | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setReason("");
+    setError(null);
+  }, [reservation]);
+  if (!reservation) return null;
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await markNoShow(reservation.id, reason);
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={t.frontDesk.arrivals.noShowTitle}
+      closeLabel={t.common.close}
+    >
+      <div className="stack">
+        <p className="muted">{t.frontDesk.arrivals.noShowHint}</p>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <FormField
+          label={t.frontDesk.arrivals.noShowReason}
+          htmlFor="no-show-reason"
+        >
+          <Textarea
+            id="no-show-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+          />
+        </FormField>
+        <div className="cluster cluster--end">
+          <Button variant="ghost" onClick={onClose}>
+            {t.common.cancel}
+          </Button>
+          <Button
+            variant="danger"
+            disabled={busy || !reason.trim()}
+            onClick={submit}
+          >
+            {t.frontDesk.arrivals.noShowConfirm}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
