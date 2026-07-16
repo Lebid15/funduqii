@@ -127,6 +127,16 @@ class Room(models.Model):
     )
     number = models.CharField(max_length=32)
     display_name = models.CharField(max_length=140, blank=True, default="")
+    # --- Per-room EFFECTIVE features (Round 2 §6.1, ADDITIVE) --------------
+    # Features are NEVER copied from the type onto the room. Instead a room
+    # keeps only its DELTAS against the live type list:
+    #   feature_additions  = extra features this room has that its type lacks
+    #   feature_exclusions = inherited type features this room removes
+    # The merged, deduped, ordered result is `effective_features` (property
+    # below). Empty lists (the default) reproduce the pre-§6.1 behaviour
+    # exactly: the room simply mirrors its type's amenities.
+    feature_additions = models.JSONField(default=list, blank=True)
+    feature_exclusions = models.JSONField(default=list, blank=True)
     status = models.CharField(
         max_length=16, choices=RoomStatus.choices, default=RoomStatus.AVAILABLE
     )
@@ -155,6 +165,48 @@ class Room(models.Model):
 
     def __str__(self) -> str:
         return f"Room {self.number} (hotel={self.hotel_id})"
+
+    @property
+    def effective_features(self) -> list[str]:
+        """The room's real feature list = TypeDefaults − Exclusions + Additions.
+
+        SOLE effective-merge computation for §6.1 — reuse it everywhere
+        (operational board, serializers, tests). Rules:
+
+        * Start from the LIVE ``room_type.amenities`` IN ORDER. Because the
+          type list is read live, editing a type's amenities flows to every
+          room that does not exclude the changed feature — no backfill.
+        * Drop any feature listed in ``feature_exclusions`` (an excluded
+          feature is NEVER present in the result).
+        * Append ``feature_additions`` that are not already present, in order.
+        * The result is ORDERED and DEDUPED (a feature appears at most once).
+
+        Note on ``room_type`` changes: additions/exclusions are room-scoped
+        strings, so they SURVIVE a type change; the effective list simply
+        recomputes against the NEW type's amenities.
+        """
+        exclusions = {
+            f for f in (self.feature_exclusions or []) if isinstance(f, str)
+        }
+        result: list[str] = []
+        seen: set[str] = set()
+        for feature in self.room_type.amenities or []:
+            if not isinstance(feature, str):
+                continue
+            if feature in exclusions or feature in seen:
+                continue
+            result.append(feature)
+            seen.add(feature)
+        for feature in self.feature_additions or []:
+            if not isinstance(feature, str):
+                continue
+            # An excluded feature is NEVER included, even if a stale/direct DB
+            # write left it in both lists (validation blocks this on the API).
+            if feature in exclusions or feature in seen:
+                continue
+            result.append(feature)
+            seen.add(feature)
+        return result
 
 
 class RoomStatusLog(models.Model):

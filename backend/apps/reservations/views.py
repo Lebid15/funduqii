@@ -735,7 +735,12 @@ class RoomAvailabilityView(APIView):
                     "room_type_name": rt.name,
                     "base_capacity": rt.base_capacity,
                     "max_capacity": rt.max_capacity,
-                    "amenities": rt.amenities,
+                    # Per-room EFFECTIVE features (§6.1): the live type amenities
+                    # minus this room's exclusions plus its additions. `room_type`
+                    # is select_related above, so `effective_features` (which reads
+                    # `room_type.amenities`) adds no extra query. Same JSON key so
+                    # the frontend contract is unchanged; only the value is effective.
+                    "amenities": room.effective_features,
                     # Decimal as string (matches the DecimalField convention).
                     "base_rate": str(rt.base_rate) if rt.base_rate is not None else None,
                     "currency": currency,

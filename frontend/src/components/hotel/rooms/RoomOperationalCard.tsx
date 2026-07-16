@@ -11,7 +11,7 @@ import {
   Wallet,
 } from "lucide-react";
 
-import { Badge, Button, Icon } from "@/components/ui";
+import { ActionIconButton, Button, Icon, StatusBadge } from "@/components/ui";
 import type { RoomBoardRoom } from "@/lib/api/types";
 import { formatCapacity, formatDate, formatMoney } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -20,24 +20,31 @@ import { cx } from "@/lib/utils";
 
 import { AmenityChips } from "./AmenityChips";
 import {
+  bookabilityIcon,
+  bookabilityTone,
   occupancyIcon,
   occupancyTone,
+  occupancyVariant,
   operationalIcon,
   operationalTone,
+  operationalVariant,
 } from "./boardShared";
 
 /** One room on the operational board (owner polish round): a larger, calmer
  * card split into clear, quietly-divided regions —
- *   (1) header: room number (focal point) + Eye details affordance, with the
- *       two independent badges (occupancy + operational) on the end;
+ *   (1) header: TWO rows (mirrors ReservationCard, §6.2). Row 1 = STATUS badges
+ *       ONLY — the three independent axes (occupancy + operational + the §6.3
+ *       bookability badge from `available_now`), central StatusBadge, icon+text
+ *       always. Row 2 = the room number (focal point, opens details) + an
+ *       explicit Eye ActionIconButton;
  *   (2) room data: type · floor · capacity · nightly price + currency, each
  *       with a unified accompanying icon;
- *   (3) amenities: the top few ROOM-TYPE features as chips (full list in the
- *       drawer), hidden entirely when the type has none;
+ *   (3) amenities: the top few EFFECTIVE features as chips (full list in the
+ *       drawer), hidden entirely when there are none;
  *   (4) current status: the status-specific operational line;
  *   (5) actions: EXACTLY three permission-aware controls — edit, archive
  *       (confirm; hidden when archived) and change status.
- * No delete, no contextual deep-links — those live in the drawer. The title
+ * No delete, no contextual deep-links — those live in the drawer. The number
  * button is a sibling of the action row (never nested), so there is no
  * nested-interactive a11y anti-pattern. */
 export function RoomOperationalCard({
@@ -75,34 +82,54 @@ export function RoomOperationalCard({
       className={cx("room-op-card", `room-op-card--${room.display_status}`)}
       aria-label={`${p.roomLabel} ${room.number}`}
     >
-      {/* 1) Header — room number (focal point) + details affordance on the
-       * start, the two independent badges (occupancy + operational) on the end.
-       * The title is a real button and a sibling of the action row (never
-       * nested), so there is no nested-interactive a11y anti-pattern. */}
+      {/* 1) Header — two stacked rows (mirrors ReservationCard, §6.2). */}
       <div className="room-op-card__header">
-        <button
-          type="button"
-          className="room-op-card__open"
-          onClick={() => onDetails(room)}
-          aria-label={`${b.roomDetails} — ${p.roomLabel} ${room.number} · ${room.room_type_name}`}
-        >
-          <span className="room-op-card__title">
+        {/* Row 1 — STATUS badges ONLY: occupancy + operational + the §6.3
+         * bookability badge. Three axes, each its own StatusBadge (icon+text,
+         * never colour alone); the room number is NOT on this row. */}
+        <div className="room-op-card__status-row">
+          <StatusBadge
+            tone={occupancyTone(room.occupancy_status)}
+            variant={occupancyVariant(room.occupancy_status)}
+            icon={occupancyIcon(room.occupancy_status)}
+            label={t.rooms.occupancy[room.occupancy_status]}
+          />
+          <StatusBadge
+            tone={operationalTone(room.operational_status)}
+            variant={operationalVariant(room.operational_status)}
+            icon={operationalIcon(room.operational_status)}
+            label={b.status[room.operational_status]}
+          />
+          <StatusBadge
+            tone={bookabilityTone(room.available_now)}
+            variant="outline"
+            icon={bookabilityIcon(room.available_now)}
+            label={room.available_now ? b.bookableNow : b.notBookable}
+          />
+        </div>
+        {/* Row 2 — the room number (focal; opens details) + an explicit Eye
+         * control. The number stays start-aligned and the control end-aligned so
+         * their position is stable across every card regardless of badge count.
+         * The number button is a sibling of the actions (never nested). */}
+        <div className="room-op-card__idrow">
+          <button
+            type="button"
+            className="room-op-card__open"
+            onClick={() => onDetails(room)}
+            aria-label={`${b.roomDetails} — ${p.roomLabel} ${room.number} · ${room.room_type_name}`}
+          >
             <span className="room-op-card__number">{room.number}</span>
-            {/* Persistent, subtle cue that the header opens the details drawer —
-             * touch has no hover. Decorative (the aria-label carries meaning);
-             * it is NOT a 4th action button. */}
-            <Icon icon={Eye} size="sm" className="room-op-card__open-cue" />
-          </span>
-        </button>
-        <div className="room-op-card__badges">
-          <Badge tone={occupancyTone(room.occupancy_status)}>
-            <Icon icon={occupancyIcon(room.occupancy_status)} size="sm" />
-            {t.rooms.occupancy[room.occupancy_status]}
-          </Badge>
-          <Badge tone={operationalTone(room.operational_status)}>
-            <Icon icon={operationalIcon(room.operational_status)} size="sm" />
-            {b.status[room.operational_status]}
-          </Badge>
+          </button>
+          <div className="room-op-card__idactions">
+            <ActionIconButton
+              icon={Eye}
+              label={`${b.roomDetails} — ${p.roomLabel} ${room.number}`}
+              tooltip={b.roomDetails}
+              size="sm"
+              variant="ghost"
+              onClick={() => onDetails(room)}
+            />
+          </div>
         </div>
       </div>
 
@@ -141,9 +168,10 @@ export function RoomOperationalCard({
         ) : null}
       </dl>
 
-      {/* 3) Amenities — top few ROOM-TYPE features as chips (full list lives in
-       * the details drawer); nothing renders when the type has no amenities. */}
-      <AmenityChips amenities={room.amenities} max={4} label={b.roomTypeFeatures} />
+      {/* 3) Amenities — top few EFFECTIVE features as chips (§6.1: type defaults
+       * − exclusions + additions; full list lives in the details drawer);
+       * nothing renders when the room has no effective features. */}
+      <AmenityChips amenities={room.amenities} max={4} label={b.roomFeatures} />
 
       {/* 4) Current status — resident / upcoming / status line. */}
       <OperationalLine room={room} locale={locale} />

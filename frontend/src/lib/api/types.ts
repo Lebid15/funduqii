@@ -501,6 +501,17 @@ export interface Room {
   status_changed_at: string | null;
   status_changed_by: string | null;
   is_active: boolean;
+  /* ROOMS §6.1 per-room feature overrides. Returned by RoomSerializer on BOTH
+   * the list and single-room DETAIL responses (`/rooms/` and GET/PATCH/PUT
+   * `/rooms/<id>/`). `feature_additions` / `feature_exclusions` are writable;
+   * `effective_features` (type defaults − exclusions + additions) and
+   * `inherited_features` (the room type's own amenities) are read-only. They are
+   * optional here only because the board-derived Room objects (built from
+   * RoomBoardRoom) do not carry them. */
+  feature_additions?: string[];
+  feature_exclusions?: string[];
+  effective_features?: string[];
+  inherited_features?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -544,8 +555,11 @@ export interface RoomBoardRoom {
   base_capacity: number;
   max_capacity: number;
   base_rate: string | null;
-  /** Stable amenity-key strings from the room's RoomType (room-type features,
-   * not per-room data). Empty when the type has no amenities. */
+  /** ROOMS §6.1: the room's EFFECTIVE feature keys — the room type's amenities
+   * with this room's `feature_exclusions` removed and `feature_additions` added
+   * (deduped, ordered). The field NAME is unchanged for compatibility, but the
+   * VALUE is now per-room effective (not the raw room-type list). Empty when the
+   * room has no effective features. */
   amenities: string[];
   is_active: boolean;
   operational_status: RoomStatus;

@@ -1916,21 +1916,23 @@ a {
 .room-op-card--maintenance {
   --room-accent: var(--color-danger);
 }
+/* §6.4: out-of-service reads DANGER (red), not neutral — an unusable room is an
+ * action-demanding state; the side-accent is a redundant (not sole) signal
+ * beside the danger StatusBadge. */
 .room-op-card--out_of_service {
-  --room-accent: var(--color-fg-muted);
+  --room-accent: var(--color-danger);
 }
 .room-op-card--archived {
   --room-accent: var(--color-border-strong);
   opacity: 0.85;
 }
-/* 1) Title — a real button that opens the details drawer. Button chrome is
- * reset to a calm text control; the number is the card's focal point. It is a
- * sibling of the actions row (never nested), so no nested-interactive issue. */
+/* Row 2 — the room number is a real button that opens the details drawer.
+ * Button chrome is reset to a calm text control; the number is the card's focal
+ * point. It is a sibling of the actions row (never nested), so no
+ * nested-interactive issue. */
 .room-op-card__open {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
   /* L1: give the focus-visible ring breathing room so it doesn't hug the
    * text; the equal negative margin keeps the layout position unchanged. */
@@ -1944,12 +1946,6 @@ a {
   text-align: start;
   cursor: pointer;
 }
-.room-op-card__title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: 100%;
-}
 .room-op-card__number {
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-extrabold);
@@ -1959,23 +1955,16 @@ a {
   overflow-wrap: anywhere;
   transition: color var(--transition-fast);
 }
-/* M1: a subtle, persistent "open details" cue (no hover needed on touch). */
-.room-op-card__open-cue {
-  flex: none;
-  color: var(--color-fg-muted);
-  opacity: 0.6;
-  transition: color var(--transition-fast), opacity var(--transition-fast);
+/* Explicit focus ring on the focal number button — matches the house pattern
+ * for interactive controls (.action-icon-btn, .res-card__open) so the affordance
+ * never relies on the colour shift alone (WCAG 2.4.7). */
+.room-op-card__open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
-/* M2: the header carries its OWN hover/focus treatment so it reads as the
- * click target for opening details, distinct from the whole-card lift. */
 .room-op-card__open:hover .room-op-card__number,
 .room-op-card__open:focus-visible .room-op-card__number {
   color: var(--color-primary-active);
-}
-.room-op-card__open:hover .room-op-card__open-cue,
-.room-op-card__open:focus-visible .room-op-card__open-cue {
-  color: var(--color-primary-active);
-  opacity: 1;
 }
 /* Quick type rows inside the room-types manager modal. */
 .type-row {
@@ -2050,17 +2039,34 @@ a {
   padding-top: var(--space-1);
 }
 
-/* 1) Header — the number/details affordance on the start, the two badges on
- * the end; both wrap onto their own line on very narrow cards. */
+/* 1) Header — two stacked rows (mirrors the reservation card, §6.2): status
+ * badges (row 1: occupancy + operational + bookability), then the room number
+ * (focal, opens details) plus the explicit Eye control (row 2). The number
+ * stays start-aligned and the control end-aligned so their position is stable
+ * across every card regardless of badge count. */
 .room-op-card__header {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
+  flex-direction: column;
+  gap: var(--card-inline-gap);
 }
-.room-op-card__header .room-op-card__badges {
+.room-op-card__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+.room-op-card__idrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--card-inline-gap);
+}
+.room-op-card__idactions {
+  display: flex;
+  align-items: center;
+  gap: var(--card-action-gap);
   margin-inline-start: auto;
+  flex: none;
 }
 
 /* 3) Room-type amenity chips — a quiet, calm set (icon + label) framed by a
@@ -2101,6 +2107,81 @@ a {
 }
 .amenity-chip--more {
   font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+
+/* --- Per-room feature editor (§6.1) --------------------------------------- */
+/* Three clearly-framed sections (inherited / added / excluded / preview). The
+ * distinction is section + heading icon + label + chip treatment, never colour
+ * alone: excluded chips are struck through with a dashed border. */
+.feature-editor__section {
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.feature-editor__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.feature-editor__title {
+  font-size: var(--font-size-sm);
+}
+.feature-editor__help {
+  font-size: var(--font-size-xs);
+}
+.feature-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.feature-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-block: 2px;
+  padding-inline: var(--space-2) var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg);
+}
+.feature-chip__icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.feature-chip--excluded {
+  border-style: dashed;
+  color: var(--color-fg-muted);
+  text-decoration: line-through;
+}
+.feature-chip__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.feature-chip__action:hover {
+  color: var(--color-fg);
+  background: var(--color-surface-sunken);
+}
+.feature-chip__action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
   color: var(--color-fg);
 }
 
@@ -2241,15 +2322,6 @@ a {
 }
 .board-stats__hint {
   margin: 0;
-}
-
-/* 2) Two independent badges (occupancy + operational) sit in their own row
- * under the title, wrapping on narrow cards. Text + icon + colour, never
- * colour alone (WCAG). */
-.room-op-card__badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* Collapsible floor section header. */

@@ -30,11 +30,12 @@ const SETTABLE_STATUSES: RoomStatus[] = [
 const NOTE_REQUIRED: RoomStatus[] = ["maintenance", "out_of_service"];
 
 /**
- * Bulk room creation (owner spec): floor + type + a numeric range (optional
- * prefix) with an optional initial status, an explicit PREVIEW with existing
- * numbers called out and auto-skipped, a 100-room client cap, then ONE
- * all-or-nothing request to `POST /rooms/bulk/` (no per-room loop). The result
- * reports created_count and maps the typed error codes to readable messages.
+ * Bulk room creation (owner spec): floor + type + a numeric range with an
+ * optional initial status, an explicit PREVIEW with existing numbers called out
+ * and auto-skipped, a 100-room client cap, then ONE all-or-nothing request to
+ * `POST /rooms/bulk/` (no per-room loop). Room numbers are the plain integers in
+ * the range (no prefix — §6.5). The result reports created_count and maps the
+ * typed error codes to readable messages.
  */
 export function BulkRoomCreateModal({
   open,
@@ -61,7 +62,6 @@ export function BulkRoomCreateModal({
   const [type, setType] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [prefix, setPrefix] = useState("");
   const [status, setStatus] = useState<RoomStatus>("available");
   const [statusNote, setStatusNote] = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -75,7 +75,6 @@ export function BulkRoomCreateModal({
     setType("");
     setFrom("");
     setTo("");
-    setPrefix("");
     setStatus("available");
     setStatusNote("");
     setIsActive(true);
@@ -100,10 +99,10 @@ export function BulkRoomCreateModal({
     if (!rangeValid || rangeTooBig) return [];
     const list: string[] = [];
     for (let n = Number(from); n <= Number(to); n += 1) {
-      list.push(`${prefix.trim()}${n}`);
+      list.push(String(n));
     }
     return list;
-  }, [rangeValid, rangeTooBig, from, to, prefix]);
+  }, [rangeValid, rangeTooBig, from, to]);
 
   const duplicates = numbers.filter((n) => existing.has(n));
   const fresh = numbers.filter((n) => !existing.has(n));
@@ -257,13 +256,6 @@ export function BulkRoomCreateModal({
                 placeholder={b.toPlaceholder}
                 inputMode="numeric"
                 onChange={(e) => setTo(e.target.value)}
-              />
-            </FormField>
-            <FormField label={b.numberPrefix} htmlFor="bulk-prefix">
-              <Input
-                id="bulk-prefix"
-                value={prefix}
-                onChange={(e) => setPrefix(e.target.value)}
               />
             </FormField>
             {canStatus ? (

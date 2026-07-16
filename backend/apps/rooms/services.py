@@ -471,7 +471,11 @@ def operational_board(hotel) -> dict:
                 "room_type_name": room.room_type.name,
                 "room_type_code": room.room_type.code,
                 "room_type_is_active": room_type_is_active,
-                "amenities": list(room.room_type.amenities or []),
+                # §6.1: the board row now shows the room's EFFECTIVE features
+                # (type defaults − exclusions + additions). The payload key
+                # stays `amenities` so the frontend board contract is
+                # unchanged; empty overrides mirror the type exactly.
+                "amenities": room.effective_features,
                 "base_capacity": room.room_type.base_capacity,
                 "max_capacity": room.room_type.max_capacity,
                 "base_rate": (

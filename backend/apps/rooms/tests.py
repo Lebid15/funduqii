@@ -1475,7 +1475,13 @@ class BoardCurrencyFieldTests(APITestCase):
 
 
 class BoardAmenitiesFieldTests(APITestCase):
-    """Per-row `amenities` on the operational board (additive)."""
+    """Per-row `amenities` on the operational board.
+
+    §6.1: the board `amenities` value is now the room's EFFECTIVE feature list
+    (type defaults − exclusions + additions). The payload KEY is unchanged
+    (`amenities`) so the frontend board contract is preserved; with empty
+    overrides (the default) it still mirrors the type exactly.
+    """
 
     def _rows_by_number(self, hotel):
         from apps.rooms.services import operational_board
@@ -1491,7 +1497,298 @@ class BoardAmenitiesFieldTests(APITestCase):
         make_room(hotel, floor, bare, "202")
 
         rows = self._rows_by_number(hotel)
+        # Empty overrides -> board `amenities` == effective == type mirror.
         self.assertEqual(rows["201"]["amenities"], ["wifi", "tv", "ac"])
         self.assertIsInstance(rows["201"]["amenities"], list)
         self.assertEqual(rows["202"]["amenities"], [])
         self.assertIsInstance(rows["202"]["amenities"], list)
+
+    def test_board_amenities_reflect_effective_additions_and_exclusions(self):
+        hotel = make_hotel(slug="amn-eff")
+        floor = make_floor(hotel, name="G", number="0")
+        rtype = make_type(hotel, code="EFF", amenities=["wifi", "tv", "ac"])
+        make_room(
+            hotel, floor, rtype, "301",
+            feature_additions=["balcony"], feature_exclusions=["ac"],
+        )
+        rows = self._rows_by_number(hotel)
+        # ac excluded, balcony appended, order = kept type order then additions.
+        self.assertEqual(rows["301"]["amenities"], ["wifi", "tv", "balcony"])
+
+
+class RoomEffectiveFeaturesTests(APITestCase):
+    """Round 2 §6.1 — per-room EFFECTIVE features (ADDITIVE overrides).
+
+    effective = live type amenities − feature_exclusions + feature_additions
+    (ORDERED, DEDUPED). Overrides are edited on the room UPDATE endpoint under
+    the existing ``rooms.update`` permission; type edits flow LIVE to
+    non-excluding rooms because effective reads ``room_type.amenities`` at
+    access time (no backfill, no copy onto the room).
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.client.force_authenticate(self.manager)
+        self.floor = make_floor(self.hotel)
+        self.rtype = make_type(
+            self.hotel, code="STD", amenities=["wifi", "tv", "ac"]
+        )
+        self.room = make_room(self.hotel, self.floor, self.rtype, "101")
+
+    def _detail_url(self, room=None):
+        return reverse("rooms:room-detail", args=[(room or self.room).id])
+
+    def _patch(self, body, room=None, hotel=None):
+        return self.client.patch(
+            self._detail_url(room), body, format="json", **HDR(hotel or self.hotel)
+        )
+
+    # --- model-level effective_features property ----------------------------
+
+    def test_default_effective_mirrors_type(self):
+        self.assertEqual(self.room.effective_features, ["wifi", "tv", "ac"])
+
+    def test_addition_appears_in_effective(self):
+        self.room.feature_additions = ["balcony"]
+        self.assertEqual(
+            self.room.effective_features, ["wifi", "tv", "ac", "balcony"]
+        )
+
+    def test_exclusion_removed_from_effective(self):
+        self.room.feature_exclusions = ["ac"]
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+
+    def test_effective_is_ordered_and_deduped(self):
+        # An addition equal to a type feature is not repeated; type order kept.
+        self.room.feature_additions = ["wifi", "balcony", "balcony"]
+        self.room.feature_exclusions = ["tv"]
+        self.assertEqual(self.room.effective_features, ["wifi", "ac", "balcony"])
+
+    def test_excluded_feature_never_present_even_if_also_added(self):
+        # Robustness: a stale/direct-DB row with the same feature in BOTH lists
+        # still never surfaces the excluded feature.
+        self.room.feature_additions = ["ac"]
+        self.room.feature_exclusions = ["ac"]
+        self.assertNotIn("ac", self.room.effective_features)
+
+    def test_type_edit_flows_to_non_excluding_room(self):
+        self.rtype.amenities = ["wifi", "tv", "ac", "minibar"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        self.assertIn("minibar", self.room.effective_features)
+
+    def test_exclusion_survives_type_edit(self):
+        self.room.feature_exclusions = ["ac"]
+        self.room.save()
+        self.rtype.amenities = ["wifi", "tv", "ac", "minibar"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        eff = self.room.effective_features
+        self.assertNotIn("ac", eff)  # exclusion preserved across the type edit
+        self.assertIn("minibar", eff)  # new type feature flows in
+
+    def test_change_room_type_recomputes_effective(self):
+        other_type = make_type(
+            self.hotel, code="LUX", amenities=["jacuzzi", "wifi"]
+        )
+        self.room.feature_additions = ["balcony"]
+        self.room.save()
+        self.room.room_type = other_type
+        self.room.save()
+        self.room.refresh_from_db()
+        # room-scoped additions survive; effective recomputes vs the NEW type.
+        self.assertEqual(self.room.feature_additions, ["balcony"])
+        self.assertEqual(
+            self.room.effective_features, ["jacuzzi", "wifi", "balcony"]
+        )
+
+    # --- API: read contract --------------------------------------------------
+
+    def test_detail_serializer_exposes_feature_contract(self):
+        res = self.client.get(self._detail_url(), **HDR(self.hotel))
+        self.assertEqual(res.status_code, 200)
+        for key in (
+            "feature_additions",
+            "feature_exclusions",
+            "effective_features",
+            "inherited_features",
+        ):
+            self.assertIn(key, res.data)
+        self.assertEqual(res.data["inherited_features"], ["wifi", "tv", "ac"])
+        self.assertEqual(res.data["effective_features"], ["wifi", "tv", "ac"])
+        self.assertEqual(res.data["feature_additions"], [])
+        self.assertEqual(res.data["feature_exclusions"], [])
+
+    # --- API: editing overrides ---------------------------------------------
+
+    def test_patch_addition_appears_in_effective(self):
+        res = self._patch({"feature_additions": ["balcony"]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["feature_additions"], ["balcony"])
+        self.assertEqual(
+            res.data["effective_features"], ["wifi", "tv", "ac", "balcony"]
+        )
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_additions, ["balcony"])
+
+    def test_patch_exclusion_removes_from_effective_and_board(self):
+        from apps.rooms.services import operational_board
+
+        res = self._patch({"feature_exclusions": ["ac"]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["effective_features"], ["wifi", "tv"])
+        row = next(
+            r
+            for r in operational_board(self.hotel)["rooms"]
+            if r["number"] == "101"
+        )
+        self.assertEqual(row["amenities"], ["wifi", "tv"])
+
+    def test_reset_to_type_with_empty_overrides(self):
+        self._patch(
+            {"feature_additions": ["balcony"], "feature_exclusions": ["ac"]}
+        )
+        res = self._patch({"feature_additions": [], "feature_exclusions": []})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["effective_features"], ["wifi", "tv", "ac"])
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_additions, [])
+        self.assertEqual(self.room.feature_exclusions, [])
+
+    def test_features_trimmed_and_deduped_on_write(self):
+        res = self._patch(
+            {"feature_additions": ["  balcony ", "balcony", "   "]}
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["feature_additions"], ["balcony"])
+
+    # --- API: validation -----------------------------------------------------
+
+    def test_feature_in_both_additions_and_exclusions_rejected(self):
+        res = self._patch(
+            {"feature_additions": ["ac"], "feature_exclusions": ["ac"]}
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("feature_additions", res.data["details"])
+        self.room.refresh_from_db()  # nothing persisted
+        self.assertEqual(self.room.feature_additions, [])
+        self.assertEqual(self.room.feature_exclusions, [])
+
+    def test_excluding_non_type_feature_accepted_as_dormant(self):
+        # §6.1 (owner semantic): exclusions are PERMANENT per-room overrides. An
+        # exclusion MAY name a feature that is NOT currently in the type — a
+        # "dormant" exclusion. It is ACCEPTED and PERSISTED, has no effect on
+        # the current effective list, and would reactivate if the feature later
+        # returns to the type. No auto-cleanup, no silent drop.
+        res = self._patch({"feature_exclusions": ["sauna"]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["feature_exclusions"], ["sauna"])
+        # Nothing currently in the type is named, so effective still mirrors it.
+        self.assertEqual(res.data["effective_features"], ["wifi", "tv", "ac"])
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])
+
+    def test_non_list_feature_rejected(self):
+        res = self._patch({"feature_additions": "balcony"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_non_string_feature_rejected(self):
+        res = self._patch({"feature_additions": [123]})
+        self.assertEqual(res.status_code, 400)
+
+    # --- API: permanent-override lifecycle (§6.1 owner semantic) -------------
+
+    def test_permanent_exclusion_lifecycle_reactivates(self):
+        # End-to-end proof that an exclusion is a PERMANENT per-room override
+        # that survives type changes and reactivates when the feature returns.
+        #
+        # 1) Exclude an INHERITED feature -> stored + dropped from effective.
+        res = self._patch({"feature_exclusions": ["ac"]})
+        self.assertEqual(res.status_code, 200)
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+
+        # 2) Remove the feature FROM THE TYPE -> the exclusion is PRESERVED
+        #    (now dormant) and effective simply no longer lists it.
+        self.rtype.amenities = ["wifi", "tv"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])  # still stored
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+        self.assertNotIn("ac", self.room.effective_features)
+
+        # 3) Re-add the feature TO THE TYPE -> the STORED exclusion REACTIVATES
+        #    and drops it from effective again (no re-save of the room needed).
+        self.rtype.amenities = ["wifi", "tv", "ac"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])  # never cleaned
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+        self.assertNotIn("ac", self.room.effective_features)
+
+    def test_patch_other_fields_preserves_dormant_exclusion(self):
+        # A dormant exclusion (feature not currently in the type) must survive a
+        # PATCH that changes only OTHER fields — overrides are not resubmitted,
+        # so they are neither re-validated nor dropped.
+        self._patch({"feature_exclusions": ["sauna"]})
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])
+
+        res = self._patch({"display_name": "Corner Suite"})
+        self.assertEqual(res.status_code, 200)
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.display_name, "Corner Suite")
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])  # preserved
+
+    # --- API: permissions + tenancy -----------------------------------------
+
+    def test_rooms_update_required_to_edit_features(self):
+        viewer = add_member(self.hotel, "viewer@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(viewer)
+        res = self._patch({"feature_additions": ["balcony"]})
+        self.assertEqual(res.status_code, 403)
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_additions, [])
+
+    def test_rooms_update_permission_can_edit_features(self):
+        editor = add_member(self.hotel, "editor@x.com", perms=["rooms.update"])
+        self.client.force_authenticate(editor)
+        res = self._patch({"feature_additions": ["balcony"]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["feature_additions"], ["balcony"])
+
+    def test_tenant_isolation_on_feature_edit(self):
+        # A manager of self.hotel cannot reach another hotel's room through its
+        # own hotel context (queryset is hotel-scoped) -> 404, no cross-tenant
+        # write to the feature fields.
+        other = make_hotel(slug="other-feat")
+        of = make_floor(other, name="OG")
+        ot = make_type(other, code="OTX", amenities=["wifi"])
+        oroom = make_room(other, of, ot, "999")
+        res = self._patch(
+            {"feature_additions": ["balcony"]}, room=oroom, hotel=self.hotel
+        )
+        self.assertEqual(res.status_code, 404)
+        oroom.refresh_from_db()
+        self.assertEqual(oroom.feature_additions, [])
+
+    def test_create_ignores_features_and_defaults_empty(self):
+        res = self.client.post(
+            reverse("rooms:room-list"),
+            {
+                "number": "150",
+                "floor": self.floor.id,
+                "room_type": self.rtype.id,
+                "feature_additions": ["balcony"],
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 201)
+        room = Room.objects.get(hotel=self.hotel, number="150")
+        self.assertEqual(room.feature_additions, [])
+        self.assertEqual(room.feature_exclusions, [])

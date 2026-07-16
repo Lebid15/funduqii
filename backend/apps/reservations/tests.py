@@ -461,6 +461,54 @@ class AvailabilityTests(APITestCase):
         self.assertEqual(len(res.data["days"]), 4)
 
 
+class RoomPickerFeaturesTests(APITestCase):
+    """The reservation room picker exposes per-room EFFECTIVE features (§6.1).
+
+    A room that EXCLUDES an inherited type feature (or ADDS a room-specific one)
+    must be reflected in the picker's ``amenities`` value, keeping it consistent
+    with the operational board/detail — not the raw room-type amenities.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.rtype = make_type(self.hotel, amenities=["wifi", "tv", "ac"])
+        self.floor = Floor.objects.create(hotel=self.hotel, name="Ground")
+        # Excludes an inherited feature ("tv") and adds a room-specific one.
+        self.room = Room.objects.create(
+            hotel=self.hotel,
+            floor=self.floor,
+            room_type=self.rtype,
+            number="101",
+            feature_exclusions=["tv"],
+            feature_additions=["balcony"],
+        )
+        self.mgr = add_member(
+            self.hotel, "picker@x.com", kind=MembershipType.MANAGER
+        )
+        self.client.force_authenticate(self.mgr)
+
+    def _row(self):
+        res = self.client.get(
+            reverse("reservations:reservation-room-availability"),
+            {"check_in": D1, "check_out": D2},
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200)
+        rows = [r for r in res.data["results"] if r["id"] == self.room.id]
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_picker_reflects_effective_features(self):
+        amenities = self._row()["amenities"]
+        # Effective = type amenities − exclusions + additions (ordered/deduped).
+        self.assertEqual(amenities, ["wifi", "ac", "balcony"])
+        # The excluded inherited feature is dropped; the addition is present.
+        self.assertNotIn("tv", amenities)
+        self.assertIn("balcony", amenities)
+        # Regression guard: it must NOT be the raw room-type amenities.
+        self.assertNotEqual(amenities, self.rtype.amenities)
+
+
 # --------------------------------------------------------------------------- #
 # Reservation lifecycle                                                        #
 # --------------------------------------------------------------------------- #

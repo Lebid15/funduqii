@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { SlidersHorizontal } from "lucide-react";
 
 import {
   Alert,
@@ -17,6 +18,8 @@ import type { Floor, Room, RoomStatus, RoomType } from "@/lib/api/types";
 import { roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import { RoomFeatureEditorModal } from "./RoomFeatureEditorModal";
 
 /** Operational statuses that may be SET here (archived stays on the status
  * modal path; occupied/reserved are computed and never stored). */
@@ -70,6 +73,8 @@ export function RoomFormModal({
   const [isActive, setIsActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // §6.1 per-room feature editor (edit mode only — a room must exist first).
+  const [featuresOpen, setFeaturesOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -82,6 +87,7 @@ export function RoomFormModal({
     setStatusNote(room?.status_note ?? "");
     setIsActive(room?.is_active ?? true);
     setError(null);
+    setFeaturesOpen(false);
   }, [open, room, initialFloor]);
 
   const statusChanged = status !== (room?.status ?? "available");
@@ -145,6 +151,7 @@ export function RoomFormModal({
   }));
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -221,7 +228,36 @@ export function RoomFormModal({
           checked={isActive}
           onChange={setIsActive}
         />
+        {/* §6.1 — customize this room's features (inherited/added/excluded). Edit
+         * mode only; the room must exist before its overrides can be edited. */}
+        {room ? (
+          <div className="cluster">
+            <Button
+              variant="secondary"
+              icon={SlidersHorizontal}
+              onClick={() => setFeaturesOpen(true)}
+              disabled={busy}
+            >
+              {b.features.customize}
+            </Button>
+          </div>
+        ) : null}
       </form>
     </Modal>
+    {room ? (
+      <RoomFeatureEditorModal
+        open={featuresOpen}
+        roomId={room.id}
+        roomNumber={room.number}
+        onClose={() => setFeaturesOpen(false)}
+        onSaved={() => {
+          setFeaturesOpen(false);
+          // Persisting overrides changes the room's EFFECTIVE features shown on
+          // the board + drawer, so refresh through the parent's saved handler.
+          onSaved();
+        }}
+      />
+    ) : null}
+    </>
   );
 }
