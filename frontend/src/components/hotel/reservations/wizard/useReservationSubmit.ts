@@ -29,7 +29,6 @@ import type { ImmediateCheckInResult, Reservation } from "@/lib/api/types";
 
 import {
   buildDepositBody,
-  isMaskedValue,
   toCreateBody,
   toImmediateCheckInBody,
   toUpdateBody,
@@ -94,8 +93,8 @@ function buildDocumentForm(
 ): FormData {
   const body = new FormData();
   body.set("doc_type", doc.doc_type);
-  const number = doc.number.trim();
-  if (number) body.set("number", number);
+  // §7.2 — the document number is no longer collected in the wizard, so it is
+  // never sent on upload (the display field in details/print is a separate thing).
   if (doc.target.kind === "occupant") {
     const occupantId = occupantIds.get(doc.target.occupantKey);
     if (occupantId !== undefined) body.set("occupant", String(occupantId));
@@ -132,7 +131,12 @@ async function uploadStagedDocuments(
  * document upload failures are reported via the returned counts. */
 export function useReservationSubmit() {
   return useCallback(
-    async (draft: ReservationDraft): Promise<ReservationSubmitOutcome> => {
+    async (
+      draft: ReservationDraft,
+      // §7.3 — the number reserved on form open. Replayed into the create body so
+      // the server pins the SAME number; null (reserve failed) → server allocates.
+      options?: { idempotencyKey?: string | null },
+    ): Promise<ReservationSubmitOutcome> => {
       let reservation: Reservation;
       let checkIn: ImmediateCheckInResult | null = null;
       let depositFailed = false;
@@ -140,14 +144,14 @@ export function useReservationSubmit() {
       if (draft.booking.immediate_check_in) {
         // Immediate: the deposit flows through the atomic orchestration (the
         // stay/folio are opened in the same transaction) — never a second call.
-        checkIn = await immediateCheckIn(toImmediateCheckInBody(draft));
+        checkIn = await immediateCheckIn(toImmediateCheckInBody(draft, options));
         reservation = checkIn.reservation;
       } else {
         // Future/held/confirmed: create first, THEN record any deposit against
         // the reservation's pre-arrival folio (§27). A deposit failure never
         // rolls the reservation back — it is surfaced so staff can retry from
         // the reservation details; the reservation itself is kept.
-        reservation = await createReservation(toCreateBody(draft));
+        reservation = await createReservation(toCreateBody(draft, options));
         const deposit = buildDepositBody(draft);
         if (deposit) {
           try {
@@ -192,17 +196,18 @@ export interface ReservationEditOptions extends ReservationUpdateOptions {
 }
 
 /** True when an EXISTING document needs the replace endpoint: a new file was
- * staged, or the type/number changed to a real (non-masked) value. Otherwise the
- * saved document is left untouched — an edit never re-uploads what is on file. */
+ * staged, or the document type changed. Otherwise the saved document is left
+ * untouched — an edit never re-uploads what is on file. */
 function needsReplace(doc: PendingDocument): boolean {
   const existing = doc.existing;
   if (!existing) return false;
   if (doc.file !== null || doc.additionalFile !== null) return true;
-  const number = doc.number.trim();
-  const numberChanged =
-    !isMaskedValue(number) && number !== (existing.number ?? "");
+  // §7.2 removed the document-number field, so `doc.number` always equals the
+  // hydrated existing value and `buildReplaceForm` never sends it — the former
+  // `numberChanged` branch was dead. Replace now fires only on a real trigger: a
+  // new file (handled above) or a document-type change.
   const typeChanged = doc.doc_type !== "" && doc.doc_type !== existing.doc_type;
-  return numberChanged || typeChanged;
+  return typeChanged;
 }
 
 /** Multipart body for REPLACING a saved document. Only CHANGED, non-masked
@@ -214,10 +219,8 @@ function buildReplaceForm(doc: PendingDocument): FormData {
   if (doc.doc_type && doc.doc_type !== existing?.doc_type) {
     body.set("doc_type", doc.doc_type);
   }
-  const number = doc.number.trim();
-  if (number && !isMaskedValue(number) && number !== (existing?.number ?? "")) {
-    body.set("number", number);
-  }
+  // §7.2 — the document number is no longer collected in the wizard; a replace
+  // never sends it, leaving whatever is on file untouched.
   if (doc.file) body.set("front_file", doc.file);
   if (doc.additionalFile) body.set("back_file", doc.additionalFile);
   return body;

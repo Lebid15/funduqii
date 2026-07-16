@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -22,6 +22,9 @@ from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
     Reservation,
     ReservationDocument,
+    ReservationDraft,
+    ReservationDraftStatus,
+    ReservationNumberSequence,
     ReservationRoomLine,
     ReservationSource,
     ReservationStatus,
@@ -2427,8 +2430,11 @@ class AgreedRateSnapshotPolicyTests(APITestCase):
 
 
 class ReservationNumberHardeningTests(TestCase):
-    """STAYS item 9 — ``_next_reservation_number`` ignores non ``^R[0-9]+$`` values
-    (PG-safe) and never modifies/deletes them."""
+    """Round 3 §7.3 — the locked counter (``next_reservation_number``) is now the
+    SOLE allocator. It SEEDS lazily from the existing max (ignoring non ``^R[0-9]+$``
+    values, never modifying/deleting them) and then persists monotonically. These
+    assert the SAME outcomes the former MAX+1 generator produced, plus the counter's
+    persistence and per-hotel independence."""
 
     def setUp(self):
         self.hotel = make_hotel(slug="rn")
@@ -2441,30 +2447,406 @@ class ReservationNumberHardeningTests(TestCase):
         )
 
     def test_advances_from_existing_numbers(self):
-        from apps.reservations.services import _next_reservation_number
+        from apps.reservations.services import next_reservation_number
 
         self._mk("R00001")
         self._mk("R00125")
-        self.assertEqual(_next_reservation_number(self.hotel), "R00126")
+        # First allocation SEEDS from the existing max (125) -> R00126.
+        self.assertEqual(next_reservation_number(self.hotel), "R00126")
+        # The counter now PERSISTS: it does not re-seed on the next call.
+        self.assertEqual(next_reservation_number(self.hotel), "R00127")
+        seq = ReservationNumberSequence.objects.get(hotel=self.hotel)
+        self.assertEqual(seq.last_number, 127)
 
-    def test_stray_prefix_is_ignored(self):
+    def test_alias_delegates_to_counter(self):
+        # The backward-compatible ``_next_reservation_number`` alias uses the counter.
         from apps.reservations.services import _next_reservation_number
 
         self._mk("R00005")
-        stray = self._mk("RB00099")  # imported/corrupt — ignored, not broken
         self.assertEqual(_next_reservation_number(self.hotel), "R00006")
+
+    def test_stray_prefix_is_ignored(self):
+        from apps.reservations.services import next_reservation_number
+
+        self._mk("R00005")
+        stray = self._mk("RB00099")  # imported/corrupt — ignored, not broken
+        self.assertEqual(next_reservation_number(self.hotel), "R00006")
         stray.refresh_from_db()  # untouched
         self.assertEqual(stray.reservation_number, "RB00099")
 
     def test_only_stray_starts_at_one(self):
-        from apps.reservations.services import _next_reservation_number
+        from apps.reservations.services import next_reservation_number
 
         self._mk("RB00099")  # only a non-matching value -> ignored
-        self.assertEqual(_next_reservation_number(self.hotel), "R00001")
+        self.assertEqual(next_reservation_number(self.hotel), "R00001")
 
     def test_huge_number_does_not_overflow(self):
-        # FIX F — a matching-but-huge tail (> 2^31-1) must not overflow the cast.
-        from apps.reservations.services import _next_reservation_number
+        # A matching-but-huge tail (> 2^31-1) must not overflow the BigInt seed/cast.
+        from apps.reservations.services import next_reservation_number
 
         self._mk("R3000000000")  # 3e9 > 2147483647
-        self.assertEqual(_next_reservation_number(self.hotel), "R3000000001")
+        self.assertEqual(next_reservation_number(self.hotel), "R3000000001")
+
+    def test_seed_R00126_plus_stray_then_independent_per_hotel(self):
+        # Sequence SEEDING: existing R00126 + an RB##### to ignore -> R00127.
+        from apps.reservations.services import next_reservation_number
+
+        self._mk("R00126")
+        self._mk("RB00099")  # ignored by the ^R[0-9]+$ seed filter
+        self.assertEqual(next_reservation_number(self.hotel), "R00127")
+        # A different hotel is fully independent — its counter starts at R00001.
+        other = make_hotel(slug="rn-other")
+        self.assertEqual(next_reservation_number(other), "R00001")
+
+
+class ReservationNumberReservationTests(APITestCase):
+    """Round 3 §7.3 — reserve a REAL number when the booking form opens, then pin
+    it end-to-end at create. Covers idempotency, no side effects, draft consumption,
+    number-not-reused, tenant isolation, edit-reserves-nothing, and permission."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        make_rooms(self.hotel, self.rtype, 3)
+
+    # -- helpers ------------------------------------------------------------
+    def _reserve(self, key, hotel=None):
+        hotel = hotel or self.hotel
+        return self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": key},
+            format="json",
+            **HDR(hotel),
+        )
+
+    def _create(self, hotel=None, **over):
+        hotel = hotel or self.hotel
+        return self.client.post(
+            reverse("reservations:reservation-list"),
+            res_payload(self.rtype, **over),
+            format="json",
+            **HDR(hotel),
+        )
+
+    # -- idempotency --------------------------------------------------------
+    def test_reserve_idempotent_same_key_same_number(self):
+        r1 = self._reserve("k1")
+        self.assertEqual(r1.status_code, 201)
+        self.assertTrue(r1.data["reservation_number"].startswith("R"))
+        self.assertIn("draft_id", r1.data)
+        self.assertIn("expires_at", r1.data)
+        r2 = self._reserve("k1")
+        self.assertEqual(r2.status_code, 201)
+        # Replay of the SAME key -> SAME number + SAME draft (idempotent).
+        self.assertEqual(r2.data["reservation_number"], r1.data["reservation_number"])
+        self.assertEqual(r2.data["draft_id"], r1.data["draft_id"])
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_reserve_different_key_different_number(self):
+        n1 = self._reserve("k1").data["reservation_number"]
+        n2 = self._reserve("k2").data["reservation_number"]
+        self.assertNotEqual(n1, n2)
+        self.assertEqual(n1, "R00001")
+        self.assertEqual(n2, "R00002")
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 2)
+
+    def test_reserve_requires_idempotency_key(self):
+        r = self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": ""},
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 400)
+
+    # -- no side effects ----------------------------------------------------
+    def test_reserve_has_no_side_effects(self):
+        from apps.finance.models import Folio, Payment
+
+        self._reserve("k1")
+        # Only a draft is created — no reservation, folio, or payment; availability
+        # is untouched (nothing consumes inventory).
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(Payment.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 1)
+
+    # -- draft -> create pins the SAME number, consumes the draft -----------
+    def test_draft_number_pins_create_and_consumes_draft(self):
+        reserved = self._reserve("k1").data["reservation_number"]
+        draft_id = ReservationDraft.objects.get(hotel=self.hotel).id
+        res = self._create(idempotency_key="k1")
+        self.assertEqual(res.status_code, 201)
+        # The reservation carries the EXACT reserved number.
+        self.assertEqual(res.data["reservation_number"], reserved)
+        draft = ReservationDraft.objects.get(id=draft_id)
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+
+    def test_create_without_key_allocates_fresh_number(self):
+        reserved = self._reserve("k1").data["reservation_number"]  # R00001
+        res = self._create()  # no idempotency_key
+        self.assertEqual(res.status_code, 201)
+        # A direct create never grabs the reserved-but-unconsumed number.
+        self.assertNotEqual(res.data["reservation_number"], reserved)
+        self.assertEqual(res.data["reservation_number"], "R00002")
+        # The reserved draft stays OPEN (never touched by the keyless create).
+        self.assertEqual(
+            ReservationDraft.objects.get(hotel=self.hotel).status,
+            ReservationDraftStatus.OPEN,
+        )
+
+    # -- expire/cancel: number NOT reused (gap acceptable) ------------------
+    def test_expired_draft_new_key_gets_new_number(self):
+        from django.core.management import call_command
+
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        # Force the TTL to have passed, then run the cleanup command.
+        ReservationDraft.objects.filter(hotel=self.hotel).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        call_command("cleanup_reservation_drafts", hotel=self.hotel.id)
+        draft = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="k1")
+        self.assertEqual(draft.status, ReservationDraftStatus.EXPIRED)
+        # A fresh key allocates a NEW number; the expired R00001 is a gap, not reused.
+        n2 = self._reserve("k2").data["reservation_number"]
+        self.assertEqual(n1, "R00001")
+        self.assertEqual(n2, "R00002")
+
+    def test_expired_same_key_reissues_new_number(self):
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        ReservationDraft.objects.filter(hotel=self.hotel).update(
+            status=ReservationDraftStatus.EXPIRED,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        # Re-reserving the SAME spent key re-issues a FRESH number in place.
+        n2 = self._reserve("k1").data["reservation_number"]
+        self.assertNotEqual(n1, n2)
+        self.assertEqual(n2, "R00002")
+        # Still exactly one row for this key (unique per hotel).
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="k1"
+            ).count(),
+            1,
+        )
+
+    def test_cancelled_draft_number_not_reused(self):
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        ReservationDraft.objects.filter(hotel=self.hotel).update(
+            status=ReservationDraftStatus.CANCELLED
+        )
+        n2 = self._reserve("k2").data["reservation_number"]
+        self.assertEqual(n1, "R00001")
+        self.assertEqual(n2, "R00002")  # gap at R00001, never reused
+
+    # -- locked allocator gives DISTINCT, monotonic numbers -----------------
+    def test_sequential_allocations_are_distinct_and_monotonic(self):
+        from django.db import transaction
+
+        from apps.reservations.services import next_reservation_number
+
+        numbers = []
+        with transaction.atomic():
+            for _ in range(25):
+                numbers.append(next_reservation_number(self.hotel))
+        self.assertEqual(len(set(numbers)), 25)  # all distinct
+        self.assertEqual(numbers[0], "R00001")
+        self.assertEqual(numbers[-1], "R00025")  # contiguous + monotonic
+
+    # -- tenant isolation ---------------------------------------------------
+    def test_reserve_is_hotel_scoped(self):
+        other = make_hotel(slug="tenant-b")
+        bm = add_member(other, "b@x.com", kind=MembershipType.MANAGER)
+        na = self._reserve("shared").data["reservation_number"]  # hotel A actor
+        # Hotel B's own actor, same key -> its OWN independent number + its OWN draft.
+        self.client.force_authenticate(bm)
+        rb = self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": "shared"},
+            format="json",
+            **HDR(other),
+        )
+        self.assertEqual(rb.status_code, 201)
+        self.assertEqual(na, "R00001")
+        self.assertEqual(rb.data["reservation_number"], "R00001")  # per-hotel counter
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(ReservationDraft.objects.filter(hotel=other).count(), 1)
+
+    def test_hotel_b_cannot_consume_hotel_a_draft(self):
+        other = make_hotel(slug="tenant-b2")
+        bm = add_member(other, "b2@x.com", kind=MembershipType.MANAGER)
+        ot = make_type(other, max_capacity=3)
+        make_rooms(other, ot, 2)
+        a_number = self._reserve("shared").data["reservation_number"]  # hotel A actor
+        a_draft = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="shared")
+        # Hotel B's own actor creates with hotel A's key -> the hotel-scoped draft
+        # lookup finds nothing, so B allocates its OWN fresh number; A's draft is
+        # NOT consumed.
+        self.client.force_authenticate(bm)
+        res = self.client.post(
+            reverse("reservations:reservation-list"),
+            res_payload(ot, idempotency_key="shared"),
+            format="json",
+            **HDR(other),
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["reservation_number"], "R00001")  # B's own
+        a_draft.refresh_from_db()
+        self.assertEqual(a_draft.status, ReservationDraftStatus.OPEN)
+        self.assertEqual(a_number, "R00001")
+
+    # -- edit reserves nothing ---------------------------------------------
+    def test_edit_reserves_nothing(self):
+        res = self._create()  # R00001, no draft
+        rid = res.data["id"]
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 0)
+        patch = self.client.patch(
+            reverse("reservations:reservation-detail", args=[rid]),
+            {"notes": "edited", "idempotency_key": "ignored-on-edit"},
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(patch.status_code, 200)
+        # No draft was created and the number is unchanged.
+        self.assertEqual(ReservationDraft.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(patch.data["reservation_number"], "R00001")
+
+    # -- permission ---------------------------------------------------------
+    def test_reserve_requires_create_permission(self):
+        viewer = add_member(
+            self.hotel, "viewer@x.com", perms=("reservations.view",)
+        )
+        self.client.force_authenticate(viewer)
+        denied = self._reserve("k1")
+        self.assertEqual(denied.status_code, 403)
+        creator = add_member(
+            self.hotel, "creator@x.com", perms=("reservations.create",)
+        )
+        self.client.force_authenticate(creator)
+        allowed = self._reserve("k1")
+        self.assertEqual(allowed.status_code, 201)
+
+    # -- concurrent same-key insert collision (FIX 1) -----------------------
+    def test_reserve_concurrent_same_key_returns_existing_no_500(self):
+        """FIX 1 — the FIRST-time same-key race: the ``select_for_update`` lookup
+        locks nothing when the row does not exist yet, so two reserves both reach
+        ``ReservationDraft.objects.create`` and the loser's insert violates the
+        unique ``(hotel, idempotency_key)`` constraint. The except branch must
+        RE-FETCH and return the winner's draft — idempotent, no uncaught
+        IntegrityError (no 500), no second row.
+
+        A true 2-connection race is PostgreSQL-only; here it is simulated
+        deterministically on SQLite: a winner draft already exists for the key, but
+        the initial locked lookup is forced to MISS it (mirroring 'no row seen
+        yet'), so the service allocates a fresh number and its insert collides with
+        the pre-existing row — driving exactly the FIX 1 except→re-fetch path."""
+        from unittest import mock
+
+        from apps.reservations.services import reserve_reservation_number
+
+        # The 'winner' draft is already committed for this key (distinctive number
+        # so the assertion proves the EXISTING row is returned, not a fresh one).
+        winner = ReservationDraft.objects.create(
+            hotel=self.hotel,
+            reservation_number="R09999",
+            idempotency_key="race",
+            status=ReservationDraftStatus.OPEN,
+            expires_at=timezone.now() + timedelta(minutes=30),
+        )
+
+        # Blind the initial locked lookup so it returns None even though the winner
+        # row exists — the service then proceeds to allocate + insert and collide.
+        # The except-branch re-fetch uses a plain (non-locked) query, so it is NOT
+        # affected by this patch and returns the real winner row.
+        blind_qs = mock.MagicMock()
+        blind_qs.filter.return_value.first.return_value = None
+        with mock.patch.object(
+            ReservationDraft.objects, "select_for_update", return_value=blind_qs
+        ):
+            draft = reserve_reservation_number(
+                self.hotel, idempotency_key="race", user=self.manager
+            )
+
+        # Idempotent: the loser's colliding insert was caught and the EXISTING
+        # winner draft was returned — no 500, no duplicate row, same number.
+        self.assertEqual(draft.id, winner.id)
+        self.assertEqual(draft.reservation_number, "R09999")
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="race"
+            ).count(),
+            1,
+        )
+
+
+_PG_SKIP_ALLOC = (
+    "True two-connection allocation concurrency is only meaningful on PostgreSQL "
+    "(the locked counter needs real row locking). SQLite serialises writers with a "
+    "process-wide lock and has different threading semantics; skipped to avoid a "
+    "false green."
+)
+
+
+class ReservationNumberConcurrencyTests(TransactionTestCase):
+    """Round 3 §7.3 — a REAL two-connection proof that the locked
+    ``ReservationNumberSequence`` allocator hands out DISTINCT numbers under true
+    concurrency. ``TransactionTestCase`` COMMITS setUp data so both worker
+    connections see the same hotel row. PostgreSQL-only (SQLite has no real row
+    locks) — skipped elsewhere rather than producing a false green."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="conc-resnum")
+
+    def _alloc_worker(self, barrier, results, index):
+        from django.db import connections, transaction
+
+        from apps.reservations.services import next_reservation_number
+
+        try:
+            barrier.wait(timeout=15)
+            with transaction.atomic():
+                results[index] = next_reservation_number(self.hotel)
+        except Exception as exc:  # noqa: BLE001 - a leaked error must be visible
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def test_concurrent_allocations_are_distinct(self):
+        import threading
+
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_ALLOC)
+
+        workers = 5
+        barrier = threading.Barrier(workers)
+        results = [None] * workers
+        threads = [
+            threading.Thread(target=self._alloc_worker, args=(barrier, results, i))
+            for i in range(workers)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "an allocation worker deadlocked or timed out")
+        for r in results:
+            self.assertFalse(
+                str(r).startswith("unexpected:"),
+                f"an unexpected error escaped a worker: {r}",
+            )
+        # Every worker got a DISTINCT number and the counter advanced exactly once
+        # per allocation (contiguous R00001..R00005 in some order — no collision).
+        self.assertEqual(len(set(results)), workers, results)
+        self.assertEqual(
+            sorted(results),
+            [f"R{n:05d}" for n in range(1, workers + 1)],
+            results,
+        )
+        seq = ReservationNumberSequence.objects.get(hotel=self.hotel)
+        self.assertEqual(seq.last_number, workers)

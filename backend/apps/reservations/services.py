@@ -9,6 +9,8 @@ No guest profile, payment, folio, invoice, or check-in/out is created here.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.db import IntegrityError, transaction
 from django.db.models import BigIntegerField
 from django.db.models.functions import Cast, Substr
@@ -29,6 +31,9 @@ from apps.common.exceptions import (
 from .availability import AvailabilityService
 from .models import (
     Reservation,
+    ReservationDraft,
+    ReservationDraftStatus,
+    ReservationNumberSequence,
     ReservationOccupant,
     ReservationRoomLine,
     ReservationStatus,
@@ -47,36 +52,167 @@ _PRIMARY_GUEST_SNAPSHOT_MAP = {
 
 _NUMBER_PREFIX = "R"
 
+# Round 3 §7.3 — a reserved reservation number (its ``ReservationDraft``) is valid
+# for this long. After it lapses a cleanup job may mark the draft ``expired``; the
+# NUMBER itself is never reused (an expired draft leaves a gap). 30 minutes is a
+# sensible default for filling in a booking form.
+RESERVATION_DRAFT_TTL = timedelta(minutes=30)
 
-def _next_reservation_number(hotel) -> str:
-    """Generate the next per-hotel reservation number (e.g. ``R00001``).
 
-    Numbers are unique per hotel (DB-enforced). They are monotonic but need not
-    be gapless; a rare race is caught by the unique constraint and retried by
-    :func:`create_reservation`.
+def _actor(user):
+    return user if getattr(user, "is_authenticated", False) else None
 
-    ITEM 9 (PG-safe): the filter matches EXACTLY ``^R[0-9]+`` before the
-    ``Substr``/``Cast`` so an imported / historical value like ``RB00001`` (or an
-    empty / corrupt number) is IGNORED — not modified, not deleted. On PostgreSQL,
-    casting the tail of a non-numeric value (e.g. ``B00001``) to integer raises;
-    the regex pre-filter guarantees only digit tails ever reach the cast. SQLite is
-    lenient but the same filter keeps the two backends consistent.
+
+def _max_existing_number(hotel) -> int:
+    """The current MAX valid ``R#####`` sequence value for a hotel (``0`` if none).
+
+    ITEM 9 (PG-safe): matches EXACTLY ``^R[0-9]+$`` before the ``Substr``/``Cast``
+    so an imported / historical value like ``RB00001`` (or an empty / corrupt
+    number) is IGNORED — not modified, not deleted. On PostgreSQL, casting the tail
+    of a non-numeric value (e.g. ``B00001``) to integer raises; the regex pre-filter
+    guarantees only digit tails ever reach the cast. ``BigIntegerField`` avoids a PG
+    overflow on a matching-but-huge tail (e.g. ``R3000000000`` > 2^31-1).
     """
     last = (
         Reservation.objects.filter(
             hotel=hotel, reservation_number__regex=r"^R[0-9]+$"
         )
         .annotate(
-            # FIX F — BigInteger avoids a PG overflow on a matching-but-huge tail
-            # (e.g. "R3000000000" > 2^31-1); the ``^R[0-9]+$`` filter still guards.
             seq=Cast(Substr("reservation_number", 2), output_field=BigIntegerField())
         )
         .order_by("-seq")
         .values_list("seq", flat=True)
         .first()
     )
-    nxt = (last or 0) + 1
-    return f"{_NUMBER_PREFIX}{nxt:05d}"
+    return int(last or 0)
+
+
+def next_reservation_number(hotel) -> str:
+    """Allocate the next per-hotel reservation number (e.g. ``R00001``).
+
+    Round 3 §7.3 — this is now the SOLE allocator. It locks the hotel's
+    :class:`~apps.reservations.models.ReservationNumberSequence` row with
+    ``select_for_update`` so two concurrent allocations can never collide (the same
+    blessed pattern as :func:`apps.finance.services.next_number`). MUST run inside a
+    transaction.
+
+    On the FIRST allocation for a hotel the counter SEEDS from the current max
+    valid reservation number (ignoring non ``^R[0-9]+$`` values), so it continues
+    seamlessly from the existing ``R#####`` max — imported/corrupt prefixes are
+    left untouched and per-hotel independence is preserved.
+    """
+    seq, created = ReservationNumberSequence.objects.select_for_update().get_or_create(
+        hotel=hotel
+    )
+    if created:
+        # Seed lazily from the existing max so the counter continues from it (no
+        # data migration/backfill needed). Only raises the counter, never lowers.
+        seed = _max_existing_number(hotel)
+        if seed > seq.last_number:
+            seq.last_number = seed
+    seq.last_number += 1
+    seq.save(update_fields=["last_number", "updated_at"])
+    return f"{_NUMBER_PREFIX}{seq.last_number:05d}"
+
+
+def _next_reservation_number(hotel) -> str:
+    """Backward-compatible alias for the locked-counter allocator.
+
+    Kept so existing internal call sites / tests keep working; delegates entirely
+    to :func:`next_reservation_number` (the MAX+1 body has been removed — the
+    counter is authoritative). MUST run inside a transaction.
+    """
+    return next_reservation_number(hotel)
+
+
+@transaction.atomic
+def reserve_reservation_number(hotel, *, idempotency_key, user=None) -> ReservationDraft:
+    """Reserve a REAL reservation number when the booking form opens (Round 3 §7.3).
+
+    Idempotent per ``(hotel, idempotency_key)``: an existing OPEN, non-expired draft
+    for the key is returned unchanged (same number). Otherwise a fresh number is
+    allocated from the locked counter and an OPEN draft (with a TTL) is created.
+
+    There are NO side effects — no folio, payment, availability, or inventory is
+    touched. The draft is hotel-scoped: a key from another hotel never matches here
+    (tenant isolation).
+
+    Concurrency (Round 3 §7.3 correction): a REPLAY of an already-stored key locks
+    that existing row with ``select_for_update`` and returns it unchanged. On the
+    FIRST-time concurrent case there is NO row to lock yet, so two same-key reserves
+    can both miss the lookup, both allocate a number, and both attempt the insert.
+    The unique ``(hotel, idempotency_key)`` constraint then lets exactly ONE draft
+    persist; the loser catches the ``IntegrityError`` and RE-FETCHES the winner's
+    draft, so the endpoint stays idempotent — a SINGLE stored draft per key (it is
+    the counter + this catch, NOT the lock, that guarantee that). The loser's
+    already-allocated number becomes a permanent gap (the counter is authoritative
+    and monotonic; numbers are never reused). Mirrors the finance folio/charge
+    ``get_or_create``-style resilience. Runs inside a transaction.
+    """
+    key = (idempotency_key or "").strip()
+    if not key:
+        raise DRFValidationError({"idempotency_key": "An idempotency key is required."})
+
+    now = timezone.now()
+    draft = (
+        ReservationDraft.objects.select_for_update()
+        .filter(hotel=hotel, idempotency_key=key)
+        .first()
+    )
+    if (
+        draft is not None
+        and draft.status == ReservationDraftStatus.OPEN
+        and draft.expires_at > now
+    ):
+        return draft  # idempotent replay -> the SAME reserved number
+
+    number = next_reservation_number(hotel)
+    expires_at = now + RESERVATION_DRAFT_TTL
+    if draft is not None:
+        # A SPENT (consumed/expired/cancelled) draft already holds this key. The
+        # unique constraint forbids a second row, so re-issue a FRESH number in
+        # place; the old number is a permanent gap (never reused).
+        draft.reservation_number = number
+        draft.status = ReservationDraftStatus.OPEN
+        draft.expires_at = expires_at
+        draft.created_by = _actor(user)
+        draft.save(
+            update_fields=[
+                "reservation_number",
+                "status",
+                "expires_at",
+                "created_by",
+            ]
+        )
+        return draft
+
+    # First-time insert for this key. Two SAME-key reserves can BOTH reach here:
+    # the ``select_for_update`` above locks nothing when no row exists yet, so both
+    # allocate a number and both attempt the insert. The unique ``(hotel,
+    # idempotency_key)`` constraint lets only ONE row land; the loser catches the
+    # ``IntegrityError`` and RE-FETCHES the winner's draft (idempotent — it returns
+    # the winner's number). The loser's already-allocated number is a permanent gap.
+    # The nested ``atomic`` is a SAVEPOINT so the collision rolls back ONLY this
+    # insert and leaves the outer transaction usable (required on PostgreSQL, where
+    # an IntegrityError otherwise aborts the whole transaction) — the same guard
+    # ``finance`` uses around its folio/charge inserts.
+    try:
+        with transaction.atomic():
+            return ReservationDraft.objects.create(
+                hotel=hotel,
+                reservation_number=number,
+                idempotency_key=key,
+                created_by=_actor(user),
+                status=ReservationDraftStatus.OPEN,
+                expires_at=expires_at,
+            )
+    except IntegrityError:
+        existing = (
+            ReservationDraft.objects.filter(hotel=hotel, idempotency_key=key).first()
+        )
+        if existing is not None:
+            return existing
+        raise
 
 
 def _log_status(reservation, previous, new, *, note="", user=None):
@@ -181,7 +317,15 @@ def _line_snapshot_for_write(line, *, prior_line, hotel, user):
 
 @transaction.atomic
 def create_reservation(
-    hotel, *, lines, status, user, occupants=None, room_assignment_mode=None, **fields
+    hotel,
+    *,
+    lines,
+    status,
+    user,
+    occupants=None,
+    room_assignment_mode=None,
+    idempotency_key=None,
+    **fields,
 ) -> Reservation:
     """Create a reservation with its room lines after an availability check.
 
@@ -255,25 +399,38 @@ def create_reservation(
             hotel, _book_payload(lines), check_in, check_out
         )
 
-    actor = user if getattr(user, "is_authenticated", False) else None
-    # Retry on the (rare) reservation-number race.
-    for _ in range(5):
-        number = _next_reservation_number(hotel)
-        try:
-            with transaction.atomic():
-                reservation = Reservation.objects.create(
-                    hotel=hotel,
-                    reservation_number=number,
-                    status=status,
-                    created_by=actor,
-                    updated_by=actor,
-                    **fields,
-                )
-                break
-        except IntegrityError:
-            continue
-    else:  # pragma: no cover - only if 5 consecutive collisions
-        raise IntegrityError("Could not allocate a reservation number.")
+    actor = _actor(user)
+    # Round 3 §7.3 — pin a PRE-RESERVED number when a matching OPEN, non-expired
+    # draft exists for this hotel + idempotency_key (the number the form reserved
+    # on open); otherwise allocate a fresh number from the locked counter. The
+    # whole call is ``@transaction.atomic`` and the counter takes a row lock, so
+    # concurrent creates get DISTINCT numbers with no retry loop; the per-hotel
+    # unique constraint on ``reservation_number`` remains a DB backstop. The draft
+    # lookup is hotel-scoped, so a draft from another hotel is never consumable.
+    draft = None
+    if idempotency_key:
+        draft = (
+            ReservationDraft.objects.select_for_update()
+            .filter(
+                hotel=hotel,
+                idempotency_key=idempotency_key,
+                status=ReservationDraftStatus.OPEN,
+                expires_at__gt=timezone.now(),
+            )
+            .first()
+        )
+    number = draft.reservation_number if draft is not None else next_reservation_number(hotel)
+    reservation = Reservation.objects.create(
+        hotel=hotel,
+        reservation_number=number,
+        status=status,
+        created_by=actor,
+        updated_by=actor,
+        **fields,
+    )
+    if draft is not None:
+        draft.status = ReservationDraftStatus.CONSUMED
+        draft.save(update_fields=["status"])
 
     # RESERVATIONS-AUTO-ROOM: automatic assignment runs under the type locks
     # ``ensure_can_book`` already acquired, so a concurrent booking cannot pick

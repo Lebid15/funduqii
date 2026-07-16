@@ -674,7 +674,10 @@ function buildOccupants(draft: ReservationDraft): ReservationOccupantBody[] {
  * (Wave 2b) booking sub-draft, so they flow through automatically once that UI
  * lands. `adults` is derived (1 + named companions) — the server reconciles.
  */
-export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
+export function toCreateBody(
+  draft: ReservationDraft,
+  options?: { idempotencyKey?: string | null },
+): ReservationCreateBody {
   const { guest, companions, booking } = draft;
   const occupants = buildOccupants(draft);
   const children = companions.has_companions
@@ -714,6 +717,11 @@ export function toCreateBody(draft: ReservationDraft): ReservationCreateBody {
   const notes = booking.notes.trim();
   if (notes) body.notes = notes;
   if (occupants.length > 0) body.occupants = occupants;
+  // §7.3 — echo the reserved-number key (create only) so the server pins the SAME
+  // number shown in the header. The FE never generates a number; it only replays
+  // the server's own reserved key. Null/absent → the server allocates fresh.
+  const idempotencyKey = options?.idempotencyKey;
+  if (idempotencyKey) body.idempotency_key = idempotencyKey;
   return body;
 }
 
@@ -753,10 +761,11 @@ export function buildDepositBody(
  */
 export function toImmediateCheckInBody(
   draft: ReservationDraft,
+  options?: { idempotencyKey?: string | null },
 ): ImmediateCheckInBody {
   const { booking } = draft;
   return {
-    reservation: toCreateBody(draft),
+    reservation: toCreateBody(draft, options),
     // RESERVATIONS-AUTO-ROOM §5 — never pin a room in automatic mode; the backend
     // assigns it on the line and the check-in admits into that assigned room.
     room:

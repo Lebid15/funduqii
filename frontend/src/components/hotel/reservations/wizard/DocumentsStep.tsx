@@ -17,7 +17,6 @@ import {
   DocumentPreviewCard,
   FormField,
   Icon,
-  Input,
   Modal,
   SectionCard,
   Select,
@@ -387,26 +386,17 @@ function DocumentFields({
 
   return (
     <>
-      <div className="form-grid">
-        <FormField label={d.docType} htmlFor={`${idPrefix}-type`}>
-          <Select
-            id={`${idPrefix}-type`}
-            value={type}
-            placeholder={d.docTypePlaceholder}
-            options={options}
-            onChange={(e) => onSet({ doc_type: e.target.value as ReservationDocumentType })}
-          />
-        </FormField>
-        <FormField label={d.docNumber} htmlFor={`${idPrefix}-num`}>
-          <Input
-            id={`${idPrefix}-num`}
-            value={doc?.number ?? ""}
-            autoComplete="off"
-            disabled={!hasType}
-            onChange={(e) => onSet({ number: e.target.value })}
-          />
-        </FormField>
-      </div>
+      {/* §7.2 — the document-number field is removed. The type Select is now the
+          full-width control for the card (no orphaned 2-col grid). */}
+      <FormField label={d.docType} htmlFor={`${idPrefix}-type`}>
+        <Select
+          id={`${idPrefix}-type`}
+          value={type}
+          placeholder={d.docTypePlaceholder}
+          options={options}
+          onChange={(e) => onSet({ doc_type: e.target.value as ReservationDocumentType })}
+        />
+      </FormField>
       {hasType ? (
         <div className="stack-tight">
           <StagedFileField

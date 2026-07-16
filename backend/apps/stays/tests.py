@@ -3458,6 +3458,89 @@ class ImmediateCheckInFolioRBACTests(APITestCase):
         self.assertIn("balance", r.data["folio"])
 
 
+class ImmediateCheckInDraftPinTests(APITestCase):
+    """Round 3 §7.3 — the reserved number is PINNED end-to-end through the IMMEDIATE
+    check-in path. Reserve a number (an OPEN ``ReservationDraft`` keyed by an
+    idempotency_key), then immediate-check-in with that SAME idempotency_key nested
+    in the reservation body (exactly as the front desk sends it). The created
+    reservation must carry the EXACT reserved number and the draft must be CONSUMED.
+
+    This is the round's key coverage gap: it proves the reserve → immediate-check-in
+    pin/consume handshake works, not just the plain create path."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "immdraft@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = _priced_type(self.hotel, code="IPD", rate="100.00")
+        self.room = make_room(self.hotel, self.rtype, number="440")
+        self.client.force_authenticate(self.manager)
+
+    def _reserve_number(self, key):
+        return self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": key},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _immediate_check_in(self, key):
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            {
+                "reservation": {
+                    "check_in_date": D1.isoformat(),
+                    "check_out_date": D2.isoformat(),
+                    "primary_guest_name": "Pinned Guest",
+                    "adults": 1,
+                    "children": 0,
+                    # The FE nests the reserved key inside the reservation body.
+                    "idempotency_key": key,
+                    "lines": [
+                        {
+                            "room_type": self.rtype.id,
+                            "quantity": 1,
+                            "room": self.room.id,
+                        }
+                    ],
+                },
+                "room": self.room.id,
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_immediate_check_in_pins_reserved_number_and_consumes_draft(self):
+        from apps.reservations.models import (
+            ReservationDraft,
+            ReservationDraftStatus,
+        )
+
+        reserved = self._reserve_number("imm-k1")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        reserved_number = reserved.data["reservation_number"]
+        draft_id = reserved.data["draft_id"]
+
+        result = self._immediate_check_in("imm-k1")
+        self.assertEqual(result.status_code, 201, result.data)
+        # (a) the created reservation carries the EXACT reserved number.
+        self.assertEqual(
+            result.data["reservation"]["reservation_number"], reserved_number
+        )
+        # (b) the draft is now CONSUMED (its number was pinned, never re-allocated).
+        draft = ReservationDraft.objects.get(id=draft_id)
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        # Exactly one reservation exists and it is the pinned one (no fresh number
+        # was allocated alongside the reserved draft).
+        self.assertEqual(
+            Reservation.objects.filter(
+                hotel=self.hotel, reservation_number=reserved_number
+            ).count(),
+            1,
+        )
+
+
 class GapStayBlockFlowTests(APITestCase):
     """FIX 4 — the missing-rate block is REAL end-to-end: a stay with a DUE night
     and NO covering rate period blocks check-out (folio stays OPEN) and rolls back

@@ -154,6 +154,11 @@ export interface ReservationCreateBody {
    * backend picks the room (send room_type + floor criteria, never a room id);
    * `"manual"` → the line pins the chosen room. Omitted = legacy behaviour. */
   room_assignment_mode?: RoomAssignmentMode;
+  /** RESERVATIONS-DEFERRED-CORRECTIONS §7.3 — optional key that PINS a number
+   * previously reserved via `reserveReservationNumber` (on form open). The server
+   * reuses that reserved number for the SAME (hotel, key); omitted → it allocates
+   * a fresh number. The FE NEVER generates or guesses a reservation number. */
+  idempotency_key?: string;
 }
 
 export function createReservation(
@@ -163,6 +168,28 @@ export function createReservation(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** RESERVATIONS-DEFERRED-CORRECTIONS §7.3 — reserve a REAL reservation number up
+ * front (on form open) so staff see the actual number instead of a placeholder.
+ * The server allocates + holds a numbered DRAFT keyed by (hotel, idempotency_key):
+ * repeat calls with the SAME key return the SAME number, so a StrictMode
+ * double-mount / re-render / retry never burns two numbers. Passing that same
+ * `idempotency_key` to `createReservation` PINS this number onto the created
+ * reservation. Gated by `reservations.create`; hotel-scoped server-side. */
+export interface ReserveReservationNumberResult {
+  reservation_number: string;
+  draft_id: number;
+  expires_at: string;
+}
+
+export function reserveReservationNumber(
+  idempotencyKey: string,
+): Promise<ReserveReservationNumberResult> {
+  return hotelJson<ReserveReservationNumberResult>(
+    "/reservations/reserve-number",
+    { method: "POST", body: JSON.stringify({ idempotency_key: idempotencyKey }) },
+  );
 }
 
 export type ReservationUpdateBody = Partial<

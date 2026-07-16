@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from .document_storage import (
     private_document_storage,
@@ -464,3 +465,100 @@ class ReservationDocument(models.Model):
 
     def __str__(self) -> str:
         return f"document#{self.pk} ({self.doc_type}, res={self.reservation_id})"
+
+
+class ReservationNumberSequence(models.Model):
+    """A per-hotel monotonic counter for reservation numbers (Round 3 §7.3).
+
+    This is the SOLE allocator of ``R#####`` reservation numbers. Allocation runs
+    inside a transaction with ``select_for_update`` on the hotel's row (see
+    :func:`apps.reservations.services.next_reservation_number`) so two concurrent
+    allocations can never collide — the blessed locked-counter pattern already used
+    by :class:`apps.finance.models.FinancialNumberSequence`.
+
+    On first use for a hotel the counter SEEDS from the current max valid
+    reservation number (ignoring imported/corrupt non ``^R[0-9]+$`` prefixes), so
+    it continues seamlessly from the existing max. One row per hotel (OneToOne).
+    """
+
+    hotel = models.OneToOneField(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_number_sequence",
+    )
+    # BigInteger: a matching-but-huge historical tail (e.g. ``R3000000000``) must
+    # not overflow when the counter seeds from / continues past it.
+    last_number = models.BigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "reservation_number_sequences"
+
+    def __str__(self) -> str:
+        return f"reservation seq hotel={self.hotel_id} @ {self.last_number}"
+
+
+class ReservationDraftStatus(models.TextChoices):
+    OPEN = "open", "Open"
+    CONSUMED = "consumed", "Consumed"
+    EXPIRED = "expired", "Expired"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class ReservationDraft(models.Model):
+    """A lightweight placeholder that RESERVES a real reservation number the moment
+    the booking form opens (Round 3 §7.3).
+
+    It holds ONLY the allocated number + metadata — there is deliberately NO folio,
+    availability, or inventory field and NO side effect. Idempotency is keyed on
+    ``(hotel, idempotency_key)``: a repeated reserve with the same key returns the
+    SAME draft. When the form is submitted the create flow consumes the matching
+    OPEN, non-expired draft and pins its number onto the new reservation.
+
+    Numbers are NEVER reused: an expired/cancelled draft simply leaves a gap in the
+    sequence (acceptable — the counter is authoritative and monotonic).
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_drafts",
+    )
+    # The number allocated from ``ReservationNumberSequence`` at draft creation.
+    reservation_number = models.CharField(max_length=32)
+    # A client-supplied idempotency token (a fresh UUID per form-open). Unique per
+    # hotel so a replayed reserve returns the same draft.
+    idempotency_key = models.CharField(max_length=64)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservation_drafts_created",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ReservationDraftStatus.choices,
+        default=ReservationDraftStatus.OPEN,
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "reservation_drafts"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["hotel", "idempotency_key"],
+                name="unique_reservation_draft_idempotency_key_per_hotel",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"draft {self.reservation_number} (hotel={self.hotel_id}, {self.status})"
+        )
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()

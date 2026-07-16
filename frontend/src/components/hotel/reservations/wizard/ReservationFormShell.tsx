@@ -7,6 +7,7 @@ import { CheckCircle2, Eye, Plus, Printer, X } from "lucide-react";
 
 import { Alert, Badge, Button, IconButton, StatusBadge, useToast } from "@/components/ui";
 import { messageForError } from "@/lib/api/errors";
+import { reserveReservationNumber } from "@/lib/api/reservations";
 import type { Reservation, ReservationFinancialSummary } from "@/lib/api/types";
 import {
   formatDate,
@@ -38,6 +39,17 @@ type StepKey = "guest" | "companions" | "documents" | "booking";
 const STEPS: StepKey[] = ["guest", "companions", "documents", "booking"];
 
 const LIST_ROUTE = "/hotel/reservations";
+
+/** §7.3 — a stable idempotency key per form-mount. `crypto.randomUUID` when the
+ * runtime offers it (all current browsers over HTTPS/localhost), else a
+ * sufficiently-unique fallback — the server dedups by (hotel, key), so only
+ * uniqueness matters. The FE never derives a reservation NUMBER from this. */
+function makeIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export type ReservationFormMode = "create" | "edit";
 
@@ -131,6 +143,40 @@ export function ReservationFormShell({
   const can = (...codes: string[]) =>
     access === null || (!access.loading && access.can(...codes));
 
+  // §7.3 — reserve a REAL reservation number when the CREATE form opens. The
+  // idempotency key AND a single-call boolean guard live in refs so a StrictMode
+  // double-mount, any re-render, or a retry never reserves twice; the SAME key is
+  // replayed into the create body at save so the server pins that number.
+  const idempotencyKeyRef = useRef<string | null>(null);
+  const reserveGuardRef = useRef(false);
+  const [reservedNumber, setReservedNumber] = useState<string | null>(null);
+  // Start "in flight" for create so the header shows the skeleton immediately (no
+  // one-frame flash of the degraded placeholder); edit never reserves.
+  const [reservingNumber, setReservingNumber] = useState(mode === "create");
+
+  const reserveNumber = useCallback(() => {
+    if (isEdit) return; // EDIT never reserves — it shows the saved number.
+    if (reserveGuardRef.current) return; // exactly one reserve per key.
+    reserveGuardRef.current = true;
+    const key = makeIdempotencyKey();
+    idempotencyKeyRef.current = key;
+    setReservingNumber(true);
+    reserveReservationNumber(key)
+      .then((result) => setReservedNumber(result.reservation_number))
+      .catch(() => {
+        // Degrade gracefully: keep the auto-assigned placeholder and let the
+        // server allocate the number on save. NEVER block the form on a failed
+        // reserve, and NEVER fabricate a number on the client.
+        setReservedNumber(null);
+      })
+      .finally(() => setReservingNumber(false));
+  }, [isEdit]);
+
+  // Reserve once when the create form opens (the ref guard makes this idempotent).
+  useEffect(() => {
+    reserveNumber();
+  }, [reserveNumber]);
+
   // §25/§33 (Finance-F1) — ANY stay (in-house OR already checked-out) makes the
   // STAY the source of truth: it freezes the dates + room (changed only through
   // the stay service, never a reservation edit) AND blocks a NEW pre-arrival
@@ -214,7 +260,14 @@ export function ReservationFormShell({
     setPendingNew(false);
     setPrintOpen(false);
     setSuccess(null);
-  }, [actions]);
+    // §7.3 — a fresh reservation must reserve a NEW number: clear the guard + key,
+    // reset the display, then reserve again so the just-saved reservation's number
+    // is never reused.
+    reserveGuardRef.current = false;
+    idempotencyKeyRef.current = null;
+    setReservedNumber(null);
+    reserveNumber();
+  }, [actions, reserveNumber]);
 
   // Escape closes the dialog unless a submit is in flight (mirrors `Modal.tsx`) or
   // the print preview is open (Escape then belongs to the preview); backdrop click
@@ -359,7 +412,11 @@ export function ReservationFormShell({
 
       // Create-or-check-in, THEN upload staged documents. Document failures are
       // reported without rolling the reservation back (retry from details).
-      const outcome = await runSubmit(draft);
+      // §7.3 — replay the reserved idempotency key so the server pins the SAME
+      // number shown in the header; null (reserve failed) → the server allocates.
+      const outcome = await runSubmit(draft, {
+        idempotencyKey: idempotencyKeyRef.current,
+      });
       if (outcome.depositFailed) {
         notify(w.depositFailed, "error");
       }
@@ -471,7 +528,39 @@ export function ReservationFormShell({
               <span className="resform-header__number">
                 {reservation.reservation_number}
               </span>
+            ) : reservedNumber ? (
+              // §7.3 — the REAL reserved number, READ-ONLY. The label term (never
+              // colour alone) marks it non-editable / system-assigned; the value
+              // adopts the reservation-card number treatment and is selectable so
+              // it can be copied. Grouped with an accessible label AND a polite
+              // live region so screen readers announce the number when it resolves
+              // (the in-flight skeleton it replaces is no longer live).
+              <span
+                className="resform-header__reserved"
+                role="group"
+                aria-live="polite"
+                aria-atomic="true"
+                aria-label={`${sc.reservationNumber}: ${reservedNumber}`}
+              >
+                <span className="resform-header__reserved-label">
+                  {sc.reservationNumber}
+                </span>
+                <strong className="resform-header__reserved-value">
+                  {reservedNumber}
+                </strong>
+              </span>
+            ) : reservingNumber ? (
+              // Reserve in flight — a subtle labelled skeleton until the number
+              // arrives; it never blocks the form.
+              <span
+                className="skeleton resform-header__reserving"
+                role="status"
+                aria-live="polite"
+                aria-label={w.booking.autoAssignedHint}
+              />
             ) : (
+              // Reserve failed/unavailable — degrade to the auto-assigned
+              // placeholder; the server allocates the number on save.
               <Badge tone="neutral">{w.booking.autoAssigned}</Badge>
             )}
           </div>

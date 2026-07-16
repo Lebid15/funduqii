@@ -3674,6 +3674,22 @@ a {
   }
 }
 
+/* §7.1 — the guest step's "no email" toggle shares the email row as its OWN grid
+   cell and lines up with the email INPUT (not its label). `align-self: end` drops
+   the cell to the row's block-end (= the input's row); the min-block-size ≈ the
+   control height keeps the toggle centred ON the input. No physical properties, so
+   it mirrors correctly in RTL, and the long Arabic label wraps inside the bounded
+   cell instead of clipping. */
+.guest-email-switch {
+  align-self: end;
+  display: flex;
+  align-items: center;
+  min-block-size: 2.75rem;
+}
+.guest-email-switch .switch {
+  inline-size: 100%;
+}
+
 /* --- Motion --------------------------------------------------------------- */
 @keyframes spin {
   to {
@@ -5097,6 +5113,40 @@ a {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
   letter-spacing: var(--tracking-tight);
+}
+/* §7.3 — the REAL reserved reservation number, shown READ-ONLY on create. A
+   stacked label + value: the label term (never colour alone) carries the
+   "system-assigned / non-editable" meaning; the value adopts the reservation-card
+   number treatment (larger, bolder, tracking-tight) and stays user-selectable so
+   it can be copied. In a COLUMN flex the cross axis is horizontal and
+   `flex-end` already follows the writing direction, so it aligns to the header's
+   inline-end and mirrors automatically in RTL — NO `[dir="rtl"]` override (that
+   would double-flip it). */
+.resform-header__reserved {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+  line-height: var(--line-tight);
+}
+.resform-header__reserved-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-fg-muted);
+}
+.resform-header__reserved-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-fg);
+  -webkit-user-select: all;
+  user-select: all;
+}
+/* Reserve-in-flight skeleton sizing (reuses the shared `.skeleton` shimmer). */
+.resform-header__reserving {
+  width: 5rem;
+  height: 1.75rem;
 }
 
 /* Band 3 — the ONLY scroller. `min-height: 0` is the linchpin: it overrides the
