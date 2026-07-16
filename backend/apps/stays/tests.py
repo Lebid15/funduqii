@@ -3060,12 +3060,18 @@ class FinancialDetailRBACTests(APITestCase):
     def test_view_only_current_residents_card_is_abstract(self):
         summary = self._current_row(self.viewer)["folio_summary"]
         self.assertIsNotNone(summary)
+        # Abstract clearance flags + the FIX 2 operational rate-coverage block
+        # (dates/flags, NOT money) — no monetary keys.
         self.assertEqual(
             set(summary),
             {
                 "financial_details_visible",
                 "financial_clearance_complete",
                 "requires_financial_action",
+                "requires_rate_remediation",
+                "missing_rate_ranges",
+                "remediation_allowed",
+                "requires_extension_first",
             },
         )
         self.assertFalse(summary["financial_details_visible"])
@@ -3638,10 +3644,11 @@ class CentralRatePeriodServiceTests(APITestCase):
             )
 
     def test_priced_booking_empty_currency_rejected(self):
-        # FIX E — a PRICED booking snapshot with EMPTY currency is rejected at
-        # check-in (create_booking_period passes the RAW currency; no silent
-        # folio-currency fallback).
-        from apps.common.exceptions import InvalidFinanceOperation
+        # FIX E + FIX 1 — a PRICED line with EMPTY captured currency is rejected at
+        # check-in (no silent folio-currency fallback). The FIX 1 folio-currency
+        # resolver (``_stay_folio_currency`` in ``ensure_stay_folio``) blocks first
+        # with ``FolioCurrencyMismatch`` reason ``missing_line_currency``.
+        from apps.common.exceptions import FolioCurrencyMismatch
         from apps.reservations.models import ReservationRoomLine
         from apps.stays.services import CheckInService
 
@@ -3651,12 +3658,13 @@ class CentralRatePeriodServiceTests(APITestCase):
         # Simulate a legacy PRICED line whose captured currency is EMPTY.
         ReservationRoomLine.objects.filter(pk=line.pk).update(agreed_rate_currency="")
         line.refresh_from_db()
-        with self.assertRaises(InvalidFinanceOperation):
+        with self.assertRaises(FolioCurrencyMismatch) as ctx:
             CheckInService.execute(
                 self.hotel, reservation=res, reservation_line=line, room=room,
                 primary_guest=make_guest(self.hotel, name="FE"), companions=(),
                 user=self.manager,
             )
+        self.assertEqual(ctx.exception.detail["reason"], "missing_line_currency")
 
     def test_conflicting_data_same_start_rejected(self):
         # FIX C — a second write at the SAME start_date with DIFFERENT data is a
@@ -3856,3 +3864,408 @@ class CheckMissingStayRatesCommandTests(APITestCase):
         _set_arrival(stay, D1 - timedelta(days=2))
         # A priced booking period covers every due night -> clean exit (no raise).
         call_command("check_missing_stay_rates")
+
+
+def _hotel_with_currency(slug, code):
+    from apps.hotels.models import HotelSettings
+
+    hotel = make_hotel(slug=slug)
+    HotelSettings.objects.create(hotel=hotel, default_currency=code, timezone="UTC")
+    return hotel
+
+
+class StayFolioCurrencyTests(APITestCase):
+    """FIX 1 — the stay's folio adopts the BOOKING's agreed currency, NOT the
+    hotel's CURRENT default; a conflicting/missing agreed currency or an existing
+    folio in a different currency BLOCKS check-in (no auto-FX, no silent change)."""
+
+    def setUp(self):
+        self.hotel = _hotel_with_currency("fc", "EUR")
+        self.manager = add_member(self.hotel, "fc@x.com", kind=MembershipType.MANAGER)
+
+    def _set_default(self, code):
+        from apps.hotels.models import HotelSettings
+
+        HotelSettings.objects.filter(hotel=self.hotel).update(default_currency=code)
+
+    def test_folio_adopts_booking_currency_not_current_default(self):
+        from apps.stays.services import CheckInService
+
+        rtype = _priced_type(self.hotel, code="BC", rate="100.00")
+        room = make_room(self.hotel, rtype, number="500")
+        res, line = make_reservation(self.hotel, rtype, room=room)  # booked in EUR
+        self.assertEqual(line.agreed_rate_currency, "EUR")
+        self._set_default("USD")  # the hotel changes its default AFTER booking
+        stay = CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="BC"), companions=(),
+            user=self.manager,
+        )
+        # The folio + booking period both carry the BOOKING currency (EUR), not USD.
+        self.assertEqual(stay.folios.get().currency, "EUR")
+        self.assertEqual(stay.rate_periods.get().currency, "EUR")
+
+    def test_conflicting_line_currencies_block_check_in(self):
+        from apps.common.exceptions import FolioCurrencyMismatch
+        from apps.reservations.models import ReservationRoomLine
+        from apps.stays.services import CheckInService
+
+        rtype = _priced_type(self.hotel, code="CF", rate="100.00")
+        room = make_room(self.hotel, rtype, number="501")
+        room2 = make_room(self.hotel, rtype, number="502")
+        res, line = make_reservation(self.hotel, rtype, room=room)  # EUR
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=res, room_type=rtype, room=room2,
+            quantity=1, agreed_nightly_rate=Decimal("100.00"),
+            agreed_rate_currency="USD",  # a DIFFERENT agreed currency
+        )
+        with self.assertRaises(FolioCurrencyMismatch) as ctx:
+            CheckInService.execute(
+                self.hotel, reservation=res, reservation_line=line, room=room,
+                primary_guest=make_guest(self.hotel, name="CF"), companions=(),
+                user=self.manager,
+            )
+        self.assertEqual(ctx.exception.detail["reason"], "conflicting_line_currencies")
+        self.assertFalse(res.folios.exists())  # blocked -> no folio
+
+    def test_existing_folio_different_currency_blocks(self):
+        from apps.common.exceptions import FolioCurrencyMismatch
+        from apps.finance.models import Folio, FolioStatus
+        from apps.finance.services import ensure_stay_folio
+
+        rtype = _priced_type(self.hotel, code="EX", rate="100.00")
+        room = make_room(self.hotel, rtype, number="503")
+        res, line = make_reservation(self.hotel, rtype, room=room)  # EUR agreed
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="EX"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1, planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        folio = Folio.objects.create(
+            hotel=self.hotel, stay=stay, guest=stay.primary_guest,
+            customer_name="EX", folio_number="F-EX-1", currency="USD",
+            status=FolioStatus.OPEN,
+        )
+        with self.assertRaises(FolioCurrencyMismatch) as ctx:
+            ensure_stay_folio(stay, user=self.manager)
+        self.assertEqual(ctx.exception.detail["reason"], "existing_folio_currency")
+        folio.refresh_from_db()
+        self.assertEqual(folio.currency, "USD")  # never silently changed
+
+    def test_unpriced_stay_uses_hotel_default(self):
+        # An UNPRICED stay has no agreed currency -> hotel default (keeps walk-in
+        # check-in working; remediated later).
+        rtype = make_type(self.hotel, code="UP")  # no base_rate
+        stay = _check_in(self.hotel, self.manager, rtype, number="505")
+        self.assertEqual(stay.folios.get().currency, "EUR")  # hotel default
+
+    def test_immediate_check_in_folio_uses_booking_currency(self):
+        from apps.stays.orchestration import execute_immediate_check_in
+
+        rtype = _priced_type(self.hotel, code="IM", rate="100.00")
+        room = make_room(self.hotel, rtype, number="504")
+        result = execute_immediate_check_in(
+            self.hotel,
+            lines=[{"room_type": rtype, "quantity": 1, "room": room}],
+            room=room, room_assignment_mode="manual", user=self.manager,
+            check_in_date=D1, check_out_date=D2,
+            source="walk_in", primary_guest_name="IM Guest",
+        )
+        self.assertEqual(result["folio"].currency, "EUR")
+
+    def test_currency_resolution_is_tenant_isolated(self):
+        from apps.stays.services import CheckInService
+
+        other = _hotel_with_currency("fc-other", "USD")
+        omgr = add_member(other, "fco@x.com", kind=MembershipType.MANAGER)
+        ortype = _priced_type(other, code="OT", rate="100.00")
+        oroom = make_room(other, ortype, number="601")
+        ores, oline = make_reservation(other, ortype, room=oroom)  # USD
+        rtype = _priced_type(self.hotel, code="TA", rate="100.00")
+        room = make_room(self.hotel, rtype, number="602")
+        res, line = make_reservation(self.hotel, rtype, room=room)  # EUR
+        stay_a = CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="A"), companions=(),
+            user=self.manager,
+        )
+        stay_b = CheckInService.execute(
+            other, reservation=ores, reservation_line=oline, room=oroom,
+            primary_guest=make_guest(other, name="B"), companions=(), user=omgr,
+        )
+        self.assertEqual(stay_a.folios.get().currency, "EUR")
+        self.assertEqual(stay_b.folios.get().currency, "USD")
+
+
+class RateCoverageSummaryTests(APITestCase):
+    """FIX 2 — the OPERATIONAL rate-coverage summary: contiguous
+    ``missing_rate_ranges`` + remediation_allowed / requires_extension_first; an
+    overstay range cannot be remediated directly (extend first)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "rc2@x.com", kind=MembershipType.MANAGER)
+
+    def _stay(self, number, *, ci, co, periods):
+        from apps.finance.services import ensure_stay_folio
+        from apps.stays.models import StayRatePeriod
+
+        rtype = _priced_type(self.hotel, code=f"C{number}", rate="100.00")
+        room = make_room(self.hotel, rtype, number=number)
+        res, line = make_reservation(self.hotel, rtype, room=room, ci=ci, co=co)
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name=f"C{number}"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=ci, planned_check_out_date=co,
+            actual_check_in_at=timezone.now(),
+        )
+        _set_arrival(stay, ci)
+        for s, e, rate in periods:
+            StayRatePeriod.objects.create(
+                hotel=self.hotel, stay=stay, start_date=s, end_date=e,
+                nightly_rate=rate, currency="USD", source="booking",
+            )
+        ensure_stay_folio(stay, user=self.manager)
+        return stay
+
+    def test_whole_stay_gap(self):
+        from apps.stays.rate_periods import rate_coverage_state
+
+        stay = self._stay("610", ci=D1, co=D1 + timedelta(days=2), periods=[])
+        state = rate_coverage_state(stay, business_date=D1 + timedelta(days=2))
+        self.assertEqual(
+            state["missing_rate_ranges"],
+            [{"start_date": D1, "end_date": D1 + timedelta(days=2)}],
+        )
+        self.assertTrue(state["requires_rate_remediation"])
+        self.assertTrue(state["remediation_allowed"])
+        self.assertFalse(state["requires_extension_first"])
+
+    def test_partial_gap_mid_stay(self):
+        from apps.stays.rate_periods import rate_coverage_state
+
+        stay = self._stay(
+            "611", ci=D1, co=D1 + timedelta(days=3),
+            periods=[
+                (D1, D1 + timedelta(days=1), Decimal("100.00")),
+                (D1 + timedelta(days=2), D1 + timedelta(days=3), Decimal("100.00")),
+            ],
+        )
+        state = rate_coverage_state(stay, business_date=D1 + timedelta(days=3))
+        self.assertEqual(
+            state["missing_rate_ranges"],
+            [{"start_date": D1 + timedelta(days=1), "end_date": D1 + timedelta(days=2)}],
+        )
+        self.assertTrue(state["remediation_allowed"])
+        self.assertFalse(state["requires_extension_first"])
+
+    def test_multiple_gaps(self):
+        from apps.stays.rate_periods import rate_coverage_state
+
+        stay = self._stay(
+            "612", ci=D1, co=D1 + timedelta(days=4),
+            periods=[(D1 + timedelta(days=1), D1 + timedelta(days=2), Decimal("100.00"))],
+        )
+        state = rate_coverage_state(stay, business_date=D1 + timedelta(days=4))
+        self.assertEqual(
+            state["missing_rate_ranges"],
+            [
+                {"start_date": D1, "end_date": D1 + timedelta(days=1)},
+                {"start_date": D1 + timedelta(days=2), "end_date": D1 + timedelta(days=4)},
+            ],
+        )
+
+    def test_overstay_gap_requires_extension_first(self):
+        from apps.common.exceptions import RateRemediationRequiresExtension
+        from apps.stays.rate_periods import rate_coverage_state, remediate_stay_rate
+
+        # Priced fully in-plan [D1, D2); guest OVERSTAYS to D4 with no extension.
+        stay = self._stay(
+            "613", ci=D1, co=D2, periods=[(D1, D2, Decimal("100.00"))]
+        )
+        state = rate_coverage_state(stay, business_date=D2 + timedelta(days=2))
+        self.assertTrue(state["requires_extension_first"])
+        self.assertFalse(state["remediation_allowed"])
+        self.assertEqual(
+            state["missing_rate_ranges"],
+            [{"start_date": D2, "end_date": D2 + timedelta(days=2)}],
+        )
+        # Remediating the overstay range directly is refused — extend first.
+        with self.assertRaises(RateRemediationRequiresExtension):
+            remediate_stay_rate(
+                stay, start_date=D2, end_date=D2 + timedelta(days=2),
+                nightly_rate=Decimal("100.00"), currency="USD", reason="x",
+                user=self.manager,
+            )
+
+    def test_remediate_one_gap_leaves_the_other(self):
+        from apps.stays.rate_periods import (
+            rate_coverage_state, remediate_stay_rate,
+        )
+
+        stay = self._stay(
+            "614", ci=D1, co=D1 + timedelta(days=4),
+            periods=[(D1 + timedelta(days=1), D1 + timedelta(days=2), Decimal("100.00"))],
+        )
+        # Fill the FIRST gap [D1, D1+1) only.
+        remediate_stay_rate(
+            stay, start_date=D1, end_date=D1 + timedelta(days=1),
+            nightly_rate=Decimal("100.00"), currency="USD", reason="gap1",
+            user=self.manager,
+        )
+        state = rate_coverage_state(stay, business_date=D1 + timedelta(days=4))
+        self.assertTrue(state["requires_rate_remediation"])  # the 2nd gap remains
+        self.assertEqual(
+            state["missing_rate_ranges"],
+            [{"start_date": D1 + timedelta(days=2), "end_date": D1 + timedelta(days=4)}],
+        )
+
+    def test_summary_endpoint_exposes_ranges_to_non_finance(self):
+        # The operational block is present for a non-finance viewer (dates/flags).
+        # Past window so the DUE nights are already consumed by today's business date.
+        stay = self._stay(
+            "615", ci=D1 - timedelta(days=2), co=D1, periods=[]
+        )
+        viewer = add_member(self.hotel, "rc2-view@x.com", perms=["stays.view"])
+        self.client.force_authenticate(viewer)
+        r = self.client.get(
+            reverse("stays:stay-folio-summary", args=[stay.id]), **HDR(self.hotel)
+        )
+        self.assertFalse(r.data["financial_details_visible"])
+        self.assertTrue(r.data["requires_rate_remediation"])
+        self.assertTrue(len(r.data["missing_rate_ranges"]) >= 1)
+        self.assertIn("start_date", r.data["missing_rate_ranges"][0])
+        self.assertTrue(r.data["remediation_allowed"])
+
+
+class CheckoutErrorSanitizationTests(APITestCase):
+    """FIX 3 — money-linked checkout / immediate-check-in errors are sanitized for a
+    viewer WITHOUT finance.view (no folio id/number, balance, amount, or currency);
+    a finance viewer keeps the detail."""
+
+    def setUp(self):
+        from apps.finance.services import ensure_due_room_charges
+
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "san-mgr@x.com", kind=MembershipType.MANAGER)
+        self.rtype = _priced_type(self.hotel, code="SAN", rate="100.00")
+        self.stay = _check_in(self.hotel, self.manager, self.rtype, number="600")
+        ensure_due_room_charges(
+            self.stay, as_of=self.stay.planned_check_out_date, user=self.manager
+        )
+        self.checker = add_member(self.hotel, "san-chk@x.com", perms=["stays.check_out"])
+        self.finance = add_member(
+            self.hotel, "san-fin@x.com", perms=["stays.check_out", "finance.view"]
+        )
+
+    def _checkout(self, user):
+        # A reason is supplied so the EARLY-departure guard passes and the checkout
+        # reaches the outstanding-balance (money-linked) blocker.
+        self.client.force_authenticate(user)
+        return self.client.post(
+            reverse("stays:stay-check-out", args=[self.stay.id]),
+            {"checkout_reason": "leaving"}, format="json", **HDR(self.hotel),
+        )
+
+    def test_non_finance_checkout_error_is_sanitized(self):
+        r = self._checkout(self.checker)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "folio_balance_outstanding")
+        details = r.data.get("details", {})
+        for leaked in ("folio", "folio_number", "balance", "amount", "currency", "held"):
+            self.assertNotIn(leaked, details)
+        self.assertFalse(details.get("financial_details_visible"))
+        self.assertTrue(details.get("requires_financial_action"))
+        self.assertFalse(details.get("can_check_out"))
+
+    def test_finance_checkout_error_keeps_detail(self):
+        r = self._checkout(self.finance)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "folio_balance_outstanding")
+        self.assertIn("balance", r.data["details"])
+        self.assertIn("folio_number", r.data["details"])
+
+    def test_posting_currency_mismatch_sanitized_for_non_finance(self):
+        # The posting-time currency guard raises a GENERIC InvalidFinanceOperation
+        # carrying ``folio_currency``/``rate_currency``. On checkout it must ALSO be
+        # sanitized for a non-finance viewer (money-linked KEY detection), while a
+        # finance viewer keeps the detail.
+        from apps.finance.services import ensure_stay_folio
+        from apps.stays.models import StayRatePeriod
+
+        rtype = _priced_type(self.hotel, code="MM", rate="100.00")
+        room = make_room(self.hotel, rtype, number="620")
+        res, line = make_reservation(
+            self.hotel, rtype, room=room, ci=D1 - timedelta(days=2), co=D1
+        )
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=make_guest(self.hotel, name="MM"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1 - timedelta(days=2), planned_check_out_date=D1,
+            actual_check_in_at=timezone.now(),
+        )
+        _set_arrival(stay, D1 - timedelta(days=2))
+        ensure_stay_folio(stay, user=self.manager)  # USD folio (line is USD)
+        # Force a MISMATCHING EUR rate period (a data mismatch the guard catches).
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=stay, start_date=D1 - timedelta(days=2), end_date=D1,
+            nightly_rate=Decimal("100.00"), currency="EUR", source="booking",
+        )
+
+        self.client.force_authenticate(self.checker)  # no finance.view
+        r = self.client.post(
+            reverse("stays:stay-check-out", args=[stay.id]),
+            {"checkout_reason": "leaving"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 400)  # InvalidFinanceOperation
+        self.assertEqual(r.data["code"], "invalid_finance_operation")
+        details = r.data.get("details", {})
+        for leaked in (
+            "folio_currency", "rate_currency", "room_night", "balance", "amount",
+        ):
+            self.assertNotIn(leaked, details)
+        self.assertFalse(details.get("financial_details_visible"))
+        self.assertTrue(details.get("requires_financial_action"))
+
+        # A finance viewer still sees the full detail (currency codes included).
+        self.client.force_authenticate(self.finance)
+        r2 = self.client.post(
+            reverse("stays:stay-check-out", args=[stay.id]),
+            {"checkout_reason": "leaving"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r2.status_code, 400)
+        self.assertIn("folio_currency", r2.data["details"])
+
+    def test_run_finance_gated_helper_sanitizes(self):
+        # The SAME helper wraps the immediate-check-in path — covers it too.
+        from types import SimpleNamespace
+
+        from apps.common.exceptions import FolioBalanceOutstanding
+        from apps.stays.views import _run_finance_gated
+
+        def boom():
+            raise FolioBalanceOutstanding(
+                {"folio": 1, "folio_number": "F1", "balance": "200.00"}
+            )
+
+        req_nf = SimpleNamespace(user=self.checker, hotel=self.hotel)
+        with self.assertRaises(FolioBalanceOutstanding) as ctx:
+            _run_finance_gated(req_nf, boom)
+        # The rendered payload uses ``_sanitized_details`` (raw booleans, no money).
+        d = ctx.exception._sanitized_details
+        for leaked in ("folio", "folio_number", "balance", "amount", "currency"):
+            self.assertNotIn(leaked, d)
+        self.assertIs(d["financial_details_visible"], False)
+        self.assertIs(d["requires_financial_action"], True)
+        self.assertIs(d["can_check_out"], False)
+
+        req_f = SimpleNamespace(user=self.finance, hotel=self.hotel)
+        with self.assertRaises(FolioBalanceOutstanding) as ctx2:
+            _run_finance_gated(req_f, boom)
+        # Finance viewer: original detail preserved, NOT sanitized.
+        self.assertIsNone(getattr(ctx2.exception, "_sanitized_details", None))
+        self.assertIn("balance", ctx2.exception.detail)

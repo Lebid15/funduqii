@@ -30,6 +30,7 @@ from apps.common.exceptions import (
     RatePeriodConflict,
     RatePeriodCoversPostedNight,
     RatePeriodOverlap,
+    RateRemediationRequiresExtension,
 )
 
 from .models import Stay, StayRatePeriod, StayRatePeriodSource, StayStatus
@@ -377,6 +378,20 @@ def remediate_stay_rate(
         raise InvalidStayChange({"reason": "rate_period_empty_range"})
     if nightly_rate is None or not _is_positive(nightly_rate):
         raise InvalidStayChange({"reason": "nightly_rate_not_positive"})
+    # FIX 2 — the window must be an actual IN-PLAN coverage gap: not before
+    # check-in, and NOT at/after planned_check_out. An overstay range cannot be
+    # given a rate period directly — the stay must be EXTENDED first (the extension
+    # then prices the added window); never create a period past the plan.
+    if start_date < stay.planned_check_in_date:
+        raise InvalidStayChange({"reason": "rate_remediation_before_check_in"})
+    if end_date > stay.planned_check_out_date:
+        raise RateRemediationRequiresExtension(
+            {
+                "stay": stay.id,
+                "end_date": end_date.isoformat(),
+                "planned_check_out": stay.planned_check_out_date.isoformat(),
+            }
+        )
     # Never touch an already-billed night.
     _reject_posted_night_in_window(stay, start_date, end_date)
     # Replace any unpriced placeholder the window fills, then create the priced one.
@@ -474,3 +489,71 @@ def uncovered_billable_nights(stay, *, business_date=None) -> list:
             gaps.append(night)
         night = night + timedelta(days=1)
     return gaps
+
+
+def _night_has_positive_rate(periods, night) -> bool:
+    return any(
+        p.start_date <= night < p.end_date
+        and p.nightly_rate is not None
+        and p.nightly_rate > 0
+        for p in periods
+    )
+
+
+def rate_coverage_state(stay, *, business_date=None) -> dict:
+    """FIX 2 — the OPERATIONAL rate-coverage summary for a stay (dates + flags, NOT
+    money; exposed to operational viewers, never gated behind ``finance.view``).
+
+    Considers every CONSUMED night ``[arrival, business_date)`` and groups the ones
+    with NO positive-rate period into CONTIGUOUS half-open ranges ``[start, end)``
+    (``end`` exclusive, matching :class:`StayRatePeriod`). A range is split at the
+    ``planned_check_out`` boundary so each range is entirely WITHIN plan (directly
+    remediable) or entirely OVERSTAY (needs an extension first). Returns::
+
+        {
+          "business_date": date,
+          "missing_rate_ranges": [{"start_date": date, "end_date": date}, ...],
+          "requires_rate_remediation": bool,   # any uncovered consumed night
+          "remediation_allowed": bool,         # a within-plan gap exists
+          "requires_extension_first": bool,    # an overstay gap exists
+        }
+    """
+    from apps.shifts.services import get_business_date
+
+    if business_date is None:
+        business_date = get_business_date(stay.hotel)
+    periods = list(stay.rate_periods.all())
+    planned_out = stay.planned_check_out_date
+    night = max(stay.planned_check_in_date, _arrival_date(stay))
+
+    ranges = []  # each: {"start": date, "end": date, "overstay": bool}
+    while night < business_date:
+        if not _night_has_positive_rate(periods, night):
+            overstay = night >= planned_out
+            if (
+                ranges
+                and ranges[-1]["end"] == night
+                and ranges[-1]["overstay"] == overstay
+            ):
+                ranges[-1]["end"] = night + timedelta(days=1)
+            else:
+                ranges.append(
+                    {
+                        "start": night,
+                        "end": night + timedelta(days=1),
+                        "overstay": overstay,
+                    }
+                )
+        night = night + timedelta(days=1)
+
+    remediation_allowed = any(not r["overstay"] for r in ranges)
+    requires_extension_first = any(r["overstay"] for r in ranges)
+    return {
+        "business_date": business_date,
+        "missing_rate_ranges": [
+            {"start_date": r["start"], "end_date": r["end"]} for r in ranges
+        ],
+        "requires_rate_remediation": bool(ranges),
+        "remediation_allowed": remediation_allowed,
+        "requires_extension_first": requires_extension_first,
+    }

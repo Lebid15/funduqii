@@ -107,6 +107,32 @@ class StaySerializer(serializers.ModelSerializer):
             obj, business_date=self._business_date_for(obj.hotel)
         )
 
+    def _rate_coverage_block(self, obj) -> dict:
+        """FIX 2 — the OPERATIONAL rate-coverage block (dates + flags, NOT money)
+        merged into the folio summary for EVERY viewer. Empty for a stay that is no
+        longer in-house."""
+        if obj.status != "in_house":
+            return {
+                "requires_rate_remediation": False,
+                "missing_rate_ranges": [],
+                "remediation_allowed": False,
+                "requires_extension_first": False,
+            }
+        from apps.stays.rate_periods import rate_coverage_state
+
+        state = rate_coverage_state(
+            obj, business_date=self._business_date_for(obj.hotel)
+        )
+        return {
+            "requires_rate_remediation": state["requires_rate_remediation"],
+            "missing_rate_ranges": [
+                {"start_date": str(r["start_date"]), "end_date": str(r["end_date"])}
+                for r in state["missing_rate_ranges"]
+            ],
+            "remediation_allowed": state["remediation_allowed"],
+            "requires_extension_first": state["requires_extension_first"],
+        }
+
     def get_document_count(self, obj) -> int:
         if obj.reservation_id is None:
             return 0
@@ -219,6 +245,8 @@ class StaySerializer(serializers.ModelSerializer):
                 "financial_details_visible": False,
                 "financial_clearance_complete": financial_clearance_complete,
                 "requires_financial_action": not financial_clearance_complete,
+                # FIX 2 — operational rate-coverage (dates/flags, not money).
+                **self._rate_coverage_block(obj),
             }
         # Payment status is DERIVED from the folio's own totals — never a second
         # local rule that could disagree with the ledger (§12). ``overpaid`` is
@@ -258,6 +286,8 @@ class StaySerializer(serializers.ModelSerializer):
             "awaiting_final_charges": awaiting,
             "current_nightly_rate": current_nightly_rate,
             "current_rate_currency": current_rate_currency,
+            # FIX 2 — operational rate-coverage (dates/flags, not money).
+            **self._rate_coverage_block(obj),
         }
 
 

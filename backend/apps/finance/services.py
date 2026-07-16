@@ -32,6 +32,7 @@ from apps.common.exceptions import (
     ExpenseAlreadyReversed,
     FolioAwaitingFinalCharges,
     FolioClosed,
+    FolioCurrencyMismatch,
     FolioHasPostings,
     FolioNotBalanced,
     InvalidAmount,
@@ -285,10 +286,14 @@ def _accepted_currencies(hotel) -> list[str]:
 @transaction.atomic
 def create_folio(hotel, *, reservation=None, stay=None, guest=None,
                  customer_name="", currency=None, notes="", user=None,
-                 origin="manual") -> Folio:
-    """Open a folio. The currency is ALWAYS the hotel's (any passed value is
-    ignored — documented decision). A reservation may only be referenced
-    together with its stay: pre-arrival folios are not supported."""
+                 origin="manual", agreed_currency=None) -> Folio:
+    """Open a folio. The client-facing ``currency`` is ALWAYS ignored (documented
+    decision — a client can never set a folio currency). ``agreed_currency`` is an
+    INTERNAL override used ONLY by the stay-folio path (FIX 1): the folio adopts the
+    BOOKING's agreed currency instead of the hotel's CURRENT default; when it is
+    ``None`` the hotel default currency is used exactly as before. A reservation may
+    only be referenced together with its stay: pre-arrival folios are not
+    supported."""
     if reservation is not None and stay is None:
         raise ReservationFolioNotSupported()
     if stay is not None:
@@ -309,7 +314,9 @@ def create_folio(hotel, *, reservation=None, stay=None, guest=None,
             guest=guest,
             customer_name=customer_name or (guest.full_name if guest else ""),
             folio_number=number,
-            currency=_hotel_currency(hotel),
+            # FIX 1 — the stay-folio path may adopt the BOOKING's agreed currency;
+            # every other caller (agreed_currency None) keeps the hotel default.
+            currency=agreed_currency or _hotel_currency(hotel),
             notes=notes or "",
             created_by=actor,
             updated_by=actor,
@@ -391,14 +398,70 @@ def _reuse_reservation_folio_for_stay(stay, *, user=None):
     return folio
 
 
+def _stay_folio_currency(stay) -> str:
+    """The currency the stay's folio must use (FIX 1 — the folio adopts the
+    BOOKING's agreed currency, NOT the hotel's CURRENT default).
+
+    * PRICED stay (its reservation line has a non-null ``agreed_nightly_rate``): the
+      folio currency = that line's ``agreed_rate_currency``. If the reservation
+      feeding the stay has MULTIPLE priced lines whose currencies CONFLICT (>1
+      distinct) OR a priced line has a MISSING currency, raise
+      :class:`FolioCurrencyMismatch` (check-in is BLOCKED, no folio created).
+    * UNPRICED stay (no agreed rate): fall back to the hotel default currency —
+      there is no agreed currency to honor, so walk-in / unpriced check-in keeps
+      working (the rate is remediated later).
+
+    NO conversion, NO auto-FX anywhere.
+    """
+    line = stay.reservation_line
+    own_priced = line is not None and line.agreed_nightly_rate is not None
+    if not own_priced:
+        return _hotel_currency(stay.hotel)
+    reservation = stay.reservation
+    priced = (
+        [rl for rl in reservation.lines.all() if rl.agreed_nightly_rate is not None]
+        if reservation is not None
+        else [line]
+    )
+    currencies = set()
+    for rl in priced:
+        cur = (rl.agreed_rate_currency or "").strip()
+        if not cur:
+            raise FolioCurrencyMismatch(
+                {"reason": "missing_line_currency", "line": rl.id}
+            )
+        currencies.add(cur)
+    if len(currencies) > 1:
+        raise FolioCurrencyMismatch(
+            {
+                "reason": "conflicting_line_currencies",
+                "currencies": sorted(currencies),
+            }
+        )
+    return next(iter(currencies))
+
+
+def _guard_existing_folio_currency(folio, agreed_currency):
+    """Block (never silently change) when an existing folio's currency differs from
+    the resolved agreed currency."""
+    if folio.currency and folio.currency != agreed_currency:
+        raise FolioCurrencyMismatch(
+            {
+                "reason": "existing_folio_currency",
+                "folio_currency": folio.currency,
+                "agreed_currency": agreed_currency,
+            }
+        )
+
+
 @transaction.atomic
 def ensure_stay_folio(stay, *, user=None) -> Folio:
     """Get-or-create the stay's ONE open folio (idempotent, race-safe).
 
     Called from check-in (same transaction: a failed folio rolls back the
     whole check-in) and from service-order posting. Links stay + guest +
-    reservation, uses the hotel currency, and never posts any charge,
-    payment, or deposit.
+    reservation, adopts the BOOKING's agreed currency (FIX 1), and never posts any
+    charge, payment, or deposit.
     """
     stay = type(stay).objects.select_for_update().get(pk=stay.pk)
     # Restaurant closure (P0): a NEW operational folio may only be opened for
@@ -407,10 +470,14 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     # check-in calls this while the stay is already in-house.
     if stay.status != "in_house":
         raise StayNotInHouse({"stay": stay.pk, "status": stay.status})
+    # FIX 1 — resolve the currency the folio must carry (may BLOCK check-in on a
+    # conflicting / missing agreed currency; no folio is created then).
+    agreed_currency = _stay_folio_currency(stay)
     existing = Folio.objects.filter(
         hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
     ).first()
     if existing is not None:
+        _guard_existing_folio_currency(existing, agreed_currency)
         return existing
     # Reservation-folio reuse (RESERVATIONS-FORM-REWORK — immediate check-in):
     # if a pre-arrival deposit opened the reservation's ONE folio (reservation
@@ -418,9 +485,10 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     # second one — the deposit then lives on the stay folio automatically (ONE
     # ledger). Backward-compatible: with no reservation, or no open reservation
     # folio, this is a no-op and the stay folio is created below exactly as
-    # before.
+    # before. A currency mismatch BLOCKS (the atomic rolls the attach back).
     reused = _reuse_reservation_folio_for_stay(stay, user=user)
     if reused is not None:
+        _guard_existing_folio_currency(reused, agreed_currency)
         return reused
     try:
         return create_folio(
@@ -431,6 +499,7 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
             customer_name=stay.primary_guest.full_name,
             user=user,
             origin="stay",
+            agreed_currency=agreed_currency,
         )
     except (IntegrityError, InvalidFinanceOperation):
         # Lost a race that slipped past the lock: the winner's folio is ours.

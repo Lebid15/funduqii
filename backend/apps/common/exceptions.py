@@ -657,6 +657,23 @@ class InvalidAmount(FunduqiiAPIException):
     default_code = "invalid_amount"
 
 
+class FolioCurrencyMismatch(FunduqiiAPIException):
+    """The stay's folio currency cannot be resolved/honored (STAYS rate-integrity —
+    the folio adopts the BOOKING's agreed currency, never auto-converted).
+
+    ``details.reason`` is one of: ``conflicting_line_currencies`` (the reservation's
+    priced lines disagree), ``missing_line_currency`` (a priced line has no agreed
+    currency), or ``existing_folio_currency`` (a folio already exists in a different
+    currency — never silently changed). Check-in is blocked; no folio is created."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "The stay's agreed currency conflicts with its folio; resolve the "
+        "currency before check-in."
+    )
+    default_code = "folio_currency_mismatch"
+
+
 class MissingAgreedNightlyRate(FunduqiiAPIException):
     """A due room night has NO covering rate period with a POSITIVE agreed rate —
     either no period covers it, or the covering period's rate is NULL (agreed price
@@ -696,6 +713,19 @@ class RatePeriodConflict(FunduqiiAPIException):
         "A different rate period already exists for this stay at that start date."
     )
     default_code = "rate_period_conflict"
+
+
+class RateRemediationRequiresExtension(FunduqiiAPIException):
+    """A rate-remediation window falls at/after the stay's planned check-out (an
+    overstay range). Those nights cannot be given a rate period directly — the stay
+    must be EXTENDED first (which adds the priced period for the added window)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This range is at/after the planned check-out; extend the stay first, "
+        "then it is priced by the extension."
+    )
+    default_code = "rate_remediation_requires_extension"
 
 
 class RatePeriodCoversPostedNight(FunduqiiAPIException):
@@ -962,7 +992,14 @@ def funduqii_exception_handler(exc, context):
 
     detail = getattr(exc, "detail", None)
     payload = {"code": _extract_code(exc), "message": _flatten_message(detail)}
-    if isinstance(detail, (list, dict)):
+    # FIX 3 — a money-linked checkout/immediate-check-in error sanitized for a
+    # non-finance viewer attaches a RAW dict of operational flags via
+    # ``_sanitized_details``. Use it verbatim (so booleans stay booleans and no
+    # money/folio figure leaks) instead of the ErrorDetail-wrapped ``detail``.
+    sanitized = getattr(exc, "_sanitized_details", None)
+    if sanitized is not None:
+        payload["details"] = sanitized
+    elif isinstance(detail, (list, dict)):
         payload["details"] = detail
 
     response.data = payload

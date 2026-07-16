@@ -14,7 +14,15 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.exceptions import PermissionDenied
+from apps.common.exceptions import (
+    FolioAwaitingFinalCharges,
+    FolioBalanceOutstanding,
+    FolioCurrencyMismatch,
+    FolioNotBalanced,
+    FunduqiiAPIException,
+    InsuranceNotSettled,
+    PermissionDenied,
+)
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelPermission
 from apps.rbac.services import has_hotel_permission
@@ -60,6 +68,74 @@ CanRateOverride = HasHotelPermission("stays.rate_override")
 # so it requires BOTH capabilities (a deposit adds finance.payment_create, and a
 # foreign-currency manual FX rate adds exchange_rate.override — enforced below).
 CanCreateReservation = HasHotelPermission("reservations.create")
+
+
+# FIX 3 — domain exceptions on the checkout / immediate-check-in paths that carry
+# a folio identifier, a balance/total/amount, or a money-linked currency. For a
+# requester WITHOUT ``finance.view`` these must be sanitized to an operational-only
+# payload (code + generic message + operational flags), never leaking the figures.
+# ``_MONEY_LINKED_ERRORS`` are ALWAYS money-linked; additionally, ANY domain error
+# whose ``details`` dict carries a money-linked KEY is sanitized too (this closes
+# the posting-time currency guard, which raises a generic ``InvalidFinanceOperation``
+# carrying ``folio_currency``/``rate_currency``). A pure-operational domain error
+# (no money key) passes through unchanged — never over-sanitized.
+_MONEY_LINKED_ERRORS = (
+    FolioBalanceOutstanding,
+    FolioNotBalanced,
+    FolioAwaitingFinalCharges,
+    InsuranceNotSettled,
+    FolioCurrencyMismatch,
+)
+_MONEY_LINKED_DETAIL_KEYS = frozenset(
+    {
+        "folio",
+        "folio_number",
+        "balance",
+        "amount",
+        "total",
+        "currency",
+        "rate_currency",
+        "folio_currency",
+        "held",
+    }
+)
+
+
+def _detail_has_money_key(exc) -> bool:
+    detail = getattr(exc, "detail", None)
+    return isinstance(detail, dict) and any(
+        key in _MONEY_LINKED_DETAIL_KEYS for key in detail
+    )
+
+
+def _run_finance_gated(request: Request, fn, *args, **kwargs):
+    """Run a service call; if it raises a money-linked domain exception AND the
+    caller lacks ``finance.view``, re-raise the SAME exception type (so the machine
+    code + HTTP status are preserved) with a SANITIZED operational detail — no folio
+    id/number, balance, total, amount, or money-linked currency. A finance viewer
+    gets the detailed payload unchanged; a pure-operational error passes through."""
+    try:
+        return fn(*args, **kwargs)
+    except FunduqiiAPIException as exc:
+        money_linked = isinstance(exc, _MONEY_LINKED_ERRORS) or _detail_has_money_key(
+            exc
+        )
+        if not money_linked or has_hotel_permission(
+            request.user, request.hotel, "finance.view"
+        ):
+            raise
+        # Re-raise the SAME type (machine code + HTTP status preserved) with a
+        # generic message and a RAW operational-only details dict via
+        # ``_sanitized_details`` — the exception handler emits it verbatim, so the
+        # booleans stay booleans and NO folio id/number, balance, total, amount, or
+        # money-linked currency leaks.
+        sanitized = type(exc)()
+        sanitized._sanitized_details = {
+            "financial_details_visible": False,
+            "requires_financial_action": True,
+            "can_check_out": False,
+        }
+        raise sanitized from None
 
 
 def _guard_write(request: Request) -> None:
@@ -309,6 +385,33 @@ class StayLogsView(APIView):
         )
 
 
+def _rate_coverage_block(stay, business_date) -> dict:
+    """FIX 2 — the OPERATIONAL rate-coverage block (dates + flags, NOT money) for a
+    stay: the contiguous ``missing_rate_ranges`` of DUE nights lacking a positive
+    rate, plus ``requires_rate_remediation`` / ``remediation_allowed`` /
+    ``requires_extension_first``. Present for EVERY viewer. Empty for a stay that is
+    no longer in-house (nothing to remediate operationally)."""
+    if stay.status != StayStatus.IN_HOUSE:
+        return {
+            "requires_rate_remediation": False,
+            "missing_rate_ranges": [],
+            "remediation_allowed": False,
+            "requires_extension_first": False,
+        }
+    from apps.stays.rate_periods import rate_coverage_state
+
+    state = rate_coverage_state(stay, business_date=business_date)
+    return {
+        "requires_rate_remediation": state["requires_rate_remediation"],
+        "missing_rate_ranges": [
+            {"start_date": str(r["start_date"]), "end_date": str(r["end_date"])}
+            for r in state["missing_rate_ranges"]
+        ],
+        "remediation_allowed": state["remediation_allowed"],
+        "requires_extension_first": state["requires_extension_first"],
+    }
+
+
 def _stay_folio_summary(request, stay) -> dict:
     """Build the checkout dialog's folio + insurance snapshot for a stay.
 
@@ -397,6 +500,11 @@ def _stay_folio_summary(request, stay) -> dict:
         "requires_financial_action": not financial_clearance_complete,
         "can_check_out": financial_clearance_complete,
     }
+    # FIX 2 — the rate-coverage state (dates + flags, NOT money) is an OPERATIONAL
+    # contract: present for EVERY viewer (never gated behind finance.view), so the
+    # front desk knows exactly which nights need a rate and whether they are
+    # directly remediable or need an extension first.
+    summary.update(_rate_coverage_block(stay, business_date))
     if can_see_finance:
         # Full monetary detail exactly as before (unchanged shape).
         summary["open_folios"] = open_summaries
@@ -582,7 +690,9 @@ class ImmediateCheckInView(APIView):
             deposit = dict(deposit)
             self._authorize_deposit(request, hotel, deposit)
 
-        result = execute_immediate_check_in(
+        result = _run_finance_gated(
+            request,
+            execute_immediate_check_in,
             hotel,
             lines=lines,
             primary_guest=primary_guest,
@@ -653,7 +763,11 @@ class CheckOutView(APIView):
         stay = generics.get_object_or_404(Stay, pk=pk, hotel=request.hotel)
         serializer = CheckOutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        CheckOutService.execute(
+        # FIX 3 — money-linked checkout blockers are sanitized for a non-finance
+        # viewer (no folio id/number, balance, amount, or currency leak).
+        _run_finance_gated(
+            request,
+            CheckOutService.execute,
             stay,
             check_out_notes=serializer.validated_data.get("check_out_notes", ""),
             checkout_reason=serializer.validated_data.get("checkout_reason", ""),
