@@ -7,7 +7,9 @@ import {
   BedSingle,
   Brush,
   Briefcase,
+  CalendarCheck,
   CalendarClock,
+  CalendarOff,
   CalendarPlus,
   CheckCircle2,
   Cigarette,
@@ -40,7 +42,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { BadgeTone } from "@/components/ui";
+import type { BadgeTone, BadgeVariant } from "@/components/ui";
 import type {
   RoomBoardRoom,
   RoomOccupancyStatus,
@@ -73,7 +75,9 @@ export function occupancyIcon(status: RoomOccupancyStatus): LucideIcon {
 }
 
 /** OPERATIONAL-status axis badge (available / dirty / cleaning / maintenance /
- * out_of_service / archived) — tone + icon, never colour alone (WCAG). */
+ * out_of_service / archived) — tone + icon, never colour alone (WCAG).
+ * §6.4: `out_of_service` reads DANGER (red), not neutral — an unusable room is
+ * an action-demanding state, mirrored by the danger card side-accent. */
 export function operationalTone(status: RoomStatus): BadgeTone {
   switch (status) {
     case "available":
@@ -85,10 +89,43 @@ export function operationalTone(status: RoomStatus): BadgeTone {
     case "maintenance":
       return "danger";
     case "out_of_service":
-      return "neutral";
+      return "danger";
     default:
       return "neutral"; // archived
   }
+}
+
+/** Badge WEIGHT for the occupancy axis (§6.4). The action-demanding "occupied"
+ * state is FILLED (strong); free / reserved stay soft so the two axes read at
+ * distinct weights (a soft amber "reserved" never collides with a filled amber
+ * "dirty" on the operational axis). */
+export function occupancyVariant(status: RoomOccupancyStatus): BadgeVariant {
+  return status === "occupied" ? "filled" : "soft";
+}
+
+/** Badge WEIGHT for the operational axis (§6.4): the states that demand action
+ * (dirty / maintenance / out_of_service) are FILLED with their tone colour;
+ * ready / cleaning / archived stay soft. */
+export function operationalVariant(status: RoomStatus): BadgeVariant {
+  switch (status) {
+    case "dirty":
+    case "maintenance":
+    case "out_of_service":
+      return "filled";
+    default:
+      return "soft"; // available (ready) / cleaning / archived
+  }
+}
+
+/** THIRD axis — BOOKABILITY (§6.3), derived from `available_now`. A secondary
+ * OUTLINE badge (icon + text) so it reads distinctly from the two primary
+ * (soft/filled) badges and never conveys meaning by colour alone. */
+export function bookabilityTone(availableNow: boolean): BadgeTone {
+  return availableNow ? "success" : "neutral";
+}
+
+export function bookabilityIcon(availableNow: boolean): LucideIcon {
+  return availableNow ? CalendarCheck : CalendarOff;
 }
 
 export function operationalIcon(status: RoomStatus): LucideIcon {

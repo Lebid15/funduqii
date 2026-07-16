@@ -163,6 +163,33 @@ export function updateRoom(
   });
 }
 
+/** Single-room DETAIL — the only shape that carries the §6.1 feature arrays
+ * (feature_additions / feature_exclusions / effective_features /
+ * inherited_features). The board + list responses omit the writable overrides,
+ * so the per-room feature editor reads the fresh detail here. */
+export function getRoom(id: number): Promise<Room> {
+  return hotelJson<Room>(`/rooms/${id}`);
+}
+
+/** ROOMS §6.1 per-room feature override write. PATCHes ONLY the two writable
+ * arrays under the existing `rooms.update` permission; reset-to-type = send both
+ * as `[]`. Server validation (both-lists / non-inherited exclusion) surfaces as
+ * `{details: {feature_additions|feature_exclusions: [...]}}`. */
+export interface RoomFeatureWriteBody {
+  feature_additions: string[];
+  feature_exclusions: string[];
+}
+
+export function updateRoomFeatures(
+  id: number,
+  body: RoomFeatureWriteBody,
+): Promise<Room> {
+  return hotelJson<Room>(`/rooms/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
 export function deleteRoom(id: number): Promise<void> {
   return hotelJson<void>(`/rooms/${id}`, { method: "DELETE" });
 }

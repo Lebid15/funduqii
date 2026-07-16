@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { RefreshCw } from "lucide-react";
 
-import { Badge, Button, Icon, Modal } from "@/components/ui";
+import { Button, Icon, Modal, StatusBadge } from "@/components/ui";
 import type { RoomBoardRoom } from "@/lib/api/types";
 import { formatCapacity, formatDate, formatMoney, roomStatusLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -11,11 +11,15 @@ import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
 import { AmenityChips } from "./AmenityChips";
 import {
+  bookabilityIcon,
+  bookabilityTone,
   buildRoomLinks,
   occupancyIcon,
   occupancyTone,
+  occupancyVariant,
   operationalIcon,
   operationalTone,
+  operationalVariant,
 } from "./boardShared";
 
 /** Full room details (owner spec) as a central Modal — identity, capacity,
@@ -89,15 +93,27 @@ export function RoomDetailsDrawer({
       }
     >
       <div className="stack">
+        {/* The three independent axes as central StatusBadges (§6.3): occupancy
+         * + operational + the bookability badge from `available_now`. */}
         <div className="cluster">
-          <Badge tone={occupancyTone(room.occupancy_status)}>
-            <Icon icon={occupancyIcon(room.occupancy_status)} size="sm" />
-            {t.rooms.occupancy[room.occupancy_status]}
-          </Badge>
-          <Badge tone={operationalTone(room.operational_status)}>
-            <Icon icon={operationalIcon(room.operational_status)} size="sm" />
-            {b.status[room.operational_status]}
-          </Badge>
+          <StatusBadge
+            tone={occupancyTone(room.occupancy_status)}
+            variant={occupancyVariant(room.occupancy_status)}
+            icon={occupancyIcon(room.occupancy_status)}
+            label={t.rooms.occupancy[room.occupancy_status]}
+          />
+          <StatusBadge
+            tone={operationalTone(room.operational_status)}
+            variant={operationalVariant(room.operational_status)}
+            icon={operationalIcon(room.operational_status)}
+            label={b.status[room.operational_status]}
+          />
+          <StatusBadge
+            tone={bookabilityTone(room.available_now)}
+            variant="outline"
+            icon={bookabilityIcon(room.available_now)}
+            label={room.available_now ? b.bookableNow : b.notBookable}
+          />
         </div>
         <dl className="room-op-details">
           {rows.map(([label, value]) => (
@@ -107,8 +123,10 @@ export function RoomDetailsDrawer({
             </div>
           ))}
         </dl>
-        {/* Full room-type amenity list (the card shows only the top few). */}
-        <AmenityChips amenities={room.amenities} label={b.roomTypeFeatures} />
+        {/* Full EFFECTIVE feature list (§6.1): the board `amenities` value is
+         * already type defaults − exclusions + additions, so an excluded feature
+         * is never shown. The card shows only the top few. */}
+        <AmenityChips amenities={room.amenities} label={b.roomFeatures} />
         <div className="cluster">
           {links.map((link) => (
             <Link key={link.key} href={link.href} className="btn btn--secondary btn--sm">
