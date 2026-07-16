@@ -99,8 +99,17 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.lineFull;
     case "arrival_date_in_future":
       return t.frontDesk.errors.arrivalFuture;
-    case "invalid_stay_change":
-      return t.frontDesk.errors.invalidStayChange;
+    case "invalid_stay_change": {
+      // Some stay-change rejections carry a stable `details.reason`; surface the
+      // rate-remediation "before check-in" case specifically (the rest stay generic).
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      return reason === "rate_remediation_before_check_in"
+        ? t.frontDesk.errors.rateBeforeCheckIn
+        : t.frontDesk.errors.invalidStayChange;
+    }
     case "folio_balance_outstanding":
       return t.frontDesk.errors.folioOutstanding;
     case "early_departure_reason_required":
@@ -115,6 +124,14 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.frontDesk.errors.rateCoversPostedNight;
     case "missing_agreed_nightly_rate":
       return t.frontDesk.errors.missingAgreedRate;
+    case "rate_remediation_requires_extension":
+      return t.frontDesk.errors.rateRequiresExtension;
+    // FIX-1 check-in currency guard (409): the booking's agreed currency cannot be
+    // reconciled with the folio/hotel currency (conflicting_line_currencies /
+    // missing_line_currency / existing_folio_currency). One operational message —
+    // no amounts — covers every reason; check-in is blocked and no folio is created.
+    case "folio_currency_mismatch":
+      return t.frontDesk.errors.folioCurrencyMismatch;
     case "guest_blocked":
       return t.guests.errors.blocked;
     case "block_reason_required":
@@ -144,6 +161,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
           return t.finance.errors.invalidExchangeRate;
         case "amount_out_of_range":
           return t.finance.errors.amountOutOfRange;
+        case "rate_currency_mismatch":
+          return t.finance.errors.rateCurrencyMismatch;
         default:
           return t.finance.errors.invalidOperation;
       }

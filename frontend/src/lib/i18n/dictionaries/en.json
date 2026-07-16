@@ -1519,7 +1519,10 @@
       "rateOverlap": "This rate window overlaps an existing rate period for this stay.",
       "rateConflict": "A different rate already exists for this start date.",
       "rateCoversPostedNight": "This window includes an already-billed night — narrow the dates.",
-      "missingAgreedRate": "This stay needs an agreed nightly rate before it can be billed or checked out."
+      "missingAgreedRate": "This stay needs an agreed nightly rate before it can be billed or checked out.",
+      "rateRequiresExtension": "These nights are on or after the planned check-out — extend the stay first, then they are priced by the extension.",
+      "rateBeforeCheckIn": "The rate window cannot start before the guest's check-in date.",
+      "folioCurrencyMismatch": "Check-in is blocked: the booking's agreed currency conflicts with the folio or hotel currency. Fix the pricing currency before checking in."
     },
     "workflow": {
       "arrivalsTitle": "Arrivals today",
@@ -1582,7 +1585,14 @@
       "reasonRequired": "A reason is required.",
       "rateInvalid": "Enter a nightly rate greater than zero.",
       "submit": "Save rate",
-      "blockedCheckout": "Check-out is blocked until this stay's rate is set."
+      "blockedCheckout": "Check-out is blocked until this stay's rate is set.",
+      "gapLabel": "Uncovered period {index} of {total}",
+      "prevGap": "Previous period",
+      "nextGap": "Next period",
+      "extensionRequiredTitle": "Extension required first",
+      "extensionRequiredBody": "These nights fall on or after the planned check-out. Extend the stay first — the extension then prices the added nights.",
+      "goToExtend": "Extend stay",
+      "remainingNote": "Rate set. {count} uncovered period(s) still need a rate."
     }
   },
   "finance": {
@@ -1822,6 +1832,7 @@
       "folioNotBalanced": "A folio can only be closed when its balance is zero.",
       "voidReasonRequired": "A reason is required to void this record.",
       "invalidOperation": "This financial operation is not allowed.",
+      "rateCurrencyMismatch": "The rate currency must match the stay's folio currency.",
       "invalidAmount": "The amount is not valid.",
       "voidWindowClosed": "This record's business day has been closed — post an adjustment (for charges) or a payment reversal instead of voiding.",
       "voidWindowOpen": "This record's business day is still open — void it instead.",

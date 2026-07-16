@@ -942,19 +942,46 @@ export interface Stay {
   updated_at: string;
 }
 
+/** One CONTIGUOUS gap of consumed nights lacking a positive rate — half-open
+ * `[start_date, end_date)` (end EXCLUSIVE), split at the planned-check-out
+ * boundary so each range is entirely within-plan or entirely overstay. This is
+ * NEVER the whole stay: it is the exact window the remediation form defaults to. */
+export interface MissingRateRange {
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * STAYS rate-integrity — the OPERATIONAL rate-coverage block (dates + flags, NOT
+ * money) merged into EVERY stay folio summary (card + checkout) for EVERY viewer,
+ * never gated behind `finance.view`. Backend-derived — never recomputed here.
+ */
+export interface RateCoverageFields {
+  /** True when any consumed billable night lacks positive-rate coverage. */
+  requires_rate_remediation: boolean;
+  /** The specific contiguous uncovered windows (end exclusive); empty when covered. */
+  missing_rate_ranges: MissingRateRange[];
+  /** True when a within-plan gap exists (directly remediable). */
+  remediation_allowed: boolean;
+  /** True when an overstay gap (at/after planned check-out) exists — the stay must
+   * be EXTENDED first before those nights can be priced. */
+  requires_extension_first: boolean;
+}
+
 /**
  * Operational-card finance block (§12) — a DISCRIMINATED UNION on
  * `financial_details_visible`. A finance viewer receives the full monetary
  * block; every other viewer receives ONLY abstract operational clearance states.
  * The monetary fields are OMITTED for a non-finance viewer (never zeroed), so
- * the UI can never print `0` for a hidden value.
+ * the UI can never print `0` for a hidden value. Both variants also carry the
+ * OPERATIONAL `RateCoverageFields` (dates/flags, not money).
  */
 export type StayFolioCardSummary =
   | StayFolioCardSummaryVisible
   | StayFolioCardSummaryHidden;
 
 /** Finance viewer — full monetary detail (backend derives it from the ledger). */
-export interface StayFolioCardSummaryVisible {
+export interface StayFolioCardSummaryVisible extends RateCoverageFields {
   financial_details_visible: true;
   folio_number: string;
   currency: string;
@@ -973,7 +1000,7 @@ export interface StayFolioCardSummaryVisible {
 }
 
 /** Non-finance viewer — abstract operational states only (no money at all). */
-export interface StayFolioCardSummaryHidden {
+export interface StayFolioCardSummaryHidden extends RateCoverageFields {
   financial_details_visible: false;
   /** True when balance is zero, no folio awaits final charges, no insurance held. */
   financial_clearance_complete: boolean;
@@ -992,7 +1019,7 @@ export interface StayFolioCardSummaryHidden {
  */
 export type StayFolioSummary = StayFolioSummaryVisible | StayFolioSummaryHidden;
 
-interface StayFolioSummaryBase {
+interface StayFolioSummaryBase extends RateCoverageFields {
   business_date: string;
   is_early_departure: boolean;
   has_folio: boolean;

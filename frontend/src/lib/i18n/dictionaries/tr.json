@@ -1519,7 +1519,10 @@
       "rateOverlap": "Bu dönem, bu konaklamanın mevcut bir ücret dönemiyle çakışıyor.",
       "rateConflict": "Bu başlangıç tarihi için farklı bir ücret zaten mevcut.",
       "rateCoversPostedNight": "Bu dönem, zaten faturalanmış bir gece içeriyor — tarihleri daraltın.",
-      "missingAgreedRate": "Bu konaklamanın faturalanmadan veya çıkış yapılmadan önce anlaşmalı bir gecelik ücrete ihtiyacı var."
+      "missingAgreedRate": "Bu konaklamanın faturalanmadan veya çıkış yapılmadan önce anlaşmalı bir gecelik ücrete ihtiyacı var.",
+      "rateRequiresExtension": "Bu geceler planlanan çıkış tarihinde veya sonrasında — önce konaklamayı uzatın, ardından uzatma ile fiyatlandırılır.",
+      "rateBeforeCheckIn": "Ücret dönemi, misafirin giriş tarihinden önce başlayamaz.",
+      "folioCurrencyMismatch": "Giriş engellendi: rezervasyonun anlaşmalı para birimi, folio veya otel para birimiyle çelişiyor. Giriş yapmadan önce fiyatlandırma para birimini düzeltin."
     },
     "workflow": {
       "arrivalsTitle": "Bugünkü girişler",
@@ -1582,7 +1585,14 @@
       "reasonRequired": "Sebep zorunludur.",
       "rateInvalid": "Sıfırdan büyük bir gecelik ücret girin.",
       "submit": "Ücreti kaydet",
-      "blockedCheckout": "Bu konaklamanın ücreti belirlenene kadar çıkış engellidir."
+      "blockedCheckout": "Bu konaklamanın ücreti belirlenene kadar çıkış engellidir.",
+      "gapLabel": "Kapsanmayan dönem {index}/{total}",
+      "prevGap": "Önceki dönem",
+      "nextGap": "Sonraki dönem",
+      "extensionRequiredTitle": "Önce uzatma gerekir",
+      "extensionRequiredBody": "Bu geceler planlanan çıkış tarihinde veya sonrasında. Önce konaklamayı uzatın — uzatma, eklenen geceleri fiyatlandırır.",
+      "goToExtend": "Konaklamayı uzat",
+      "remainingNote": "Ücret belirlendi. Hâlâ {count} kapsanmayan dönemin ücrete ihtiyacı var."
     }
   },
   "finance": {
@@ -1822,6 +1832,7 @@
       "folioNotBalanced": "Folyo yalnızca bakiyesi sıfırken kapatılabilir.",
       "voidReasonRequired": "Bu kaydı iptal etmek için bir neden gerekir.",
       "invalidOperation": "Bu finansal işleme izin verilmiyor.",
+      "rateCurrencyMismatch": "Ücret para birimi, konaklamanın folio para birimiyle eşleşmelidir.",
       "invalidAmount": "Tutar geçersiz.",
       "voidWindowClosed": "Bu kaydın iş günü kapatıldı — iptal yerine düzeltme (ücretler için) veya ödeme ters kaydı işleyin.",
       "voidWindowOpen": "Bu kaydın iş günü hâlâ açık — bunun yerine iptal kullanın.",

@@ -78,6 +78,7 @@ import { messageForError } from "@/lib/api/errors";
 import type {
   AdmissibleRoom,
   Guest,
+  MissingRateRange,
   Reservation,
   Stay,
   StayFolioCardSummary,
@@ -721,6 +722,11 @@ function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey:
       />
       <RemediateRateModal
         stay={remediateTarget}
+        onExtend={
+          can("stays.extend")
+            ? () => { const s = remediateTarget; setRemediateTarget(null); setExtendTarget(s); }
+            : undefined
+        }
         onClose={() => setRemediateTarget(null)}
         onDone={done(setRemediateTarget)}
       />
@@ -1109,6 +1115,9 @@ function CheckOutModal({
   const [done, setDone] = useState(false);
   const [departedAt, setDepartedAt] = useState<string | null>(null);
   const [printMode, setPrintMode] = useState<"preliminary" | "final" | null>(null);
+  // In-checkout rate remediation (a `stays.rate_override` holder fixes the blocking
+  // gap without leaving the dialog; on success the checkout summary is refetched).
+  const [remediateOpen, setRemediateOpen] = useState(false);
   // A single inline action form is open at a time (settle / refund / insurance).
   const [action, setAction] = useState<{ kind: CoActionKind; id: number } | null>(null);
   const [amountField, setAmountField] = useState("");
@@ -1211,10 +1220,16 @@ function CheckOutModal({
   // shown state may be understated). Cancel is never blocked.
   const canDepart = summary !== null && (finSummary ? canDepartFinance : summary.can_check_out);
   // STAYS rate-integrity — a "stuck" stay (a consumed night with no agreed rate)
-  // is refused server-side (MissingAgreedNightlyRate, 409). Block the confirm
-  // button locally too and show a clear reason so the agent remediates the rate
-  // first. This is an OPERATIONAL flag on the stay (not finance-gated).
-  const rateRemediationNeeded = stay?.requires_rate_remediation ?? false;
+  // is refused server-side (MissingAgreedNightlyRate, 409). Prefer the FRESH
+  // operational rate-coverage from the (post-ensure) summary, falling back to the
+  // stay's own flag; block the confirm button locally too and show clear guidance.
+  // These are OPERATIONAL flags/dates (never money), present for every viewer.
+  const rateRemediationNeeded =
+    summary?.requires_rate_remediation ?? stay?.requires_rate_remediation ?? false;
+  const rateRemediationAllowed = summary?.remediation_allowed ?? false;
+  const rateRequiresExtension = summary?.requires_extension_first ?? false;
+  const missingRateRanges =
+    summary?.missing_rate_ranges ?? stay?.folio_summary?.missing_rate_ranges ?? [];
   const blocked = !canDepart || ensureFailed || rateRemediationNeeded;
 
   function openSettle(folioId: number, folioBalance: string) {
@@ -1407,7 +1422,24 @@ function CheckOutModal({
         <div className="stack">
           {error ? <Alert tone="error">{error}</Alert> : null}
           {rateRemediationNeeded ? (
-            <Alert tone="warning">{t.frontDesk.rateRemediation.blockedCheckout}</Alert>
+            <div className="stack" style={{ gap: "0.5rem" }}>
+              <Alert tone="warning">{t.frontDesk.rateRemediation.blockedCheckout}</Alert>
+              {/* A `stays.rate_override` holder can fix the blocking gap right here;
+                  everyone else sees only the operational guidance (never money). */}
+              {can("stays.rate_override") ? (
+                rateRemediationAllowed ? (
+                  <div className="row">
+                    <Button type="button" size="sm" icon={Coins} onClick={() => setRemediateOpen(true)}>
+                      {t.frontDesk.rateRemediation.setRate}
+                    </Button>
+                  </div>
+                ) : rateRequiresExtension ? (
+                  <Alert tone="info">
+                    <strong>{t.frontDesk.rateRemediation.extensionRequiredTitle}</strong> — {t.frontDesk.rateRemediation.extensionRequiredBody}
+                  </Alert>
+                ) : null
+              ) : null}
+            </div>
           ) : null}
           <Alert tone="info">{c.body}</Alert>
           {ensureFailed ? (
@@ -1558,6 +1590,17 @@ function CheckOutModal({
         folioId={finSummary?.open_folios[0]?.id ?? null}
         mode={printMode ?? "preliminary"}
         onClose={() => setPrintMode(null)}
+      />
+      <RemediateRateModal
+        stay={remediateOpen ? stay : null}
+        ranges={missingRateRanges}
+        onClose={() => setRemediateOpen(false)}
+        onDone={() => {
+          // Fully remediated — refetch the checkout summary so the dialog
+          // re-evaluates readiness (the newly-priced night is posted by ensure).
+          setRemediateOpen(false);
+          if (stay) void runEnsure(stay.id);
+        }}
       />
     </Modal>
   );
@@ -1910,39 +1953,64 @@ function MoveRoomModal({
 
 /**
  * A LIMITED corrective form (NOT a price-management page): a `stays.rate_override`
- * holder sets the missing agreed nightly rate for a "stuck" stay's uncovered
- * window. The frontend NEVER computes night charges — it only records the agreed
- * rate; the backend re-checks the permission, requires the reason, and enforces
- * that the currency matches the folio. On success the parent refetches the folio +
- * operational state (via `onDone`). The period defaults to the stay's own dates
- * (the backend does not expose the specific uncovered nights on the serializer).
+ * holder sets the missing agreed nightly rate for a stay's SPECIFIC uncovered
+ * window(s). It opens on a specific `missing_rate_range` (default dates = that gap,
+ * NEVER the whole stay) and steps through multiple gaps. The frontend NEVER
+ * computes night charges — it only records the agreed rate; the backend re-checks
+ * the permission, requires the reason, and enforces the folio currency. After each
+ * success it REFETCHES the operational state: it stays open (reflecting the
+ * remaining gaps) while `requires_rate_remediation` is still true, and only signals
+ * overall success (`onDone`) once every gap is covered. An OVERSTAY gap (at/after
+ * planned check-out) is not directly remediable — it shows extension guidance
+ * (and, when wired, an Extend action) instead of the rate form.
  */
 function RemediateRateModal({
   stay,
+  ranges,
+  onExtend,
   onClose,
   onDone,
 }: {
   stay: Stay | null;
+  ranges?: MissingRateRange[] | null;
+  onExtend?: () => void;
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useI18n();
   const rr = t.frontDesk.rateRemediation;
+  const [gaps, setGaps] = useState<MissingRateRange[]>([]);
+  const [idx, setIdx] = useState(0);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [rate, setRate] = useState("");
   const [currency, setCurrency] = useState("");
   const [reason, setReason] = useState("");
   const [triedSubmit, setTriedSubmit] = useState(false);
+  const [remaining, setRemaining] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const open = stay !== null;
 
+  // Seed the form from a SPECIFIC gap (never the whole stay). Currency is prefilled
+  // once on open, so stepping between gaps never clears it.
+  function seedFrom(gap: MissingRateRange | undefined) {
+    setStartDate(gap?.start_date ?? "");
+    setEndDate(gap?.end_date ?? "");
+    setRate("");
+    setReason("");
+    setTriedSubmit(false);
+  }
+
   useEffect(() => {
     if (!open || !stay) return;
-    setStartDate(stay.planned_check_in_date);
-    setEndDate(stay.planned_check_out_date);
-    setRate("");
+    // Prefer the caller's explicit ranges (e.g. the fresher checkout summary), else
+    // the stay's own card folio summary. NEVER the whole-stay window.
+    const initial = ranges ?? stay.folio_summary?.missing_rate_ranges ?? [];
+    setGaps(initial);
+    setIdx(0);
+    seedFrom(initial[0]);
+    setRemaining(null);
     // Prefill the currency from the folio when the viewer can see it (finance
     // viewer); a rate_override-only viewer types it and the backend validates it
     // against the folio currency.
@@ -1951,10 +2019,18 @@ function RemediateRateModal({
         ? stay.folio_summary
         : null;
     setCurrency(fin?.currency ?? "");
-    setReason("");
-    setTriedSubmit(false);
     setError(null);
+    setBusy(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/stay drive the seed
   }, [open, stay]);
+
+  const active = gaps[idx] ?? null;
+  // An OVERSTAY gap starts at/after the planned check-out (the backend splits gaps
+  // at that boundary). Date-only compare — no money is computed here.
+  const overstay =
+    active !== null && stay !== null
+      ? active.start_date >= stay.planned_check_out_date
+      : false;
 
   const reasonMissing = !reason.trim();
   // Inline positive-rate guard — block submit locally (the backend also enforces a
@@ -1967,9 +2043,15 @@ function RemediateRateModal({
   const incomplete =
     reasonMissing || rateInvalid || !currency.trim() || !startDate || !endDate;
 
+  function goto(next: number) {
+    setIdx(next);
+    seedFrom(gaps[next]);
+    setError(null);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!stay) return;
+    if (!stay || overstay || !active) return;
     setTriedSubmit(true);
     if (incomplete) return;
     setBusy(true);
@@ -1982,7 +2064,18 @@ function RemediateRateModal({
         currency: currency.trim(),
         reason: reason.trim(),
       });
-      onDone();
+      // REFETCH the operational state. Do NOT signal overall success while the stay
+      // still needs remediation (other gaps remain) — reflect the remaining gaps.
+      const fresh = await getStayFolioSummary(stay.id);
+      if (!fresh.requires_rate_remediation) {
+        onDone();
+        return;
+      }
+      const nextGaps = fresh.missing_rate_ranges;
+      setGaps(nextGaps);
+      setIdx(0);
+      seedFrom(nextGaps[0]);
+      setRemaining(nextGaps.length);
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -1997,14 +2090,26 @@ function RemediateRateModal({
       title={`${rr.title} · ${stay?.room_number ?? ""}`}
       closeLabel={t.common.close}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
-          <Button form="remediate-form" type="submit" loading={busy}>{rr.submit}</Button>
-        </>
+        overstay ? (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.close}</Button>
+            {onExtend ? (
+              <Button icon={CalendarPlus} onClick={onExtend}>{rr.goToExtend}</Button>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+            <Button form="remediate-form" type="submit" loading={busy} disabled={!active}>{rr.submit}</Button>
+          </>
+        )
       }
     >
       <form id="remediate-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
+        {remaining !== null && remaining > 0 ? (
+          <Alert tone="success">{rr.remainingNote.replace("{count}", String(remaining))}</Alert>
+        ) : null}
         <Alert tone="info">{rr.hint}</Alert>
         {stay ? (
           <dl className="detail-grid">
@@ -2012,33 +2117,54 @@ function RemediateRateModal({
             <div><dt>{t.frontDesk.checkOutModal.room}</dt><dd>{stay.room_number}</dd></div>
           </dl>
         ) : null}
-        <div className="line-row">
-          <FormField label={rr.periodStart} htmlFor="rr-start">
-            <Input id="rr-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-          </FormField>
-          <FormField label={rr.periodEnd} htmlFor="rr-end">
-            <Input id="rr-end" type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} />
-          </FormField>
-        </div>
-        <div className="line-row">
-          <FormField
-            label={rr.rate}
-            htmlFor="rr-rate"
-            error={triedSubmit && rateInvalid ? rr.rateInvalid : undefined}
-          >
-            <Input id="rr-rate" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
-          </FormField>
-          <FormField label={rr.currency} htmlFor="rr-currency">
-            <Input id="rr-currency" value={currency} maxLength={3} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
-          </FormField>
-        </div>
-        <FormField
-          label={rr.reason}
-          htmlFor="rr-reason"
-          error={triedSubmit && reasonMissing ? rr.reasonRequired : undefined}
-        >
-          <Input id="rr-reason" value={reason} required onChange={(e) => setReason(e.target.value)} />
-        </FormField>
+        {gaps.length > 1 ? (
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+            <span className="muted small">
+              {rr.gapLabel.replace("{index}", String(idx + 1)).replace("{total}", String(gaps.length))}
+            </span>
+            <div className="cluster" style={{ gap: "0.35rem" }}>
+              <Button type="button" size="sm" variant="ghost" disabled={idx === 0} onClick={() => goto(idx - 1)}>{rr.prevGap}</Button>
+              <Button type="button" size="sm" variant="ghost" disabled={idx >= gaps.length - 1} onClick={() => goto(idx + 1)}>{rr.nextGap}</Button>
+            </div>
+          </div>
+        ) : null}
+        {overstay ? (
+          // An overstay gap cannot be priced directly — the backend rejects it with
+          // `rate_remediation_requires_extension`; guide the agent to extend first.
+          <Alert tone="warning">
+            <strong>{rr.extensionRequiredTitle}</strong> — {rr.extensionRequiredBody}
+          </Alert>
+        ) : (
+          <>
+            <div className="line-row">
+              <FormField label={rr.periodStart} htmlFor="rr-start">
+                <Input id="rr-start" type="date" value={startDate} min={active?.start_date} max={active?.end_date} onChange={(e) => setStartDate(e.target.value)} />
+              </FormField>
+              <FormField label={rr.periodEnd} htmlFor="rr-end">
+                <Input id="rr-end" type="date" value={endDate} min={startDate || active?.start_date} max={active?.end_date} onChange={(e) => setEndDate(e.target.value)} />
+              </FormField>
+            </div>
+            <div className="line-row">
+              <FormField
+                label={rr.rate}
+                htmlFor="rr-rate"
+                error={triedSubmit && rateInvalid ? rr.rateInvalid : undefined}
+              >
+                <Input id="rr-rate" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+              </FormField>
+              <FormField label={rr.currency} htmlFor="rr-currency">
+                <Input id="rr-currency" value={currency} maxLength={3} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
+              </FormField>
+            </div>
+            <FormField
+              label={rr.reason}
+              htmlFor="rr-reason"
+              error={triedSubmit && reasonMissing ? rr.reasonRequired : undefined}
+            >
+              <Input id="rr-reason" value={reason} required onChange={(e) => setReason(e.target.value)} />
+            </FormField>
+          </>
+        )}
       </form>
     </Modal>
   );
