@@ -482,8 +482,7 @@
         "allExcluded": "Tüm devralınan özellikler kapalı.",
         "effectivePreview": "Etkin özellikler",
         "noneEffective": "Özellik yok.",
-        "errorBothLists": "Bir özellik hem eklenip hem çıkarılamaz.",
-        "errorNotInherited": "Yalnızca oda türünün kendi özellikleri çıkarılabilir."
+        "errorBothLists": "Bir özellik hem eklenip hem çıkarılamaz."
       },
       "amenity": {
         "ac": "Klima",

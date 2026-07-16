@@ -32,10 +32,10 @@ import { amenityIcon } from "./boardShared";
  *   • EXCLUDED: inherited features you turned off — struck through and
  *     restorable.
  * "Reset to type defaults" clears both override lists. Save PATCHes ONLY the two
- * writable arrays via `updateRoomFeatures`; the server's both-lists /
- * non-inherited-exclusion validation errors surface inline. The modal reads the
- * FRESH single-room detail on open (the board / list Room shapes omit the
- * writable arrays), so the caller need only pass the room id + number.
+ * writable arrays via `updateRoomFeatures`; the server's both-lists validation
+ * error surfaces inline. The modal reads the FRESH single-room detail on open
+ * (the board / list Room shapes omit the writable arrays), so the caller need
+ * only pass the room id + number.
  */
 export function RoomFeatureEditorModal({
   open,
@@ -121,13 +121,11 @@ export function RoomFeatureEditorModal({
   }
 
   /** Map the server's field-keyed 400 details to a translated inline message.
-   * The normalize helper raises the both-lists conflict on `feature_additions`
-   * and the non-inherited-exclusion on `feature_exclusions`. */
+   * The normalize helper raises the both-lists conflict on `feature_additions`. */
   function describeError(err: unknown): string {
     if (isApiError(err) && err.details && typeof err.details === "object") {
       const d = err.details as Record<string, unknown>;
       if ("feature_additions" in d) return f.errorBothLists;
-      if ("feature_exclusions" in d) return f.errorNotInherited;
     }
     return messageForError(err, t);
   }

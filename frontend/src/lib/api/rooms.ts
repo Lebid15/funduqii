@@ -173,8 +173,8 @@ export function getRoom(id: number): Promise<Room> {
 
 /** ROOMS §6.1 per-room feature override write. PATCHes ONLY the two writable
  * arrays under the existing `rooms.update` permission; reset-to-type = send both
- * as `[]`. Server validation (both-lists / non-inherited exclusion) surfaces as
- * `{details: {feature_additions|feature_exclusions: [...]}}`. */
+ * as `[]`. The both-lists conflict surfaces as
+ * `{details: {feature_additions: [...]}}`. */
 export interface RoomFeatureWriteBody {
   feature_additions: string[];
   feature_exclusions: string[];

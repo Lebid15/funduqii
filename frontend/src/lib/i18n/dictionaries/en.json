@@ -482,8 +482,7 @@
         "allExcluded": "All inherited features are turned off.",
         "effectivePreview": "Effective features",
         "noneEffective": "No features.",
-        "errorBothLists": "A feature can't be both added and excluded.",
-        "errorNotInherited": "Only the room type's own features can be excluded."
+        "errorBothLists": "A feature can't be both added and excluded."
       },
       "amenity": {
         "ac": "Air Conditioning",
