@@ -36,7 +36,10 @@
   /* --- Text --------------------------------------------------------- */
   --color-fg: #15211d;
   --color-fg-muted: #566159;
-  --color-fg-subtle: #909a90;
+  /* Subtle text (placeholders, captions). Darkened from the former #909a90
+     (2.91:1 on white — failed WCAG AA for text) to #6b766e (4.73:1 on white)
+     so subtle *text* is legible; stays in the same warm green-gray family. */
+  --color-fg-subtle: #6b766e;
   --color-fg-inverse: #ffffff;
 
   /* --- Feedback (calm, not neon) ------------------------------------ */
@@ -60,6 +63,18 @@
   --color-warning-strong: #8a5a12;
   --color-danger-strong: #b5352f;
   --color-info-strong: #2257c4;
+
+  /* --- VIP accent (CENTRAL-DESIGN-SYSTEM §6) -------------------------------
+     A DEDICATED premium tone for the VIP marker so it is never the `warning`
+     (amber) semantic tone (owner decision). A refined amethyst, distinct from
+     every feedback tone and from the teal brand. Contrast (verified):
+       vip-strong on vip-soft  6.80:1  (soft-badge text, AA)
+       white on vip-strong     7.95:1  (filled badge, AA)
+       vip-strong on white     7.95:1  (outline badge, AA)
+     Owner to confirm the exact hue; the token structure stays the same. */
+  --color-vip: #6a3fb0;
+  --color-vip-soft: #f0ebfa;
+  --color-vip-strong: #5f3aa6;
 
   /* --- Gradients (soft, premium) ------------------------------------ */
   --gradient-brand: linear-gradient(135deg, #0e7c72 0%, #0a544e 100%);

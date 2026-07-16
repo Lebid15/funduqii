@@ -9,9 +9,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Icon } from "@/components/ui";
+import { SmartStatCard, type SmartStatTone } from "@/components/ui";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { cx } from "@/lib/utils";
 
 /** Which summary card is active. "" is the Total card (clears status AND
  * source); "website" is a SOURCE card (source=public_website), not a status. */
@@ -39,7 +38,7 @@ interface CardDef {
     | "cancelledCaption"
     | "websiteCaption";
   icon: LucideIcon;
-  tone: string;
+  tone: SmartStatTone;
 }
 
 const CARDS: CardDef[] = [
@@ -96,7 +95,8 @@ const CARDS: CardDef[] = [
  * distributed across the status counts — it is NEVER summed into the status
  * math, which the caption + the group hint make explicit. Each card highlights
  * with text/icon/ring (never colour alone). Clicking Total (or the active card)
- * clears both status and source. */
+ * clears both status and source. Rendered via the central {@link SmartStatCard};
+ * the grid container + source tag/frame + filter logic stay here. */
 export function ReservationSummaryCards({
   counts,
   active,
@@ -115,33 +115,20 @@ export function ReservationSummaryCards({
     <div className="stack-tight">
       <div className="board-stats board-stats--5" role="group" aria-label={c.groupLabel}>
         {CARDS.map((card) => {
-          const isActive = active === card.key;
-          const value = counts[card.countKey];
           const isSource = card.dimension === "source";
           return (
-            <button
+            <SmartStatCard
               key={card.labelKey}
-              type="button"
-              className={cx(
-                "board-stat",
-                isSource && "board-stat--source",
-                isActive && "board-stat--active",
-              )}
-              aria-pressed={isActive}
+              icon={card.icon}
+              tone={card.tone}
+              value={counts[card.countKey] ?? "…"}
+              label={c[card.labelKey]}
+              caption={c[card.captionKey]}
+              active={active === card.key}
               onClick={() => onSelect(card.key)}
-            >
-              <span className="board-stat__head">
-                <span className={cx("board-stat__icon", `board-stat__icon--${card.tone}`)}>
-                  <Icon icon={card.icon} size="md" />
-                </span>
-                {isSource ? (
-                  <span className="board-stat__tag">{c.sourceTag}</span>
-                ) : null}
-              </span>
-              <span className="board-stat__value">{value ?? "…"}</span>
-              <span className="board-stat__label">{c[card.labelKey]}</span>
-              <span className="board-stat__caption">{c[card.captionKey]}</span>
-            </button>
+              tag={isSource ? c.sourceTag : undefined}
+              className={isSource ? "board-stat--source" : undefined}
+            />
           );
         })}
       </div>

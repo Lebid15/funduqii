@@ -33,8 +33,7 @@
     "optional": "İsteğe bağlı",
     "unlimited": "Sınırsız",
     "createdAt": "Oluşturuldu",
-    "updatedAt": "Güncellendi",
-    "refresh": "Yenile"
+    "updatedAt": "Güncellendi"
   },
   "nav": {
     "dashboard": "Panel",
@@ -2975,6 +2974,7 @@
     "title": "Bildirimler ve etkinlik",
     "subtitle": "Bu otelde dikkatinizi bekleyenler — harici kanal yok.",
     "bell": "Bildirimler",
+    "bellUnread": "Bildirimler, {count} okunmamış",
     "tabs": {
       "overview": "Genel bakış",
       "inbox": "Bildirimler",

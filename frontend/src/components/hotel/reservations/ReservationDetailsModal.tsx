@@ -30,6 +30,7 @@ import {
   PaymentStatusBadge,
   SectionCard,
   Select,
+  StatusBadge,
   useToast,
 } from "@/components/ui";
 import {
@@ -300,9 +301,10 @@ export function ReservationDetailsModal({
         {/* Overview */}
         <SectionCard title={d.sectionOverview} icon={ClipboardList}>
           <div className="cluster">
-            <Badge tone={reservationStatusTone(r.status)}>
-              {reservationStatusLabel(r.status, t)}
-            </Badge>
+            <StatusBadge
+              tone={reservationStatusTone(r.status)}
+              label={reservationStatusLabel(r.status, t)}
+            />
             {/* §25 — the STAY status is a SEPARATE badge (never conflated with
                 the reservation status): a guest may be in-house while the
                 booking still reads "confirmed". */}

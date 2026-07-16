@@ -278,7 +278,7 @@ function GuestLookupFeedback({
         <div key={match.id} className="line-row">
           <span className="cluster">
             <strong>{match.full_name || "—"}</strong>
-            {match.is_vip ? <Badge tone="info">{g.vip}</Badge> : null}
+            {match.is_vip ? <Badge tone="vip">{g.vip}</Badge> : null}
             {match.is_blocked ? (
               <Badge tone="danger">{g.blockedBadge}</Badge>
             ) : null}

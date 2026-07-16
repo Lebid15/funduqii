@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Eye, Plus, Printer, X } from "lucide-react";
 
-import { Alert, Badge, Button, IconButton, useToast } from "@/components/ui";
+import { Alert, Badge, Button, IconButton, StatusBadge, useToast } from "@/components/ui";
 import { messageForError } from "@/lib/api/errors";
 import type { Reservation, ReservationFinancialSummary } from "@/lib/api/types";
 import {
@@ -573,22 +573,20 @@ export function ReservationFormShell({
                   <div className="resform-success__item">
                     <dt>{sc.status}</dt>
                     <dd>
-                      <Badge
+                      <StatusBadge
                         tone={reservationStatusTone(success.reservation.status)}
-                      >
-                        {reservationStatusLabel(success.reservation.status, t)}
-                      </Badge>
+                        label={reservationStatusLabel(success.reservation.status, t)}
+                      />
                     </dd>
                   </div>
                   {success.reservation.stay_status ? (
                     <div className="resform-success__item">
                       <dt>{sc.stayStatus}</dt>
                       <dd>
-                        <Badge
+                        <StatusBadge
                           tone={stayStatusTone(success.reservation.stay_status)}
-                        >
-                          {stayStatusLabel(success.reservation.stay_status, t)}
-                        </Badge>
+                          label={stayStatusLabel(success.reservation.stay_status, t)}
+                        />
                       </dd>
                     </div>
                   ) : null}
