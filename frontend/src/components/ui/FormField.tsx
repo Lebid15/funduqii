@@ -50,7 +50,12 @@ export function FormField({
 
   // Only enhance when there is exactly one valid element child; otherwise fall
   // back to the untouched legacy behaviour (label + text, no injection).
-  const onlyChild = Children.count(children) === 1 ? Children.only(children) : null;
+  // Resolve the lone child via Children.toArray (never Children.only, which
+  // throws when the single child is a non-element such as a string, number or
+  // false). A non-element single child stays null here and falls through to the
+  // legacy path below.
+  const childArray = Children.toArray(children);
+  const onlyChild = childArray.length === 1 ? childArray[0] : null;
   const childEl = isValidElement(onlyChild)
     ? (onlyChild as ReactElement<FieldChildProps>)
     : null;
