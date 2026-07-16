@@ -48,17 +48,28 @@ def _clean_feature_list(value, field_name: str) -> list[str]:
 
 
 def normalize_room_feature_overrides(
-    additions, exclusions, type_amenities
+    additions, exclusions
 ) -> tuple[list[str], list[str]]:
-    """Clean + validate a room's ``feature_additions`` / ``feature_exclusions``
-    against its type defaults (``type_amenities``). Returns the cleaned pair or
-    raises a field-scoped ``ValidationError``. Rules (§6.1):
+    """Clean + validate a room's PERMANENT ``feature_additions`` /
+    ``feature_exclusions`` overrides (§6.1). Returns the cleaned pair or raises
+    a field-scoped ``ValidationError``.
 
-    * each list is normalized by :func:`_clean_feature_list`;
-    * a feature MUST NOT appear in BOTH lists (no contradiction);
-    * an exclusion MUST name a feature that exists in the type defaults —
-      excluding something the type never had is meaningless and rejected,
-      keeping stored deltas clean.
+    Per the owner's semantic decision, additions and exclusions are PERMANENT
+    per-room overrides — they are NOT validated against the room type's current
+    amenities. An exclusion MAY be *dormant*: it can name a feature that is not
+    currently in the type. A dormant exclusion has no effect right now, is
+    PRESERVED (never auto-cleaned or silently dropped), and REACTIVATES
+    automatically if that feature later returns to the type.
+
+    Rules enforced here:
+
+    * each list is normalized by :func:`_clean_feature_list` (trim, drop
+      blanks, dedupe WITHIN the list, order preserved);
+    * a feature MUST NOT appear in BOTH lists (no contradiction).
+
+    The effective merge lives solely on :attr:`Room.effective_features`, which
+    ignores a dormant exclusion at read time (it only drops features actually
+    present in the live type) and reactivates it if the feature returns.
     """
     additions = _clean_feature_list(additions, "feature_additions")
     exclusions = _clean_feature_list(exclusions, "feature_exclusions")
@@ -71,19 +82,6 @@ def normalize_room_feature_overrides(
                 "feature_additions": (
                     "A feature cannot be both added and excluded: "
                     + ", ".join(conflicts)
-                    + "."
-                )
-            }
-        )
-
-    type_features = {a for a in (type_amenities or []) if isinstance(a, str)}
-    unknown = [f for f in exclusions if f not in type_features]
-    if unknown:
-        raise serializers.ValidationError(
-            {
-                "feature_exclusions": (
-                    "Can only exclude features inherited from the room type: "
-                    + ", ".join(unknown)
                     + "."
                 )
             }
@@ -267,11 +265,11 @@ class RoomSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         # Only relevant if this serializer is ever used for a write; the live
-        # write path is RoomWriteSerializer. room_type is read-only here, so the
-        # type defaults come from the existing instance.
+        # write path is RoomWriteSerializer. Overrides are PERMANENT per-room
+        # deltas (§6.1) — validated for per-list cleaning + no-contradiction
+        # only, never against the type's current amenities (dormant exclusions
+        # are allowed and preserved).
         if "feature_additions" in attrs or "feature_exclusions" in attrs:
-            room_type = getattr(self.instance, "room_type", None)
-            type_amenities = room_type.amenities if room_type else []
             additions, exclusions = normalize_room_feature_overrides(
                 attrs.get(
                     "feature_additions",
@@ -281,7 +279,6 @@ class RoomSerializer(serializers.ModelSerializer):
                     "feature_exclusions",
                     getattr(self.instance, "feature_exclusions", []),
                 ),
-                type_amenities,
             )
             attrs["feature_additions"] = additions
             attrs["feature_exclusions"] = exclusions
@@ -361,12 +358,14 @@ class RoomWriteSerializer(serializers.ModelSerializer):
             ).strip():
                 raise StatusNoteRequired({"status": initial_status})
 
-        # §6.1 feature overrides — normalized + validated together (whenever
-        # either list is submitted) against the resolved room type, so the
-        # no-contradiction and exclusions⊆type invariants always hold. A
-        # partial PATCH of one list re-checks it against the stored other list.
+        # §6.1 feature overrides — PERMANENT per-room deltas, normalized +
+        # validated together (whenever either list is submitted): per-list
+        # string cleaning + the no-contradiction rule only. Exclusions are NOT
+        # checked against the type's current amenities — a dormant exclusion (a
+        # feature not currently in the type) is accepted, preserved, and
+        # reactivates if the feature returns. A partial PATCH of one list
+        # re-checks it against the stored other list.
         if "feature_additions" in attrs or "feature_exclusions" in attrs:
-            type_amenities = room_type.amenities if room_type is not None else []
             additions, exclusions = normalize_room_feature_overrides(
                 attrs.get(
                     "feature_additions",
@@ -376,7 +375,6 @@ class RoomWriteSerializer(serializers.ModelSerializer):
                     "feature_exclusions",
                     getattr(self.instance, "feature_exclusions", []) or [],
                 ),
-                type_amenities,
             )
             attrs["feature_additions"] = additions
             attrs["feature_exclusions"] = exclusions

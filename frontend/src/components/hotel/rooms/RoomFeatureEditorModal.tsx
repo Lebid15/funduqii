@@ -70,12 +70,13 @@ export function RoomFeatureEditorModal({
       .then((room) => {
         const inh = room.inherited_features ?? [];
         setInherited(inh);
-        // Keep the three sections mutually exclusive and valid-by-construction:
-        // additions never include an inherited feature; exclusions are only
-        // inherited features (a stale exclusion left over from a since-changed
-        // room type is dropped, matching the server's effective-features read).
-        setAdditions((room.feature_additions ?? []).filter((x) => !inh.includes(x)));
-        setExclusions((room.feature_exclusions ?? []).filter((x) => inh.includes(x)));
+        // The two override lists are PERMANENT per-room state (owner rule): keep
+        // them intact — a DORMANT exclusion (a feature not currently in the type)
+        // and a redundant addition are PRESERVED here and re-sent on save, never
+        // silently dropped. Only the DISPLAY derivations below filter against the
+        // live inherited set.
+        setAdditions(room.feature_additions ?? []);
+        setExclusions(room.feature_exclusions ?? []);
       })
       .catch((err) => setError(messageForError(err, t)))
       .finally(() => setLoading(false));
@@ -85,13 +86,16 @@ export function RoomFeatureEditorModal({
   const label = (key: string) => amenityLabels[key] ?? key;
 
   const activeInherited = inherited.filter((k) => !exclusions.includes(k));
+  // DISPLAY-only view of the additions: a redundant addition that the type now
+  // provides is hidden from the ADDED section + preview (it's already shown as
+  // inherited) but stays in `additions` state so save preserves it.
+  const addedRoomSpecific = additions.filter((k) => !inherited.includes(k));
   // The picker offers catalog features the type does NOT already provide and the
-  // room has not already added — so an addition can never collide with an
-  // exclusion (exclusions are inherited-only).
+  // room has not already added (checked against the FULL additions state).
   const available = AMENITY_KEYS.filter(
     (k) => !inherited.includes(k) && !additions.includes(k),
   );
-  const effective = [...activeInherited, ...additions];
+  const effective = [...activeInherited, ...addedRoomSpecific];
 
   function excludeFeature(key: string) {
     setError(null);
@@ -228,9 +232,9 @@ export function RoomFeatureEditorModal({
               onChange={(e) => addFeature(e.target.value)}
             />
           </FormField>
-          {additions.length > 0 ? (
+          {addedRoomSpecific.length > 0 ? (
             <ul className="feature-chip-list">
-              {additions.map((key) => (
+              {addedRoomSpecific.map((key) => (
                 <li key={key} className="feature-chip">
                   <Icon icon={Check} size="sm" className="feature-chip__icon" />
                   <span>{label(key)}</span>

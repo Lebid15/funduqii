@@ -1677,10 +1677,19 @@ class RoomEffectiveFeaturesTests(APITestCase):
         self.assertEqual(self.room.feature_additions, [])
         self.assertEqual(self.room.feature_exclusions, [])
 
-    def test_excluding_non_type_feature_rejected(self):
+    def test_excluding_non_type_feature_accepted_as_dormant(self):
+        # §6.1 (owner semantic): exclusions are PERMANENT per-room overrides. An
+        # exclusion MAY name a feature that is NOT currently in the type — a
+        # "dormant" exclusion. It is ACCEPTED and PERSISTED, has no effect on
+        # the current effective list, and would reactivate if the feature later
+        # returns to the type. No auto-cleanup, no silent drop.
         res = self._patch({"feature_exclusions": ["sauna"]})
-        self.assertEqual(res.status_code, 400)
-        self.assertIn("feature_exclusions", res.data["details"])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["feature_exclusions"], ["sauna"])
+        # Nothing currently in the type is named, so effective still mirrors it.
+        self.assertEqual(res.data["effective_features"], ["wifi", "tv", "ac"])
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])
 
     def test_non_list_feature_rejected(self):
         res = self._patch({"feature_additions": "balcony"})
@@ -1689,6 +1698,51 @@ class RoomEffectiveFeaturesTests(APITestCase):
     def test_non_string_feature_rejected(self):
         res = self._patch({"feature_additions": [123]})
         self.assertEqual(res.status_code, 400)
+
+    # --- API: permanent-override lifecycle (§6.1 owner semantic) -------------
+
+    def test_permanent_exclusion_lifecycle_reactivates(self):
+        # End-to-end proof that an exclusion is a PERMANENT per-room override
+        # that survives type changes and reactivates when the feature returns.
+        #
+        # 1) Exclude an INHERITED feature -> stored + dropped from effective.
+        res = self._patch({"feature_exclusions": ["ac"]})
+        self.assertEqual(res.status_code, 200)
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+
+        # 2) Remove the feature FROM THE TYPE -> the exclusion is PRESERVED
+        #    (now dormant) and effective simply no longer lists it.
+        self.rtype.amenities = ["wifi", "tv"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])  # still stored
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+        self.assertNotIn("ac", self.room.effective_features)
+
+        # 3) Re-add the feature TO THE TYPE -> the STORED exclusion REACTIVATES
+        #    and drops it from effective again (no re-save of the room needed).
+        self.rtype.amenities = ["wifi", "tv", "ac"]
+        self.rtype.save()
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["ac"])  # never cleaned
+        self.assertEqual(self.room.effective_features, ["wifi", "tv"])
+        self.assertNotIn("ac", self.room.effective_features)
+
+    def test_patch_other_fields_preserves_dormant_exclusion(self):
+        # A dormant exclusion (feature not currently in the type) must survive a
+        # PATCH that changes only OTHER fields — overrides are not resubmitted,
+        # so they are neither re-validated nor dropped.
+        self._patch({"feature_exclusions": ["sauna"]})
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])
+
+        res = self._patch({"display_name": "Corner Suite"})
+        self.assertEqual(res.status_code, 200)
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.display_name, "Corner Suite")
+        self.assertEqual(self.room.feature_exclusions, ["sauna"])  # preserved
 
     # --- API: permissions + tenancy -----------------------------------------
 
