@@ -93,13 +93,16 @@ export default function ReservationsPage() {
       {/* The list stays MOUNTED across surface switches (hidden under the
           availability engine) so its filters, modals and the in-progress
           create/edit wizard survive; returning to the tab pulls the latest via a
-          refresh signal WITHOUT remounting. The availability engine is an
-          on-demand query (state lost on surface switch anyway); it is rendered
-          without a remount key so an in-progress search survives a tab-return. */}
+          refresh signal WITHOUT remounting. The availability engine shares that
+          refresh signal: it never auto-queries before the first user search, but
+          once a search has run, a tab-return RE-RUNS THAT SAME search in place
+          (non-destructive — the form/filters and last results are preserved). */}
       <div style={{ display: surface === "availability" ? "none" : undefined }}>
         <ReservationsTab refreshSignal={refreshKey} createSignal={createSignal} />
       </div>
-      {surface === "availability" ? <AvailabilityTab /> : null}
+      {surface === "availability" ? (
+        <AvailabilityTab refreshSignal={refreshKey} />
+      ) : null}
     </PageContainer>
   );
 }

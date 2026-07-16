@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { CalendarSearch, Search } from "lucide-react";
 
 import {
@@ -16,7 +16,7 @@ import {
   SectionHeader,
 } from "@/components/ui";
 import { cx } from "@/lib/utils";
-import { checkAvailability } from "@/lib/api/reservations";
+import { checkAvailability, type AvailabilityParams } from "@/lib/api/reservations";
 import { listRoomTypes } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type { RoomType, TypeAvailability } from "@/lib/api/types";
@@ -24,7 +24,11 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 
 /** Backend-driven availability checker. The server computes availability; this
  * only renders the result — it never decides bookability itself. */
-export function AvailabilityTab() {
+export function AvailabilityTab({
+  refreshSignal = 0,
+}: {
+  refreshSignal?: number;
+}) {
   const { t } = useI18n();
   const [types, setTypes] = useState<RoomType[]>([]);
   const [checkIn, setCheckIn] = useState("");
@@ -42,30 +46,69 @@ export function AvailabilityTab() {
       .catch(() => setTypes([]));
   }, []);
 
-  async function submit(event: FormEvent) {
+  // The exact criteria of the LAST executed search. A tab-return refetch re-runs
+  // THIS query (not the half-edited form inputs), so the grid stays in sync with
+  // what the operator actually asked for. Null until the first search → nothing
+  // can fire on mount (availability needs the user's dates first).
+  const lastQuery = useRef<AvailabilityParams | null>(null);
+
+  // One request path for both the user's submit and the background tab-return
+  // refetch. `background` makes failure NON-DESTRUCTIVE: the previously shown
+  // results stay on screen and only the error Alert updates; a user-initiated
+  // submit keeps its original behavior of clearing results on error.
+  const runSearch = useCallback(
+    async (params: AvailabilityParams, opts?: { background?: boolean }) => {
+      setError(null);
+      setBusy(true);
+      try {
+        const res = await checkAvailability(params);
+        setResults(res.results);
+      } catch (err) {
+        setError(messageForError(err, t));
+        if (!opts?.background) setResults(null);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [t],
+  );
+
+  function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     if (!checkIn || !checkOut) {
       setError(t.errors.validation);
       return;
     }
-    setBusy(true);
-    try {
-      const res = await checkAvailability({
-        check_in_date: checkIn,
-        check_out_date: checkOut,
-        adults: Number(adults) || undefined,
-        children: Number(children) || undefined,
-        room_type: roomType ? Number(roomType) : undefined,
-      });
-      setResults(res.results);
-    } catch (err) {
-      setError(messageForError(err, t));
-      setResults(null);
-    } finally {
-      setBusy(false);
-    }
+    const params: AvailabilityParams = {
+      check_in_date: checkIn,
+      check_out_date: checkOut,
+      adults: Number(adults) || undefined,
+      children: Number(children) || undefined,
+      room_type: roomType ? Number(roomType) : undefined,
+    };
+    // Record the SUBMITTED criteria as the "last query" before running it, so a
+    // later tab-return re-runs exactly this (not whatever the form holds then).
+    lastQuery.current = params;
+    runSearch(params);
   }
+
+  // The page pulses `refreshSignal` when the operator returns to this tab
+  // (visibilitychange). IF a search has already run, re-run THAT exact query in
+  // place — no remount, no form/filter reset, last results kept on failure.
+  // Consume real increments only (the initial value must not fire on mount). If a
+  // signal lands WHILE a request is in flight it is intentionally skipped, not
+  // queued: that in-flight request is already fetching fresh data, so a second
+  // pass would be a redundant/overlapping request. The next tab-return refreshes.
+  const lastRefreshSignal = useRef(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal !== lastRefreshSignal.current) {
+      lastRefreshSignal.current = refreshSignal;
+      if (lastQuery.current && !busy) {
+        runSearch(lastQuery.current, { background: true });
+      }
+    }
+  }, [refreshSignal, busy, runSearch]);
 
   const typeOptions = types.map((ty) => ({ value: String(ty.id), label: ty.name }));
 
