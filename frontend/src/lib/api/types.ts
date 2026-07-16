@@ -918,24 +918,163 @@ export interface Stay {
   checked_in_by: string | null;
   checked_out_by: string | null;
   guests: StayGuestLink[];
+  /** Count of the linked reservation's documents (§13) — 0 for a walk-in. */
+  document_count: number;
+  /**
+   * Operational-card finance block (§12) — present only on the front-desk
+   * resident/departure lists. A DISCRIMINATED UNION on `financial_details_visible`:
+   * a finance viewer (`finance.view`) gets the full monetary block; every other
+   * viewer gets only abstract operational clearance states (no amounts, currency,
+   * folio number or payment status). Null when the stay has no open folio.
+   * Derived from the folio ledger; the client never recomputes it.
+   */
+  folio_summary?: StayFolioCardSummary | null;
+  /**
+   * STAYS rate-integrity remediation — an OPERATIONAL flag (NOT finance-gated):
+   * true when an in-house stay has a DUE/consumed billable night with no
+   * positive-rate coverage (a "stuck" stay). Such a stay blocks check-out and its
+   * folio must never be shown as settled/zero; a `stays.rate_override` holder can
+   * remediate it via POST /stays/<id>/remediate-rate/. Backend-derived — never
+   * recomputed on the client.
+   */
+  requires_rate_remediation: boolean;
   created_at: string;
   updated_at: string;
 }
 
-/** GET /stays/<id>/folio-summary — check-out dialog context. */
-export interface StayFolioSummary {
+/** One CONTIGUOUS gap of consumed nights lacking a positive rate — half-open
+ * `[start_date, end_date)` (end EXCLUSIVE), split at the planned-check-out
+ * boundary so each range is entirely within-plan or entirely overstay. This is
+ * NEVER the whole stay: it is the exact window the remediation form defaults to. */
+export interface MissingRateRange {
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * STAYS rate-integrity — the OPERATIONAL rate-coverage block (dates + flags, NOT
+ * money) merged into EVERY stay folio summary (card + checkout) for EVERY viewer,
+ * never gated behind `finance.view`. Backend-derived — never recomputed here.
+ */
+export interface RateCoverageFields {
+  /** True when any consumed billable night lacks positive-rate coverage. */
+  requires_rate_remediation: boolean;
+  /** The specific contiguous uncovered windows (end exclusive); empty when covered. */
+  missing_rate_ranges: MissingRateRange[];
+  /** True when a within-plan gap exists (directly remediable). */
+  remediation_allowed: boolean;
+  /** True when an overstay gap (at/after planned check-out) exists — the stay must
+   * be EXTENDED first before those nights can be priced. */
+  requires_extension_first: boolean;
+}
+
+/**
+ * Operational-card finance block (§12) — a DISCRIMINATED UNION on
+ * `financial_details_visible`. A finance viewer receives the full monetary
+ * block; every other viewer receives ONLY abstract operational clearance states.
+ * The monetary fields are OMITTED for a non-finance viewer (never zeroed), so
+ * the UI can never print `0` for a hidden value. Both variants also carry the
+ * OPERATIONAL `RateCoverageFields` (dates/flags, not money).
+ */
+export type StayFolioCardSummary =
+  | StayFolioCardSummaryVisible
+  | StayFolioCardSummaryHidden;
+
+/** Finance viewer — full monetary detail (backend derives it from the ledger). */
+export interface StayFolioCardSummaryVisible extends RateCoverageFields {
+  financial_details_visible: true;
+  folio_number: string;
+  currency: string;
+  total_charges: string;
+  total_payments: string;
+  balance: string;
+  /** Derived from the folio's own totals (§12). `overpaid` = credit/refund-due. */
+  payment_status: "paid" | "partial" | "unpaid" | "overpaid";
+  awaiting_final_charges: boolean;
+  /** The stay's CURRENT nightly rate (the latest rate period's rate/currency —
+   * the value an extension defaults from) so the extend dialog can SHOW it.
+   * finance.view ONLY; NULL when the stay has no rate period. Backend-derived —
+   * NEVER recomputed on the client. */
+  current_nightly_rate: string | null;
+  current_rate_currency: string | null;
+}
+
+/** Non-finance viewer — abstract operational states only (no money at all). */
+export interface StayFolioCardSummaryHidden extends RateCoverageFields {
+  financial_details_visible: false;
+  /** True when balance is zero, no folio awaits final charges, no insurance held. */
+  financial_clearance_complete: boolean;
+  /** True when the account still needs a finance action before departure. */
+  requires_financial_action: boolean;
+}
+
+/**
+ * GET /stays/<id>/folio-summary and POST /stays/<id>/ensure-room-charges — the
+ * check-out dialog context. A DISCRIMINATED UNION on `financial_details_visible`.
+ * The base fields (including the backend-authoritative `can_check_out`) are
+ * always present; a finance viewer additionally receives the monetary block
+ * (balances, insurances). A non-finance viewer receives a money-free
+ * `open_folios` skeleton and no balance/insurance fields — they are OMITTED,
+ * never zeroed.
+ */
+export type StayFolioSummary = StayFolioSummaryVisible | StayFolioSummaryHidden;
+
+interface StayFolioSummaryBase extends RateCoverageFields {
   business_date: string;
   is_early_departure: boolean;
   has_folio: boolean;
+  /** True when balance is zero, nothing awaits final charges, no insurance held. */
+  financial_clearance_complete: boolean;
+  /** True when a finance action is still required before departure. */
+  requires_financial_action: boolean;
+  /** Backend-authoritative checkout readiness — the UI gates the confirm button
+   * on this (NOT a money-derived flag), so a non-finance actor can still depart a
+   * financially-cleared stay. */
+  can_check_out: boolean;
+  /** True when any open folio is still flagged awaiting final charges (§32). */
+  awaiting_final_charges: boolean;
+}
+
+/** Finance viewer — full monetary detail. */
+export interface StayFolioSummaryVisible extends StayFolioSummaryBase {
+  financial_details_visible: true;
   open_folios: {
     id: number;
     folio_number: string;
     status: string;
     currency: string;
     balance: string;
+    awaiting_final_charges: boolean;
+    awaiting_final_charges_note: string;
   }[];
   /** Total balance across the stay's OPEN folios ("0" when settled/none). */
   balance: string;
+  /** Refundable insurance held against the stay (§35). */
+  insurances: {
+    id: number;
+    currency: string;
+    amount: string;
+    deducted_amount: string;
+    refunded_amount: string;
+    held_amount: string;
+    status: "held" | "refunded" | "partially_deducted" | "consumed";
+  }[];
+  /** True when any insurance still has a held amount awaiting settlement. */
+  insurance_pending: boolean;
+  /** The stay's CURRENT nightly rate (latest rate period rate/currency — the
+   * value an extension defaults from) so the extend dialog can SHOW it.
+   * finance.view ONLY; NULL when the stay has no rate period. Backend-derived —
+   * NEVER recomputed on the client. */
+  current_nightly_rate: string | null;
+  current_rate_currency: string | null;
+}
+
+/** Non-finance viewer — money-free operational skeleton. Item 10: NO folio list
+ * (`open_folios`) at all — it leaked internal financial identifiers (folio id +
+ * folio_number). Only the abstract operational states on the base survive; no
+ * amount, currency, folio number, or nightly rate is ever sent. */
+export interface StayFolioSummaryHidden extends StayFolioSummaryBase {
+  financial_details_visible: false;
 }
 
 /** GET /stays/check-in-rooms and /stays/<id>/move-candidates. */

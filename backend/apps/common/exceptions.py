@@ -426,6 +426,12 @@ class InvalidReservationTransition(FunduqiiAPIException):
     default_code = "invalid_reservation_transition"
 
 
+class NoShowReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to mark a reservation as a no-show."
+    default_code = "no_show_reason_required"
+
+
 class CancellationReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A cancellation reason is required."
@@ -519,6 +525,26 @@ class InvalidStayChange(FunduqiiAPIException):
     default_code = "invalid_stay_change"
 
 
+class ReverseCheckInReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to reverse a check-in."
+    default_code = "reverse_check_in_reason_required"
+
+
+class ReverseCheckInDayClosed(FunduqiiAPIException):
+    """A check-in cannot be reversed once its room-night charges fall in a closed
+    business day (STAYS-ARRIVALS-DEPARTURES): voiding closed financial history is
+    not allowed here. A correction after the day closed needs a separate
+    accounting-correction cycle with its own permission — out of this scope."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This check-in cannot be reversed: its room charges are in a closed "
+        "business day. Use an accounting correction instead."
+    )
+    default_code = "reverse_check_in_day_closed"
+
+
 class FolioBalanceOutstanding(FunduqiiAPIException):
     """Check-out is blocked while the stay's open folio holds a non-zero
     balance — settlement happens in Finance, never at the front desk."""
@@ -529,6 +555,31 @@ class FolioBalanceOutstanding(FunduqiiAPIException):
         "before check-out."
     )
     default_code = "folio_balance_outstanding"
+
+
+class InsuranceNotSettled(FunduqiiAPIException):
+    """Check-out is blocked while a refundable insurance held against the stay is
+    not fully refunded or settled (STAYS-ARRIVALS-DEPARTURES §35/§38)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay has refundable insurance that is not yet refunded or settled. "
+        "Handle the insurance before check-out."
+    )
+    default_code = "insurance_not_settled"
+
+
+class FolioAwaitingFinalCharges(FunduqiiAPIException):
+    """Check-out is blocked while reception is still confirming the stay's final
+    charges (STAYS-ARRIVALS-DEPARTURES §32) — the folio must not close until the
+    final charges (restaurant / services / minibar / damages) are confirmed."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay's folio is awaiting final charges. Confirm the final charges "
+        "before check-out."
+    )
+    default_code = "folio_awaiting_final_charges"
 
 
 class EarlyDepartureReasonRequired(FunduqiiAPIException):
@@ -604,6 +655,90 @@ class InvalidAmount(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "The amount is not valid."
     default_code = "invalid_amount"
+
+
+class FolioCurrencyMismatch(FunduqiiAPIException):
+    """The stay's folio currency cannot be resolved/honored (STAYS rate-integrity —
+    the folio adopts the BOOKING's agreed currency, never auto-converted).
+
+    ``details.reason`` is one of: ``conflicting_line_currencies`` (the reservation's
+    priced lines disagree), ``missing_line_currency`` (a priced line has no agreed
+    currency), or ``existing_folio_currency`` (a folio already exists in a different
+    currency — never silently changed). Check-in is blocked; no folio is created."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "The stay's agreed currency conflicts with its folio; resolve the "
+        "currency before check-in."
+    )
+    default_code = "folio_currency_mismatch"
+
+
+class MissingAgreedNightlyRate(FunduqiiAPIException):
+    """A due room night has NO covering rate period with a POSITIVE agreed rate —
+    either no period covers it, or the covering period's rate is NULL (agreed price
+    MISSING, never a free night). The posting service raises this (rather than
+    falling back to the live catalog rate or silently posting zero) so a checkout /
+    daily close cannot settle short: the night must be given a positive rate
+    (booking snapshot / extension / override / remediation) before it can be
+    billed. ``details`` carries the ``stay`` and the missing ``room_night``.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This stay has a room night with no agreed nightly rate. Set the room "
+        "rate before posting charges, checking out, or closing the day."
+    )
+    default_code = "missing_agreed_nightly_rate"
+
+
+class RatePeriodOverlap(FunduqiiAPIException):
+    """A new stay rate period would overlap an existing one for the same stay.
+    Rate periods per stay must be non-overlapping half-open ranges ``[start, end)``;
+    the central rate-period service refuses any intersecting write."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This rate period overlaps an existing period for the stay."
+    default_code = "rate_period_overlap"
+
+
+class RatePeriodConflict(FunduqiiAPIException):
+    """A rate period already exists at ``(stay, start_date)`` with DIFFERENT data
+    (rate / currency / end_date / source). The central service refuses a silent
+    no-op that would drop the requested change — an IDENTICAL re-request stays
+    idempotent; a conflicting one must be resolved explicitly."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "A different rate period already exists for this stay at that start date."
+    )
+    default_code = "rate_period_conflict"
+
+
+class RateRemediationRequiresExtension(FunduqiiAPIException):
+    """A rate-remediation window falls at/after the stay's planned check-out (an
+    overstay range). Those nights cannot be given a rate period directly — the stay
+    must be EXTENDED first (which adds the priced period for the added window)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This range is at/after the planned check-out; extend the stay first, "
+        "then it is priced by the extension."
+    )
+    default_code = "rate_remediation_requires_extension"
+
+
+class RatePeriodCoversPostedNight(FunduqiiAPIException):
+    """A rate-remediation window covers a night that already has a POSTED room
+    charge. Remediation only fills FUTURE/unbilled coverage gaps — it never
+    back-dates or rewrites an already-billed night (correct that in finance)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This rate window covers a night that has already been billed. "
+        "Remediation cannot change an already-posted room night."
+    )
+    default_code = "rate_period_covers_posted_night"
 
 
 # --- Finance (folio final closure round) --------------------------------------
@@ -857,7 +992,14 @@ def funduqii_exception_handler(exc, context):
 
     detail = getattr(exc, "detail", None)
     payload = {"code": _extract_code(exc), "message": _flatten_message(detail)}
-    if isinstance(detail, (list, dict)):
+    # FIX 3 — a money-linked checkout/immediate-check-in error sanitized for a
+    # non-finance viewer attaches a RAW dict of operational flags via
+    # ``_sanitized_details``. Use it verbatim (so booleans stay booleans and no
+    # money/folio figure leaks) instead of the ErrorDetail-wrapped ``detail``.
+    sanitized = getattr(exc, "_sanitized_details", None)
+    if sanitized is not None:
+        payload["details"] = sanitized
+    elif isinstance(detail, (list, dict)):
         payload["details"] = detail
 
     response.data = payload

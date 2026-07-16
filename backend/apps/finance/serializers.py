@@ -10,8 +10,24 @@ from .models import (
     Invoice,
     InvoiceLine,
     Payment,
+    RefundableInsurance,
 )
 from .services import folio_balance
+
+
+class InsuranceSerializer(serializers.ModelSerializer):
+    held_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = RefundableInsurance
+        fields = [
+            "id", "reservation", "stay", "currency", "amount",
+            "deducted_amount", "refunded_amount", "held_amount", "status",
+            "method", "reference", "notes", "received_at", "settled_at",
+        ]
+        read_only_fields = fields
 
 
 class FolioChargeSerializer(serializers.ModelSerializer):

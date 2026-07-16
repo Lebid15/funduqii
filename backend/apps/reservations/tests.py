@@ -8,6 +8,7 @@ no hard delete, status logs, overbooking prevention), and regressions.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 from django.test import TestCase
 from django.urls import reverse
@@ -2127,3 +2128,295 @@ class LegacyAssignmentModeTests(APITestCase):
         res = self._create(body)
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.json()["lines"][0]["room"], self.rooms[0].id)
+
+
+class NoShowTests(APITestCase):
+    """§29 — mark an expected arrival as a no-show: guarded, soft, frees inventory."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "ns@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.rooms = make_rooms(self.hotel, self.rtype, 1)
+
+    def _res(self, *, ci, number="R-NS"):
+        res = Reservation.objects.create(
+            hotel=self.hotel, reservation_number=number,
+            status=ReservationStatus.CONFIRMED, booking_kind="future",
+            check_in_date=ci, check_out_date=ci + timedelta(days=1),
+            primary_guest_name="NS Guest",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=self.hotel, reservation=res, room_type=self.rtype,
+            room=self.rooms[0], quantity=1,
+        )
+        return res
+
+    def test_mark_no_show_transitions_and_frees_inventory(self):
+        from apps.reservations.availability import blocking_q
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1))  # arrival long past
+        mark_no_show(res, reason="did not arrive", user=self.manager)
+        res.refresh_from_db()
+        self.assertEqual(res.status, ReservationStatus.NO_SHOW)
+        self.assertEqual(res.no_show_reason, "did not arrive")
+        # NO_SHOW is non-blocking: excluded from the availability engine.
+        self.assertFalse(
+            Reservation.objects.filter(blocking_q(), pk=res.pk).exists()
+        )
+
+    def test_no_show_requires_reason(self):
+        from apps.common.exceptions import NoShowReasonRequired
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-R")
+        with self.assertRaises(NoShowReasonRequired):
+            mark_no_show(res, reason="  ", user=self.manager)
+
+    def test_cannot_no_show_a_future_arrival(self):
+        from apps.common.exceptions import InvalidReservationTransition
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=D1, number="R-NS-F")  # D1 is a future date
+        with self.assertRaises(InvalidReservationTransition):
+            mark_no_show(res, reason="did not arrive", user=self.manager)
+
+    def test_cannot_no_show_a_reservation_with_a_stay(self):
+        from apps.common.exceptions import ReservationHasActiveStay
+        from apps.reservations.services import mark_no_show
+
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-S")
+        line = res.lines.get()
+        make_stay(self.hotel, res, line, self.rooms[0], status=StayStatus.IN_HOUSE)
+        with self.assertRaises(ReservationHasActiveStay):
+            mark_no_show(res, reason="did not arrive", user=self.manager)
+
+    def test_no_show_endpoint(self):
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-API")
+        self.client.force_authenticate(self.manager)
+        resp = self.client.post(
+            reverse("reservations:reservation-no-show", args=[res.id]),
+            {"reason": "did not arrive"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "no_show")
+
+    def test_no_show_endpoint_requires_permission(self):
+        res = self._res(ci=date(2020, 1, 1), number="R-NS-PERM")
+        viewer = add_member(self.hotel, "ns-viewer@x.com", perms=["reservations.view"])
+        self.client.force_authenticate(viewer)
+        resp = self.client.post(
+            reverse("reservations:reservation-no-show", args=[res.id]),
+            {"reason": "x"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
+class AgreedRateSnapshotPolicyTests(APITestCase):
+    """STAYS item 6 — update_reservation snapshot policy: PRESERVE on a same-type
+    replacement / guest edit / date change; CAPTURE the new type's base_rate on a
+    genuine type change; a manual DIFFERENT rate needs stays.rate_override + reason;
+    a stay-linked reservation is never re-priced."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "sp-mgr@x.com", kind=MembershipType.MANAGER)
+        self.rt_a = make_type(self.hotel, code="A", base_rate="100.00")
+        self.rt_b = make_type(self.hotel, code="B", base_rate="180.00")
+        make_rooms(self.hotel, self.rt_a, 2, start=101)
+        make_rooms(self.hotel, self.rt_b, 2, start=201)
+
+    def _create(self):
+        from apps.reservations.services import create_reservation
+
+        return create_reservation(
+            self.hotel,
+            lines=[{"room_type": self.rt_a, "quantity": 1}],
+            status=ReservationStatus.CONFIRMED,
+            user=self.manager,
+            check_in_date=D1, check_out_date=D2, primary_guest_name="G",
+        )
+
+    def test_guest_edit_preserves_rate(self):
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        RoomType.objects.filter(pk=self.rt_a.pk).update(base_rate=Decimal("999.00"))
+        update_reservation(res, primary_guest_name="New Name", user=self.manager)
+        self.assertEqual(res.lines.get().agreed_nightly_rate, Decimal("100.00"))
+
+    def test_date_change_same_type_preserves_rate(self):
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        RoomType.objects.filter(pk=self.rt_a.pk).update(base_rate=Decimal("999.00"))
+        update_reservation(
+            res,
+            lines=[{"room_type": self.rt_a, "quantity": 1}],
+            check_in_date=D1, check_out_date=D3, user=self.manager,
+        )
+        self.assertEqual(res.lines.get().agreed_nightly_rate, Decimal("100.00"))
+
+    def test_type_change_captures_new_rate(self):
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        update_reservation(
+            res, lines=[{"room_type": self.rt_b, "quantity": 1}], user=self.manager,
+        )
+        line = res.lines.get()
+        self.assertEqual(line.room_type_id, self.rt_b.id)
+        self.assertEqual(line.agreed_nightly_rate, Decimal("180.00"))
+
+    def test_same_type_multiple_lines_preserve_each_snapshot(self):
+        # FIX A — two lines of the SAME RoomType at DIFFERENT agreed rates
+        # (default 100 + audited override 150). A later edit re-creating both lines
+        # must preserve BOTH snapshots by position — never collapse onto the first.
+        from apps.reservations.services import create_reservation, update_reservation
+
+        res = create_reservation(
+            self.hotel,
+            lines=[
+                {"room_type": self.rt_a, "quantity": 1},
+                {
+                    "room_type": self.rt_a, "quantity": 1,
+                    "agreed_nightly_rate": Decimal("150.00"),
+                    "rate_override_reason": "vip",
+                },
+            ],
+            status=ReservationStatus.CONFIRMED,
+            user=self.manager,
+            check_in_date=D1, check_out_date=D2, primary_guest_name="G", adults=2,
+        )
+        self.assertEqual(
+            sorted(str(ln.agreed_nightly_rate) for ln in res.lines.all()),
+            ["100.00", "150.00"],
+        )
+        # Move the catalog, then a DATE edit re-submitting both same-type lines.
+        RoomType.objects.filter(pk=self.rt_a.pk).update(base_rate=Decimal("999.00"))
+        update_reservation(
+            res,
+            lines=[
+                {"room_type": self.rt_a, "quantity": 1},
+                {"room_type": self.rt_a, "quantity": 1},
+            ],
+            check_in_date=D1, check_out_date=D3, user=self.manager,
+        )
+        # BOTH snapshots preserved — the audited override (150) is NOT dropped.
+        self.assertEqual(
+            sorted(str(ln.agreed_nightly_rate) for ln in res.lines.all()),
+            ["100.00", "150.00"],
+        )
+
+    def test_override_without_permission_rejected(self):
+        from apps.common.exceptions import PermissionDenied
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        clerk = add_member(self.hotel, "sp-clerk@x.com", perms=["reservations.update"])
+        with self.assertRaises(PermissionDenied):
+            update_reservation(
+                res,
+                lines=[{
+                    "room_type": self.rt_a, "quantity": 1,
+                    "agreed_nightly_rate": Decimal("150.00"),
+                    "rate_override_reason": "vip",
+                }],
+                user=clerk,
+            )
+
+    def test_override_without_reason_rejected(self):
+        from rest_framework.exceptions import ValidationError
+
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        with self.assertRaises(ValidationError):
+            update_reservation(
+                res,
+                lines=[{
+                    "room_type": self.rt_a, "quantity": 1,
+                    "agreed_nightly_rate": Decimal("150.00"),
+                    "rate_override_reason": "",
+                }],
+                user=self.manager,
+            )
+
+    def test_override_with_permission_and_reason_captured(self):
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        update_reservation(
+            res,
+            lines=[{
+                "room_type": self.rt_a, "quantity": 1,
+                "agreed_nightly_rate": Decimal("150.00"),
+                "rate_override_reason": "vip rate",
+            }],
+            user=self.manager,
+        )
+        self.assertEqual(res.lines.get().agreed_nightly_rate, Decimal("150.00"))
+
+    def test_stay_linked_reservation_not_repriced(self):
+        from apps.common.exceptions import ReservationHasActiveStay
+        from apps.reservations.services import update_reservation
+
+        res = self._create()
+        room = Room.objects.filter(hotel=self.hotel, room_type=self.rt_a).first()
+        Stay.objects.create(
+            hotel=self.hotel, reservation=res, room=room,
+            primary_guest=Guest.objects.create(hotel=self.hotel, full_name="S"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1, planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        with self.assertRaises(ReservationHasActiveStay):
+            update_reservation(
+                res, lines=[{"room_type": self.rt_b, "quantity": 1}], user=self.manager,
+            )
+        self.assertEqual(res.lines.get().agreed_nightly_rate, Decimal("100.00"))
+
+
+class ReservationNumberHardeningTests(TestCase):
+    """STAYS item 9 — ``_next_reservation_number`` ignores non ``^R[0-9]+$`` values
+    (PG-safe) and never modifies/deletes them."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="rn")
+
+    def _mk(self, number):
+        return Reservation.objects.create(
+            hotel=self.hotel, reservation_number=number,
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=D1, check_out_date=D2, primary_guest_name="G",
+        )
+
+    def test_advances_from_existing_numbers(self):
+        from apps.reservations.services import _next_reservation_number
+
+        self._mk("R00001")
+        self._mk("R00125")
+        self.assertEqual(_next_reservation_number(self.hotel), "R00126")
+
+    def test_stray_prefix_is_ignored(self):
+        from apps.reservations.services import _next_reservation_number
+
+        self._mk("R00005")
+        stray = self._mk("RB00099")  # imported/corrupt — ignored, not broken
+        self.assertEqual(_next_reservation_number(self.hotel), "R00006")
+        stray.refresh_from_db()  # untouched
+        self.assertEqual(stray.reservation_number, "RB00099")
+
+    def test_only_stray_starts_at_one(self):
+        from apps.reservations.services import _next_reservation_number
+
+        self._mk("RB00099")  # only a non-matching value -> ignored
+        self.assertEqual(_next_reservation_number(self.hotel), "R00001")
+
+    def test_huge_number_does_not_overflow(self):
+        # FIX F — a matching-but-huge tail (> 2^31-1) must not overflow the cast.
+        from apps.reservations.services import _next_reservation_number
+
+        self._mk("R3000000000")  # 3e9 > 2147483647
+        self.assertEqual(_next_reservation_number(self.hotel), "R3000000001")

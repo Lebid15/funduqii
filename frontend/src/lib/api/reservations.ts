@@ -196,6 +196,17 @@ export function cancelReservation(
   });
 }
 
+/** Mark an expected arrival as a no-show (§29) — a mandatory reason. */
+export function markNoShow(
+  id: number,
+  reason: string,
+): Promise<Reservation> {
+  return hotelJson<Reservation>(`/reservations/${id}/no-show`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
 export function getReservationLogs(
   id: number,
 ): Promise<ReservationStatusLogEntry[]> {

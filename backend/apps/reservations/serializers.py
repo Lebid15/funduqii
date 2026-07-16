@@ -8,6 +8,7 @@ the services/availability layer inside a transaction.
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 
 from django.utils import timezone
 
@@ -484,6 +485,21 @@ class ReservationLineWriteSerializer(serializers.Serializer):
     adults = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     children = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     notes = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    # STAYS rate-integrity remediation (item 6) — an OPTIONAL explicit agreed rate.
+    # Absent -> the snapshot policy applies (preserve on same RoomType, capture the
+    # new type's base_rate on a type change). A value that DIFFERS from that default
+    # is an OVERRIDE requiring ``stays.rate_override`` + a reason (enforced in the
+    # service). Strictly positive.
+    agreed_nightly_rate = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=Decimal("0.01"),
+    )
+    rate_override_reason = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""
     )
 

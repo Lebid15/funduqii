@@ -19,11 +19,11 @@ export function ActionCard({ icon, title, description, meta, action }: ActionCar
       <span className="action-card__icon">
         <Icon icon={icon} size="md" />
       </span>
-      <span className="action-card__main">
+      <div className="action-card__main">
         <strong className="action-card__title">{title}</strong>
         {description ? <span className="muted">{description}</span> : null}
-        {meta ? <span className="action-card__meta">{meta}</span> : null}
-      </span>
+        {meta ? <div className="action-card__meta">{meta}</div> : null}
+      </div>
       {action ? <span className="action-card__action">{action}</span> : null}
     </div>
   );

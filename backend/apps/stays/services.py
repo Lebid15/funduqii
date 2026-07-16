@@ -30,10 +30,14 @@ from apps.common.exceptions import (
     ArrivalDateInFuture,
     CrossTenantReference,
     EarlyDepartureReasonRequired,
+    FolioAwaitingFinalCharges,
     FolioBalanceOutstanding,
+    InsuranceNotSettled,
     InvalidCheckIn,
     InvalidCheckOut,
     InvalidStayChange,
+    PermissionDenied,
+    ReverseCheckInReasonRequired,
     ReservationLineFull,
     RoomAssignmentConflict,
     RoomNotReady,
@@ -52,7 +56,28 @@ from apps.rooms.models import Room, RoomStatus
 from apps.rooms.services import change_room_status
 from apps.shifts.services import get_business_date
 
-from .models import Stay, StayGuest, StayGuestRole, StayStatus, StayStatusLog
+from .models import (
+    Stay,
+    StayGuest,
+    StayGuestRole,
+    StayRatePeriod,
+    StayRatePeriodSource,
+    StayStatus,
+    StayStatusLog,
+)
+
+
+# STAYS rate-integrity remediation (item 8): ALL StayRatePeriod writes route
+# through the central service in ``apps.stays.rate_periods``. These are re-exported
+# so existing callers (views/serializers) can keep importing from ``services``.
+from .rate_periods import (  # noqa: E402
+    create_booking_period,
+    create_extension_period,
+    latest_rate_period,
+    remediate_stay_rate,
+    stay_requires_rate_remediation,
+    trim_rate_periods,
+)
 
 # A room may only be checked into when it is manually `available`. dirty/cleaning
 # (and the hard-blocked maintenance/out_of_service/archived) are refused —
@@ -92,7 +117,11 @@ def _record(stay, *, event_type, severity, title, message, user=None):
 
 def _require_in_house(stay) -> Stay:
     """Re-read the stay under a row lock and require it to be in-house."""
-    stay = Stay.objects.select_for_update().select_related(
+    # FIX 6 (PG-safe): lock ONLY the stays row (``of=("self",)``). ``reservation``
+    # is a nullable FK, so a plain ``select_for_update`` over this ``select_related``
+    # asks PostgreSQL to lock the nullable side of an OUTER JOIN (``NotSupportedError``);
+    # ``of`` restricts the lock to the base table. SQLite ignores ``of``.
+    stay = Stay.objects.select_for_update(of=("self",)).select_related(
         "room", "room__room_type", "primary_guest", "reservation", "hotel"
     ).get(pk=stay.pk)
     if stay.status != StayStatus.IN_HOUSE:
@@ -292,9 +321,24 @@ class CheckInService:
         # Folio closure round: every stay opens with its ONE operational folio
         # (same transaction — a failed folio rolls the whole check-in back).
         # Lazy import: finance is a later phase.
-        from apps.finance.services import ensure_stay_folio
+        from apps.finance.services import ensure_due_room_charges, ensure_stay_folio
 
         ensure_stay_folio(stay, user=user)
+        # STAYS rate-integrity remediation: the ORIGINAL rate period is created ONLY
+        # through the central rate-period service, from the reservation line's
+        # BOOKING snapshot — NEVER the live catalog rate. A NULL agreed rate becomes
+        # a NULL-rate booking period that BLOCKS billing until remediated (it is
+        # never a free night, never billed at a live rate).
+        create_booking_period(stay, reservation_line=reservation_line)
+        # STAYS-ARRIVALS-DEPARTURES §24/§31 (owner correction): post only the
+        # room nights already DUE by the hotel business date — never front-load
+        # the whole planned stay. On the arrival day this normally posts nothing;
+        # each later night is posted when it is consumed — by this check-in call,
+        # by the pre-checkout safety net in CheckOutService, by the manual
+        # stays/<id>/ensure-room-charges endpoint, or by the daily close
+        # (post_due_room_charges_for_hotel). Same transaction — a failure rolls
+        # check-in back.
+        ensure_due_room_charges(stay, user=user)
         _log(stay, "", StayStatus.IN_HOUSE, note="checked in", user=user)
         _record(
             stay,
@@ -322,8 +366,10 @@ class CheckOutService:
     @transaction.atomic
     def execute(stay, *, check_out_notes="", checkout_reason="", user=None) -> Stay:
         # Row lock: concurrent check-outs of the same stay serialize; the
-        # loser then fails the in-house test instead of double-logging.
-        stay = Stay.objects.select_for_update().select_related(
+        # loser then fails the in-house test instead of double-logging. FIX 6:
+        # lock ONLY the stays row (``of=("self",)``) — ``reservation`` is nullable,
+        # so locking the whole OUTER JOIN is rejected on PostgreSQL.
+        stay = Stay.objects.select_for_update(of=("self",)).select_related(
             "room", "primary_guest", "reservation", "hotel"
         ).get(pk=stay.pk)
         if stay.status != StayStatus.IN_HOUSE:
@@ -341,7 +387,20 @@ class CheckOutService:
 
         # Folio gate (final closure). Lazy import: finance is a later phase.
         from apps.finance.models import Folio, FolioStatus
-        from apps.finance.services import close_folio, folio_balance
+        from apps.finance.services import (
+            close_folio,
+            ensure_due_room_charges,
+            folio_balance,
+        )
+
+        # Safety net (owner correction): make sure every room night consumed by
+        # the hotel's clock is posted before we read the balance and settle — a
+        # departure must never skip a due night. The due nights are posted by
+        # several converging callers: check-in, this pre-checkout safety net, the
+        # manual stays/<id>/ensure-room-charges endpoint, and the daily close
+        # (post_due_room_charges_for_hotel). Idempotent, so it never double-posts.
+        # No night on/after the departure business date is posted.
+        ensure_due_room_charges(stay, user=user)
 
         open_folios = list(
             Folio.objects.select_for_update().filter(
@@ -349,6 +408,17 @@ class CheckOutService:
             )
         )
         for folio in open_folios:
+            # §32/§38 — a folio still awaiting final charges must not close and
+            # blocks departure (checked BEFORE the balance: the balance is not yet
+            # final while charges are pending).
+            if folio.awaiting_final_charges:
+                raise FolioAwaitingFinalCharges(
+                    {
+                        "folio": folio.id,
+                        "folio_number": folio.folio_number,
+                        "reason": folio.awaiting_final_charges_note,
+                    }
+                )
             balance = folio_balance(folio)["balance"]
             if balance != 0:
                 raise FolioBalanceOutstanding(
@@ -357,6 +427,20 @@ class CheckOutService:
                         "folio_number": folio.folio_number,
                         "balance": str(balance),
                     }
+                )
+
+        # §35/§38 — refundable insurance held for this stay must be fully refunded
+        # or settled (held_amount == 0) before departure. This includes insurance
+        # taken at booking against the reservation (stay not yet linked). The set
+        # of blocking insurance is defined ONCE in ``held_insurance_qs`` and reused
+        # by the checkout-dialog folio summary, so the readiness the front desk
+        # sees can never disagree with this gate.
+        from apps.finance.services import held_insurance_qs
+
+        for ins in held_insurance_qs(stay):
+            if ins.held_amount > 0:
+                raise InsuranceNotSettled(
+                    {"insurance": ins.id, "held": str(ins.held_amount)}
                 )
 
         actor = user if getattr(user, "is_authenticated", False) else None
@@ -408,18 +492,113 @@ class CheckOutService:
         return stay
 
 
+class ReverseCheckInService:
+    """Reverse a MISTAKEN check-in (§30) — an organised reversal, never a delete.
+
+    Voids the check-in's room charges (same business date), reverts the stay's
+    folio to a pre-arrival reservation folio (detaches the stay, so any deposit
+    survives as a pre-arrival deposit and the room frees), and soft-cancels the
+    stay with a mandatory reason + audit. Historical PAYMENTS are never deleted;
+    only an IN-HOUSE stay can be reversed. The reservation returns to a bookable
+    state so a correct check-in can follow.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def execute(stay, *, reason, user=None) -> Stay:
+        if not (reason or "").strip():
+            raise ReverseCheckInReasonRequired()
+        reason = reason.strip()
+        # FIX 6: lock ONLY the stays row (``of=("self",)``) — ``reservation`` is a
+        # nullable FK, so locking the whole OUTER JOIN is rejected on PostgreSQL.
+        stay = (
+            Stay.objects.select_for_update(of=("self",))
+            .select_related("room", "reservation", "hotel")
+            .get(pk=stay.pk)
+        )
+        if stay.status != StayStatus.IN_HOUSE:
+            raise InvalidStayChange({"reason": "not_in_house", "status": stay.status})
+
+        from apps.common.exceptions import (
+            ReverseCheckInDayClosed,
+            VoidWindowClosed,
+        )
+        from apps.finance.models import (
+            ChargeType,
+            Folio,
+            FolioStatus,
+            PostingStatus,
+        )
+        from apps.finance.services import void_charge
+
+        open_folios = list(
+            Folio.objects.select_for_update().filter(
+                hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
+            )
+        )
+        for folio in open_folios:
+            # Void the check-in's room-night charges (reverses the financial
+            # effect). Payments/deposits are NEVER deleted — no silent loss of
+            # history. If any of these charges is already in a CLOSED business day,
+            # a plain void is not allowed: surface a clear domain error rather than
+            # a confusing finance one, and (being atomic) change nothing. Correcting
+            # closed history is a separate accounting-correction cycle.
+            try:
+                for charge in folio.charges.filter(
+                    type=ChargeType.ROOM,
+                    room_night__isnull=False,
+                    status=PostingStatus.POSTED,
+                ):
+                    void_charge(charge, reason=f"check-in reversed · {reason}", user=user)
+            except VoidWindowClosed as exc:
+                raise ReverseCheckInDayClosed(getattr(exc, "detail", None))
+            # Detach the folio from the stay: it reverts to the reservation's ONE
+            # pre-arrival folio (reservation set, stay NULL), so any deposit lives
+            # on as a pre-arrival deposit and a future re-check-in reuses it (never
+            # a second ledger). A folio with no reservation link stays attached to
+            # the cancelled stay as read-only history.
+            if folio.reservation_id is not None:
+                folio.stay = None
+                folio.save(update_fields=["stay", "updated_at"])
+
+        previous = stay.status
+        stay.status = StayStatus.CANCELLED
+        stay.checkout_reason = reason
+        stay.save(update_fields=["status", "checkout_reason", "updated_at"])
+        # The room frees automatically (occupancy is derived from in-house stays).
+        _log(
+            stay,
+            previous,
+            StayStatus.CANCELLED,
+            note=f"check-in reversed · {reason}",
+            user=user,
+        )
+        _record(
+            stay,
+            event_type="stay.check_in_reversed",
+            severity="warning",
+            title=f"Check-in reversed: room {stay.room.number}",
+            message=f"{stay.primary_guest.full_name} · {reason}",
+            user=user,
+        )
+        return stay
+
+
 class ExtendStayService:
     """Extend an in-house stay — from the STAY, the operational truth.
 
     Availability for the ADDED window is re-checked through the central
     engine (excluding the stay's own reservation so it never conflicts with
     itself); the reservation's end grows with the stay so inventory stays
-    unified. The arrival date never changes and no charges are created.
+    unified. The arrival date never changes; the ADDED nights are posted to the
+    folio as a room charge (§25 / owner decision D1), skipped for an unpriced room.
     """
 
     @staticmethod
     @transaction.atomic
-    def execute(stay, *, new_check_out_date, reason="", user=None) -> Stay:
+    def execute(
+        stay, *, new_check_out_date, reason="", nightly_rate=None, user=None
+    ) -> Stay:
         stay = _require_in_house(stay)
         old_end = stay.planned_check_out_date
         if new_check_out_date <= old_end:
@@ -450,6 +629,25 @@ class ExtendStayService:
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
         _grow_reservation_end(stay.reservation, new_end=new_check_out_date)
+        # STAYS rate-integrity remediation: the added window gets its OWN rate
+        # period via the central service — never the live catalog rate, and the
+        # ORIGINAL nights' periods are never touched. Default = the stay's latest
+        # period rate/currency (source="extension"); an explicit DIFFERENT rate is
+        # an OVERRIDE requiring ``stays.rate_override`` + a reason + audit.
+        create_extension_period(
+            stay,
+            old_end=old_end,
+            new_end=new_check_out_date,
+            requested_rate=nightly_rate,
+            reason=reason,
+            user=user,
+        )
+        # §25 (owner correction): extending only updates the plan + availability.
+        # The added nights are NOT posted now — they become real folio charges as
+        # each one is consumed, posted by the pre-checkout safety net in
+        # CheckOutService, the manual stays/<id>/ensure-room-charges endpoint, or
+        # the daily close (post_due_room_charges_for_hotel), so the folio never
+        # front-loads a future night that has not yet happened.
         note = f"extended {old_end} -> {new_check_out_date}"
         if (reason or "").strip():
             note = f"{note} · {reason.strip()}"
@@ -504,6 +702,10 @@ class ShortenStayService:
             )
         stay.planned_check_out_date = new_check_out_date
         stay.save(update_fields=["planned_check_out_date", "updated_at"])
+        # STAYS rate-integrity round (FIX 1): move the rate periods with the plan so
+        # a later extend cannot overlap a still-long period and silently bill the
+        # OLD rate for re-added nights (masking an audited override).
+        trim_rate_periods(stay, new_check_out_date)
         _shrink_reservation_end(stay.reservation, business_date=business_date)
         note = f"shortened {old_end} -> {new_check_out_date}"
         if (reason or "").strip():
@@ -720,3 +922,51 @@ def promote_reservation_occupants(reservation, stay, *, user=None) -> list:
         existing_guest_ids.add(guest.id)
         created.append(stay_guest)
     return created
+
+
+def stays_overview(hotel) -> dict:
+    """Counts for the six operational cards (§6/§50) in a FIXED set of queries —
+    never per-row work — based on the hotel's current business date.
+
+    1 arriving today · 2 awaiting check-in (due/overdue, no stay) · 3 checked-in
+    today · 4 current residents · 5 departing today · 6 needs attention (overdue
+    arrivals + overstays + folios awaiting final charges).
+    """
+    from django.db.models import Q
+
+    from apps.reservations.models import Reservation, ReservationStatus
+
+    from .models import Stay, StayStatus
+
+    bd = get_business_date(hotel)
+    confirmed_no_stay = Reservation.objects.filter(
+        hotel=hotel, status=ReservationStatus.CONFIRMED, stays__isnull=True,
+    )
+    arriving_today = confirmed_no_stay.filter(check_in_date=bd).count()
+    awaiting_check_in = confirmed_no_stay.filter(check_in_date__lte=bd).count()
+    overdue_arrivals = confirmed_no_stay.filter(check_in_date__lt=bd).count()
+
+    in_house = Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+    current_residents = in_house.count()
+    departing_today = in_house.filter(planned_check_out_date=bd).count()
+    checked_in_today = Stay.objects.filter(
+        hotel=hotel, actual_check_in_at__date=bd
+    ).count()
+
+    stays_attention = (
+        in_house.filter(
+            Q(planned_check_out_date__lt=bd)
+            | Q(folios__status="open", folios__awaiting_final_charges=True)
+        )
+        .distinct()
+        .count()
+    )
+    return {
+        "business_date": str(bd),
+        "arriving_today": arriving_today,
+        "awaiting_check_in": awaiting_check_in,
+        "checked_in_today": checked_in_today,
+        "current_residents": current_residents,
+        "departing_today": departing_today,
+        "needs_attention": overdue_arrivals + stays_attention,
+    }

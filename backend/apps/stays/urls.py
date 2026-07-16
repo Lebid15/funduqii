@@ -6,16 +6,20 @@ from .views import (
     CheckInRoomsView,
     CheckInView,
     CheckOutView,
+    ReverseCheckInView,
     CurrentResidentsView,
     DeparturesTodayView,
     ImmediateCheckInView,
     StayDetailView,
+    StayEnsureRoomChargesView,
     StayExtendView,
     StayFolioSummaryView,
     StayListView,
     StayLogsView,
     StayMoveCandidatesView,
     StayMoveRoomView,
+    StayRemediateRateView,
+    StaysOverviewView,
     StayShortenView,
 )
 
@@ -24,6 +28,7 @@ app_name = "stays"
 urlpatterns = [
     path("stays/", StayListView.as_view(), name="stay-list"),
     path("stays/current/", CurrentResidentsView.as_view(), name="stay-current"),
+    path("stays/overview/", StaysOverviewView.as_view(), name="stay-overview"),
     path(
         "stays/arrivals-today/",
         ArrivalsTodayView.as_view(),
@@ -47,6 +52,11 @@ urlpatterns = [
     ),
     path("stays/<int:pk>/", StayDetailView.as_view(), name="stay-detail"),
     path("stays/<int:pk>/check-out/", CheckOutView.as_view(), name="stay-check-out"),
+    path(
+        "stays/<int:pk>/reverse-check-in/",
+        ReverseCheckInView.as_view(),
+        name="stay-reverse-check-in",
+    ),
     path("stays/<int:pk>/extend/", StayExtendView.as_view(), name="stay-extend"),
     path("stays/<int:pk>/shorten/", StayShortenView.as_view(), name="stay-shorten"),
     path(
@@ -63,6 +73,16 @@ urlpatterns = [
         "stays/<int:pk>/folio-summary/",
         StayFolioSummaryView.as_view(),
         name="stay-folio-summary",
+    ),
+    path(
+        "stays/<int:pk>/ensure-room-charges/",
+        StayEnsureRoomChargesView.as_view(),
+        name="stay-ensure-room-charges",
+    ),
+    path(
+        "stays/<int:pk>/remediate-rate/",
+        StayRemediateRateView.as_view(),
+        name="stay-remediate-rate",
     ),
     path("stays/<int:pk>/logs/", StayLogsView.as_view(), name="stay-logs"),
 ]

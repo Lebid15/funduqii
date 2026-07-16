@@ -94,6 +94,14 @@ class Folio(models.Model):
     )
     currency = models.CharField(max_length=3, default="USD")
     notes = models.TextField(blank=True, default="")
+    # STAYS-ARRIVALS-DEPARTURES §32 — reception is still confirming final charges
+    # (restaurant / café / services / minibar / laundry / damages / open orders).
+    # While true the folio must NOT close and departure is BLOCKED; cleared when
+    # the charges are confirmed. An operational sub-state of an OPEN folio.
+    awaiting_final_charges = models.BooleanField(default=False)
+    awaiting_final_charges_note = models.CharField(
+        max_length=255, blank=True, default=""
+    )
     opened_at = models.DateTimeField(auto_now_add=True)
     closed_at = models.DateTimeField(null=True, blank=True)
     closed_by = models.ForeignKey(
@@ -203,6 +211,11 @@ class FolioCharge(models.Model):
     total_amount = models.DecimalField(**MONEY_KW, default=ZERO)
     charge_date = models.DateField()
     source = models.CharField(max_length=16, blank=True, default="manual")
+    # The stay night this charge settles (owner correction §24). Set ONLY for
+    # room-night charges; it is the stable idempotency key (folio + room_night)
+    # that a partial unique index enforces so no night is ever double-posted,
+    # even under concurrent posting. NULL for every other charge type.
+    room_night = models.DateField(null=True, blank=True)
     # Folio closure round: a full counter-posting created AFTER the original
     # charge's void window closed. The original is never edited; the link is
     # the audit trail. Adjustments cannot themselves be adjusted (no chains).
@@ -245,6 +258,17 @@ class FolioCharge(models.Model):
                 fields=["adjusts"],
                 condition=models.Q(status="posted", adjusts__isnull=False),
                 name="unique_posted_adjustment_per_charge",
+            ),
+            # Owner concurrency guard §24: at most ONE POSTED charge per (folio,
+            # night). The partial condition means it constrains ONLY room-night
+            # charges (room_night set) and leaves voided rows free — so a
+            # reverse-check-in void + a later re-check-in re-post of the same
+            # night is allowed, while two concurrent posts of the same night can
+            # never both succeed.
+            models.UniqueConstraint(
+                fields=["folio", "room_night"],
+                condition=models.Q(status="posted", room_night__isnull=False),
+                name="uniq_posted_room_night_per_folio",
             ),
         ]
 
@@ -388,6 +412,132 @@ class Payment(models.Model):
 
     def __str__(self) -> str:
         return f"payment {self.amount} on folio={self.folio_id}"
+
+
+class InsuranceStatus(models.TextChoices):
+    HELD = "held", "Held"
+    REFUNDED = "refunded", "Refunded"
+    PARTIALLY_DEDUCTED = "partially_deducted", "Partially deducted"
+    CONSUMED = "consumed", "Consumed"
+
+
+class RefundableInsurance(models.Model):
+    """A refundable security/insurance amount held SEPARATELY from the folio
+    account (STAYS-ARRIVALS-DEPARTURES §35 / owner decision D2).
+
+    It is NEVER revenue and NEVER auto-reduces the folio balance. A documented
+    deduction (damage / unpaid item) posts ONLY the deducted portion to the folio
+    as a normal charge, with a reason + permission + audit; the rest is refunded.
+    Before check-out the insurance must be fully refunded or settled
+    (``held_amount == 0``). The held amount is DERIVED, never trusted as a stored
+    balance (money rule of this app).
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel", on_delete=models.CASCADE, related_name="insurances"
+    )
+    # Linked to the reservation and/or its stay (both nullable, like Folio).
+    reservation = models.ForeignKey(
+        "reservations.Reservation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="insurances",
+    )
+    stay = models.ForeignKey(
+        "stays.Stay",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="insurances",
+    )
+    currency = models.CharField(max_length=3, default="USD")
+    # The amount originally taken and held (positive).
+    amount = models.DecimalField(**MONEY_KW)
+    # Cumulative documented deduction posted to the folio (§35). <= amount.
+    deducted_amount = models.DecimalField(**MONEY_KW, default=ZERO)
+    # Cumulative amount returned to the guest. deducted + refunded <= amount.
+    refunded_amount = models.DecimalField(**MONEY_KW, default=ZERO)
+    status = models.CharField(
+        max_length=20, choices=InsuranceStatus.choices, default=InsuranceStatus.HELD
+    )
+    # How the insurance was received (informational; NOT a folio Payment).
+    method = models.CharField(
+        max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH
+    )
+    reference = models.CharField(max_length=120, blank=True, default="")
+    notes = models.CharField(max_length=255, blank=True, default="")
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="insurances_received",
+    )
+    received_at = models.DateTimeField()
+    settled_at = models.DateTimeField(null=True, blank=True)
+    settled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="insurances_settled",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="insurances_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "refundable_insurances"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["hotel", "status"], name="insurance_hotel_status_idx"
+            ),
+            models.Index(fields=["stay"], name="insurance_stay_idx"),
+            models.Index(fields=["reservation"], name="insurance_reservation_idx"),
+        ]
+        constraints = [
+            # DB backstop for the money invariants (owner §35): the service layer
+            # enforces them under a row lock, but the database refuses a corrupt
+            # row from any path (admin, import, a future service, a bug).
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name="insurance_amount_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(deducted_amount__gte=0),
+                name="insurance_deducted_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(refunded_amount__gte=0),
+                name="insurance_refunded_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    amount__gte=models.F("deducted_amount") + models.F("refunded_amount")
+                ),
+                name="insurance_settled_within_amount",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(currency=""),
+                name="insurance_currency_present",
+            ),
+        ]
+
+    @property
+    def held_amount(self) -> Decimal:
+        """Amount still held (not yet deducted or refunded) — DERIVED."""
+        return self.amount - self.deducted_amount - self.refunded_amount
+
+    def __str__(self) -> str:
+        return f"insurance {self.amount} {self.currency} ({self.status})"
 
 
 class InvoiceStatus(models.TextChoices):

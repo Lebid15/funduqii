@@ -10,7 +10,7 @@ No guest profile, payment, folio, invoice, or check-in/out is created here.
 from __future__ import annotations
 
 from django.db import IntegrityError, transaction
-from django.db.models import IntegerField
+from django.db.models import BigIntegerField
 from django.db.models.functions import Cast, Substr
 from django.utils import timezone
 
@@ -19,7 +19,9 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.common.exceptions import (
     CancellationReasonRequired,
     InvalidReservationTransition,
+    NoShowReasonRequired,
     NoAvailability,
+    PermissionDenied,
     ReservationHasActiveStay,
     RoomAssignmentConflict,
 )
@@ -52,13 +54,22 @@ def _next_reservation_number(hotel) -> str:
     Numbers are unique per hotel (DB-enforced). They are monotonic but need not
     be gapless; a rare race is caught by the unique constraint and retried by
     :func:`create_reservation`.
+
+    ITEM 9 (PG-safe): the filter matches EXACTLY ``^R[0-9]+`` before the
+    ``Substr``/``Cast`` so an imported / historical value like ``RB00001`` (or an
+    empty / corrupt number) is IGNORED — not modified, not deleted. On PostgreSQL,
+    casting the tail of a non-numeric value (e.g. ``B00001``) to integer raises;
+    the regex pre-filter guarantees only digit tails ever reach the cast. SQLite is
+    lenient but the same filter keeps the two backends consistent.
     """
     last = (
         Reservation.objects.filter(
-            hotel=hotel, reservation_number__startswith=_NUMBER_PREFIX
+            hotel=hotel, reservation_number__regex=r"^R[0-9]+$"
         )
         .annotate(
-            seq=Cast(Substr("reservation_number", 2), output_field=IntegerField())
+            # FIX F — BigInteger avoids a PG overflow on a matching-but-huge tail
+            # (e.g. "R3000000000" > 2^31-1); the ``^R[0-9]+$`` filter still guards.
+            seq=Cast(Substr("reservation_number", 2), output_field=BigIntegerField())
         )
         .order_by("-seq")
         .values_list("seq", flat=True)
@@ -78,6 +89,94 @@ def _log_status(reservation, previous, new, *, note="", user=None):
         note=note or "",
         changed_by=actor,
     )
+
+
+def _hotel_default_currency(hotel) -> str:
+    """The hotel's default currency (from HotelSettings) or ``USD`` — the SAME
+    source ``finance`` uses for ``folio.currency`` and ``reservation_financials``."""
+    settings_obj = getattr(hotel, "settings", None)
+    return (getattr(settings_obj, "default_currency", "") or "") or "USD"
+
+
+def _agreed_rate_snapshot(room_type, hotel):
+    """Freeze the AGREED nightly rate + currency at BOOKING time.
+
+    STAYS rate-integrity round — the rate is ``room_type.base_rate`` quantized via
+    ``money()`` at THIS moment, an INDEPENDENT snapshot: a later catalog change to
+    ``base_rate`` must NEVER alter it, so the hotel always bills the agreed price.
+    Returns ``(None, currency)`` when the room type is unpriced (``base_rate`` NULL
+    / <= 0) — an explicitly UNPRICED line, never a live-fallback signal. The
+    currency is always the hotel default (captured at booking too).
+    """
+    from apps.finance.services import ZERO, money
+
+    base = getattr(room_type, "base_rate", None)
+    if base is None:
+        rate = None
+    else:
+        rate = money(base)
+        if rate <= ZERO:
+            rate = None
+    return rate, _hotel_default_currency(hotel)
+
+
+def _line_snapshot_for_write(line, *, prior_line, hotel, user):
+    """Resolve ``(agreed_nightly_rate, agreed_rate_currency)`` for a line being
+    (re)created, per the STAYS rate-integrity snapshot policy (item 6):
+
+    * a matching PRIOR line of the SAME RoomType -> PRESERVE its snapshot (a guest
+      edit / date-only change / internal line re-create never re-prices);
+    * a new / changed RoomType -> capture the new type's ``base_rate`` (confirm
+      path);
+    * an explicit ``agreed_nightly_rate`` that DIFFERS from that default -> an
+      OVERRIDE: it requires ``stays.rate_override`` + a non-empty
+      ``rate_override_reason`` and is audited.
+
+    ``prior_line`` is the reservation's existing line of the same RoomType (or
+    ``None`` on create / a genuine type change).
+    """
+    room_type = line["room_type"]
+    if prior_line is not None and prior_line.room_type_id == room_type.id:
+        default_rate = prior_line.agreed_nightly_rate
+        default_currency = (
+            prior_line.agreed_rate_currency or _hotel_default_currency(hotel)
+        )
+    else:
+        default_rate, default_currency = _agreed_rate_snapshot(room_type, hotel)
+
+    explicit = line.get("agreed_nightly_rate")
+    if explicit is None:
+        return default_rate, default_currency
+
+    from apps.finance.services import money
+
+    explicit_m = money(explicit)
+    if default_rate is not None and explicit_m == money(default_rate):
+        return default_rate, default_currency  # same value — not an override
+
+    # OVERRIDE — a manual rate differing from the snapshot/confirm default.
+    from apps.rbac.services import has_hotel_permission
+
+    if not has_hotel_permission(user, hotel, "stays.rate_override"):
+        raise PermissionDenied()
+    reason = (line.get("rate_override_reason") or "").strip()
+    if not reason:
+        raise DRFValidationError(
+            {"rate_override_reason": "A reason is required to override the agreed rate."}
+        )
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="reservation.rate_override",
+        category="reservation",
+        severity="warning",
+        title="Agreed nightly rate override",
+        message=f"{getattr(room_type, 'name', room_type.id)} @ {explicit_m} · {reason}",
+        actor=user,
+        related_url="/hotel/reservations",
+    )
+    return explicit_m, default_currency
 
 
 @transaction.atomic
@@ -190,6 +289,13 @@ def create_reservation(
         )
 
     for line in lines:
+        # STAYS rate-integrity round: freeze the AGREED nightly rate + currency at
+        # THIS instant (an independent snapshot — a later catalog change never
+        # rewrites it). An explicit override rate is gated on ``stays.rate_override``
+        # + a reason inside the helper.
+        agreed_rate, agreed_currency = _line_snapshot_for_write(
+            line, prior_line=None, hotel=hotel, user=user
+        )
         ReservationRoomLine.objects.create(
             hotel=hotel,
             reservation=reservation,
@@ -199,6 +305,8 @@ def create_reservation(
             adults=line.get("adults"),
             children=line.get("children"),
             notes=line.get("notes", ""),
+            agreed_nightly_rate=agreed_rate,
+            agreed_rate_currency=agreed_currency,
         )
     _create_occupants(hotel, reservation, occupants)
     _log_status(reservation, "", status, note="created", user=user)
@@ -255,9 +363,10 @@ def update_reservation(
     if reservation.status in (
         ReservationStatus.CANCELLED,
         ReservationStatus.EXPIRED,
+        ReservationStatus.NO_SHOW,
     ) and (lines is not None or _touches_dates(fields)):
         raise InvalidReservationTransition(
-            {"detail": "A cancelled or expired reservation cannot be re-booked."}
+            {"detail": "A cancelled, expired or no-show reservation cannot be re-booked."}
         )
 
     # Post-check-in guard (final closure + Finance-F1): once the reservation
@@ -329,6 +438,15 @@ def update_reservation(
     reservation.save()
 
     if lines is not None:
+        # STAYS rate-integrity remediation (item 6 + FIX A): capture the PRIOR lines'
+        # agreed snapshots BEFORE deleting so a same-type replacement PRESERVES the
+        # agreed rate (a date/guest edit never re-prices). Keep a LIST per RoomType
+        # (in id order) and consume by POSITION, so two lines of the SAME type at
+        # DIFFERENT agreed rates (e.g. default 100 + an audited override 150) each
+        # carry their OWN prior snapshot — never all collapsing onto the first.
+        prior_by_type = {}
+        for prior in reservation.lines.all().order_by("id"):
+            prior_by_type.setdefault(prior.room_type_id, []).append(prior)
         reservation.lines.all().delete()
         # RESERVATIONS-AUTO-ROOM §7: assign the replacement lines under the locks
         # ``ensure_can_book`` acquired above; excluding this reservation so it
@@ -343,6 +461,17 @@ def update_reservation(
                 exclude_reservation_id=reservation.id,
             )
         for line in lines:
+            # Consume the next prior line of this RoomType (by position), so each
+            # replacement line preserves its OWN snapshot; capture the new type's
+            # rate on a genuine type change; gate an explicit different rate.
+            bucket = prior_by_type.get(line["room_type"].id)
+            prior_line = bucket.pop(0) if bucket else None
+            agreed_rate, agreed_currency = _line_snapshot_for_write(
+                line,
+                prior_line=prior_line,
+                hotel=reservation.hotel,
+                user=user,
+            )
             ReservationRoomLine.objects.create(
                 hotel=reservation.hotel,
                 reservation=reservation,
@@ -352,6 +481,8 @@ def update_reservation(
                 adults=line.get("adults"),
                 children=line.get("children"),
                 notes=line.get("notes", ""),
+                agreed_nightly_rate=agreed_rate,
+                agreed_rate_currency=agreed_currency,
             )
     if occupants is not None:
         reservation.occupants.all().delete()
@@ -469,6 +600,74 @@ def cancel_reservation(reservation, *, reason, user=None) -> Reservation:
         actor=user,
         related_object=reservation,
         related_url="/hotel/reservations",
+    )
+    return reservation
+
+
+@transaction.atomic
+def mark_no_show(reservation, *, reason, user=None) -> Reservation:
+    """Mark an expected arrival as a NO-SHOW (§29): the guest never arrived within
+    the hotel's policy and no stay was created. A SOFT transition (never a delete)
+    that frees availability (``NO_SHOW`` is non-blocking) and records the reason +
+    actor via the status log.
+
+    Guards: only a LIVE arrival (held/confirmed) with NO stay, whose arrival date
+    has already come (never a future booking). The deposit is NOT auto-forfeited or
+    refunded here — handling it is a separate, explicit finance action per the
+    hotel's cancellation policy (§29: never treat the deposit as due/refunded
+    without a rule).
+    """
+    if not (reason or "").strip():
+        raise NoShowReasonRequired()
+    if reservation.status == ReservationStatus.NO_SHOW:
+        return reservation
+    if reservation.status not in (
+        ReservationStatus.HELD,
+        ReservationStatus.CONFIRMED,
+    ):
+        raise InvalidReservationTransition(
+            {"detail": "Only a live arrival can be marked as a no-show."}
+        )
+    if has_any_stay(reservation):
+        raise ReservationHasActiveStay(
+            {"reservation": reservation.id, "reason": "reservation_has_stay"}
+        )
+    from apps.shifts.services import get_business_date
+
+    business_date = get_business_date(reservation.hotel)
+    if reservation.check_in_date > business_date:
+        raise InvalidReservationTransition(
+            {
+                "detail": "The arrival date has not passed yet.",
+                "check_in_date": str(reservation.check_in_date),
+                "business_date": str(business_date),
+            }
+        )
+    previous = reservation.status
+    reservation.status = ReservationStatus.NO_SHOW
+    reservation.no_show_reason = reason.strip()
+    if user is not None and getattr(user, "is_authenticated", False):
+        reservation.updated_by = user
+    reservation.save()
+    _log_status(
+        reservation,
+        previous,
+        reservation.status,
+        note=f"no-show · {reason.strip()}",
+        user=user,
+    )
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        reservation.hotel,
+        event_type="reservation.no_show",
+        category="reservation",
+        severity="warning",
+        title=f"Reservation {reservation.reservation_number} marked no-show",
+        message=reason.strip(),
+        actor=user,
+        related_object=reservation,
+        related_url="/hotel/front-desk",
     )
     return reservation
 

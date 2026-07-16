@@ -181,6 +181,9 @@ export interface BookingEditContext {
   allowNewDeposit: boolean;
   financialSummary: ReservationFinancialSummary | null;
   lockedRoomLabel: string;
+  /** The room type of the reservation's FIRST line as saved (drives the edit-mode
+   * "room type changed" price notice). Null on a lineless legacy reservation. */
+  originalRoomTypeId: number | null;
 }
 
 /**
@@ -438,6 +441,23 @@ export function BookingStep({
       : null);
   const estimatedTotal =
     nightlyRate && nights > 0 ? mulDecimalByInt(nightlyRate, nights) : null;
+
+  // EDIT only — when the staff explicitly change the RoomType before arrival the
+  // nightly rate changes. Surface the NEW proposed rate (the backend `base_rate`,
+  // never computed here) against the saved rate so the price change is CONFIRMED
+  // before save, never applied silently.
+  const originalRoomTypeId = editContext?.originalRoomTypeId ?? null;
+  const roomTypeChangedInEdit =
+    isEdit &&
+    originalRoomTypeId !== null &&
+    lineType !== "" &&
+    Number(lineType) !== originalRoomTypeId;
+  const rateChange = roomTypeChangedInEdit
+    ? {
+        previous: editContext?.financialSummary?.nightly_rate ?? null,
+        proposed: nightlyRate,
+      }
+    : null;
 
   const payment = booking.payment;
   const payCurrency = payment.currency || baseCurrency;
@@ -790,6 +810,7 @@ export function BookingStep({
           estimatedRemaining={estimatedRemaining}
           baseEquivalent={baseEquivalent}
           paidBase={paidBase}
+          rateChange={rateChange}
         />
       ) : null}
 
@@ -933,6 +954,7 @@ function PaymentSection({
   estimatedRemaining,
   baseEquivalent,
   paidBase,
+  rateChange,
 }: {
   draft: ReservationDraft;
   actions: ReservationDraftActions;
@@ -945,6 +967,9 @@ function PaymentSection({
   estimatedRemaining: string | null;
   baseEquivalent: string | null;
   paidBase: string;
+  /** EDIT-only price-change notice: the saved vs the newly-proposed nightly rate
+   * (both backend Decimal strings — never computed here). Null when unchanged. */
+  rateChange: { previous: string | null; proposed: string | null } | null;
 }) {
   const { t, locale } = useI18n();
   const b = t.reservations.wizard.booking;
@@ -1043,6 +1068,28 @@ function PaymentSection({
           <Input id="wiz-pay-total" type="text" value={totalDisplay} readOnly />
         </FormField>
       </div>
+
+      {/* EDIT — RoomType changed: show the NEW proposed nightly rate (backend
+          value, never computed) vs the saved one so the change is confirmed, not
+          silent. Plain text — React escapes it (no dangerouslySetInnerHTML). */}
+      {rateChange ? (
+        <Alert tone="warning">
+          <strong>{b.rateChangeTitle}</strong>{" "}
+          {b.rateChangeBody
+            .replace(
+              "{previous}",
+              rateChange.previous
+                ? formatMoney(rateChange.previous, reservationCurrency, locale)
+                : "—",
+            )
+            .replace(
+              "{proposed}",
+              rateChange.proposed
+                ? formatMoney(rateChange.proposed, reservationCurrency, locale)
+                : "—",
+            )}
+        </Alert>
+      ) : null}
 
       {/* Payment method — real receipt (§28/§30) + tender fields on the same row. */}
       <div className="resform-book__grid">

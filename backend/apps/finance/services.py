@@ -19,6 +19,7 @@ Finality rules (folio final closure round):
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
@@ -29,11 +30,14 @@ from apps.common.exceptions import (
     ActiveInvoiceExists,
     ChargeAlreadyAdjusted,
     ExpenseAlreadyReversed,
+    FolioAwaitingFinalCharges,
     FolioClosed,
+    FolioCurrencyMismatch,
     FolioHasPostings,
     FolioNotBalanced,
     InvalidAmount,
     InvalidFinanceOperation,
+    MissingAgreedNightlyRate,
     PaymentAlreadyReversed,
     ReservationFolioNotSupported,
     StayNotInHouse,
@@ -282,10 +286,14 @@ def _accepted_currencies(hotel) -> list[str]:
 @transaction.atomic
 def create_folio(hotel, *, reservation=None, stay=None, guest=None,
                  customer_name="", currency=None, notes="", user=None,
-                 origin="manual") -> Folio:
-    """Open a folio. The currency is ALWAYS the hotel's (any passed value is
-    ignored — documented decision). A reservation may only be referenced
-    together with its stay: pre-arrival folios are not supported."""
+                 origin="manual", agreed_currency=None) -> Folio:
+    """Open a folio. The client-facing ``currency`` is ALWAYS ignored (documented
+    decision — a client can never set a folio currency). ``agreed_currency`` is an
+    INTERNAL override used ONLY by the stay-folio path (FIX 1): the folio adopts the
+    BOOKING's agreed currency instead of the hotel's CURRENT default; when it is
+    ``None`` the hotel default currency is used exactly as before. A reservation may
+    only be referenced together with its stay: pre-arrival folios are not
+    supported."""
     if reservation is not None and stay is None:
         raise ReservationFolioNotSupported()
     if stay is not None:
@@ -306,7 +314,9 @@ def create_folio(hotel, *, reservation=None, stay=None, guest=None,
             guest=guest,
             customer_name=customer_name or (guest.full_name if guest else ""),
             folio_number=number,
-            currency=_hotel_currency(hotel),
+            # FIX 1 — the stay-folio path may adopt the BOOKING's agreed currency;
+            # every other caller (agreed_currency None) keeps the hotel default.
+            currency=agreed_currency or _hotel_currency(hotel),
             notes=notes or "",
             created_by=actor,
             updated_by=actor,
@@ -388,14 +398,70 @@ def _reuse_reservation_folio_for_stay(stay, *, user=None):
     return folio
 
 
+def _stay_folio_currency(stay) -> str:
+    """The currency the stay's folio must use (FIX 1 — the folio adopts the
+    BOOKING's agreed currency, NOT the hotel's CURRENT default).
+
+    * PRICED stay (its reservation line has a non-null ``agreed_nightly_rate``): the
+      folio currency = that line's ``agreed_rate_currency``. If the reservation
+      feeding the stay has MULTIPLE priced lines whose currencies CONFLICT (>1
+      distinct) OR a priced line has a MISSING currency, raise
+      :class:`FolioCurrencyMismatch` (check-in is BLOCKED, no folio created).
+    * UNPRICED stay (no agreed rate): fall back to the hotel default currency —
+      there is no agreed currency to honor, so walk-in / unpriced check-in keeps
+      working (the rate is remediated later).
+
+    NO conversion, NO auto-FX anywhere.
+    """
+    line = stay.reservation_line
+    own_priced = line is not None and line.agreed_nightly_rate is not None
+    if not own_priced:
+        return _hotel_currency(stay.hotel)
+    reservation = stay.reservation
+    priced = (
+        [rl for rl in reservation.lines.all() if rl.agreed_nightly_rate is not None]
+        if reservation is not None
+        else [line]
+    )
+    currencies = set()
+    for rl in priced:
+        cur = (rl.agreed_rate_currency or "").strip()
+        if not cur:
+            raise FolioCurrencyMismatch(
+                {"reason": "missing_line_currency", "line": rl.id}
+            )
+        currencies.add(cur)
+    if len(currencies) > 1:
+        raise FolioCurrencyMismatch(
+            {
+                "reason": "conflicting_line_currencies",
+                "currencies": sorted(currencies),
+            }
+        )
+    return next(iter(currencies))
+
+
+def _guard_existing_folio_currency(folio, agreed_currency):
+    """Block (never silently change) when an existing folio's currency differs from
+    the resolved agreed currency."""
+    if folio.currency and folio.currency != agreed_currency:
+        raise FolioCurrencyMismatch(
+            {
+                "reason": "existing_folio_currency",
+                "folio_currency": folio.currency,
+                "agreed_currency": agreed_currency,
+            }
+        )
+
+
 @transaction.atomic
 def ensure_stay_folio(stay, *, user=None) -> Folio:
     """Get-or-create the stay's ONE open folio (idempotent, race-safe).
 
     Called from check-in (same transaction: a failed folio rolls back the
     whole check-in) and from service-order posting. Links stay + guest +
-    reservation, uses the hotel currency, and never posts any charge,
-    payment, or deposit.
+    reservation, adopts the BOOKING's agreed currency (FIX 1), and never posts any
+    charge, payment, or deposit.
     """
     stay = type(stay).objects.select_for_update().get(pk=stay.pk)
     # Restaurant closure (P0): a NEW operational folio may only be opened for
@@ -404,10 +470,14 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     # check-in calls this while the stay is already in-house.
     if stay.status != "in_house":
         raise StayNotInHouse({"stay": stay.pk, "status": stay.status})
+    # FIX 1 — resolve the currency the folio must carry (may BLOCK check-in on a
+    # conflicting / missing agreed currency; no folio is created then).
+    agreed_currency = _stay_folio_currency(stay)
     existing = Folio.objects.filter(
         hotel=stay.hotel, stay=stay, status=FolioStatus.OPEN
     ).first()
     if existing is not None:
+        _guard_existing_folio_currency(existing, agreed_currency)
         return existing
     # Reservation-folio reuse (RESERVATIONS-FORM-REWORK — immediate check-in):
     # if a pre-arrival deposit opened the reservation's ONE folio (reservation
@@ -415,9 +485,10 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
     # second one — the deposit then lives on the stay folio automatically (ONE
     # ledger). Backward-compatible: with no reservation, or no open reservation
     # folio, this is a no-op and the stay folio is created below exactly as
-    # before.
+    # before. A currency mismatch BLOCKS (the atomic rolls the attach back).
     reused = _reuse_reservation_folio_for_stay(stay, user=user)
     if reused is not None:
+        _guard_existing_folio_currency(reused, agreed_currency)
         return reused
     try:
         return create_folio(
@@ -428,6 +499,7 @@ def ensure_stay_folio(stay, *, user=None) -> Folio:
             customer_name=stay.primary_guest.full_name,
             user=user,
             origin="stay",
+            agreed_currency=agreed_currency,
         )
     except (IntegrityError, InvalidFinanceOperation):
         # Lost a race that slipped past the lock: the winner's folio is ours.
@@ -530,6 +602,17 @@ def _guard_open(folio):
 def close_folio(folio, *, user=None) -> Folio:
     folio = _lock_folio(folio)
     _guard_open(folio)
+    # §32/§38 — a folio still flagged awaiting final charges must NOT close. This
+    # is the single source of truth: the stay checkout gate also checks it, but
+    # enforcing it here protects the direct FolioCloseView path too.
+    if folio.awaiting_final_charges:
+        raise FolioAwaitingFinalCharges(
+            {
+                "folio": folio.id,
+                "folio_number": folio.folio_number,
+                "reason": folio.awaiting_final_charges_note,
+            }
+        )
     balance = folio_balance(folio)
     if balance["balance"] != ZERO:
         raise FolioNotBalanced({"folio": folio.id})
@@ -589,15 +672,86 @@ def void_folio(folio, *, reason, user=None) -> Folio:
     return folio
 
 
+@transaction.atomic
+def set_folio_awaiting_final_charges(folio, *, awaiting, note="", user=None) -> Folio:
+    """Toggle the folio's "awaiting final charges" operational flag (§32). While
+    true the folio must NOT close and departure is blocked; cleared once the final
+    charges are confirmed. Only on an OPEN folio."""
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    awaiting = bool(awaiting)
+    folio.awaiting_final_charges = awaiting
+    folio.awaiting_final_charges_note = (note or "")[:255] if awaiting else ""
+    folio.save(
+        update_fields=[
+            "awaiting_final_charges",
+            "awaiting_final_charges_note",
+            "updated_at",
+        ]
+    )
+    _record_event(
+        folio.hotel,
+        event_type=(
+            "folio.awaiting_final_charges_set"
+            if awaiting
+            else "folio.awaiting_final_charges_cleared"
+        ),
+        severity="info",
+        title=(
+            f"Folio {folio.folio_number} "
+            f"{'is awaiting' if awaiting else 'cleared'} final charges"
+        ),
+        message=folio.awaiting_final_charges_note,
+        user=user,
+        obj=folio,
+    )
+    return folio
+
+
+@transaction.atomic
+def reopen_folio(folio, *, reason, user=None) -> Folio:
+    """Reopen a CLOSED folio (STAYS-ARRIVALS-DEPARTURES §42).
+
+    Special permission (view layer) + mandatory reason + audit. A VOIDED folio
+    can never reopen. The reopen requires (and is dated to) the current OPEN
+    business day, so it respects the daily close. No financial movement is created
+    — closed history is never edited, only the folio is made writable again.
+    """
+    reason = _require_reason(reason)
+    folio = _lock_folio(folio)
+    if folio.status == FolioStatus.OPEN:
+        return folio
+    if folio.status == FolioStatus.VOIDED:
+        raise InvalidFinanceOperation({"reason": "cannot_reopen_voided"})
+    business_date = _business_date(folio.hotel)
+    _ensure_day_open(folio.hotel, business_date)
+    folio.status = FolioStatus.OPEN
+    folio.closed_at = None
+    folio.closed_by = None
+    folio.save(update_fields=["status", "closed_at", "closed_by", "updated_at"])
+    _record_event(
+        folio.hotel,
+        event_type="folio.reopened",
+        severity="warning",
+        title=f"Folio {folio.folio_number} reopened",
+        message=reason,
+        user=user,
+        obj=folio,
+    )
+    return folio
+
+
 # --- Charges ----------------------------------------------------------------
 
 
 @transaction.atomic
 def add_charge(folio, *, charge_type, description, quantity, unit_amount,
                tax_rate=ZERO, tax_amount=None, source="manual", user=None,
-               adjusts=None, record_event=True) -> FolioCharge:
+               adjusts=None, room_night=None, record_event=True) -> FolioCharge:
     """Post a charge dated to the CURRENT open hotel business date (the
-    caller never chooses the date — no back- or future-dating)."""
+    caller never chooses the date — no back- or future-dating). ``room_night``
+    is set only for a room-night charge and is the idempotency key enforced by
+    the partial unique index (folio + room_night)."""
     folio = _lock_folio(folio)
     _guard_open(folio)
     business_date = _business_date(folio.hotel)
@@ -634,6 +788,7 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
         charge_date=business_date,
         source=source,
         adjusts=adjusts,
+        room_night=room_night,
         created_by=_actor(user),
     )
     if record_event:
@@ -651,11 +806,18 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
 
 @transaction.atomic
 def post_room_account_charge(folio, *, description, quantity, unit_amount,
-                            charge_type=ChargeType.ROOM, tax_rate=ZERO,
+                            charge_type, tax_rate=ZERO,
                             tax_amount=None, source="room_account",
                             user=None) -> FolioCharge:
     """Post an "on room account" item: the charge is added to the folio and
     left OWING. This is a thin, intent-revealing delegate to ``add_charge``.
+
+    ``charge_type`` is a REQUIRED keyword (no default): the earlier ``ROOM``
+    default was ambiguous — a caller could silently post a ROOM charge that
+    would trip the room-night guard. The caller must now state the type
+    explicitly. This delegate NEVER sets ``room_night`` (it is left NULL); the
+    per-night idempotency key is owned solely by the central night service
+    ``ensure_due_room_charges``.
 
     Invariant #5: on-room-account is NOT a payment. This NEVER creates a
     ``Payment`` — doing so would falsely reduce the balance. The balance stays
@@ -671,6 +833,247 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
         source=source,
         user=user,
     )
+
+
+# STAYS-ARRIVALS-DEPARTURES — every room NIGHT is its own charge, marked with a
+# short ``source`` and its ``room_night`` date. The stable idempotency key is
+# (folio, room_night), enforced by a partial unique index, so check-in, a retry,
+# the pre-checkout safety net, the manual ensure-room-charges endpoint, the daily
+# close (``post_due_room_charges_for_hotel`` in ``close_business_day``), and any
+# two CONCURRENT posters all converge on exactly one charge per night.
+ROOM_NIGHT_SOURCE = "stay_room"
+
+
+def _room_rate_for_night(stay, night):
+    """Resolve ``(rate, currency, label)`` for one room night from the stay's rate
+    periods — the AGREED price for that date, NEVER the live catalog rate.
+
+    STAYS rate-integrity round: every night is billed from the ``StayRatePeriod``
+    whose half-open range ``[start_date, end_date)`` covers ``night`` (the booking
+    period, an extension, or an override). The periods are read from the
+    (preferably prefetched) ``stay.rate_periods`` relation, evaluated once and
+    cached on the instance so a multi-night loop issues no per-night query.
+
+    * period found, rate > 0 -> ``(money(rate), currency, label)`` — bill it.
+    * period found, rate NULL -> raise :class:`MissingAgreedNightlyRate`. NULL is
+      the agreed price MISSING (must be remediated), NOT a free night: it is NEVER
+      skipped and NEVER posted as zero.
+    * NO period covers the night -> raise :class:`MissingAgreedNightlyRate`.
+
+    Either gap must fail posting (and therefore checkout / daily close) so nothing
+    settles short and no live-catalog rate is ever used. The display label always
+    comes from the room type when known.
+    """
+    line = stay.reservation_line
+    room_type = getattr(line, "room_type", None) if line is not None else None
+    label = room_type.name if room_type is not None else "Room"
+    # Prefer the per-call cache ``ensure_due_room_charges`` sets (kept fresh each
+    # call so an extension that just added a period is never missed); fall back to
+    # a direct read for a standalone call. Never write the cache here, so a reused
+    # stay instance can never carry a STALE period list between calls.
+    periods = getattr(stay, "_rate_periods_cache", None)
+    if periods is None:
+        periods = list(stay.rate_periods.all())
+    for period in periods:
+        if period.start_date <= night < period.end_date:
+            if period.nightly_rate is None:
+                # A covering-but-unpriced period: agreed price MISSING, not free.
+                raise MissingAgreedNightlyRate(
+                    {
+                        "stay": stay.id,
+                        "room_night": night.isoformat(),
+                        "reason": "unpriced_period",
+                    }
+                )
+            return money(period.nightly_rate), period.currency, label
+    raise MissingAgreedNightlyRate(
+        {"stay": stay.id, "room_night": night.isoformat()}
+    )
+
+
+@transaction.atomic
+def ensure_due_room_charges(stay, *, as_of=None, user=None):
+    """Idempotently post one ROOM charge per CONSUMED night (owner correction to
+    §24/§31): billing runs from the guest's ACTUAL arrival up to — but not
+    including — the planned departure, and only for nights the hotel business date
+    has already passed (``D < business_date``). Future nights are NEVER pre-posted
+    — the folio only ever holds the nights the guest has actually stayed by the
+    hotel's clock, so an early departure owes exactly the nights it consumed.
+
+    Each night is keyed by its ``room_night`` date; the partial unique index on
+    (folio, room_night) is the idempotency backstop, so a retry or a concurrent
+    poster never double-posts. This function is invoked at CHECK-IN, by the
+    pre-checkout safety net in ``CheckOutService``, by the manual
+    ``stays/<id>/ensure-room-charges`` endpoint, AND by the daily close
+    (``post_due_room_charges_for_hotel`` in ``close_business_day``). Skips an
+    UNPRICED room type. The charge itself is dated to the current business date
+    (no back-dating); the ``room_night``/description carry the night it settles.
+    Returns the number of night charges newly posted.
+    """
+    # ``ensure_stay_folio`` locks the stay row (select_for_update), so concurrent
+    # calls for the SAME stay already serialize here; the partial unique index on
+    # (folio, room_night) is the DB backstop for any path that bypasses the lock.
+    folio = ensure_stay_folio(stay, user=user)
+    business_date = as_of or _business_date(stay.hotel)
+    # STAYS rate-integrity round: load THIS stay's rate periods once, FRESH for
+    # this call (an extension may have added one since this in-memory instance was
+    # last billed), so the per-night resolver issues no per-night query and never
+    # reads a stale list. Uses the prefetched relation when the caller provided it.
+    stay._rate_periods_cache = list(stay.rate_periods.all())
+    # FIX-2 (legacy double-billing guard): an OLDER design posted ONE aggregated
+    # ROOM charge for the whole stay with no ``room_night`` (room_night IS NULL).
+    # If such a POSTED aggregated charge already exists on this folio, posting
+    # per-night charges now would DOUBLE-BILL the room — so post nothing and bail.
+    if folio.charges.filter(
+        type=ChargeType.ROOM,
+        status=PostingStatus.POSTED,
+        room_night__isnull=True,
+    ).exists():
+        return 0
+    posted = set(
+        folio.charges.filter(
+            type=ChargeType.ROOM,
+            status=PostingStatus.POSTED,
+            room_night__isnull=False,
+        ).values_list("room_night", flat=True)
+    )
+    # FIX-1 (billing window START): billing begins at the guest's ACTUAL arrival,
+    # so nights before check-in are never billed (consumed nights only). Convert
+    # the aware ``actual_check_in_at`` to the hotel-local date; when no arrival is
+    # recorded — or the hotel carries an INVALID timezone string (the ``timezone``
+    # field has no validators) — fall back to the planned check-in, mirroring the
+    # ``_computed_business_date`` guard so a bad tz never breaks check-in/-out. The
+    # upper bound (planned check-out) is deliberately left unchanged — overstay is
+    # a separate decision.
+    from apps.shifts.services import _hotel_timezone
+
+    arrival_date = stay.planned_check_in_date
+    if stay.actual_check_in_at is not None:
+        try:
+            arrival_date = timezone.localtime(
+                stay.actual_check_in_at, ZoneInfo(_hotel_timezone(stay.hotel))
+            ).date()
+        except (KeyError, ValueError):
+            # ZoneInfoNotFoundError subclasses KeyError; a bad tz name keeps the
+            # safe planned-check-in fallback rather than failing the posting path.
+            arrival_date = stay.planned_check_in_date
+    night = max(stay.planned_check_in_date, arrival_date)
+    end = stay.planned_check_out_date
+    count = 0
+    while night < end and night < business_date:
+        if night not in posted:
+            # STAYS rate-integrity remediation: resolve THIS night's agreed rate
+            # from the stay's rate periods. The resolver RAISES
+            # MissingAgreedNightlyRate for either a night with NO covering period OR
+            # a covering period whose rate is NULL (agreed price missing — never a
+            # free night, never a live-catalog fallback), so a rate gap correctly
+            # fails checkout / daily close instead of settling short.
+            rate, currency, label = _room_rate_for_night(stay, night)
+            # ITEM 7 (currency hardening): a priced period MUST carry an explicit
+            # currency equal to the folio currency — the room charge posts in the
+            # folio currency and there is no FX conversion for room nights here. An
+            # empty OR mismatched currency is refused (never a silent wrong-currency
+            # post).
+            if not currency or currency != folio.currency:
+                raise InvalidFinanceOperation(
+                    {
+                        "reason": (
+                            "rate_currency_required"
+                            if not currency
+                            else "rate_currency_mismatch"
+                        ),
+                        "room_night": night.isoformat(),
+                        "rate_currency": currency,
+                        "folio_currency": folio.currency,
+                    }
+                )
+            try:
+                # add_charge is @transaction.atomic -> a savepoint, so a unique
+                # collision from a concurrent poster rolls back only this insert
+                # and leaves the surrounding transaction usable.
+                add_charge(
+                    folio,
+                    charge_type=ChargeType.ROOM,
+                    description=f"{label} — night {night.isoformat()}",
+                    quantity=1,
+                    unit_amount=rate,
+                    source=ROOM_NIGHT_SOURCE,
+                    room_night=night,
+                    user=user,
+                )
+                count += 1
+            except IntegrityError:
+                # FIX-3: a concurrent poster may have inserted THIS night between
+                # our read and our insert, so the partial unique index (folio,
+                # room_night) rejected the duplicate. Re-query: if the night is now
+                # POSTED the invariant (one charge per night) holds and we treat it
+                # as done. But if it is NOT posted then this IntegrityError is not a
+                # uniqueness collision — do not silently swallow it; re-raise.
+                if not folio.charges.filter(
+                    type=ChargeType.ROOM,
+                    room_night=night,
+                    status=PostingStatus.POSTED,
+                ).exists():
+                    raise
+            posted.add(night)
+        night = night + timedelta(days=1)
+    return count
+
+
+@transaction.atomic
+def post_due_room_charges_for_hotel(hotel, *, business_date=None, user=None) -> int:
+    """STAYS ITEM-2 — post every room night now DUE for the hotel's IN-HOUSE
+    stays, in one tenant-scoped pass.
+
+    Iterates the hotel's in-house stays and runs the central idempotent
+    ``ensure_due_room_charges`` on each. That service decides which nights are due
+    (never a future night, never on/after the planned check-out — the billing cap
+    stays intact) and never double-posts.
+
+    NO N+1 on active stays (owner requirement):
+      * The business date is read ONCE here (not re-locked per stay). The daily
+        close already holds the ``HotelSettings`` lock and knows the closing date,
+        so it passes ``business_date`` and no per-stay ``lock_business_date`` runs;
+        called standalone, we take the lock exactly once. It is forwarded as
+        ``as_of`` so ``ensure_due_room_charges`` skips its own per-stay read. The
+        posted charge is still dated to the real business date by ``add_charge``
+        (``as_of`` only BOUNDS the night loop; the charge computes its own date).
+      * ``hotel__settings`` is ``select_related`` so the per-stay hotel-timezone
+        lookup (``_hotel_timezone`` in the arrival-window calc) is served from the
+        already-fetched row, not a query per stay. Room / room type / reservation /
+        line are joined for the same reason.
+
+    Designed to run INSIDE the daily close's atomic block, immediately before the
+    snapshot is built, so the day's folios and room revenue reflect the consumed
+    nights. Because the close is atomic, a failure posting ANY stay rolls the
+    whole close back (no partial snapshot, no CLOSED status, no date roll) and
+    surfaces a diagnosable exception. Returns the total night charges newly posted.
+    """
+    from apps.stays.models import Stay, StayStatus
+
+    if business_date is None:
+        business_date = _business_date(hotel)
+    stays = (
+        Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+        .select_related(
+            "hotel",
+            "hotel__settings",
+            "room",
+            "room__room_type",
+            "reservation",
+            "reservation_line",
+            "reservation_line__room_type",
+        )
+        # STAYS rate-integrity round: the per-night resolver reads each stay's
+        # rate periods, so prefetch them here to keep this a fixed-query pass
+        # (no per-stay rate-period query).
+        .prefetch_related("rate_periods")
+        .order_by("id")
+    )
+    total = 0
+    for stay in stays:
+        total += ensure_due_room_charges(stay, as_of=business_date, user=user)
+    return total
 
 
 @transaction.atomic
@@ -1304,3 +1707,316 @@ def reverse_expense(expense, *, reason, user=None) -> Expense:
         obj=reversal,
     )
     return reversal
+
+
+# --- Refundable insurance (STAYS-ARRIVALS-DEPARTURES §35 / owner D2) ---------
+# Held SEPARATELY from the folio: never revenue, never on the folio balance. A
+# documented deduction posts ONLY the deducted portion to the folio (a payment
+# settling the account); a refund returns money to the guest (no folio movement).
+
+
+def held_insurance_qs(stay):
+    """The refundable-insurance rows that gate ``stay``'s checkout (§35/§38).
+
+    A stay is blocked from departure while ANY of these still hold money: the
+    insurance taken directly against the stay AND the insurance taken at booking
+    against the reservation while the stay was not yet linked (``stay`` NULL).
+
+    This is the SINGLE definition of "insurance that blocks this stay", used by
+    BOTH ``CheckOutService.execute`` (the settlement gate that actually raises
+    ``InsuranceNotSettled``) and the checkout-dialog folio summary
+    (``stays.views._stay_folio_summary``). Keeping one query means the endpoint's
+    ``can_check_out`` / ``financial_clearance_complete`` can never say "ready"
+    while the service would block on a reservation-level deposit (the earlier
+    ``stay=stay``-only endpoint query missed exactly that case).
+    """
+    from .models import RefundableInsurance
+
+    held_filter = models.Q(stay=stay)
+    if stay.reservation_id:
+        held_filter |= models.Q(
+            reservation_id=stay.reservation_id, stay__isnull=True
+        )
+    return RefundableInsurance.objects.filter(hotel=stay.hotel).filter(held_filter)
+
+
+def _refresh_insurance_status(ins) -> None:
+    """Recompute the derived insurance status from held/deducted/refunded."""
+    from .models import InsuranceStatus
+
+    held = ins.amount - ins.deducted_amount - ins.refunded_amount
+    if held >= ins.amount:
+        ins.status = InsuranceStatus.HELD
+    elif held > ZERO:
+        ins.status = InsuranceStatus.PARTIALLY_DEDUCTED
+    elif ins.deducted_amount == ZERO:
+        ins.status = InsuranceStatus.REFUNDED
+    else:
+        ins.status = InsuranceStatus.CONSUMED
+    if held <= ZERO and ins.settled_at is None:
+        ins.settled_at = timezone.now()
+
+
+@transaction.atomic
+def record_insurance(*, hotel, amount, currency=None, method=None, reservation=None,
+                     stay=None, reference="", notes="", user=None):
+    """Record a REFUNDABLE insurance/security amount held SEPARATELY from the
+    folio (§35). Never revenue; never on the folio balance. Positive amount."""
+    from .models import PaymentMethod, RefundableInsurance
+
+    amt = money(amount)
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    cur = (currency or _hotel_currency(hotel)).upper()
+    if cur not in _accepted_currencies(hotel):
+        raise InvalidFinanceOperation({"reason": "currency_not_accepted", "currency": cur})
+    # Defence in depth: the linked reservation/stay must belong to the same hotel
+    # (the view already scopes them, but never trust a cross-hotel link here).
+    if reservation is not None and reservation.hotel_id != hotel.id:
+        raise InvalidFinanceOperation({"reason": "reservation_hotel_mismatch"})
+    if stay is not None and stay.hotel_id != hotel.id:
+        raise InvalidFinanceOperation({"reason": "stay_hotel_mismatch"})
+    return RefundableInsurance.objects.create(
+        hotel=hotel,
+        reservation=reservation,
+        stay=stay,
+        currency=cur,
+        amount=amt,
+        method=(method or PaymentMethod.CASH),
+        reference=reference or "",
+        notes=notes or "",
+        received_by=_actor(user),
+        received_at=timezone.now(),
+        created_by=_actor(user),
+    )
+
+
+# Standard, audit-visible reason for the routine return of a deposit at
+# departure — the front desk is not asked to re-type a reason for it (owner
+# rule §35); a manual out-of-cycle refund may still pass its own reason.
+INSURANCE_RETURN_ON_CHECKOUT_REASON = "insurance_return_on_checkout"
+
+
+@transaction.atomic
+def refund_insurance(insurance, *, amount=None, reason="", user=None):
+    """Refund held insurance to the guest (§35). The money returns to the guest —
+    NOT a folio movement. ``amount`` defaults to the full remaining held amount.
+    A blank reason (the normal deposit return at departure) is recorded under a
+    standard reason so the movement is always audited without staff friction."""
+    from .models import RefundableInsurance
+
+    insurance = RefundableInsurance.objects.select_for_update().get(pk=insurance.pk)
+    held = insurance.amount - insurance.deducted_amount - insurance.refunded_amount
+    amt = money(amount) if amount is not None else held
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > held:
+        raise InvalidAmount({"field": "amount", "reason": "exceeds_held"})
+    reason = (reason or "").strip() or INSURANCE_RETURN_ON_CHECKOUT_REASON
+    insurance.refunded_amount += amt
+    _refresh_insurance_status(insurance)
+    insurance.settled_by = _actor(user)
+    insurance.save()
+    _record_event(
+        insurance.hotel,
+        event_type="insurance.refunded",
+        severity="info",
+        title=f"Insurance refunded {amt} {insurance.currency}",
+        message=reason,
+        user=user,
+        obj=insurance,
+    )
+    return insurance
+
+
+@transaction.atomic
+def deduct_insurance(insurance, *, amount, reason, user=None):
+    """Deduct part of the held insurance for a documented reason (§35): the
+    deducted portion is posted to the stay's folio as a documented payment
+    (settling the account) — needs a reason + audit. Reduces the held amount."""
+    reason = _require_reason(reason)
+    from .models import PaymentMethod, RefundableInsurance
+
+    insurance = RefundableInsurance.objects.select_for_update().get(pk=insurance.pk)
+    held = insurance.amount - insurance.deducted_amount - insurance.refunded_amount
+    amt = money(amount)
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > held:
+        raise InvalidAmount({"field": "amount", "reason": "exceeds_held"})
+    if insurance.stay_id is None:
+        raise InvalidFinanceOperation({"reason": "insurance_not_linked_to_stay"})
+    folio = ensure_stay_folio(insurance.stay, user=user)
+    # The deducted portion settles an OUTSTANDING folio charge — it must never
+    # exceed what the folio actually owes (else it would create a credit that
+    # refund_folio_credit could pay back = double payout), and it is posted in
+    # the folio's own currency, so the insurance must match it (no silent 1:1 FX).
+    if insurance.currency.upper() != folio.currency.upper():
+        raise InvalidFinanceOperation(
+            {
+                "reason": "insurance_currency_mismatch",
+                "insurance_currency": insurance.currency,
+                "folio_currency": folio.currency,
+            }
+        )
+    outstanding = folio_balance(folio)["balance"]
+    if outstanding <= ZERO:
+        raise InvalidFinanceOperation(
+            {"reason": "no_outstanding_balance", "balance": str(outstanding)}
+        )
+    if amt > outstanding:
+        raise InvalidFinanceOperation(
+            {"reason": "exceeds_folio_balance", "balance": str(outstanding)}
+        )
+    record_payment(
+        folio,
+        amount=amt,
+        method=PaymentMethod.OTHER,
+        payer_name="Insurance",
+        reference=f"insurance:{insurance.id}",
+        notes=f"insurance deduction: {reason}"[:255],
+        user=user,
+    )
+    insurance.deducted_amount += amt
+    _refresh_insurance_status(insurance)
+    insurance.settled_by = _actor(user)
+    insurance.save()
+    _record_event(
+        insurance.hotel,
+        event_type="insurance.deducted",
+        severity="warning",
+        title=f"Insurance deducted {amt} {insurance.currency}",
+        message=reason,
+        user=user,
+        obj=insurance,
+    )
+    return insurance
+
+
+# --- Stay-folio settlement + credit refund (STAYS §34/§37) ------------------
+
+
+def _resolve_payment_fx(folio, *, amount, currency, original_amount,
+                        exchange_rate, rate_basis, user):
+    """Resolve a payment's BASE amount + FX snapshot for ``folio`` (§34/§57).
+
+    Same currency as the folio → ``amount`` IS the base amount. Foreign currency →
+    a manual ``exchange_rate`` AND the tendered ``original_amount`` are required and
+    the base amount is DERIVED (never client-trusted); the direction is dictated by
+    ``rate_basis``. Returns ``(base_amount, fx_dict)``. Mirrors the deposit path.
+    """
+    base_currency = folio.currency
+    resolved_currency = (currency or base_currency).strip().upper()
+    accepted = _accepted_currencies(folio.hotel)
+    if resolved_currency not in accepted:
+        raise InvalidFinanceOperation(
+            {"reason": "currency_not_accepted", "currency": resolved_currency,
+             "accepted": accepted}
+        )
+    if resolved_currency == base_currency.upper():
+        if amount is None or money(amount) <= ZERO:
+            raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+        base_amount = money(amount)
+        fx = dict(payment_currency=base_currency, original_amount=base_amount,
+                  exchange_rate=None, rate_basis="", rate_captured_at=None,
+                  rate_entered_by=None)
+    else:
+        resolved_basis = _resolve_rate_basis(rate_basis)
+        if exchange_rate is None or Decimal(str(exchange_rate)) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "exchange_rate_required", "currency": resolved_currency}
+            )
+        if original_amount is None or money(original_amount) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "original_amount_required", "currency": resolved_currency}
+            )
+        rate = Decimal(str(exchange_rate))
+        original = money(original_amount)
+        if resolved_basis == RateBasis.PAYMENT_PER_BASE:
+            if rate == ZERO:
+                raise InvalidFinanceOperation({"reason": "invalid_exchange_rate"})
+            base_amount = money(original / rate)
+        else:
+            base_amount = money(original * rate)
+        fx = dict(payment_currency=resolved_currency, original_amount=original,
+                  exchange_rate=rate, rate_basis=resolved_basis,
+                  rate_captured_at=timezone.now(), rate_entered_by=user)
+    if base_amount <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if base_amount.copy_abs() >= MONEY_MAX_ABS:
+        raise InvalidFinanceOperation({"reason": "amount_out_of_range"})
+    return base_amount, fx
+
+
+@transaction.atomic
+def record_folio_settlement(folio, *, method, amount=None, currency=None,
+                            original_amount=None, exchange_rate=None, rate_basis="",
+                            payer_name="", reference="", notes="", user=None):
+    """Settle a stay/folio balance with a payment (§34), multi-currency aware
+    (same FX resolution as a deposit). Only on an OPEN folio; the base amount alone
+    drives ``folio_balance``. A manual FX rate is gated by ``exchange_rate.override``
+    at the view layer."""
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    base_amount, fx = _resolve_payment_fx(
+        folio, amount=amount, currency=currency, original_amount=original_amount,
+        exchange_rate=exchange_rate, rate_basis=rate_basis, user=user,
+    )
+    return record_payment(
+        folio, amount=base_amount, method=method, payer_name=payer_name,
+        reference=reference, notes=notes, user=user, **fx,
+    )
+
+
+@transaction.atomic
+def refund_folio_credit(folio, *, amount=None, reason, method=None, user=None):
+    """Refund a folio CREDIT balance to the guest (§37): when posted payments
+    exceed posted charges (overpaid), return the excess. Posts a NEGATIVE payment
+    (money out) that brings the balance toward zero; the original payments are
+    NEVER deleted and the financial date is never changed silently. Requires a
+    reason (finance.refund at the view layer)."""
+    from apps.shifts.services import get_open_shift_for
+
+    from .models import PaymentMethod
+
+    reason = _require_reason(reason)
+    folio = _lock_folio(folio)
+    _guard_open(folio)
+    balance = folio_balance(folio)["balance"]
+    credit = -balance  # positive when the guest overpaid (balance is negative)
+    if credit <= ZERO:
+        raise InvalidFinanceOperation(
+            {"reason": "no_credit_to_refund", "balance": str(balance)}
+        )
+    amt = money(amount) if amount is not None else credit
+    if amt <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if amt > credit:
+        raise InvalidFinanceOperation({"reason": "exceeds_credit", "credit": str(credit)})
+    business_date = _business_date(folio.hotel)
+    _ensure_day_open(folio.hotel, business_date)
+    refund = Payment.objects.create(
+        hotel=folio.hotel,
+        folio=folio,
+        receipt_number=next_number(folio.hotel, NumberKind.RECEIPT),
+        amount=money(-amt),
+        currency=folio.currency,
+        method=(method or PaymentMethod.CASH),
+        status=PostingStatus.POSTED,
+        paid_at=timezone.now(),
+        business_date=business_date,
+        shift=get_open_shift_for(user, folio.hotel),
+        reference="refund",
+        notes=reason[:255],
+        created_by=_actor(user),
+    )
+    _record_event(
+        folio.hotel,
+        event_type="folio.refund",
+        severity="warning",
+        title=f"Refund {amt} {folio.currency} on folio {folio.folio_number}",
+        message=reason,
+        user=user,
+        obj=refund,
+    )
+    return refund

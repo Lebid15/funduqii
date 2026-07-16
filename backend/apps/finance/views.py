@@ -6,10 +6,11 @@ finance services; there is no hard delete and no external gateway.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db.models import Q, Sum
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +18,7 @@ from rest_framework.views import APIView
 from apps.common.exceptions import FolioClosed, InvalidFinanceOperation
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelPermission
+from apps.rbac.services import has_hotel_permission
 from apps.reservations.models import Reservation
 from apps.shifts.services import get_business_date
 from apps.stays.models import Stay
@@ -32,6 +34,7 @@ from .models import (
     InvoiceStatus,
     Payment,
     PostingStatus,
+    RefundableInsurance,
 )
 from .serializers import (
     ChargeCreateSerializer,
@@ -40,6 +43,7 @@ from .serializers import (
     FolioCreateSerializer,
     FolioListSerializer,
     FolioSerializer,
+    InsuranceSerializer,
     InvoiceCreateSerializer,
     InvoiceSerializer,
     PaymentCreateSerializer,
@@ -58,6 +62,9 @@ CanChargeCreate = HasHotelPermission("finance.charge_create")
 CanChargeVoid = HasHotelPermission("finance.charge_void")
 CanPaymentCreate = HasHotelPermission("finance.payment_create")
 CanPaymentVoid = HasHotelPermission("finance.payment_void")
+CanReopen = HasHotelPermission("finance.reopen")
+CanRefund = HasHotelPermission("finance.refund")
+CanInsuranceManage = HasHotelPermission("finance.insurance_manage")
 CanAdjust = HasHotelPermission("finance.adjust")
 CanPaymentReverse = HasHotelPermission("finance.payment_reverse")
 CanInvoiceCreate = HasHotelPermission("finance.invoice_create")
@@ -90,6 +97,28 @@ def _hotel_header(hotel) -> dict:
 
 def _get(model, request, pk):
     return generics.get_object_or_404(model, pk=pk, hotel=request.hotel)
+
+
+def _opt_decimal(data, field):
+    """Validate an optional money field: None/'' → None; a malformed value → a
+    400 (not a 500 from Decimal() deep in the service). Returns the raw string
+    so the service keeps its own quantization/FX handling."""
+    value = data.get(field)
+    if value is None or value == "":
+        return None
+    try:
+        Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValidationError({field: "must_be_a_number"})
+    return str(value)
+
+
+def _req_decimal(data, field):
+    """Same as :func:`_opt_decimal` but the field is mandatory (400 if absent)."""
+    value = _opt_decimal(data, field)
+    if value is None:
+        raise ValidationError({field: "required"})
+    return value
 
 
 # --- Folios -----------------------------------------------------------------
@@ -180,6 +209,105 @@ class FolioCloseView(APIView):
         _guard_write(request)
         folio = _get(Folio, request, pk)
         services.close_folio(folio, user=request.user)
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioReopenView(APIView):
+    """Reopen a CLOSED folio (§42) — POST folios/<id>/reopen/ with a mandatory
+    ``reason``. Requires ``finance.reopen``."""
+
+    def get_permissions(self):
+        return [CanReopen()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.reopen_folio(
+            folio, reason=(request.data.get("reason") or ""), user=request.user
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioAwaitingChargesView(APIView):
+    """Toggle the folio's awaiting-final-charges flag (§32) — POST
+    folios/<id>/awaiting-final-charges/ with ``awaiting`` (bool) + optional
+    ``note``. Requires ``finance.update``."""
+
+    def get_permissions(self):
+        return [CanUpdate()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.set_folio_awaiting_final_charges(
+            folio,
+            awaiting=bool(request.data.get("awaiting")),
+            note=(request.data.get("note") or ""),
+            user=request.user,
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioSettleView(APIView):
+    """Settle a folio balance with a payment (§34), multi-currency aware — POST
+    folios/<id>/settle/. Requires ``finance.payment_create``; a manual FX rate on
+    a foreign-currency payment additionally requires ``exchange_rate.override``."""
+
+    def get_permissions(self):
+        return [CanPaymentCreate()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        data = request.data
+        currency = (data.get("currency") or "").strip().upper()
+        if (
+            currency
+            and currency != folio.currency.upper()
+            and data.get("exchange_rate") is not None
+            and not has_hotel_permission(
+                request.user, request.hotel, "exchange_rate.override"
+            )
+        ):
+            raise PermissionDenied()
+        services.record_folio_settlement(
+            folio,
+            method=data.get("method", "cash"),
+            amount=_opt_decimal(data, "amount"),
+            currency=(currency or None),
+            original_amount=_opt_decimal(data, "original_amount"),
+            exchange_rate=_opt_decimal(data, "exchange_rate"),
+            rate_basis=data.get("rate_basis", ""),
+            payer_name=data.get("payer_name", ""),
+            reference=data.get("reference", ""),
+            notes=data.get("notes", ""),
+            user=request.user,
+        )
+        folio.refresh_from_db()
+        return Response(FolioSerializer(folio).data)
+
+
+class FolioRefundView(APIView):
+    """Refund a folio credit balance to the guest (§37) — POST folios/<id>/refund/
+    with a mandatory ``reason`` (+ optional ``amount``/``method``). Requires
+    ``finance.refund``."""
+
+    def get_permissions(self):
+        return [CanRefund()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        folio = _get(Folio, request, pk)
+        services.refund_folio_credit(
+            folio,
+            amount=_opt_decimal(request.data, "amount"),
+            reason=(request.data.get("reason") or ""),
+            method=request.data.get("method"),
+            user=request.user,
+        )
         folio.refresh_from_db()
         return Response(FolioSerializer(folio).data)
 
@@ -670,3 +798,95 @@ class FinanceOverviewView(APIView):
                 "currency": hotel_currency,
             }
         )
+
+
+# --- Refundable insurance (STAYS §35) ---------------------------------------
+
+
+class InsuranceListCreateView(APIView):
+    """GET finance/insurances/?stay=&reservation= (finance.view) — list held
+    insurances; POST records one (finance.insurance_manage)."""
+
+    def get_permissions(self):
+        return [CanView()] if self.request.method == "GET" else [CanInsuranceManage()]
+
+    def get(self, request: Request) -> Response:
+        qs = RefundableInsurance.objects.filter(hotel=request.hotel)
+        stay = request.query_params.get("stay")
+        reservation = request.query_params.get("reservation")
+        if stay and str(stay).isdigit():
+            qs = qs.filter(stay_id=stay)
+        if reservation and str(reservation).isdigit():
+            qs = qs.filter(reservation_id=reservation)
+        return Response(InsuranceSerializer(qs, many=True).data)
+
+    def post(self, request: Request) -> Response:
+        _guard_write(request)
+        data = request.data
+        reservation = stay = None
+        if data.get("reservation"):
+            from apps.reservations.models import Reservation
+
+            reservation = generics.get_object_or_404(
+                Reservation, pk=data["reservation"], hotel=request.hotel
+            )
+        if data.get("stay"):
+            from apps.stays.models import Stay
+
+            stay = generics.get_object_or_404(
+                Stay, pk=data["stay"], hotel=request.hotel
+            )
+        ins = services.record_insurance(
+            hotel=request.hotel,
+            amount=_req_decimal(data, "amount"),
+            currency=data.get("currency"),
+            method=data.get("method"),
+            reservation=reservation,
+            stay=stay,
+            reference=data.get("reference", ""),
+            notes=data.get("notes", ""),
+            user=request.user,
+        )
+        return Response(
+            InsuranceSerializer(ins).data, status=status.HTTP_201_CREATED
+        )
+
+
+class InsuranceRefundView(APIView):
+    """POST finance/insurances/<id>/refund/ (finance.insurance_manage) — refund
+    part/all held insurance to the guest."""
+
+    def get_permissions(self):
+        return [CanInsuranceManage()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        ins = _get(RefundableInsurance, request, pk)
+        services.refund_insurance(
+            ins,
+            amount=_opt_decimal(request.data, "amount"),
+            reason=(request.data.get("reason") or ""),
+            user=request.user,
+        )
+        ins.refresh_from_db()
+        return Response(InsuranceSerializer(ins).data)
+
+
+class InsuranceDeductView(APIView):
+    """POST finance/insurances/<id>/deduct/ (finance.insurance_manage) — deduct a
+    documented portion (reason required); posts the deducted portion to the folio."""
+
+    def get_permissions(self):
+        return [CanInsuranceManage()]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        ins = _get(RefundableInsurance, request, pk)
+        services.deduct_insurance(
+            ins,
+            amount=_req_decimal(request.data, "amount"),
+            reason=(request.data.get("reason") or ""),
+            user=request.user,
+        )
+        ins.refresh_from_db()
+        return Response(InsuranceSerializer(ins).data)
