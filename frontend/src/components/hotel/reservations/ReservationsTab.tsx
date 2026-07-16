@@ -83,9 +83,11 @@ const SOURCES = ["direct", "phone", "walk_in", "public_website", "other"] as con
  * summary counters stay honest. */
 export function ReservationsTab({
   createSignal = 0,
+  refreshSignal = 0,
   onChanged,
 }: {
   createSignal?: number;
+  refreshSignal?: number;
   onChanged?: () => void;
 }) {
   const { t } = useI18n();
@@ -331,6 +333,18 @@ export function ReservationsTab({
     loadOverview();
     onChanged?.();
   }, [load, loadOverview, onChanged]);
+
+  // The page pulses `refreshSignal` when the operator returns to this tab
+  // (visibilitychange). Refetch the list + overview WITHOUT remounting — filters,
+  // pagination, open modals and the in-progress create/edit wizard all survive.
+  // Consume real increments only (the initial value must not refetch on mount).
+  const lastRefreshSignal = useRef(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal !== lastRefreshSignal.current) {
+      lastRefreshSignal.current = refreshSignal;
+      refresh();
+    }
+  }, [refreshSignal, refresh]);
 
   // Edit opens the SAME wizard shell as a modal — but first loads the full
   // reservation, its documents and its derived financial summary IN PARALLEL

@@ -180,13 +180,22 @@ export function formatMoney(
   locale: Locale,
 ): string {
   const value = Number(amount ?? 0);
+  // Absent currency = MISSING DATA, not a fabricated default (owner §): render a
+  // plain localised number with NO currency symbol — never invent "USD".
+  if (!currency) {
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
   try {
     return new Intl.NumberFormat(locale, {
       style: "currency",
-      currency: currency || "USD",
+      currency,
     }).format(value);
   } catch {
-    return `${value.toFixed(2)} ${currency || ""}`.trim();
+    // Unknown/invalid currency code: keep the amount + the raw code, never USD.
+    return `${value.toFixed(2)} ${currency}`.trim();
   }
 }
 

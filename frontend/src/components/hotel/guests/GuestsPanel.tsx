@@ -117,7 +117,7 @@ export function GuestsPanel() {
       render: (r) => (
         <span className="cluster" style={{ gap: "0.35rem" }}>
           {r.full_name}
-          {r.is_vip ? <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+          {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
           {r.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
           {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
         </span>
@@ -338,7 +338,7 @@ function GuestProfileModal({
               <Badge tone={p.is_repeat ? "info" : "neutral"}>
                 {p.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
               </Badge>
-              {p.is_vip ? <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
+              {p.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
               {p.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
               {!p.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
             </div>

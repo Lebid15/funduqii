@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CalendarCheck, CalendarSearch, Plus } from "lucide-react";
 
@@ -10,7 +10,6 @@ import {
   AvailabilityTab,
   ReservationsTab,
 } from "@/components/hotel/reservations";
-import { useGlobalRefresh } from "@/lib/globalRefresh";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 
@@ -46,7 +45,19 @@ export default function ReservationsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the URL is the trigger
   }, [search]);
 
-  useGlobalRefresh(useCallback(() => setRefreshKey((k) => k + 1), []));
+  // "Pull latest" without a button: bump a refresh signal when the operator
+  // returns to this tab (replaces the removed global topbar refresh). The list
+  // consumes it as a non-destructive REFETCH (no remount), so its filters,
+  // pagination, open modals and the in-progress create/edit wizard all survive.
+  // `visibilitychange` (not raw window focus) fires only on real tab-return /
+  // minimize-restore, not on every trivial focus event.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") setRefreshKey((k) => k + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   const canCreate =
     access === null || (!access.loading && access.can("reservations.create"));
@@ -80,12 +91,18 @@ export default function ReservationsPage() {
       />
 
       {/* The list stays MOUNTED across surface switches (hidden under the
-          availability engine) so its filters, modals and the create signal
-          survive; only the global refresh remounts it. */}
+          availability engine) so its filters, modals and the in-progress
+          create/edit wizard survive; returning to the tab pulls the latest via a
+          refresh signal WITHOUT remounting. The availability engine shares that
+          refresh signal: it never auto-queries before the first user search, but
+          once a search has run, a tab-return RE-RUNS THAT SAME search in place
+          (non-destructive — the form/filters and last results are preserved). */}
       <div style={{ display: surface === "availability" ? "none" : undefined }}>
-        <ReservationsTab key={refreshKey} createSignal={createSignal} />
+        <ReservationsTab refreshSignal={refreshKey} createSignal={createSignal} />
       </div>
-      {surface === "availability" ? <AvailabilityTab key={refreshKey} /> : null}
+      {surface === "availability" ? (
+        <AvailabilityTab refreshSignal={refreshKey} />
+      ) : null}
     </PageContainer>
   );
 }

@@ -10,10 +10,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Icon } from "@/components/ui";
+import { SmartStatCard, type SmartStatTone } from "@/components/ui";
 import type { StaysOverview } from "@/lib/api/stays";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { cx } from "@/lib/utils";
 
 /** Which operational summary card is active (applies its filter to the list). */
 export type OpsCardKey =
@@ -46,7 +45,7 @@ interface CardDef {
   labelKey: LabelKey;
   captionKey: CaptionKey;
   icon: LucideIcon;
-  tone: string;
+  tone: SmartStatTone;
 }
 
 const CARDS: CardDef[] = [
@@ -62,7 +61,8 @@ const CARDS: CardDef[] = [
  * The six smart cards for the operations page (§6). The numbers come from the
  * backend overview; clicking a card applies its filter to the list. Color is
  * never the only signal — each card carries an icon + label + caption, and the
- * active card is marked with ``aria-pressed`` + a visible ring.
+ * active card is marked with ``aria-pressed`` + a visible ring. Rendered via the
+ * central {@link SmartStatCard}; the grid container + filter logic stay here.
  */
 export function StaysSummaryCards({
   overview,
@@ -78,33 +78,19 @@ export function StaysSummaryCards({
 
   return (
     <div className="board-stats" role="group" aria-label={c.groupLabel}>
-      {CARDS.map((card) => {
-        const isActive = active === card.key;
-        const value = overview ? overview[card.countKey] : null;
-        return (
-          <button
-            key={card.key}
-            type="button"
-            className={cx("board-stat", isActive && "board-stat--active")}
-            aria-pressed={isActive}
-            onClick={() => onSelect(card.key)}
-          >
-            <span className="board-stat__head">
-              <span
-                className={cx(
-                  "board-stat__icon",
-                  `board-stat__icon--${card.tone}`,
-                )}
-              >
-                <Icon icon={card.icon} size="md" />
-              </span>
-            </span>
-            <span className="board-stat__value">{value ?? "…"}</span>
-            <span className="board-stat__label">{c[card.labelKey]}</span>
-            <span className="board-stat__caption">{c[card.captionKey]}</span>
-          </button>
-        );
-      })}
+      {CARDS.map((card) => (
+        <SmartStatCard
+          key={card.key}
+          icon={card.icon}
+          tone={card.tone}
+          value={overview ? overview[card.countKey] : null}
+          loading={overview === null}
+          label={c[card.labelKey]}
+          caption={c[card.captionKey]}
+          active={active === card.key}
+          onClick={() => onSelect(card.key)}
+        />
+      ))}
     </div>
   );
 }

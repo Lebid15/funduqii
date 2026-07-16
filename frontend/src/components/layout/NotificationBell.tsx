@@ -54,14 +54,27 @@ export function NotificationBell() {
 
   if (!canView) return null;
 
+  const hasUnread = unread !== null && unread > 0;
+  // Fold the unread count into the button's accessible name so screen-reader
+  // users hear it (the visual count Badge alone is not part of the name).
+  const bellLabel = hasUnread
+    ? t.notifications.bellUnread.replace("{count}", String(unread))
+    : t.notifications.bell;
+
   return (
     <span className="cluster">
       <IconButton
-        label={t.notifications.bell}
+        label={bellLabel}
         icon={Bell}
         onClick={() => router.push("/hotel/notifications")}
       />
-      {unread !== null && unread > 0 ? <Badge tone="danger">{unread}</Badge> : null}
+      {hasUnread ? (
+        // Hidden from AT: the count already lives in the button's accessible
+        // name above, so this visual pill would otherwise be announced twice.
+        <span aria-hidden="true">
+          <Badge tone="danger">{unread}</Badge>
+        </span>
+      ) : null}
     </span>
   );
 }

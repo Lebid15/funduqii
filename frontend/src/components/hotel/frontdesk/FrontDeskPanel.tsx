@@ -38,6 +38,7 @@ import {
   PaymentStatusBadge,
   SectionHeader,
   Select,
+  StatusBadge,
   Tabs,
   Textarea,
   useToast,
@@ -643,12 +644,12 @@ function CurrentTab({ reloadKey, onChange, filters, businessDate }: { reloadKey:
               <span className="stay-card__room">{stay.room_number}</span>
               <span className="cluster" style={{ gap: "0.35rem" }}>
                 {stay.primary_guest_is_vip ? (
-                  <Badge tone="warning"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
+                  <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge>
                 ) : null}
                 {overstay ? (
                   <Badge tone="danger" icon={CalendarClock}>{t.frontDesk.current.overstay}</Badge>
                 ) : null}
-                <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
+                <StatusBadge tone={stayStatusTone(stay.status)} label={stayStatusLabel(stay.status, t)} />
               </span>
             </div>
             <div className="stay-card__meta">
@@ -1343,7 +1344,7 @@ function CheckOutModal({
       || (withAmount && !amountField.trim())
       || (reasonRequired && !reasonField.trim());
     return (
-      <div className="stack" style={{ gap: "0.5rem", padding: "0.5rem", background: "var(--surface-2)", borderRadius: "0.5rem" }}>
+      <div className="stack" style={{ gap: "0.5rem", padding: "0.5rem", background: "var(--color-surface-sunken)", borderRadius: "0.5rem" }}>
         {actionError ? <Alert tone="error">{actionError}</Alert> : null}
         {withAmount ? (
           <FormField label={c.settleAmount} htmlFor="co-amount">
@@ -1488,7 +1489,7 @@ function CheckOutModal({
                   finSummary.open_folios.map((f) => {
                     const b = Number(f.balance);
                     return (
-                      <div key={f.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
+                      <div key={f.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--color-border)" }}>
                         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                           <span>{f.folio_number}</span>
                           <strong>{formatMoney(f.balance, f.currency, locale)}</strong>
@@ -1524,7 +1525,7 @@ function CheckOutModal({
                   {finSummary.insurances.map((ins) => {
                     const held = Number(ins.held_amount);
                     return (
-                      <div key={ins.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--border)" }}>
+                      <div key={ins.id} className="stack" style={{ gap: "0.35rem", paddingBlock: "0.4rem", borderTop: "1px solid var(--color-border)" }}>
                         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                           <span>{c.insuranceHeld}: {formatMoney(ins.held_amount, ins.currency, locale)}</span>
                           {held <= 0 ? <Badge tone="success">{c.insuranceSettled}</Badge> : null}
@@ -2190,7 +2191,7 @@ function StayDetailsModal({ stay, onClose }: { stay: Stay | null; onClose: () =>
     <Modal open={open} onClose={onClose} title={`${t.frontDesk.details.title} · ${stay.room_number}`} closeLabel={t.common.close} footer={<Button variant="secondary" onClick={onClose}>{t.common.close}</Button>}>
       <div className="stack">
         <div className="cluster">
-          <Badge tone={stayStatusTone(stay.status)}>{stayStatusLabel(stay.status, t)}</Badge>
+          <StatusBadge tone={stayStatusTone(stay.status)} label={stayStatusLabel(stay.status, t)} />
           {stay.reservation_number ? <span className="muted">{t.frontDesk.details.reservation}: {stay.reservation_number}</span> : null}
         </div>
         <dl className="detail-grid">

@@ -72,7 +72,11 @@ const OCCUPANCY_OPTIONS = ["free", "occupied", "reserved"] as const;
  * grouped into collapsible floor sections. Occupancy and operational status
  * are INDEPENDENT axes — every displayed value comes from the server.
  */
-export function RoomOperationalBoard() {
+export function RoomOperationalBoard({
+  refreshSignal = 0,
+}: {
+  refreshSignal?: number;
+}) {
   const { t } = useI18n();
   const { notify } = useToast();
   const b = t.rooms.board;
@@ -149,6 +153,18 @@ export function RoomOperationalBoard() {
     load();
     loadInventory();
   }, [load, loadInventory]);
+
+  // The page pulses `refreshSignal` when the operator returns to this tab
+  // (visibilitychange). Refetch the board + inventory WITHOUT remounting — the
+  // active filters, search and open modals all survive. Real increments only
+  // (the initial value must not refetch on mount).
+  const lastRefreshSignal = useRef(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal !== lastRefreshSignal.current) {
+      lastRefreshSignal.current = refreshSignal;
+      refreshAll();
+    }
+  }, [refreshSignal, refreshAll]);
 
   const hasFilters =
     operationalFilter !== "" ||

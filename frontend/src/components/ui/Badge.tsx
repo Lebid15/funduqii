@@ -11,7 +11,9 @@ export type BadgeTone =
   | "success"
   | "warning"
   | "danger"
-  | "info";
+  | "info"
+  /** Dedicated premium accent for the VIP marker (never the `warning` tone). */
+  | "vip";
 
 /**
  * Visual weight of the badge:

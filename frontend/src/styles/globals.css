@@ -506,7 +506,11 @@ a {
     border-start-end-radius: var(--radius-xl);
     border-end-end-radius: var(--radius-xl);
     transform: translateX(-105%);
-    transition: transform var(--transition-base);
+    /* Closed drawer is removed from the tab order + AT (a11y): `visibility`
+       flips to hidden only AFTER the slide-out finishes (discrete transition),
+       and back to visible immediately on open. */
+    visibility: hidden;
+    transition: transform var(--transition-base), visibility var(--transition-base);
     box-shadow: var(--shadow-lg);
     /* The DRAWER alone may scroll (very short phones) — invisible bar so
        every nav item stays reachable. Desktop never scrolls internally. */
@@ -521,6 +525,7 @@ a {
   }
   .app-sidebar[data-open="true"] {
     transform: translateX(0);
+    visibility: visible;
   }
   .app-topbar .app-sidebar__toggle {
     display: inline-flex;
@@ -901,7 +906,12 @@ a {
   font-weight: var(--font-weight-semibold);
   line-height: 1.4;
   border-radius: var(--radius-full);
-  white-space: nowrap;
+  /* Long ar/tr status labels may wrap rather than force horizontal overflow at
+     320px / 200% zoom (WCAG 1.4.10). Short status pills are unaffected — they
+     never reach the cap; `max-width` keeps a single very long token from
+     stretching a card, and the caller's `title` still exposes the full text. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
   border: 1px solid transparent;
 }
 .badge__dot {
@@ -921,25 +931,36 @@ a {
   color: var(--color-primary-active);
   border-color: color-mix(in srgb, var(--color-primary) 22%, transparent);
 }
+/* Soft-badge TEXT uses the darker *-strong tokens (not the mid tone) so the
+   label meets WCAG AA (>=4.5:1) on the soft background — the mid tone failed
+   (success 3.09, warning 3.33, danger 3.82, info 4.03). Backgrounds/borders are
+   UNCHANGED; only the text (and its inherited icon) darkens. New ratios on the
+   soft background: success 4.79, warning 5.27, danger 5.21, info 5.73. */
 .badge--success {
   background: var(--color-success-soft);
-  color: var(--color-success);
+  color: var(--color-success-strong);
   border-color: color-mix(in srgb, var(--color-success) 22%, transparent);
 }
 .badge--warning {
   background: var(--color-warning-soft);
-  color: var(--color-warning);
+  color: var(--color-warning-strong);
   border-color: color-mix(in srgb, var(--color-warning) 22%, transparent);
 }
 .badge--danger {
   background: var(--color-danger-soft);
-  color: var(--color-danger);
+  color: var(--color-danger-strong);
   border-color: color-mix(in srgb, var(--color-danger) 22%, transparent);
 }
 .badge--info {
   background: var(--color-info-soft);
-  color: var(--color-info);
+  color: var(--color-info-strong);
   border-color: color-mix(in srgb, var(--color-info) 22%, transparent);
+}
+/* VIP accent tone (§6) — soft default: text uses vip-strong (6.80:1 on soft). */
+.badge--vip {
+  background: var(--color-vip-soft);
+  color: var(--color-vip-strong);
+  border-color: color-mix(in srgb, var(--color-vip) 22%, transparent);
 }
 
 /* Leading icon inside a badge (kept proportional to the xs label so a badge can
@@ -975,6 +996,9 @@ a {
 .badge--info.badge--filled {
   background: var(--color-info-strong);
 }
+.badge--vip.badge--filled {
+  background: var(--color-vip-strong);
+}
 
 /* Outline variant: surface background + tone border and text. Text uses the
    darker *-strong tokens so tone text on a light surface stays AA-legible. */
@@ -1004,6 +1028,10 @@ a {
 .badge--info.badge--outline {
   color: var(--color-info-strong);
   border-color: var(--color-info);
+}
+.badge--vip.badge--outline {
+  color: var(--color-vip-strong);
+  border-color: var(--color-vip);
 }
 
 /* --- Dashboard hero ------------------------------------------------------- */
@@ -1138,14 +1166,10 @@ a {
   border-radius: var(--radius-xl);
   padding: var(--space-5);
   box-shadow: var(--shadow-xs);
-  transition: box-shadow var(--transition-base), transform var(--transition-base),
-    border-color var(--transition-base);
 }
-.stat-card:hover {
-  box-shadow: var(--shadow-md);
-  transform: translateY(-3px);
-  border-color: var(--color-border-strong);
-}
+/* StatCard is a DISPLAY-ONLY tile (no onClick) — the former hover lift +
+   shadow implied interactivity it does not have, so it is removed. Interactive
+   summary tiles use SmartStatCard / `.board-stat`, which keep their hover. */
 .stat-card__top {
   display: flex;
   align-items: center;
@@ -1586,18 +1610,58 @@ a {
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }
-.board-stat--active {
-  border-color: var(--color-primary);
+/* Keyboard focus ring — a SEPARATE signal from the active/selected state below,
+   so the two never collapse into the same visual (a11y). */
+.board-stat:focus-visible {
+  outline: none;
   box-shadow: var(--focus-ring);
 }
+/* Active/selected: a primary border + soft primary wash (a filled "selected"
+   look), DISTINCT from the focus ring above. */
+.board-stat--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.board-stat--active:hover {
+  background: var(--color-primary-soft-hover);
+}
+/* Non-interactive (rendered as a <div>): no hover lift, no motion, no pointer. */
+.board-stat--static {
+  cursor: default;
+}
+.board-stat--static:hover {
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-xs);
+  transform: none;
+}
+.board-stat:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.board-stat:disabled:hover {
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-xs);
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-stat {
+    transition: none;
+  }
+  .board-stat:hover {
+    transform: none;
+  }
+}
+/* Bigger, ROUND icon container (§10) — a more premium chip; `flex: none` keeps
+   it circular inside the head flex row. */
 .board-stat__icon {
   display: grid;
   place-items: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-md);
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-full);
   background: var(--color-surface-sunken);
   color: var(--color-fg-muted);
+  flex: none;
 }
 .board-stat__icon--primary {
   background: var(--color-primary-soft);
@@ -2302,7 +2366,7 @@ a {
   color: var(--color-fg-muted);
 }
 .mini-list__head h3 {
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
 }
 .mini-list {
@@ -2473,7 +2537,7 @@ a {
   font-size: var(--font-size-lg);
 }
 .balance-row__total {
-  border-color: var(--color-brand) !important;
+  border-color: var(--color-primary) !important;
 }
 @media (max-width: 40rem) {
   .balance-row {
@@ -3142,6 +3206,12 @@ a {
   flex-direction: column;
   animation: pop-in var(--transition-base);
 }
+/* The dialog container is programmatically focused on open (a11y: announces the
+   title, anchors the focus trap). It is not a keyboard target, so suppress the
+   default focus outline — keyboard focus rings live on the controls inside. */
+.modal:focus {
+  outline: none;
+}
 .modal__header {
   display: flex;
   align-items: center;
@@ -3730,7 +3800,7 @@ a {
   border-radius: var(--radius-md);
 }
 .status-summary__item--emphasis {
-  border-color: var(--color-brand);
+  border-color: var(--color-primary);
 }
 
 .step-summary {
@@ -5232,15 +5302,39 @@ a {
     grid-template-columns: 1fr;
   }
 }
-/* Compact field density INSIDE step 4 only — moderate, still tappable/readable. */
+/* Compact form density (§12) — OPT-IN via `.form--compact` or
+   `[data-density="compact"]` on any ancestor. Comfortable (the default) is
+   byte-identical to before: these rules ONLY apply inside a compact container,
+   so the existing `.field` / `.input` / `.select` / `.textarea` consumers need
+   no change. `.resform-book` is listed as a compact trigger so the reservations
+   step-4 form now uses this ONE central density (its former bespoke padding
+   block was removed — values are unchanged: gap space-1, control padding
+   0.5/0.7rem, textarea min-height 4.25rem). */
+.form--compact .field,
+[data-density="compact"] .field,
 .resform-book .field {
   gap: var(--space-1);
 }
+.form--compact .input,
+.form--compact .select,
+.form--compact .textarea,
+[data-density="compact"] .input,
+[data-density="compact"] .select,
+[data-density="compact"] .textarea,
 .resform-book .input,
 .resform-book .select,
 .resform-book .textarea {
   padding: 0.5rem 0.7rem;
 }
+/* A compact modal body tightens its own padding + stack gap (never the tight
+   control padding above). */
+.form--compact .modal__body,
+[data-density="compact"] .modal__body {
+  padding: var(--space-4) var(--space-5);
+  gap: var(--space-3);
+}
+.form--compact .textarea,
+[data-density="compact"] .textarea,
 .resform-book .textarea {
   min-height: 4.25rem;
 }
