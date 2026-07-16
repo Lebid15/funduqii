@@ -501,12 +501,13 @@ export interface Room {
   status_changed_at: string | null;
   status_changed_by: string | null;
   is_active: boolean;
-  /* ROOMS §6.1 per-room feature overrides. Present on the single-room DETAIL
-   * response (GET/PATCH/PUT `/rooms/<id>/`); the list endpoint and the
-   * board-derived Room objects omit the two writable override lists, so all
-   * four are optional here. `feature_additions` / `feature_exclusions` are
-   * writable; `effective_features` (type defaults − exclusions + additions) and
-   * `inherited_features` (the room type's own amenities) are read-only. */
+  /* ROOMS §6.1 per-room feature overrides. Returned by RoomSerializer on BOTH
+   * the list and single-room DETAIL responses (`/rooms/` and GET/PATCH/PUT
+   * `/rooms/<id>/`). `feature_additions` / `feature_exclusions` are writable;
+   * `effective_features` (type defaults − exclusions + additions) and
+   * `inherited_features` (the room type's own amenities) are read-only. They are
+   * optional here only because the board-derived Room objects (built from
+   * RoomBoardRoom) do not carry them. */
   feature_additions?: string[];
   feature_exclusions?: string[];
   effective_features?: string[];

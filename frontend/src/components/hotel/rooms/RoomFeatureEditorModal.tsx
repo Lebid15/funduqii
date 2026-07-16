@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Ban, Check, ListChecks, Plus, RotateCcw, Tag, X } from "lucide-react";
 
 import {
   Alert,
   Button,
+  ErrorState,
   FormField,
   Icon,
   LoadingState,
@@ -58,13 +59,22 @@ export function RoomFeatureEditorModal({
   const [inherited, setInherited] = useState<string[]>([]);
   const [additions, setAdditions] = useState<string[]>([]);
   const [exclusions, setExclusions] = useState<string[]>([]);
+  // THREE distinct states: loading (fetch in flight) / loaded (a getRoom
+  // SUCCEEDED — the only state in which Save is permitted) / loadError (fetch
+  // failed). `error` is kept SEPARATE for SAVE errors so a load failure never
+  // masquerades as one and vice-versa.
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
+  /** Fetch the FRESH single-room detail. Save stays impossible until this
+   * succeeds (loaded=true), so a failed load can NEVER PATCH the un-loaded
+   * ([]/[]) state and silently wipe the room's stored feature overrides. */
+  const loadRoom = useCallback(() => {
+    setLoadError(null);
+    setLoaded(false);
     setLoading(true);
     getRoom(roomId)
       .then((room) => {
@@ -77,11 +87,18 @@ export function RoomFeatureEditorModal({
         // live inherited set.
         setAdditions(room.feature_additions ?? []);
         setExclusions(room.feature_exclusions ?? []);
+        setLoaded(true);
       })
-      .catch((err) => setError(messageForError(err, t)))
+      .catch((err) => setLoadError(messageForError(err, t)))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable per locale
-  }, [open, roomId]);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    loadRoom();
+  }, [open, loadRoom]);
 
   const label = (key: string) => amenityLabels[key] ?? key;
 
@@ -131,6 +148,9 @@ export function RoomFeatureEditorModal({
   }
 
   async function save() {
+    // Belt-and-suspenders with the disabled Save button: never PATCH before a
+    // successful load, or we would overwrite the stored overrides with empty lists.
+    if (!loaded) return;
     setBusy(true);
     setError(null);
     try {
@@ -160,14 +180,14 @@ export function RoomFeatureEditorModal({
             variant="ghost"
             icon={RotateCcw}
             onClick={resetToType}
-            disabled={busy || loading}
+            disabled={busy || loading || !loaded}
           >
             {f.reset}
           </Button>
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             {t.common.cancel}
           </Button>
-          <Button onClick={save} loading={busy} disabled={busy || loading}>
+          <Button onClick={save} loading={busy} disabled={busy || loading || !loaded}>
             {t.common.save}
           </Button>
         </>
@@ -179,6 +199,15 @@ export function RoomFeatureEditorModal({
           // Guard the body while the fresh room detail loads, so stale/empty
           // sections never flash before inherited/added/excluded are known.
           <LoadingState label={t.common.loading} />
+        ) : loadError ? (
+          // Load FAILED: never render the sections (which would show the un-loaded
+          // []/[] state) and never enable Save — offer a retry that re-fetches.
+          <ErrorState
+            title={t.states.errorTitle}
+            message={loadError}
+            retryLabel={t.common.retry}
+            onRetry={loadRoom}
+          />
         ) : (
         <>
         <p className="muted">{f.editorHelp}</p>
