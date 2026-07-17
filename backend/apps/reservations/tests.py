@@ -2850,3 +2850,155 @@ class ReservationNumberConcurrencyTests(TransactionTestCase):
         )
         seq = ReservationNumberSequence.objects.get(hotel=self.hotel)
         self.assertEqual(seq.last_number, workers)
+
+
+class ReservationDraftCleanupTaskTests(APITestCase):
+    """Round 3 §7.3 — the periodic sweep that expires stale OPEN reservation drafts.
+
+    The Celery task ``reservations.cleanup_reservation_drafts`` and the management
+    command share ONE core (``services.expire_stale_reservation_drafts``). These
+    tests exercise the TASK path (calling the ``@shared_task`` in-process, which is
+    how the test suite runs it — no broker/worker needed) plus the service, and
+    prove: only expired OPEN drafts flip; non-expired / consumed drafts are left
+    alone; the reserved NUMBER is never reused (permanent gap); the sweep is
+    idempotent; a real Reservation gets no side effects; and a hotel-scoped run is
+    tenant-safe.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "cleanup@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype = make_type(self.hotel, max_capacity=3)
+        make_rooms(self.hotel, self.rtype, 3)
+
+    # -- helpers ------------------------------------------------------------
+    def _mk_draft(self, hotel, number, key, *, status=ReservationDraftStatus.OPEN, expired=False):
+        return ReservationDraft.objects.create(
+            hotel=hotel,
+            reservation_number=number,
+            idempotency_key=key,
+            status=status,
+            expires_at=(
+                timezone.now() - timedelta(minutes=1)
+                if expired
+                else timezone.now() + timedelta(minutes=30)
+            ),
+        )
+
+    def _reserve(self, key):
+        return self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": key},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    # -- the TASK path (shared_task run synchronously) ----------------------
+    def test_task_expires_stale_open_draft(self):
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        draft = self._mk_draft(self.hotel, "R00001", "k1", expired=True)
+        expired = cleanup_reservation_drafts()
+        self.assertEqual(expired, 1)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.EXPIRED)
+
+    def test_task_leaves_non_expired_open_draft(self):
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        draft = self._mk_draft(self.hotel, "R00001", "k1", expired=False)
+        self.assertEqual(cleanup_reservation_drafts(), 0)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.OPEN)
+
+    def test_task_leaves_consumed_draft(self):
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        # A CONSUMED draft is never re-touched even past its TTL — only OPEN expires.
+        draft = self._mk_draft(
+            self.hotel, "R00001", "k1", status=ReservationDraftStatus.CONSUMED, expired=True
+        )
+        self.assertEqual(cleanup_reservation_drafts(), 0)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+
+    def test_task_number_not_reused_after_expiry(self):
+        from apps.reservations.services import next_reservation_number
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        # Reserve a REAL number (advances the per-hotel counter), lapse its TTL, then
+        # run the task. The expired number is a permanent gap — never handed out again.
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        ReservationDraft.objects.filter(hotel=self.hotel).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        self.assertEqual(cleanup_reservation_drafts(), 1)
+        draft = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="k1")
+        self.assertEqual(draft.status, ReservationDraftStatus.EXPIRED)
+        n2 = self._reserve("k2").data["reservation_number"]
+        self.assertEqual(n1, "R00001")
+        self.assertEqual(n2, "R00002")
+        self.assertEqual(next_reservation_number(self.hotel), "R00003")
+
+    def test_task_is_idempotent(self):
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        self._mk_draft(self.hotel, "R00001", "k1", expired=True)
+        self.assertEqual(cleanup_reservation_drafts(), 1)
+        # A second run finds nothing left to expire and changes nothing more.
+        self.assertEqual(cleanup_reservation_drafts(), 0)
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, status=ReservationDraftStatus.EXPIRED
+            ).count(),
+            1,
+        )
+
+    def test_task_does_not_touch_final_reservation(self):
+        from apps.finance.models import Folio, Payment
+        from apps.reservations.tasks import cleanup_reservation_drafts
+
+        res = self.client.post(
+            reverse("reservations:reservation-list"),
+            res_payload(self.rtype),
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 201)
+        res_id = res.data["id"]
+        before = Reservation.objects.get(id=res_id)
+        self._mk_draft(self.hotel, "R09999", "k1", expired=True)
+
+        cleanup_reservation_drafts()
+
+        after = Reservation.objects.get(id=res_id)
+        # The real Reservation survives untouched — same row, status and number.
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(after.status, before.status)
+        self.assertEqual(after.reservation_number, before.reservation_number)
+        # And the sweep creates no financial or availability side effects.
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(Payment.objects.filter(hotel=self.hotel).count(), 0)
+
+    # -- the service path (shared with the management command) --------------
+    def test_service_default_sweeps_all_hotels(self):
+        from apps.reservations.services import expire_stale_reservation_drafts
+
+        other = make_hotel(slug="cleanup-all")
+        self._mk_draft(self.hotel, "R00001", "k1", expired=True)
+        self._mk_draft(other, "R00001", "k1", expired=True)
+        self.assertEqual(expire_stale_reservation_drafts(), 2)
+
+    def test_service_hotel_scope_is_tenant_safe(self):
+        from apps.reservations.services import expire_stale_reservation_drafts
+
+        other = make_hotel(slug="cleanup-other")
+        mine = self._mk_draft(self.hotel, "R00001", "k1", expired=True)
+        theirs = self._mk_draft(other, "R00001", "k1", expired=True)
+        self.assertEqual(expire_stale_reservation_drafts(hotel_id=self.hotel.id), 1)
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual(mine.status, ReservationDraftStatus.EXPIRED)
+        # A scoped run leaves another hotel's stale draft alone.
+        self.assertEqual(theirs.status, ReservationDraftStatus.OPEN)

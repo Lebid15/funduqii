@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import environ
+from celery.schedules import crontab
 from corsheaders.defaults import default_headers
 
 # backend/  (base.py -> settings -> config -> backend)
@@ -255,6 +256,18 @@ CELERY_TASK_TRACK_STARTED = True
 # ``config/celery.py`` (``config_from_object(..., namespace="CELERY")``).
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_EAGER_PROPAGATES = env.bool("CELERY_TASK_EAGER_PROPAGATES", default=True)
+# Periodic tasks (static Celery Beat schedule — no django_celery_beat / DB). In
+# production a ``celery -A config beat`` process runs ALONGSIDE the worker and
+# dispatches these. Timezone-aware via ``CELERY_TIMEZONE`` above.
+CELERY_BEAT_SCHEDULE = {
+    # Round 3 §7.3 — hourly sweep that marks OPEN reservation drafts past their TTL
+    # as expired (numbers are never reused; nothing is deleted). See
+    # apps.reservations.tasks.cleanup_reservation_drafts.
+    "cleanup-reservation-drafts": {
+        "task": "reservations.cleanup_reservation_drafts",
+        "schedule": crontab(minute=0),
+    },
+}
 
 # --- Channels (realtime foundation) -----------------------------------------
 # Realtime uses Django Channels + a Redis channel layer. Without Redis, an

@@ -18,9 +18,8 @@ Usage::
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 
-from apps.reservations.models import ReservationDraft, ReservationDraftStatus
+from apps.reservations.services import expire_stale_reservation_drafts
 
 
 class Command(BaseCommand):
@@ -38,15 +37,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        qs = ReservationDraft.objects.filter(
-            status=ReservationDraftStatus.OPEN,
-            expires_at__lte=timezone.now(),
-        )
         hotel_id = options.get("hotel")
-        if hotel_id is not None:
-            qs = qs.filter(hotel_id=hotel_id)
-
-        expired = qs.update(status=ReservationDraftStatus.EXPIRED)
+        # Same behaviour as before — the sweep now lives in a reusable service so the
+        # scheduled Celery task and this command share ONE implementation.
+        expired = expire_stale_reservation_drafts(hotel_id=hotel_id)
         scope = f"hotel {hotel_id}" if hotel_id is not None else "all hotels"
         self.stdout.write(
             self.style.SUCCESS(

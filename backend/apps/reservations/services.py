@@ -215,6 +215,31 @@ def reserve_reservation_number(hotel, *, idempotency_key, user=None) -> Reservat
         raise
 
 
+def expire_stale_reservation_drafts(*, hotel_id: int | None = None) -> int:
+    """Mark every OPEN reservation draft past its TTL as ``expired`` (Round 3 §7.3).
+
+    Shared cleanup core called by BOTH the ``cleanup_reservation_drafts`` management
+    command and the ``reservations.cleanup_reservation_drafts`` Celery task. It is a
+    pure, idempotent state transition with NO data loss and NO side effects: no draft
+    is deleted, no Reservation/folio/payment/availability row is touched, and the
+    reserved NUMBER is never reused (an expired draft simply leaves a gap in the
+    per-hotel monotonic sequence — the counter is authoritative). Uses a
+    timezone-aware ``now()``.
+
+    Runs across ALL hotels by default; the filter is status + expiry only, so it is
+    tenant-isolation-safe. Pass ``hotel_id`` to limit the sweep to a single hotel.
+
+    Returns the number of drafts transitioned to ``expired`` (``0`` on a second run).
+    """
+    qs = ReservationDraft.objects.filter(
+        status=ReservationDraftStatus.OPEN,
+        expires_at__lte=timezone.now(),
+    )
+    if hotel_id is not None:
+        qs = qs.filter(hotel_id=hotel_id)
+    return qs.update(status=ReservationDraftStatus.EXPIRED)
+
+
 def _log_status(reservation, previous, new, *, note="", user=None):
     actor = user if getattr(user, "is_authenticated", False) else None
     ReservationStatusLog.objects.create(
