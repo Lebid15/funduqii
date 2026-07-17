@@ -322,7 +322,13 @@ class DeparturesTodayView(generics.ListAPIView):
 
 
 class ArrivalsTodayView(APIView):
-    """Confirmed reservations arriving today that are not fully checked in."""
+    """Confirmed reservations due to arrive (today OR overdue) that are not fully
+    checked in. Overdue arrivals (``check_in_date < business_date``) are included
+    so a late-arriving guest can still be received from the front desk — the
+    check-in service already admits late arrivals (it only refuses FUTURE ones).
+    This matches the ``awaiting_check_in`` counter (``check_in_date <= bd``); the
+    caller distinguishes overdue rows via ``check_in_date`` vs the business date.
+    Ordered oldest-first so the most overdue surface at the top."""
 
     def get_permissions(self):
         return [CanView()]
@@ -333,8 +339,9 @@ class ArrivalsTodayView(APIView):
             Reservation.objects.filter(
                 hotel=request.hotel,
                 status=ReservationStatus.CONFIRMED,
-                check_in_date=today,
+                check_in_date__lte=today,
             )
+            .order_by("check_in_date", "id")
             .prefetch_related("lines__room_type", "lines__room", "stays")
         )
         pending = []

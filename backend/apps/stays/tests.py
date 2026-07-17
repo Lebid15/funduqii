@@ -401,6 +401,42 @@ class ArrivalsDeparturesTests(APITestCase):
         r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
         self.assertEqual(len(r.data), 0)
 
+    def test_arrivals_includes_overdue_late_arrival(self):
+        # H2: a CONFIRMED reservation whose arrival date is in the PAST (late /
+        # overdue), not yet checked in, must appear in the arrivals list — it is
+        # counted in ``awaiting_check_in`` and must not be invisible/uncheckable.
+        past = date(self.today.year - 1, 1, 5)
+        make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(len(r.data), 1)
+        self.assertEqual(r.data[0]["check_in_date"], past.isoformat())
+
+    def test_arrivals_lists_overdue_before_today(self):
+        # Ordered oldest-first: the most overdue surfaces above today's arrivals.
+        past = date(self.today.year - 1, 1, 5)
+        make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        make_reservation(self.hotel, self.rtype, ci=self.today, co=self.tomorrow)
+        r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(
+            [row["check_in_date"] for row in r.data],
+            [past.isoformat(), self.today.isoformat()],
+        )
+
+    def test_overdue_late_arrival_can_be_checked_in(self):
+        # H2 end-to-end: the check-in service admits a late arrival (it refuses
+        # only FUTURE arrivals), so an overdue arrival checks in successfully and
+        # then leaves the arrivals list.
+        past = date(self.today.year - 1, 1, 5)
+        res, line = make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        r = self.client.post(
+            reverse("stays:stay-check-in"),
+            {"reservation": res.id, "reservation_line": line.id, "room": self.room.id, "primary_guest": self.guest.id},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        after = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(len(after.data), 0)
+
     def test_departures_today_lists_in_house_leaving_today(self):
         res, line = make_reservation(self.hotel, self.rtype, ci=date(self.today.year - 1, 1, 1), co=self.today)
         self.client.post(
