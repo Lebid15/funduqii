@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import generics, status
@@ -621,9 +622,12 @@ class PlatformPaymentVoidView(PlatformOwnerMixin, APIView):
 # --- Public site settings (Phase 16) -------------------------------------------
 
 
+@transaction.atomic
 def _save_and_audit_platform(request, settings_obj, serializer, section):
     """§9.17 — save a validated platform-settings serializer and append a
-    platform-scoped (hotel=NULL) audit row with the field-level diff."""
+    platform-scoped (hotel=NULL) audit row with the field-level diff.
+
+    ATOMIC (audit-or-nothing): the save and its audit row commit together."""
     from apps.hotels.models import SettingsAuditScope
     from apps.hotels.settings_services import (
         diff_settings,

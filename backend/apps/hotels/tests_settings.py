@@ -55,6 +55,28 @@ class HotelSettingsSectionTests(APITestCase):
         self.assertEqual(s.display_name, "X")
         self.assertEqual(s.default_currency, "USD")  # unchanged (other section)
 
+    def test_every_writable_settings_field_is_grouped(self):
+        """§9.17/§9.19 invariant (drift guard): a field writable through the
+        settings API MUST belong to a settings group — otherwise it would be
+        saved without appearing in the audit diff and without a UI home. This
+        test fails the moment someone adds a writable field to HotelSettings
+        without registering it in HOTEL_SETTINGS_GROUPS."""
+        from apps.hotels.serializers import HotelSettingsSerializer
+        from apps.hotels.settings_services import GROUPED_FIELDS
+
+        writable = {
+            name
+            for name, field in HotelSettingsSerializer().fields.items()
+            if not field.read_only
+        }
+        self.assertEqual(writable - set(GROUPED_FIELDS), set())
+
+    def test_section_save_rejects_non_object_body(self):
+        res = self.client.patch(
+            self._section_url("identity"), [1, 2], format="json", **self.headers
+        )
+        self.assertEqual(res.status_code, 400)
+
     def test_unknown_section_404(self):
         res = self.client.patch(
             self._section_url("does-not-exist"), {"x": 1}, format="json", **self.headers
@@ -101,6 +123,25 @@ class HotelSettingsSectionTests(APITestCase):
         )
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.data["code"], "hotel_suspended")
+
+    def test_business_date_is_not_writable_via_settings(self):
+        """business_date is the hotel's operational anchor: it advances ONLY via
+        the daily close, never by a settings edit. A settings PATCH must not be
+        able to move it (which would corrupt every daily-derived figure)."""
+        import datetime
+
+        s, _ = HotelSettings.objects.get_or_create(hotel=self.hotel)
+        s.business_date = datetime.date(2026, 1, 10)
+        s.save(update_fields=["business_date"])
+        res = self.client.patch(
+            reverse("hotel:settings"),
+            {"business_date": "2030-01-01"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 200)
+        s.refresh_from_db()
+        self.assertEqual(s.business_date, datetime.date(2026, 1, 10))  # unchanged
 
     def test_full_patch_still_audits(self):
         res = self.client.patch(

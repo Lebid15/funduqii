@@ -5685,3 +5685,12 @@ a {
     margin-inline-start: var(--space-1, 4px);
   }
 }
+.settings-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+.settings-fieldset > legend {
+  padding: 0;
+}

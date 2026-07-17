@@ -349,6 +349,36 @@ export function operationPriorityTone(priority: OperationPriority): BadgeTone {
   }
 }
 
+/** Translate a settings-audit section key (§9.17). Falls back to the raw key so
+ * a future section never renders blank. */
+export function settingsSectionLabel(section: string, t: Dictionary): string {
+  const s = t.hotel.settings;
+  switch (section) {
+    case "identity":
+      return s.sectionIdentity;
+    case "localization":
+      return s.sectionLocalization;
+    case "contact":
+      return s.sectionContact;
+    case "location":
+      return s.sectionLocation;
+    case "policies":
+      return s.sectionPolicies;
+    case "operational":
+      return s.sectionDefaults;
+    case "public":
+      return s.sectionPublic;
+    case "all":
+      return s.sectionAll;
+    case "platform":
+      return s.sectionPlatformGeneral;
+    case "public_site":
+      return s.sectionPublicSiteAdmin;
+    default:
+      return section;
+  }
+}
+
 export function entitlementStateTone(state: EntitlementState): BadgeTone {
   switch (state) {
     case "over_limit":

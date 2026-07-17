@@ -52,7 +52,7 @@ import type {
   SettingsAuditLog,
   SettingsSection,
 } from "@/lib/api/types";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, settingsSectionLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 // Section -> the exact fields it owns (mirrors the backend HOTEL_SETTINGS_GROUPS).
@@ -279,7 +279,9 @@ export default function HotelSettingsPage() {
                       <button
                         type="button"
                         className="settings-nav__item"
-                        aria-current={active === n.key ? "page" : undefined}
+                        // In-page panel switch (no URL change) -> "true", not "page".
+                        aria-current={active === n.key ? "true" : undefined}
+                        aria-controls="settings-panel"
                         data-active={active === n.key}
                         onClick={() => setActive(n.key)}
                       >
@@ -288,6 +290,7 @@ export default function HotelSettingsPage() {
                         {dirty ? (
                           <span
                             className="settings-nav__dot"
+                            role="img"
                             title={t.hotel.settings.unsavedChanges}
                             aria-label={t.hotel.settings.unsavedChanges}
                           />
@@ -299,9 +302,11 @@ export default function HotelSettingsPage() {
               </ul>
             </nav>
 
-            <div className="settings-shell__panel">
+            <div className="settings-shell__panel" id="settings-panel">
               {saveError ? <Alert tone="error">{saveError}</Alert> : null}
-              {term && visibleNav.length === 0 ? (
+              {/* If the search hides the active section, don't leave its panel
+                  stranded — guide the user instead. */}
+              {term && !visibleNav.some((n) => n.key === active) ? (
                 <Card>
                   <p className="muted">{t.hotel.settings.noSearchResults}</p>
                 </Card>
@@ -366,7 +371,7 @@ export default function HotelSettingsPage() {
             {(rows ?? []).map((r) => (
               <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
                 <span className="detail-item__label">
-                  {r.section}
+                  {settingsSectionLabel(r.section, t)}
                   <span className="muted"> · {formatDateTime(r.created_at, locale)}</span>
                 </span>
                 <span className="detail-item__value">
@@ -461,11 +466,11 @@ function AcceptedCurrenciesEditor({
               <button
                 type="button"
                 className="chip__remove"
-                aria-label={`${code} ✕`}
+                aria-label={`${t.hotel.settings.removeCurrency}: ${code}`}
                 onClick={() => onChange(value.filter((c) => c !== code))}
                 style={{ marginInlineStart: "0.25rem", cursor: "pointer" }}
               >
-                ✕
+                <span aria-hidden>✕</span>
               </button>
             ) : null}
           </Badge>
@@ -474,9 +479,11 @@ function AcceptedCurrenciesEditor({
       {!disabled ? (
         <div className="cluster" style={{ gap: "var(--space-2)" }}>
           <Input
+            id="accepted_currencies"
             value={draft}
             maxLength={3}
             dir="ltr"
+            aria-label={t.hotel.settings.newCurrency}
             placeholder={t.hotel.settings.currencyPlaceholder}
             onChange={(e) => setDraft(e.target.value.toUpperCase())}
             onKeyDown={(e) => {
@@ -505,6 +512,7 @@ function SocialLinksEditor({
   disabled: boolean;
   onChange: (next: Record<string, string>) => void;
 }) {
+  const { t } = useI18n();
   const entries = Object.entries(value ?? {});
   function update(oldKey: string, key: string, url: string) {
     const next: Record<string, string> = {};
@@ -521,17 +529,25 @@ function SocialLinksEditor({
     <div className="stack" style={{ gap: "var(--space-2)" }}>
       {entries.map(([k, v]) => (
         <div key={k} className="cluster" style={{ gap: "var(--space-2)" }}>
-          <Input value={k} disabled={disabled} onChange={(e) => update(k, e.target.value, v)} />
+          <Input
+            value={k}
+            disabled={disabled}
+            aria-label={t.hotel.settings.socialLinkLabel}
+            placeholder={t.hotel.settings.socialLinkLabel}
+            onChange={(e) => update(k, e.target.value, v)}
+          />
           <Input
             dir="ltr"
             value={v}
             disabled={disabled}
+            aria-label={t.hotel.settings.socialLinkUrl}
+            placeholder={t.hotel.settings.socialLinkUrl}
             onChange={(e) => update(k, k, e.target.value)}
           />
           {!disabled ? (
             <IconButton
               icon={X}
-              label="✕"
+              label={`${t.hotel.settings.removeSocialLink}: ${k || t.hotel.settings.socialLinkLabel}`}
               onClick={() => {
                 const next = { ...value };
                 delete next[k];
@@ -547,7 +563,7 @@ function SocialLinksEditor({
           onClick={() => onChange({ ...(value ?? {}), "": "" })}
           disabled={Object.prototype.hasOwnProperty.call(value ?? {}, "")}
         >
-          +
+          {t.hotel.settings.addSocialLink}
         </Button>
       ) : null}
     </div>
@@ -732,18 +748,17 @@ function SectionFields({
           {text("website_url", t.hotel.settings.website, { type: "url", dir: "ltr" })}
           {text("facebook_url", t.hotel.settings.facebook, { type: "url", dir: "ltr" })}
           {text("instagram_url", t.hotel.settings.instagram, { type: "url", dir: "ltr" })}
-          <FormField
-            label={t.hotel.settings.socialLinks}
-            htmlFor="social_links"
-            className="form-grid__full"
-            hint={t.hotel.settings.socialLinksHint}
-          >
+          {/* A group of related controls (no single input) -> fieldset/legend,
+              not a label `for` pointing at an element that does not exist. */}
+          <fieldset className="form-grid__full settings-fieldset">
+            <legend className="field__label">{t.hotel.settings.socialLinks}</legend>
+            <p className="field__hint">{t.hotel.settings.socialLinksHint}</p>
             <SocialLinksEditor
               value={s.social_links}
               disabled={suspended}
               onChange={(next) => patch("social_links", next)}
             />
-          </FormField>
+          </fieldset>
         </div>
       );
     case "location":

@@ -217,7 +217,16 @@
       "unsavedExitConfirm": "You have unsaved changes. Leave without saving?",
       "noAuditYet": "No changes recorded yet.",
       "auditFieldsChanged": "fields changed",
-      "noSearchResults": "No settings match your search."
+      "noSearchResults": "No settings match your search.",
+      "socialLinkLabel": "Label",
+      "socialLinkUrl": "Link URL",
+      "removeSocialLink": "Remove link",
+      "addSocialLink": "Add link",
+      "removeCurrency": "Remove currency",
+      "newCurrency": "New currency code",
+      "sectionAll": "All settings",
+      "sectionPlatformGeneral": "Platform settings",
+      "sectionPublicSiteAdmin": "Public site"
     }
   },
   "rooms": {

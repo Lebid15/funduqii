@@ -8,6 +8,7 @@ read-only. Settings (text) and media (files) are handled by separate endpoints.
 """
 from __future__ import annotations
 
+from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
@@ -39,13 +40,18 @@ CanView = HasHotelPermission("settings.view")
 CanUpdate = HasHotelPermission("settings.update")
 
 
+@transaction.atomic
 def _apply_settings_update(request, settings_obj, data, section, fields):
     """Validate + save a (partial) settings update over ``fields`` and append an
     audit row with the field-level diff. Returns the saved serializer.
 
-    ``data`` is already restricted to the allowed fields by the caller. The diff
-    is taken from a snapshot before/after save, so only fields whose value truly
-    changed are audited (no-op saves record nothing)."""
+    ATOMIC on purpose (§9.17 audit-or-nothing): the save and its audit row commit
+    together, so a settings change can never land without its audit trail.
+
+    Only fields inside a settings group are writable at all (see
+    HotelSettingsSerializer.read_only_fields), so ``fields`` = GROUPED_FIELDS
+    covers every field this can change — there is no writable-but-unaudited
+    field. The diff is a before/after snapshot, so no-op saves record nothing."""
     before = snapshot(settings_obj, fields)
     serializer = HotelSettingsSerializer(settings_obj, data=data, partial=True)
     serializer.is_valid(raise_exception=True)
@@ -109,6 +115,11 @@ class HotelSettingsSectionView(APIView):
             return Response(
                 {"code": "unknown_settings_section", "message": "Unknown section."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+        if not isinstance(request.data, dict):
+            return Response(
+                {"code": "invalid_request", "message": "Expected an object."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         settings_obj = _get_settings(request.hotel)
         # Restrict the payload to this section's fields (ignore anything else).

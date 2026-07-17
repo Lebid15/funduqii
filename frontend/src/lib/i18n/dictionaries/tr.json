@@ -217,7 +217,16 @@
       "unsavedExitConfirm": "Kaydedilmemiş değişiklikleriniz var. Kaydetmeden çıkılsın mı?",
       "noAuditYet": "Henüz kayıtlı değişiklik yok.",
       "auditFieldsChanged": "alan değişti",
-      "noSearchResults": "Aramanızla eşleşen ayar yok."
+      "noSearchResults": "Aramanızla eşleşen ayar yok.",
+      "socialLinkLabel": "Etiket",
+      "socialLinkUrl": "Bağlantı URL",
+      "removeSocialLink": "Bağlantıyı kaldır",
+      "addSocialLink": "Bağlantı ekle",
+      "removeCurrency": "Para birimini kaldır",
+      "newCurrency": "Yeni para birimi kodu",
+      "sectionAll": "Tüm ayarlar",
+      "sectionPlatformGeneral": "Platform ayarları",
+      "sectionPublicSiteAdmin": "Genel site"
     }
   },
   "rooms": {

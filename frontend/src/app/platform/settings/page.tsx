@@ -31,7 +31,7 @@ import {
 } from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
 import type { PlatformSettings, SettingsAuditLog } from "@/lib/api/types";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, settingsSectionLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 export default function SettingsPage() {
@@ -289,7 +289,7 @@ function PlatformAuditCard() {
           {rows.map((r) => (
             <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
               <span className="detail-item__label">
-                {r.section}
+                {settingsSectionLabel(r.section, t)}
                 <span className="muted"> · {formatDateTime(r.created_at, locale)}</span>
               </span>
               <span className="detail-item__value">

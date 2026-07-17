@@ -26,12 +26,32 @@ def _validate_phoneish(value: str, field: str) -> str:
 
 
 class HotelSettingsSerializer(serializers.ModelSerializer):
-    """Text settings only. `hotel` and timestamps are read-only."""
+    """Text settings only. `hotel` and timestamps are read-only.
+
+    A field is writable here ONLY if it belongs to a settings group
+    (``settings_services.HOTEL_SETTINGS_GROUPS``) — that is what the §9.2
+    sectioned UI edits and what the §9.17 audit diffs. Anything else is
+    read-only, so there is never a writable-but-unaudited setting:
+
+    - ``business_date`` is the hotel's OPERATIONAL ANCHOR. It advances only via
+      the daily close (``shifts.services``); letting a settings PATCH move it
+      would bypass the close cycle and corrupt every daily-derived figure
+      (finance/shifts/reports/stays). Read-only here, always.
+    - ``default_booking_status`` is a dead field (documented "future settings
+      only; NOT operations") — §9.19 forbids surfacing/writing a setting with no
+      effect.
+    """
 
     class Meta:
         model = HotelSettings
         exclude = ["id"]
-        read_only_fields = ["hotel", "created_at", "updated_at"]
+        read_only_fields = [
+            "hotel",
+            "created_at",
+            "updated_at",
+            "business_date",
+            "default_booking_status",
+        ]
 
     def validate_star_rating(self, value):
         if value is not None and not (1 <= value <= 5):

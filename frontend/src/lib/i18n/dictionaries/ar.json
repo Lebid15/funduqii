@@ -217,7 +217,16 @@
       "unsavedExitConfirm": "لديك تغييرات غير محفوظة. المغادرة دون حفظ؟",
       "noAuditYet": "لا توجد تغييرات مسجلة بعد.",
       "auditFieldsChanged": "حقول تغيّرت",
-      "noSearchResults": "لا توجد إعدادات تطابق بحثك."
+      "noSearchResults": "لا توجد إعدادات تطابق بحثك.",
+      "socialLinkLabel": "التسمية",
+      "socialLinkUrl": "الرابط",
+      "removeSocialLink": "إزالة الرابط",
+      "addSocialLink": "إضافة رابط",
+      "removeCurrency": "إزالة العملة",
+      "newCurrency": "كود عملة جديد",
+      "sectionAll": "كل الإعدادات",
+      "sectionPlatformGeneral": "إعدادات المنصة",
+      "sectionPublicSiteAdmin": "الموقع العام"
     }
   },
   "rooms": {
