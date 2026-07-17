@@ -10,6 +10,8 @@ from .views import (
     HotelMediaDetailView,
     HotelMediaListCreateView,
     HotelProfileView,
+    HotelSettingsAuditView,
+    HotelSettingsSectionView,
     HotelSettingsView,
 )
 
@@ -17,6 +19,17 @@ app_name = "hotel"
 
 urlpatterns = [
     path("settings/", HotelSettingsView.as_view(), name="settings"),
+    # §9.2 per-section save + §9.17 audit trail.
+    path(
+        "settings/section/<str:section>/",
+        HotelSettingsSectionView.as_view(),
+        name="settings-section",
+    ),
+    path(
+        "settings/audit/",
+        HotelSettingsAuditView.as_view(),
+        name="settings-audit",
+    ),
     path("profile/", HotelProfileView.as_view(), name="profile"),
     path("media/", HotelMediaListCreateView.as_view(), name="media-list"),
     path("media/<int:pk>/", HotelMediaDetailView.as_view(), name="media-detail"),

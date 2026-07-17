@@ -19,6 +19,7 @@ import type {
   PlatformPaymentMethod,
   PlatformPublicSettings,
   PlatformSettings,
+  SettingsAuditLog,
   SubscriptionPlan,
 } from "./types";
 
@@ -484,6 +485,13 @@ export function cancelChangeRequest(
 
 export function getSettings(): Promise<PlatformSettings> {
   return request<PlatformSettings>("/settings");
+}
+
+/** §9.17 read-only audit trail of platform-settings changes. */
+export function getPlatformSettingsAudit(): Promise<
+  PaginatedResponse<SettingsAuditLog>
+> {
+  return request<PaginatedResponse<SettingsAuditLog>>("/settings-audit");
 }
 
 export function updateSettings(

@@ -25,6 +25,7 @@ from .views import (
     PlanListCreateView,
     PlatformPaymentListCreateView,
     PlatformPaymentVoidView,
+    PlatformSettingsAuditView,
     PublicSiteSettingsView,
     SettingsView,
     SubscriptionDetailView,
@@ -176,6 +177,12 @@ urlpatterns = [
         name="subscription-request-cancel",
     ),
     path("settings/", SettingsView.as_view(), name="settings"),
+    # §9.17 — platform settings audit trail.
+    path(
+        "settings-audit/",
+        PlatformSettingsAuditView.as_view(),
+        name="settings-audit",
+    ),
     # Phase 16 — public-website admin settings.
     path(
         "public-site-settings/",

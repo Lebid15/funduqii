@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import generics, status
@@ -621,6 +622,37 @@ class PlatformPaymentVoidView(PlatformOwnerMixin, APIView):
 # --- Public site settings (Phase 16) -------------------------------------------
 
 
+@transaction.atomic
+def _save_and_audit_platform(request, settings_obj, serializer, section):
+    """§9.17 — save a validated platform-settings serializer and append a
+    platform-scoped (hotel=NULL) audit row with the field-level diff.
+
+    ATOMIC (audit-or-nothing): the save and its audit row commit together."""
+    from apps.hotels.models import SettingsAuditScope
+    from apps.hotels.settings_services import (
+        diff_settings,
+        record_settings_change,
+        snapshot,
+    )
+
+    fields = list(serializer.validated_data.keys())
+    before = snapshot(settings_obj, fields)
+    # Column-scoped write (see hotel _apply_settings_update): a concurrent save
+    # to other platform fields cannot clobber this one's columns.
+    for field, value in serializer.validated_data.items():
+        setattr(settings_obj, field, value)
+    if fields:
+        settings_obj.save(update_fields=fields + ["updated_at"])
+    record_settings_change(
+        scope=SettingsAuditScope.PLATFORM,
+        section=section,
+        changes=diff_settings(settings_obj, before, snapshot(settings_obj, fields)),
+        hotel=None,
+        actor=request.user,
+    )
+    settings_obj.refresh_from_db()
+
+
 class PublicSiteSettingsView(PlatformOwnerMixin, APIView):
     """Read or patch the singleton public-website settings row."""
 
@@ -634,7 +666,7 @@ class PublicSiteSettingsView(PlatformOwnerMixin, APIView):
             settings, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        _save_and_audit_platform(request, settings, serializer, "public_site")
         return Response(serializer.data)
 
 
@@ -824,5 +856,23 @@ class SettingsView(PlatformOwnerMixin, APIView):
             settings, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        _save_and_audit_platform(request, settings, serializer, "platform")
         return Response(serializer.data)
+
+
+class PlatformSettingsAuditView(PlatformOwnerMixin, generics.ListAPIView):
+    """§9.17 read-only audit trail of platform-settings changes."""
+
+    def get_serializer_class(self):
+        from apps.hotels.serializers import SettingsAuditLogSerializer
+
+        return SettingsAuditLogSerializer
+
+    def get_queryset(self):
+        from apps.hotels.models import SettingsAuditLog, SettingsAuditScope
+
+        return (
+            SettingsAuditLog.objects.filter(scope=SettingsAuditScope.PLATFORM)
+            .select_related("actor")
+            .order_by("-created_at", "-id")
+        )

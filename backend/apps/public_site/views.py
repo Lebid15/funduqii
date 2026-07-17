@@ -132,6 +132,7 @@ def _hotel_card(settings_obj, *, subscription_blocked: bool | None = None) -> di
         "city": settings_obj.city,
         "country": settings_obj.country,
         "star_rating": settings_obj.star_rating,
+        "facility_type": settings_obj.facility_type,
         "featured": settings_obj.public_featured,
         "booking_enabled": services.booking_open(
             settings_obj, subscription_blocked=subscription_blocked

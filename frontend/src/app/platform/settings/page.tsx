@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Globe, LifeBuoy, SlidersHorizontal, ToggleRight } from "lucide-react";
+import {
+  Globe,
+  History,
+  LifeBuoy,
+  SlidersHorizontal,
+  ToggleRight,
+} from "lucide-react";
 
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
@@ -18,9 +24,14 @@ import {
   Switch,
   useToast,
 } from "@/components/ui";
-import { getSettings, updateSettings } from "@/lib/api/platform";
+import {
+  getPlatformSettingsAudit,
+  getSettings,
+  updateSettings,
+} from "@/lib/api/platform";
 import { messageForError } from "@/lib/api/errors";
-import type { PlatformSettings } from "@/lib/api/types";
+import type { PlatformSettings, SettingsAuditLog } from "@/lib/api/types";
+import { formatDateTime, settingsSectionLabel } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 export default function SettingsPage() {
@@ -242,6 +253,56 @@ export default function SettingsPage() {
           </div>
         </form>
       ) : null}
+
+      {!loading && !error && settings ? <PlatformAuditCard /> : null}
     </PageContainer>
+  );
+}
+
+function PlatformAuditCard() {
+  const { t, locale } = useI18n();
+  const [rows, setRows] = useState<SettingsAuditLog[] | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getPlatformSettingsAudit()
+      .then((res) => alive && setRows(res.results))
+      .catch((err) => alive && setAuditError(messageForError(err, t)));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Card>
+      <SectionHeader
+        title={t.hotel.settings.sectionAudit}
+        description={t.hotel.settings.sectionAuditDesc}
+        icon={History}
+      />
+      {auditError ? <Alert tone="error">{auditError}</Alert> : null}
+      {rows === null && !auditError ? (
+        <LoadingState label={t.common.loading} />
+      ) : rows && rows.length === 0 ? (
+        <p className="muted">{t.hotel.settings.noAuditYet}</p>
+      ) : (
+        <div className="stack">
+          {(rows ?? []).map((r) => (
+            <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
+              <span className="detail-item__label">
+                {settingsSectionLabel(r.section, t)}
+                <span className="muted"> · {formatDateTime(r.created_at, locale)}</span>
+              </span>
+              <span className="detail-item__value">
+                {Object.keys(r.changes).length} {t.hotel.settings.auditFieldsChanged}
+                {r.actor ? <span className="muted"> · {r.actor}</span> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
