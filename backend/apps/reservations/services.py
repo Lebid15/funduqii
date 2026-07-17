@@ -28,6 +28,7 @@ from apps.common.exceptions import (
     NoAvailability,
     PermissionDenied,
     ReservationHasActiveStay,
+    ReservationKeyAlreadyUsed,
     RoomAssignmentConflict,
 )
 
@@ -132,25 +133,32 @@ def _next_reservation_number(hotel) -> str:
 def reserve_reservation_number(hotel, *, idempotency_key, user=None) -> ReservationDraft:
     """Reserve a REAL reservation number when the booking form opens (Round 3 §7.3).
 
-    Idempotent per ``(hotel, idempotency_key)``: an existing OPEN, non-expired draft
-    for the key is returned unchanged (same number). Otherwise a fresh number is
-    allocated from the locked counter and an OPEN draft (with a TTL) is created.
+    Idempotent per ``(hotel, idempotency_key)`` ONLY while the draft is still OPEN
+    and within TTL: that draft is returned unchanged (same number). A FIRST-time key
+    allocates a fresh number from the locked counter and creates an OPEN draft.
+
+    TERMINAL-DRAFT RULE (owner semantics): a draft that has reached a terminal or
+    expired outcome — ``consumed`` / ``expired`` / ``cancelled``, or ``open`` but
+    PAST its ``expires_at`` — is NEVER re-opened, re-numbered, or recycled, and its
+    number / reservation link / status are never mutated. Re-opening a terminal
+    draft would blur the boundary between a finished operation and a new one (and
+    could later return a historical reservation under a "fresh" number). Instead the
+    spent key raises :class:`ReservationKeyAlreadyUsed` (HTTP 409); the client opens
+    a new form (a new UUID) to reserve again. The old number stays a permanent gap
+    (never reused).
 
     There are NO side effects — no folio, payment, availability, or inventory is
     touched. The draft is hotel-scoped: a key from another hotel never matches here
     (tenant isolation).
 
-    Concurrency (Round 3 §7.3 correction): a REPLAY of an already-stored key locks
-    that existing row with ``select_for_update`` and returns it unchanged. On the
-    FIRST-time concurrent case there is NO row to lock yet, so two same-key reserves
-    can both miss the lookup, both allocate a number, and both attempt the insert.
-    The unique ``(hotel, idempotency_key)`` constraint then lets exactly ONE draft
-    persist; the loser catches the ``IntegrityError`` and RE-FETCHES the winner's
-    draft, so the endpoint stays idempotent — a SINGLE stored draft per key (it is
-    the counter + this catch, NOT the lock, that guarantee that). The loser's
-    already-allocated number becomes a permanent gap (the counter is authoritative
-    and monotonic; numbers are never reused). Mirrors the finance folio/charge
-    ``get_or_create``-style resilience. Runs inside a transaction.
+    Concurrency: a REPLAY of an OPEN+valid key locks that row with
+    ``select_for_update`` and returns it unchanged. On the FIRST-time concurrent case
+    there is NO row to lock yet, so two same-key reserves can both miss the lookup,
+    both allocate a number, and both attempt the insert; the unique
+    ``(hotel, idempotency_key)`` constraint lets exactly ONE draft persist and the
+    loser catches the ``IntegrityError`` and RE-FETCHES the winner — returning it if
+    OPEN+valid (idempotent), else raising ``ReservationKeyAlreadyUsed``. The loser's
+    already-allocated number becomes a permanent gap. Runs inside a transaction.
     """
     key = (idempotency_key or "").strip()
     if not key:
@@ -162,43 +170,24 @@ def reserve_reservation_number(hotel, *, idempotency_key, user=None) -> Reservat
         .filter(hotel=hotel, idempotency_key=key)
         .first()
     )
-    if (
-        draft is not None
-        and draft.status == ReservationDraftStatus.OPEN
-        and draft.expires_at > now
-    ):
-        return draft  # idempotent replay -> the SAME reserved number
-
-    number = next_reservation_number(hotel)
-    expires_at = now + RESERVATION_DRAFT_TTL
     if draft is not None:
-        # A SPENT (consumed/expired/cancelled) draft already holds this key. The
-        # unique constraint forbids a second row, so re-issue a FRESH number in
-        # place; the old number is a permanent gap (never reused).
-        draft.reservation_number = number
-        draft.status = ReservationDraftStatus.OPEN
-        draft.expires_at = expires_at
-        draft.created_by = _actor(user)
-        draft.save(
-            update_fields=[
-                "reservation_number",
-                "status",
-                "expires_at",
-                "created_by",
-            ]
-        )
-        return draft
+        # Idempotent replay ONLY while OPEN and within TTL -> the SAME reserved number.
+        if draft.status == ReservationDraftStatus.OPEN and draft.expires_at > now:
+            return draft
+        # Terminal / expired outcome: the key is SPENT. Never re-open, re-number, or
+        # recycle it, and never touch its link/status/audit — reserve again with a
+        # fresh key.
+        raise ReservationKeyAlreadyUsed()
 
-    # First-time insert for this key. Two SAME-key reserves can BOTH reach here:
-    # the ``select_for_update`` above locks nothing when no row exists yet, so both
+    # First-time insert for this key. Two SAME-key reserves can BOTH reach here: the
+    # ``select_for_update`` above locks nothing when no row exists yet, so both
     # allocate a number and both attempt the insert. The unique ``(hotel,
     # idempotency_key)`` constraint lets only ONE row land; the loser catches the
-    # ``IntegrityError`` and RE-FETCHES the winner's draft (idempotent — it returns
-    # the winner's number). The loser's already-allocated number is a permanent gap.
-    # The nested ``atomic`` is a SAVEPOINT so the collision rolls back ONLY this
-    # insert and leaves the outer transaction usable (required on PostgreSQL, where
-    # an IntegrityError otherwise aborts the whole transaction) — the same guard
-    # ``finance`` uses around its folio/charge inserts.
+    # ``IntegrityError`` and RE-FETCHES the winner. The nested ``atomic`` is a
+    # SAVEPOINT so the collision rolls back ONLY this insert and leaves the outer
+    # transaction usable (required on PostgreSQL) — the guard ``finance`` uses too.
+    number = next_reservation_number(hotel)
+    expires_at = now + RESERVATION_DRAFT_TTL
     try:
         with transaction.atomic():
             return ReservationDraft.objects.create(
@@ -210,11 +199,19 @@ def reserve_reservation_number(hotel, *, idempotency_key, user=None) -> Reservat
                 expires_at=expires_at,
             )
     except IntegrityError:
+        # The winner's row now exists. Return it only if OPEN+valid (idempotent
+        # first-time race); a spent winner means the key is already used.
         existing = (
             ReservationDraft.objects.filter(hotel=hotel, idempotency_key=key).first()
         )
-        if existing is not None:
+        if (
+            existing is not None
+            and existing.status == ReservationDraftStatus.OPEN
+            and existing.expires_at > now
+        ):
             return existing
+        if existing is not None:
+            raise ReservationKeyAlreadyUsed()
         raise
 
 

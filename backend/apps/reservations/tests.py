@@ -2614,23 +2614,86 @@ class ReservationNumberReservationTests(APITestCase):
         self.assertEqual(n1, "R00001")
         self.assertEqual(n2, "R00002")
 
-    def test_expired_same_key_reissues_new_number(self):
+    def test_reserve_after_expired_rejects_and_keeps_number(self):
+        """Terminal-draft rule: a key that reached EXPIRED is NEVER re-opened. Re-
+        reserving the SAME key -> 409, no new number, the old draft untouched."""
         n1 = self._reserve("k1").data["reservation_number"]  # R00001
         ReservationDraft.objects.filter(hotel=self.hotel).update(
             status=ReservationDraftStatus.EXPIRED,
             expires_at=timezone.now() - timedelta(minutes=1),
         )
-        # Re-reserving the SAME spent key re-issues a FRESH number in place.
-        n2 = self._reserve("k1").data["reservation_number"]
-        self.assertNotEqual(n1, n2)
-        self.assertEqual(n2, "R00002")
-        # Still exactly one row for this key (unique per hotel).
+        resp = self._reserve("k1")
+        self.assertEqual(resp.status_code, 409, resp.data)
+        # No new number allocated (the counter did not advance).
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel).last_number, 1
+        )
+        # The spent draft is untouched: still EXPIRED, still its original number,
+        # still exactly one row for this key.
+        after = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="k1")
+        self.assertEqual(after.status, ReservationDraftStatus.EXPIRED)
+        self.assertEqual(after.reservation_number, n1)
         self.assertEqual(
             ReservationDraft.objects.filter(
                 hotel=self.hotel, idempotency_key="k1"
             ).count(),
             1,
         )
+
+    def test_reserve_after_consumed_rejects_and_keeps_link(self):
+        """A CONSUMED (linked) draft is NEVER re-opened: reserve with the SAME key
+        -> 409, no new number, and the draft's status / number / reservation link
+        are untouched (a historical record is never altered)."""
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        created = self._create(idempotency_key="k1")  # consumes the draft
+        self.assertEqual(created.status_code, 201, created.data)
+        draft = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="k1")
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        self.assertIsNotNone(draft.reservation_id)
+        linked_id = draft.reservation_id
+
+        resp = self._reserve("k1")
+        self.assertEqual(resp.status_code, 409, resp.data)
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel).last_number, 1
+        )
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        self.assertEqual(draft.reservation_id, linked_id)
+        self.assertEqual(draft.reservation_number, n1)
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="k1"
+            ).count(),
+            1,
+        )
+
+    def test_reserve_after_cancelled_rejects(self):
+        """A CANCELLED draft is terminal too: reserve with the SAME key -> 409, no
+        re-open, no new number, the old number not reused."""
+        n1 = self._reserve("k1").data["reservation_number"]  # R00001
+        ReservationDraft.objects.filter(
+            hotel=self.hotel, idempotency_key="k1"
+        ).update(status=ReservationDraftStatus.CANCELLED)
+        resp = self._reserve("k1")
+        self.assertEqual(resp.status_code, 409, resp.data)
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel).last_number, 1
+        )
+        draft = ReservationDraft.objects.get(hotel=self.hotel, idempotency_key="k1")
+        self.assertEqual(draft.status, ReservationDraftStatus.CANCELLED)
+        self.assertEqual(draft.reservation_number, n1)
+
+    def test_new_key_after_spent_key_reserves_fresh_number(self):
+        """After a key is spent (409 on reuse), a NEW key still reserves normally."""
+        self._reserve("k1")  # R00001
+        ReservationDraft.objects.filter(
+            hotel=self.hotel, idempotency_key="k1"
+        ).update(status=ReservationDraftStatus.CONSUMED)
+        self.assertEqual(self._reserve("k1").status_code, 409)  # spent -> rejected
+        fresh = self._reserve("k2")  # a fresh UUID works
+        self.assertEqual(fresh.status_code, 201, fresh.data)
+        self.assertEqual(fresh.data["reservation_number"], "R00002")
 
     def test_cancelled_draft_number_not_reused(self):
         n1 = self._reserve("k1").data["reservation_number"]  # R00001

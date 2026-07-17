@@ -473,6 +473,21 @@ class IdempotencyKeyConflict(FunduqiiAPIException):
     default_code = "idempotency_key_conflict"
 
 
+class ReservationKeyAlreadyUsed(FunduqiiAPIException):
+    """reserve-number was called with an idempotency key that has already reached a
+    TERMINAL/expired outcome (consumed / expired / cancelled / OPEN-past-TTL). A
+    spent key is NEVER re-opened, re-numbered, or recycled — the client opens a new
+    booking form (a fresh key) to reserve a new number. Distinct from
+    :class:`IdempotencyKeyConflict` (which is a create-time payload mismatch)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This reservation-number key has already been used; open a new booking form "
+        "to reserve a fresh number."
+    )
+    default_code = "reservation_key_already_used"
+
+
 # --- Guests, check-in & check-out (Phase 7) --------------------------------
 
 

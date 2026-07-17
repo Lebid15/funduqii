@@ -3768,6 +3768,10 @@ class ImmediateCheckInIdempotencyConcurrencyTests(TransactionTestCase):
         )
         self.rtype = _priced_type(self.hotel, code="ICC", rate="100.00")
         self.room = make_room(self.hotel, self.rtype, number="501")
+        # A second room of the type so the NO-DRAFT loser's type-availability check
+        # passes and it reaches the creation_idempotency_key backstop (then replays)
+        # rather than failing on inventory. (The WITH-draft loser replays earlier.)
+        self.room2 = make_room(self.hotel, self.rtype, number="502")
 
     def _worker(self, barrier, results, index, key):
         from django.db import connections
@@ -3834,6 +3838,77 @@ class ImmediateCheckInIdempotencyConcurrencyTests(TransactionTestCase):
                 f"an unexpected error escaped a worker: {r}",
             )
         self.assertEqual(results[0], results[1])  # both see the SAME reservation
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Payment.objects.filter(folio__hotel=self.hotel).count(), 1)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_concurrent_immediate_check_in_no_draft_is_safe(self):
+        """The NO-DRAFT immediate-check-in path (no pre-reserved draft → no early
+        draft-lock serialization). Under a true concurrent same-key race pinning the
+        SAME room, the path is NOT cleanly replayable: room overlap is enforced at
+        availability BEFORE the creation-key backstop. The owner-adopted outcome is a
+        SAFE REJECTION — exactly ONE check-in succeeds fully, the other fails with a
+        clear DOMAIN conflict (room/availability), with ZERO partial effects (still
+        one of everything), never a duplicate booking and never a 500/IntegrityError
+        leak. (The real front-desk flow always reserves a draft first, which replays
+        cleanly — see test_concurrent_immediate_check_in_no_duplicates.)"""
+        import threading
+
+        from django.db import connection
+
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.reservations.models import ReservationDraft
+
+        if connection.vendor != "postgresql":
+            self.skipTest(
+                "True two-connection immediate check-in concurrency needs PostgreSQL "
+                "row locks; skipped on SQLite to avoid a false green."
+            )
+
+        # Deliberately NO reserve_reservation_number -> no draft for this key.
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="icc-nd"
+            ).count(),
+            0,
+        )
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._worker, args=(barrier, results, i, "icc-nd"))
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "a no-draft immediate-check-in worker timed out")
+
+        successes = [r for r in results if not str(r).startswith("unexpected:")]
+        rejections = [r for r in results if str(r).startswith("unexpected:")]
+        # Exactly one succeeds; exactly one is safely rejected.
+        self.assertEqual(len(successes), 1, results)
+        self.assertEqual(len(rejections), 1, results)
+        # The rejection is a clean DOMAIN conflict, NOT a server error / integrity leak.
+        self.assertTrue(
+            any(
+                name in rejections[0]
+                for name in (
+                    "RoomAssignmentConflict",
+                    "NoAvailability",
+                    "IdempotencyKeyConflict",
+                )
+            ),
+            rejections[0],
+        )
+        self.assertNotIn("IntegrityError", rejections[0])
+        # ZERO partial effects from the rejected worker — exactly one of everything.
         self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
         self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
         self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 1)
