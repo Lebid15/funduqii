@@ -33,6 +33,46 @@ from apps.reservations.services import create_reservation
 from .services import CheckInService, promote_reservation_occupants
 
 
+def _immediate_check_in_extra(deposit, room, line_index):
+    """The immediate-check-in-SPECIFIC material inputs folded into the creation
+    idempotency fingerprint: the deposit (amount/currency/method/FX — the money
+    effect), the admit room, and the target line. So a replay with the same key
+    but a different deposit / room / line is a materially different request (409),
+    not a silent no-op. Money-ish values are coerced to ``Decimal`` (via the same
+    ``_decimal_or_none`` the line-rate uses) so the fingerprint is type-independent —
+    ``"50.00"``, ``50`` and ``Decimal("50")`` all match — instead of relying on the
+    API always sending a ``Decimal``; currency is upper/stripped (``usd``≡``USD``)
+    and method stripped. Descriptive-only deposit fields (payer_name / reference /
+    notes) are excluded — changing a note is not a materially different request."""
+    from apps.reservations.services import _decimal_or_none
+
+    d = deposit or {}
+    return {
+        "deposit": {
+            "amount": _decimal_or_none(d.get("amount")),
+            "original_amount": _decimal_or_none(d.get("original_amount")),
+            "currency": (d.get("currency") or "").strip().upper(),
+            "method": (d.get("method") or "").strip(),
+            "exchange_rate": _decimal_or_none(d.get("exchange_rate")),
+            "rate_basis": (d.get("rate_basis") or "").strip(),
+        }
+        if d
+        else None,
+        "room": getattr(room, "id", room),
+        "line_index": line_index,
+    }
+
+
+def _existing_stay_folio(hotel, stay):
+    """The stay's folio in WHATEVER state it is now (the immediate-check-in compose
+    creates exactly one). Used on an idempotent replay so a retry after check-out
+    still returns the real folio (possibly CLOSED) instead of ``None`` — never
+    re-opening, creating, or mutating it."""
+    from apps.finance.models import Folio
+
+    return Folio.objects.filter(hotel=hotel, stay=stay).order_by("id").first()
+
+
 def _resolve_existing_primary_guest(hotel, provided_guest, reservation_fields):
     """Return a PRE-EXISTING hotel-scoped ``Guest`` for the primary occupant, or
     ``None`` — WITHOUT creating anything (no side effect, so it is replay-safe).
@@ -83,14 +123,6 @@ def _create_primary_guest(hotel, reservation_fields, *, user=None):
         created_by=actor,
         updated_by=actor,
     )
-
-
-def _ensure_primary_guest(hotel, provided_guest, reservation_fields, *, user=None):
-    """Resolve an existing primary Guest or create one. Thin wrapper kept for any
-    caller that wants the classic resolve-or-create in one step."""
-    return _resolve_existing_primary_guest(
-        hotel, provided_guest, reservation_fields
-    ) or _create_primary_guest(hotel, reservation_fields, user=user)
 
 
 def _select_check_in_line(reservation, room, line_index):
@@ -169,14 +201,21 @@ def execute_immediate_check_in(
         reservation_fields["primary_guest"] = resolved_guest
 
     # 1) confirmed, instant reservation — the idempotency gate (availability +
-    #    capacity enforced within). On a replay ``create_reservation`` returns the
-    #    existing booking and we create NOTHING else.
+    #    capacity enforced within). The fingerprint scopes this as an
+    #    ``immediate_check_in`` operation and folds in the WHOLE material payload
+    #    (the deposit + the check-in room/line), so the same key can neither replay
+    #    across to a plain reservation create nor return the original when the
+    #    deposit/room differs — a materially different request 409s here. On a
+    #    genuine replay ``create_reservation`` returns the existing booking and we
+    #    create NOTHING else.
     reservation = create_reservation(
         hotel,
         lines=lines,
         status=ReservationStatus.CONFIRMED,
         user=user,
         occupants=occupants,
+        operation="immediate_check_in",
+        idempotency_extra=_immediate_check_in_extra(deposit, room, line_index),
         **reservation_fields,
     )
 
@@ -187,7 +226,6 @@ def execute_immediate_check_in(
     # we return them WITHOUT re-running any side effect — no duplicate Guest,
     # deposit, stay, folio, payment, or audit. (Inventory limits are NOT relied on.)
     if getattr(reservation, "_idempotent_replay", False):
-        from apps.finance.models import Folio, FolioStatus
         from apps.stays.models import Stay
 
         existing_stay = (
@@ -195,10 +233,11 @@ def execute_immediate_check_in(
             .order_by("id")
             .first()
         )
+        # Return the operation's folio in WHATEVER state it is now (OPEN or CLOSED).
+        # The original compose created exactly one; we never re-open, create, or
+        # mutate it — a replay after check-out still returns the real (closed) folio.
         existing_folio = (
-            Folio.objects.filter(
-                hotel=hotel, stay=existing_stay, status=FolioStatus.OPEN
-            ).first()
+            _existing_stay_folio(hotel, existing_stay)
             if existing_stay is not None
             else None
         )

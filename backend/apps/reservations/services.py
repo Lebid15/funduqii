@@ -243,31 +243,94 @@ def expire_stale_reservation_drafts(*, hotel_id: int | None = None) -> int:
     return qs.update(status=ReservationDraftStatus.EXPIRED)
 
 
-def _creation_fingerprint(*, lines, status, fields, occupants=None) -> str:
-    """A stable SHA-256 fingerprint of the SALIENT booking payload (S6 remediation).
+def _canonicalize(value):
+    """Canonical, format-stable representation of a value for fingerprinting.
 
-    Used to detect a replayed ``idempotency_key`` that carries a MATERIALLY
-    DIFFERENT request: two creates with the same key but different dates / rooms /
-    guest / status must NOT resolve to the same booking. The guest identity is
-    itself hashed and the whole payload is hashed again, so **no raw PII is ever
-    stored** — only the final digest. Computed from the RAW inputs (before the
-    capacity/snapshot mutations) so the original create and its replay always
-    produce the same value.
+    Normalizes Decimals (fixed notation — ``50``, ``50.00`` and ``50.0`` all
+    collapse to the same string), dates/times (ISO), model instances (``pk:<id>``)
+    and strips strings. ``None`` is preserved DISTINCT from ``""`` so a materially
+    absent value never collides with an empty one. Lists/dicts recurse; dict keys
+    are sorted at dump time, so client JSON key order never affects the digest.
     """
-    # Every MATERIAL booking-defining dimension — what is booked (dates, room
-    # type + quantity + pinned room, kind, source, arrival), how many people
-    # (adults/children + named occupants), and FOR WHOM (the full guest identity
-    # snapshot). Purely descriptive metadata (notes / special_requests /
-    # booking_channel) is deliberately excluded — changing a note is not a
-    # "materially different" request. Values are read from the RAW payload, so a
-    # genuine retry (identical body) always matches and never false-409s.
-    line_sig = sorted(
-        [
-            getattr(line.get("room_type"), "id", line.get("room_type")),
-            int(line.get("quantity") or 1),
-            (getattr(line.get("room"), "id", line.get("room")) or 0),
-        ]
+    import datetime
+    from decimal import Decimal
+
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, Decimal):
+        return format(value.normalize(), "f")
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _canonicalize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonicalize(v) for v in value]
+    if hasattr(value, "pk"):
+        return f"pk:{value.pk}"
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _decimal_or_none(value):
+    """Coerce a money-ish value to a ``Decimal`` (so ``"50.00"`` and ``50`` match),
+    or ``None`` when absent. Falls back to the stripped string if unparseable."""
+    from decimal import Decimal, InvalidOperation
+
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return str(value).strip()
+
+
+def _creation_fingerprint(
+    *,
+    operation,
+    lines,
+    status,
+    fields,
+    occupants=None,
+    room_assignment_mode=None,
+    extra=None,
+) -> str:
+    """A stable SHA-256 fingerprint of the WHOLE material operation (S6 remediation).
+
+    It represents everything that changes the resulting records or their financial
+    / operational side effects, so a replayed ``idempotency_key`` carrying a
+    materially different request is rejected (409) rather than silently returning
+    the original:
+
+    * OPERATION SCOPE — so a key cannot cross between a plain reservation create and
+      an immediate check-in and be replayed as the other.
+    * WHAT is booked — dates, arrival, kind, source, per-line (room type + quantity
+      + pinned room + agreed-rate override + reason), and the room-assignment mode.
+    * HOW MANY — adults/children + named occupant identities.
+    * FOR WHOM — the full guest-identity snapshot (hashed).
+    * EXTRA path-specific inputs — e.g. the deposit (amount/currency/method/FX) and
+      the immediate check-in room + line, supplied by the orchestration.
+
+    Non-material UI values (language, ordering, CSRF, transient UI) are never
+    included. Canonical: server-built dict, ``sort_keys`` at dump time, sorted
+    lists, normalized Decimals/dates/PKs, and ``None`` kept distinct from ``""`` —
+    so client JSON key order never matters and a genuine retry always matches. The
+    guest identity and the whole payload are hashed, so NO raw PII is stored.
+    """
+    line_entries = [
+        {
+            "room_type": _canonicalize(line.get("room_type")),
+            "quantity": int(line.get("quantity") or 1),
+            "room": _canonicalize(line.get("room")),
+            "rate": _canonicalize(_decimal_or_none(line.get("agreed_nightly_rate"))),
+            "rate_reason": (line.get("rate_override_reason") or "").strip(),
+        }
         for line in (lines or [])
+    ]
+    # Sort by a canonical string so line order from the client is irrelevant and
+    # mixed None/str values never raise on comparison.
+    line_sig = sorted(
+        line_entries, key=lambda e: json.dumps(e, sort_keys=True, default=str)
     )
     occupant_sig = sorted(
         "|".join(
@@ -298,22 +361,21 @@ def _creation_fingerprint(*, lines, status, fields, occupants=None) -> str:
             (fields.get("primary_guest_nationality") or "").strip(),
         ]
     )
-
-    def _s(value):
-        return "" if value is None else str(value)
-
     payload = {
-        "status": str(status),
-        "booking_kind": _s(fields.get("booking_kind")),
-        "source": _s(fields.get("source")),
-        "check_in": _s(fields.get("check_in_date")),
-        "check_out": _s(fields.get("check_out_date")),
-        "arrival": _s(fields.get("expected_arrival_time")),
-        "adults": _s(fields.get("adults")),
-        "children": _s(fields.get("children")),
+        "operation": _canonicalize(operation),
+        "status": _canonicalize(status),
+        "booking_kind": _canonicalize(fields.get("booking_kind")),
+        "source": _canonicalize(fields.get("source")),
+        "check_in": _canonicalize(fields.get("check_in_date")),
+        "check_out": _canonicalize(fields.get("check_out_date")),
+        "arrival": _canonicalize(fields.get("expected_arrival_time")),
+        "adults": _canonicalize(fields.get("adults")),
+        "children": _canonicalize(fields.get("children")),
+        "room_assignment_mode": _canonicalize(room_assignment_mode),
         "lines": line_sig,
         "occupants": occupant_sig,
         "guest": hashlib.sha256(guest_identity.encode("utf-8")).hexdigest(),
+        "extra": _canonicalize(extra or {}),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -439,6 +501,8 @@ def create_reservation(
     occupants=None,
     room_assignment_mode=None,
     idempotency_key=None,
+    operation="reservation",
+    idempotency_extra=None,
     **fields,
 ) -> Reservation:
     """Create a reservation with its room lines after an availability check.
@@ -484,7 +548,13 @@ def create_reservation(
     creation_key = (idempotency_key or "").strip() or None
     creation_fingerprint = (
         _creation_fingerprint(
-            lines=lines, status=status, fields=fields, occupants=occupants
+            operation=operation,
+            lines=lines,
+            status=status,
+            fields=fields,
+            occupants=occupants,
+            room_assignment_mode=room_assignment_mode,
+            extra=idempotency_extra,
         )
         if creation_key
         else ""

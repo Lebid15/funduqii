@@ -3088,6 +3088,66 @@ class ReservationCreationIdempotencyTests(TestCase):
             self._create(key="k-occ", adults=2)
         self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
 
+    # 5c — same key, different room_assignment_mode → 409
+    def test_same_key_different_assignment_mode_rejected(self):
+        from apps.common.exceptions import IdempotencyKeyConflict
+
+        self._create(key="k-mode")  # mode absent (None)
+        with self.assertRaises(IdempotencyKeyConflict):
+            self._create(key="k-mode", room_assignment_mode="automatic")
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    # 5d — same key, different PINNED room → 409
+    def test_same_key_different_room_rejected(self):
+        from apps.common.exceptions import IdempotencyKeyConflict
+
+        rooms = list(
+            Room.objects.filter(hotel=self.hotel, room_type=self.rt).order_by("number")
+        )
+        self._create(
+            key="k-room",
+            lines=[{"room_type": self.rt, "quantity": 1, "room": rooms[0]}],
+        )
+        with self.assertRaises(IdempotencyKeyConflict):
+            self._create(
+                key="k-room",
+                lines=[{"room_type": self.rt, "quantity": 1, "room": rooms[1]}],
+            )
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    # 5e — same key, different agreed-rate OVERRIDE → 409 (no silent price change)
+    def test_same_key_different_rate_override_rejected(self):
+        from decimal import Decimal
+
+        from apps.common.exceptions import IdempotencyKeyConflict
+
+        self._create(
+            key="k-rate",
+            lines=[
+                {
+                    "room_type": self.rt, "quantity": 1,
+                    "agreed_nightly_rate": Decimal("120.00"),
+                    "rate_override_reason": "vip",
+                }
+            ],
+        )
+        with self.assertRaises(IdempotencyKeyConflict):
+            self._create(
+                key="k-rate",
+                lines=[
+                    {
+                        "room_type": self.rt, "quantity": 1,
+                        "agreed_nightly_rate": Decimal("180.00"),
+                        "rate_override_reason": "vip",
+                    }
+                ],
+            )
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(
+            Reservation.objects.get(hotel=self.hotel).lines.get().agreed_nightly_rate,
+            Decimal("120.00"),
+        )
+
     # 6 — two different keys → two distinct reservations
     def test_two_different_keys_two_reservations(self):
         r1 = self._create(key="k-a")
