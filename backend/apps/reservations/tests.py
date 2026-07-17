@@ -3002,3 +3002,243 @@ class ReservationDraftCleanupTaskTests(APITestCase):
         self.assertEqual(mine.status, ReservationDraftStatus.EXPIRED)
         # A scoped run leaves another hotel's stale draft alone.
         self.assertEqual(theirs.status, ReservationDraftStatus.OPEN)
+
+
+class ReservationCreationIdempotencyTests(TestCase):
+    """S6 remediation — reservation CREATION is idempotent end-to-end.
+
+    A repeated create with the SAME ``idempotency_key`` returns the SAME
+    reservation (one booking, one number, the draft consumed once, no re-run side
+    effects); a DIFFERENT payload under the same key is a conflict; different keys
+    / different hotels stay independent; an expired draft is never consumed and
+    its number never reused; and a legacy key-less caller is unaffected.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "idem-mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.rt = make_type(self.hotel, code="STD", base_rate="100.00")
+        make_rooms(self.hotel, self.rt, 4, start=101)
+
+    def _reserve(self, key, hotel=None, user=None):
+        from django.db import transaction
+
+        from apps.reservations.services import reserve_reservation_number
+
+        with transaction.atomic():
+            return reserve_reservation_number(
+                hotel or self.hotel, idempotency_key=key, user=user or self.manager
+            )
+
+    def _create(self, *, key=None, hotel=None, user=None, rt=None, **over):
+        from apps.reservations.services import create_reservation
+
+        payload = dict(
+            lines=[{"room_type": rt or self.rt, "quantity": 1}],
+            status=ReservationStatus.CONFIRMED,
+            user=user or self.manager,
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="G",
+        )
+        payload.update(over)
+        return create_reservation(hotel or self.hotel, idempotency_key=key, **payload)
+
+    # 1 — same draft consumed twice, sequentially
+    def test_same_draft_consumed_twice_sequential_one_reservation(self):
+        draft = self._reserve("k-seq")
+        r1 = self._create(key="k-seq")
+        r2 = self._create(key="k-seq")
+        self.assertEqual(r1.id, r2.id)
+        self.assertEqual(r1.reservation_number, r2.reservation_number)
+        self.assertEqual(r1.reservation_number, draft.reservation_number)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        self.assertEqual(draft.reservation_id, r1.id)
+        self.assertTrue(getattr(r2, "_idempotent_replay", False))
+
+    # 3 — retry after a lost 201 (no prior draft): returns the existing reservation
+    def test_retry_after_lost_response_returns_existing(self):
+        r1 = self._create(key="k-retry")
+        r2 = self._create(key="k-retry")
+        self.assertEqual(r1.id, r2.id)
+        self.assertEqual(r1.reservation_number, r2.reservation_number)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    # 5 — same key, materially DIFFERENT payload → rejected, no second record
+    def test_same_key_different_payload_rejected(self):
+        from apps.common.exceptions import IdempotencyKeyConflict
+
+        r1 = self._create(key="k-diff", check_out_date=D2)
+        with self.assertRaises(IdempotencyKeyConflict):
+            self._create(key="k-diff", check_out_date=D3)  # different stay length
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        r1.refresh_from_db()
+        self.assertEqual(r1.check_out_date, D2)
+
+    # 5b — same key, different OCCUPANCY (a material field beyond dates) → 409
+    def test_same_key_different_occupancy_rejected(self):
+        from apps.common.exceptions import IdempotencyKeyConflict
+
+        self._create(key="k-occ", adults=1)
+        with self.assertRaises(IdempotencyKeyConflict):
+            self._create(key="k-occ", adults=2)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    # 6 — two different keys → two distinct reservations
+    def test_two_different_keys_two_reservations(self):
+        r1 = self._create(key="k-a")
+        r2 = self._create(key="k-b")
+        self.assertNotEqual(r1.id, r2.id)
+        self.assertNotEqual(r1.reservation_number, r2.reservation_number)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 2)
+
+    # 7 — same textual key in two hotels → full isolation, independent counters
+    def test_same_key_two_hotels_isolated(self):
+        other = make_hotel(slug="idem-other")
+        other_mgr = add_member(other, "idem-o@x.com", kind=MembershipType.MANAGER)
+        ort = make_type(other, code="STD", base_rate="100.00")
+        make_rooms(other, ort, 2, start=101)
+        r1 = self._create(key="shared")
+        r2 = self._create(key="shared", hotel=other, user=other_mgr, rt=ort)
+        self.assertNotEqual(r1.id, r2.id)
+        self.assertEqual(r1.reservation_number, "R00001")
+        self.assertEqual(r2.reservation_number, "R00001")  # independent per-hotel
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Reservation.objects.filter(hotel=other).count(), 1)
+
+    # 8 — expired draft (OPEN, past TTL, cleanup not run): not consumed, no reuse,
+    #     yet a retry stays idempotent via the reservation key
+    def test_expired_draft_not_consumed_number_not_reused_idempotent(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        draft = self._reserve("k-exp")
+        expired_number = draft.reservation_number
+        ReservationDraft.objects.filter(pk=draft.pk).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        r1 = self._create(key="k-exp")
+        self.assertNotEqual(r1.reservation_number, expired_number)  # fresh number
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.OPEN)  # untouched
+        self.assertIsNone(draft.reservation_id)
+        r2 = self._create(key="k-exp")  # retry is still idempotent
+        self.assertEqual(r1.id, r2.id)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    # 9 — legacy caller WITHOUT a key keeps working (no idempotency applied)
+    def test_legacy_caller_without_key_works(self):
+        r1 = self._create(key=None)
+        r2 = self._create(key=None)
+        self.assertNotEqual(r1.id, r2.id)
+        self.assertIsNone(r1.creation_idempotency_key)
+        self.assertIsNone(r2.creation_idempotency_key)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 2)
+
+    # 10 — a failure INSIDE the transaction leaves no consumed-draft-without-
+    #      reservation and no partial rows (full atomic rollback)
+    def test_failure_in_transaction_rolls_back_draft_and_reservation(self):
+        from unittest import mock
+
+        draft = self._reserve("k-fail")
+        with mock.patch(
+            "apps.reservations.services.ReservationRoomLine.objects.create",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self._create(key="k-fail")
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.OPEN)  # NOT consumed
+        self.assertIsNone(draft.reservation_id)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(
+            ReservationRoomLine.objects.filter(hotel=self.hotel).count(), 0
+        )
+
+
+class ReservationCreationIdempotencyConcurrencyTests(TransactionTestCase):
+    """S6 remediation — the TRUE two-connection proof that a concurrent double
+    create with the same key yields exactly ONE reservation (PostgreSQL-only —
+    the draft row lock is the serialization point; skipped on SQLite)."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="idem-conc")
+        self.manager = add_member(
+            self.hotel, "idem-conc@x.com", kind=MembershipType.MANAGER
+        )
+        self.rt = make_type(self.hotel, code="STD", base_rate="100.00")
+        make_rooms(self.hotel, self.rt, 4, start=101)
+
+    def _consume_worker(self, barrier, results, index, key):
+        from django.db import connections
+
+        from apps.reservations.services import create_reservation
+
+        try:
+            barrier.wait(timeout=15)
+            r = create_reservation(
+                self.hotel,
+                lines=[{"room_type": self.rt, "quantity": 1}],
+                status=ReservationStatus.CONFIRMED,
+                user=self.manager,
+                check_in_date=D1,
+                check_out_date=D2,
+                primary_guest_name="G",
+                idempotency_key=key,
+            )
+            results[index] = r.reservation_number
+        except Exception as exc:  # noqa: BLE001 - a leaked error must be visible
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def test_concurrent_same_key_create_yields_one_reservation(self):
+        import threading
+
+        from django.db import connection, transaction
+
+        from apps.reservations.services import reserve_reservation_number
+
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_ALLOC)
+
+        with transaction.atomic():
+            draft = reserve_reservation_number(
+                self.hotel, idempotency_key="conc", user=self.manager
+            )
+        reserved = draft.reservation_number
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(
+                target=self._consume_worker, args=(barrier, results, i, "conc")
+            )
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "a create worker deadlocked or timed out")
+        for r in results:
+            self.assertFalse(
+                str(r).startswith("unexpected:"),
+                f"an unexpected error escaped a worker: {r}",
+            )
+        # Exactly ONE reservation; BOTH workers observe the SAME reserved number.
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(results[0], reserved)
+        self.assertEqual(results[1], reserved)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        res = Reservation.objects.get(hotel=self.hotel)
+        self.assertEqual(draft.reservation_id, res.id)
+        self.assertEqual(res.reservation_number, reserved)

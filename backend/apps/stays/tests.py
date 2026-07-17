@@ -3540,6 +3540,72 @@ class ImmediateCheckInDraftPinTests(APITestCase):
             1,
         )
 
+    def _immediate_check_in_with_deposit(self, key):
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            {
+                "reservation": {
+                    "check_in_date": D1.isoformat(),
+                    "check_out_date": D2.isoformat(),
+                    "primary_guest_name": "Idem Guest",
+                    "adults": 1,
+                    "children": 0,
+                    "idempotency_key": key,
+                    "lines": [
+                        {"room_type": self.rtype.id, "quantity": 1, "room": self.room.id}
+                    ],
+                },
+                "room": self.room.id,
+                "deposit": {"amount": "50.00", "method": "cash"},
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_immediate_check_in_idempotent_no_duplicate_side_effects(self):
+        """S6 remediation — a REPLAYED immediate check-in (same idempotency key, e.g.
+        a lost-201 retry) returns the SAME reservation and creates NO second Stay,
+        Folio, or deposit Payment — no operational/financial duplication."""
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.reservations.models import ReservationDraft, ReservationDraftStatus
+        from apps.stays.models import Stay
+
+        reserved = self._reserve_number("imm-idem")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        reserved_number = reserved.data["reservation_number"]
+        draft_id = reserved.data["draft_id"]
+
+        first = self._immediate_check_in_with_deposit("imm-idem")
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(
+            first.data["reservation"]["reservation_number"], reserved_number
+        )
+
+        # Replay with the SAME key (simulates a retry after a lost response).
+        second = self._immediate_check_in_with_deposit("imm-idem")
+        self.assertEqual(second.status_code, 201, second.data)
+        self.assertEqual(
+            second.data["reservation"]["reservation_number"], reserved_number
+        )
+
+        # Exactly ONE of everything — no duplicate booking / stay / folio / payment.
+        res = Reservation.objects.get(hotel=self.hotel)
+        self.assertEqual(res.reservation_number, reserved_number)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(
+            Folio.objects.filter(hotel=self.hotel, reservation=res).count(), 1
+        )
+        folio = Folio.objects.get(hotel=self.hotel, reservation=res)
+        self.assertEqual(Payment.objects.filter(folio=folio).count(), 1)
+        # No duplicate/orphan Guest leaked by the replay (the guest is created only
+        # on the fresh-booking path, after the idempotency gate).
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), 1)
+        draft = ReservationDraft.objects.get(id=draft_id)
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        self.assertEqual(draft.reservation_id, res.id)
+
 
 class GapStayBlockFlowTests(APITestCase):
     """FIX 4 — the missing-rate block is REAL end-to-end: a stay with a DUE night

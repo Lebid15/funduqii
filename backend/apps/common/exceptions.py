@@ -461,6 +461,18 @@ class RoomAssignmentConflict(FunduqiiAPIException):
     default_code = "room_assignment_conflict"
 
 
+class IdempotencyKeyConflict(FunduqiiAPIException):
+    """S6 remediation — the same creation idempotency key was replayed with a
+    MATERIALLY DIFFERENT request payload. The original booking is never returned
+    as the result of a different request, and no second booking is created."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This idempotency key was already used for a different reservation request."
+    )
+    default_code = "idempotency_key_conflict"
+
+
 # --- Guests, check-in & check-out (Phase 7) --------------------------------
 
 

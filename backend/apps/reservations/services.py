@@ -9,6 +9,8 @@ No guest profile, payment, folio, invoice, or check-in/out is created here.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
@@ -20,6 +22,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.common.exceptions import (
     CancellationReasonRequired,
+    IdempotencyKeyConflict,
     InvalidReservationTransition,
     NoShowReasonRequired,
     NoAvailability,
@@ -240,6 +243,92 @@ def expire_stale_reservation_drafts(*, hotel_id: int | None = None) -> int:
     return qs.update(status=ReservationDraftStatus.EXPIRED)
 
 
+def _creation_fingerprint(*, lines, status, fields, occupants=None) -> str:
+    """A stable SHA-256 fingerprint of the SALIENT booking payload (S6 remediation).
+
+    Used to detect a replayed ``idempotency_key`` that carries a MATERIALLY
+    DIFFERENT request: two creates with the same key but different dates / rooms /
+    guest / status must NOT resolve to the same booking. The guest identity is
+    itself hashed and the whole payload is hashed again, so **no raw PII is ever
+    stored** — only the final digest. Computed from the RAW inputs (before the
+    capacity/snapshot mutations) so the original create and its replay always
+    produce the same value.
+    """
+    # Every MATERIAL booking-defining dimension — what is booked (dates, room
+    # type + quantity + pinned room, kind, source, arrival), how many people
+    # (adults/children + named occupants), and FOR WHOM (the full guest identity
+    # snapshot). Purely descriptive metadata (notes / special_requests /
+    # booking_channel) is deliberately excluded — changing a note is not a
+    # "materially different" request. Values are read from the RAW payload, so a
+    # genuine retry (identical body) always matches and never false-409s.
+    line_sig = sorted(
+        [
+            getattr(line.get("room_type"), "id", line.get("room_type")),
+            int(line.get("quantity") or 1),
+            (getattr(line.get("room"), "id", line.get("room")) or 0),
+        ]
+        for line in (lines or [])
+    )
+    occupant_sig = sorted(
+        "|".join(
+            [
+                (occ.get("first_name") or "").strip().casefold(),
+                (occ.get("last_name") or "").strip().casefold(),
+                (occ.get("national_id") or "").strip(),
+            ]
+        )
+        for occ in (occupants or [])
+    )
+    # Guest identity uses the STABLE snapshot fields, NOT any linked ``Guest`` PK —
+    # the immediate-check-in path creates a fresh Guest from the same snapshot on
+    # each call, so a PK would make an identical replay look "different" and
+    # wrongly 409.
+    guest_identity = "|".join(
+        [
+            (fields.get("primary_guest_name") or "").strip().casefold(),
+            (fields.get("primary_guest_first_name") or "").strip().casefold(),
+            (fields.get("primary_guest_last_name") or "").strip().casefold(),
+            (fields.get("primary_guest_father_name") or "").strip().casefold(),
+            (fields.get("primary_guest_mother_name") or "").strip().casefold(),
+            (fields.get("primary_guest_document_type") or "").strip(),
+            (fields.get("primary_guest_document_number") or "").strip(),
+            (fields.get("primary_guest_national_id") or "").strip(),
+            (fields.get("primary_guest_phone") or "").strip(),
+            (fields.get("primary_guest_email") or "").strip().casefold(),
+            (fields.get("primary_guest_nationality") or "").strip(),
+        ]
+    )
+
+    def _s(value):
+        return "" if value is None else str(value)
+
+    payload = {
+        "status": str(status),
+        "booking_kind": _s(fields.get("booking_kind")),
+        "source": _s(fields.get("source")),
+        "check_in": _s(fields.get("check_in_date")),
+        "check_out": _s(fields.get("check_out_date")),
+        "arrival": _s(fields.get("expected_arrival_time")),
+        "adults": _s(fields.get("adults")),
+        "children": _s(fields.get("children")),
+        "lines": line_sig,
+        "occupants": occupant_sig,
+        "guest": hashlib.sha256(guest_identity.encode("utf-8")).hexdigest(),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _assert_same_creation_request(reservation, fingerprint: str) -> None:
+    """Reject a replayed key whose payload fingerprint differs from the stored one.
+
+    A stored/incoming empty fingerprint is treated as "unknown" and never
+    conflicts (backward compatible with pre-remediation rows)."""
+    stored = reservation.creation_request_fingerprint or ""
+    if stored and fingerprint and stored != fingerprint:
+        raise IdempotencyKeyConflict()
+
+
 def _log_status(reservation, previous, new, *, note="", user=None):
     actor = user if getattr(user, "is_authenticated", False) else None
     ReservationStatusLog.objects.create(
@@ -383,6 +472,42 @@ def create_reservation(
     check_in = fields["check_in_date"]
     check_out = fields["check_out_date"]
 
+    # --- S6 remediation: end-to-end idempotent creation --------------------
+    # A client ``idempotency_key`` makes the WHOLE create idempotent. Lock the
+    # draft for the key FIRST — it is the serialization point for concurrent
+    # same-key creates: a second create BLOCKS here until the winner commits,
+    # then sees the draft CONSUMED + linked and returns the SAME reservation
+    # BEFORE any availability/capacity work. So a retry of a booking that already
+    # succeeded returns the original reservation and never a misleading
+    # ``no_availability``. The fingerprint (from the RAW payload, before the
+    # mutations below) rejects reusing a key for a materially DIFFERENT request.
+    creation_key = (idempotency_key or "").strip() or None
+    creation_fingerprint = (
+        _creation_fingerprint(
+            lines=lines, status=status, fields=fields, occupants=occupants
+        )
+        if creation_key
+        else ""
+    )
+    locked_draft = None
+    if creation_key:
+        locked_draft = (
+            ReservationDraft.objects.select_for_update()
+            .filter(hotel=hotel, idempotency_key=creation_key)
+            .first()
+        )
+        replay = None
+        if locked_draft is not None and locked_draft.reservation_id:
+            replay = locked_draft.reservation
+        if replay is None:
+            replay = Reservation.objects.filter(
+                hotel=hotel, creation_idempotency_key=creation_key
+            ).first()
+        if replay is not None:
+            _assert_same_creation_request(replay, creation_fingerprint)
+            replay._idempotent_replay = True
+            return replay
+
     # Guests final closure: a guest blocked in THIS hotel gets no new
     # bookings. Reservations hold snapshots (no guest FK), so the guard
     # matches by exact document/phone — a fresh Guest row for the same
@@ -425,37 +550,54 @@ def create_reservation(
         )
 
     actor = _actor(user)
-    # Round 3 §7.3 — pin a PRE-RESERVED number when a matching OPEN, non-expired
-    # draft exists for this hotel + idempotency_key (the number the form reserved
-    # on open); otherwise allocate a fresh number from the locked counter. The
-    # whole call is ``@transaction.atomic`` and the counter takes a row lock, so
-    # concurrent creates get DISTINCT numbers with no retry loop; the per-hotel
-    # unique constraint on ``reservation_number`` remains a DB backstop. The draft
-    # lookup is hotel-scoped, so a draft from another hotel is never consumable.
-    draft = None
-    if idempotency_key:
-        draft = (
-            ReservationDraft.objects.select_for_update()
-            .filter(
-                hotel=hotel,
-                idempotency_key=idempotency_key,
-                status=ReservationDraftStatus.OPEN,
-                expires_at__gt=timezone.now(),
-            )
-            .first()
+    # Round 3 §7.3 + S6 remediation — pin the PRE-RESERVED number by consuming the
+    # OPEN, non-expired draft the form reserved on open (already locked above);
+    # otherwise allocate a fresh number from the locked counter. An expired/spent
+    # draft is NOT consumed and its number is never reused. The per-hotel
+    # partial-unique on ``creation_idempotency_key`` (plus the existing
+    # ``reservation_number`` unique) is the DB BACKSTOP: two concurrent same-key
+    # creates that both slipped past the replay check both attempt the insert,
+    # exactly ONE lands, and the loser RE-FETCHES the winner (idempotent — no 500,
+    # no duplicate booking), the same resilience the reserve/finance inserts use.
+    now = timezone.now()
+    draft = (
+        locked_draft
+        if (
+            locked_draft is not None
+            and locked_draft.status == ReservationDraftStatus.OPEN
+            and locked_draft.expires_at > now
         )
-    number = draft.reservation_number if draft is not None else next_reservation_number(hotel)
-    reservation = Reservation.objects.create(
-        hotel=hotel,
-        reservation_number=number,
-        status=status,
-        created_by=actor,
-        updated_by=actor,
-        **fields,
+        else None
     )
+    number = draft.reservation_number if draft is not None else next_reservation_number(hotel)
+    try:
+        with transaction.atomic():
+            reservation = Reservation.objects.create(
+                hotel=hotel,
+                reservation_number=number,
+                status=status,
+                created_by=actor,
+                updated_by=actor,
+                creation_idempotency_key=creation_key,
+                creation_request_fingerprint=creation_fingerprint,
+                **fields,
+            )
+    except IntegrityError:
+        # Lost the same-key race: the winner already created the reservation.
+        # Return it (idempotent) instead of surfacing a 500 or a duplicate.
+        if creation_key:
+            winner = Reservation.objects.filter(
+                hotel=hotel, creation_idempotency_key=creation_key
+            ).first()
+            if winner is not None:
+                _assert_same_creation_request(winner, creation_fingerprint)
+                winner._idempotent_replay = True
+                return winner
+        raise
     if draft is not None:
         draft.status = ReservationDraftStatus.CONSUMED
-        draft.save(update_fields=["status"])
+        draft.reservation = reservation
+        draft.save(update_fields=["status", "reservation"])
 
     # RESERVATIONS-AUTO-ROOM: automatic assignment runs under the type locks
     # ``ensure_can_book`` already acquired, so a concurrent booking cannot pick

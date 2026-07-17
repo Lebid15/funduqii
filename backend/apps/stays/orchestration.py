@@ -33,31 +33,39 @@ from apps.reservations.services import create_reservation
 from .services import CheckInService, promote_reservation_occupants
 
 
-def _ensure_primary_guest(hotel, provided_guest, reservation_fields, *, user=None):
-    """Return a hotel-scoped ``Guest`` for the stay's primary occupant.
+def _resolve_existing_primary_guest(hotel, provided_guest, reservation_fields):
+    """Return a PRE-EXISTING hotel-scoped ``Guest`` for the primary occupant, or
+    ``None`` — WITHOUT creating anything (no side effect, so it is replay-safe).
 
     Prefers the guest the caller linked; else reuses an existing guest by EXACT
-    national ID; else creates a lightweight Guest from the reservation snapshot
-    fields. A central Guest is REQUIRED because ``CheckInService`` attaches it as
-    the primary ``StayGuest`` (a PROTECT FK). The generic document fields are not
-    copied (see ``_guest_from_occupant``) to avoid document-uniqueness collisions.
+    national ID (matched on the NORMALIZED key the constraint + lookup use).
     """
+    if provided_guest is not None:
+        return provided_guest
     from apps.guests.models import Guest
     from apps.guests.normalize import normalize_id
 
-    if provided_guest is not None:
-        return provided_guest
-    national_id = (reservation_fields.get("primary_guest_national_id") or "").strip()
-    # Match on the NORMALIZED key (same field the constraint + lookup use) so a
-    # differently-formatted national ID reuses the existing guest instead of
-    # creating a duplicate that would now also hit the DB constraint.
-    national_id_normalized = normalize_id(national_id)
+    national_id_normalized = normalize_id(
+        (reservation_fields.get("primary_guest_national_id") or "").strip()
+    )
     if national_id_normalized:
-        existing = Guest.objects.filter(
+        return Guest.objects.filter(
             hotel=hotel, national_id_normalized=national_id_normalized
         ).first()
-        if existing is not None:
-            return existing
+    return None
+
+
+def _create_primary_guest(hotel, reservation_fields, *, user=None):
+    """Create a lightweight central ``Guest`` from the reservation snapshot fields.
+
+    A central Guest is REQUIRED because ``CheckInService`` attaches it as the
+    primary ``StayGuest`` (a PROTECT FK). Called ONLY on the fresh-booking path
+    (after ``create_reservation`` has confirmed this is not an idempotent replay),
+    so a retried check-in never leaks a duplicate orphan Guest. The generic
+    document fields are not copied to avoid document-uniqueness collisions.
+    """
+    from apps.guests.models import Guest
+
     actor = user if getattr(user, "is_authenticated", False) else None
     full_name = (reservation_fields.get("primary_guest_name") or "").strip()
     return Guest.objects.create(
@@ -67,7 +75,7 @@ def _ensure_primary_guest(hotel, provided_guest, reservation_fields, *, user=Non
         last_name=(reservation_fields.get("primary_guest_last_name") or ""),
         father_name=(reservation_fields.get("primary_guest_father_name") or ""),
         mother_name=(reservation_fields.get("primary_guest_mother_name") or ""),
-        national_id=national_id,
+        national_id=(reservation_fields.get("primary_guest_national_id") or "").strip(),
         phone=(reservation_fields.get("primary_guest_phone") or ""),
         email=(reservation_fields.get("primary_guest_email") or ""),
         nationality=(reservation_fields.get("primary_guest_nationality") or "")[:80],
@@ -75,6 +83,14 @@ def _ensure_primary_guest(hotel, provided_guest, reservation_fields, *, user=Non
         created_by=actor,
         updated_by=actor,
     )
+
+
+def _ensure_primary_guest(hotel, provided_guest, reservation_fields, *, user=None):
+    """Resolve an existing primary Guest or create one. Thin wrapper kept for any
+    caller that wants the classic resolve-or-create in one step."""
+    return _resolve_existing_primary_guest(
+        hotel, provided_guest, reservation_fields
+    ) or _create_primary_guest(hotel, reservation_fields, user=user)
 
 
 def _select_check_in_line(reservation, room, line_index):
@@ -141,12 +157,20 @@ def execute_immediate_check_in(
     reservation_fields.pop("status", None)  # status is forced to confirmed
     reservation_fields.pop("hold_expires_at", None)  # not a confirmed-booking field
 
-    primary = _ensure_primary_guest(
-        hotel, primary_guest, reservation_fields, user=user
+    # Resolve a PRE-EXISTING primary guest (a provided link or an exact national-id
+    # match) up front — this has NO side effect, so it is replay-safe and lets the
+    # reservation snapshot be filled from it. A BRAND-NEW guest is deferred to the
+    # fresh-booking path below, so an idempotent replay never leaks a duplicate
+    # orphan Guest (the side effect that must NOT re-run).
+    resolved_guest = _resolve_existing_primary_guest(
+        hotel, primary_guest, reservation_fields
     )
-    reservation_fields["primary_guest"] = primary
+    if resolved_guest is not None:
+        reservation_fields["primary_guest"] = resolved_guest
 
-    # 1) confirmed, instant reservation (availability + capacity enforced within).
+    # 1) confirmed, instant reservation — the idempotency gate (availability +
+    #    capacity enforced within). On a replay ``create_reservation`` returns the
+    #    existing booking and we create NOTHING else.
     reservation = create_reservation(
         hotel,
         lines=lines,
@@ -155,6 +179,43 @@ def execute_immediate_check_in(
         occupants=occupants,
         **reservation_fields,
     )
+
+    # S6 remediation — idempotent replay: if the SAME creation idempotency key was
+    # already used, ``create_reservation`` returns the EXISTING reservation. Since
+    # this whole orchestration is one ``transaction.atomic``, a committed
+    # reservation for the key means its stay + folio (+ deposit) already exist, so
+    # we return them WITHOUT re-running any side effect — no duplicate Guest,
+    # deposit, stay, folio, payment, or audit. (Inventory limits are NOT relied on.)
+    if getattr(reservation, "_idempotent_replay", False):
+        from apps.finance.models import Folio, FolioStatus
+        from apps.stays.models import Stay
+
+        existing_stay = (
+            Stay.objects.filter(hotel=hotel, reservation=reservation)
+            .order_by("id")
+            .first()
+        )
+        existing_folio = (
+            Folio.objects.filter(
+                hotel=hotel, stay=existing_stay, status=FolioStatus.OPEN
+            ).first()
+            if existing_stay is not None
+            else None
+        )
+        return {
+            "reservation": reservation,
+            "stay": existing_stay,
+            "folio": existing_folio,
+        }
+
+    # Fresh booking — NOW materialize the primary Guest (creating one only here, so
+    # a retry never leaves an orphan) and link it for the stay's primary StayGuest.
+    primary = resolved_guest or _create_primary_guest(
+        hotel, reservation_fields, user=user
+    )
+    if reservation.primary_guest_id is None:
+        reservation.primary_guest = primary
+        reservation.save(update_fields=["primary_guest"])
 
     # 2) optional pre-arrival deposit → opens the reservation's ONE folio.
     if deposit:

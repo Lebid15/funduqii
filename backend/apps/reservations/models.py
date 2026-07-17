@@ -197,6 +197,26 @@ class Reservation(models.Model):
     public_cancel_requested_at = models.DateTimeField(null=True, blank=True)
     public_cancel_reason = models.CharField(max_length=255, blank=True, default="")
 
+    # --- End-to-end creation idempotency (S6 remediation) -------------------
+    # Set ONLY when the create ran with a client idempotency key. It makes
+    # reservation CREATION idempotent end-to-end: the per-hotel PARTIAL-UNIQUE
+    # constraint below (non-NULL values only) is the DB BACKSTOP, and
+    # ``create_reservation`` returns the EXISTING reservation on a replayed key
+    # instead of creating a second booking, re-consuming the draft, or re-running
+    # side effects (deposit / stay / folio). Legacy reservations and no-key
+    # callers keep it NULL and are excluded from the constraint — fully backward
+    # compatible.
+    creation_idempotency_key = models.CharField(
+        max_length=64, null=True, blank=True, default=None
+    )
+    # A SHA-256 fingerprint of the salient booking payload (lines, dates, status,
+    # guest identity) captured when the key was first used. Only the HASH is
+    # stored (never raw PII). A replay whose fingerprint DIFFERS is rejected as a
+    # conflict rather than silently returning the original booking.
+    creation_request_fingerprint = models.CharField(
+        max_length=64, blank=True, default=""
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -225,6 +245,17 @@ class Reservation(models.Model):
             models.CheckConstraint(
                 check=models.Q(check_out_date__gt=models.F("check_in_date")),
                 name="reservation_checkout_after_checkin",
+            ),
+            # S6 remediation — the DB backstop for end-to-end creation
+            # idempotency. PARTIAL: applies ONLY to non-NULL keys, so legacy
+            # reservations and no-key callers (key IS NULL) are unaffected. Two
+            # concurrent creates with the same key can both miss the app-level
+            # lookup; this constraint lets exactly ONE land and the loser
+            # re-fetches the winner (idempotent, no duplicate booking).
+            models.UniqueConstraint(
+                fields=["hotel", "creation_idempotency_key"],
+                condition=models.Q(creation_idempotency_key__isnull=False),
+                name="unique_reservation_creation_idempotency_key_per_hotel",
             ),
         ]
 
@@ -529,6 +560,19 @@ class ReservationDraft(models.Model):
     # A client-supplied idempotency token (a fresh UUID per form-open). Unique per
     # hotel so a replayed reserve returns the same draft.
     idempotency_key = models.CharField(max_length=64)
+    # The final reservation this draft was CONSUMED into (S6 remediation). NULL
+    # while OPEN / expired / cancelled; set ATOMICALLY at consume time. It is the
+    # serialization anchor + replay target for concurrent same-key creates: a
+    # second create locks this row, sees it CONSUMED + linked, and returns the
+    # SAME reservation without re-running side effects. SET_NULL preserves the
+    # draft row for audit if the (never hard-deleted) reservation ever goes away.
+    reservation = models.OneToOneField(
+        "Reservation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_draft",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
