@@ -55,8 +55,14 @@ def _apply_settings_update(request, settings_obj, data, section, fields):
     before = snapshot(settings_obj, fields)
     serializer = HotelSettingsSerializer(settings_obj, data=data, partial=True)
     serializer.is_valid(raise_exception=True)
-    serializer.save()
-    settings_obj.refresh_from_db()
+    # Write ONLY the columns this request changed (update_fields), not the whole
+    # row: two concurrent saves to DIFFERENT sections of the same hotel touch
+    # disjoint columns, so neither clobbers the other (no lost update).
+    changed = list(serializer.validated_data.keys())
+    for field, value in serializer.validated_data.items():
+        setattr(settings_obj, field, value)
+    if changed:
+        settings_obj.save(update_fields=changed + ["updated_at"])
     changes = diff_settings(settings_obj, before, snapshot(settings_obj, fields))
     record_settings_change(
         scope=SettingsAuditScope.HOTEL,
@@ -65,6 +71,7 @@ def _apply_settings_update(request, settings_obj, data, section, fields):
         hotel=request.hotel,
         actor=request.user,
     )
+    settings_obj.refresh_from_db()  # accurate response incl. concurrent changes
     return serializer
 
 

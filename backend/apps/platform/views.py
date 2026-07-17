@@ -637,8 +637,12 @@ def _save_and_audit_platform(request, settings_obj, serializer, section):
 
     fields = list(serializer.validated_data.keys())
     before = snapshot(settings_obj, fields)
-    serializer.save()
-    settings_obj.refresh_from_db()
+    # Column-scoped write (see hotel _apply_settings_update): a concurrent save
+    # to other platform fields cannot clobber this one's columns.
+    for field, value in serializer.validated_data.items():
+        setattr(settings_obj, field, value)
+    if fields:
+        settings_obj.save(update_fields=fields + ["updated_at"])
     record_settings_change(
         scope=SettingsAuditScope.PLATFORM,
         section=section,
@@ -646,6 +650,7 @@ def _save_and_audit_platform(request, settings_obj, serializer, section):
         hotel=None,
         actor=request.user,
     )
+    settings_obj.refresh_from_db()
 
 
 class PublicSiteSettingsView(PlatformOwnerMixin, APIView):
