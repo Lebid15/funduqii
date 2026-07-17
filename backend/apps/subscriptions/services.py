@@ -61,6 +61,13 @@ SUBSCRIPTION_EVENT_TYPES = (
     "subscription.reactivated",
     "subscription.payment_recorded",
     "subscription.payment_voided",
+    # Hotel-initiated change requests (§8.5). request_submitted is raised by the
+    # hotel and notifies the platform owner; the decision events notify the hotel.
+    "subscription.request_submitted",
+    "subscription.request_accepted",
+    "subscription.request_rejected",
+    "subscription.request_cancelled",
+    "subscription.request_executed",
     # Reserved for the notifications module (time-based; no scheduler yet)
     "subscription.restricted",
     "subscription.trial_will_end",

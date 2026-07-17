@@ -325,6 +325,10 @@ export interface HotelSubscriptionState {
   /** Date-derived status — PREFER this over `status` for display. */
   effective_status: SubscriptionStatus | null;
   plan_name: string | null;
+  /** The live subscription's start date (§8.3). Null when there is no live sub. */
+  starts_at: string | null;
+  /** Trial end date — only set for a trial subscription, else null. */
+  trial_ends_at: string | null;
   ends_at: string | null;
   days_left: number | null;
   expiring_soon: boolean;
@@ -335,6 +339,79 @@ export interface HotelSubscriptionState {
   terms: SubscriptionTerms | null;
   entitlements: EntitlementSummary;
   payments: SubscriptionStatePayment[];
+}
+
+// --- Subscription change requests (§8.4/§8.5) --------------------------------
+
+export type ChangeRequestKind = "new_subscription" | "renewal" | "plan_change";
+
+export type ChangeRequestStatus =
+  | "under_review"
+  | "accepted"
+  | "rejected"
+  | "cancelled"
+  | "executed";
+
+/** Per-hotel state of a plan in the hotel's available-plans grid. */
+export type AvailablePlanState =
+  | "current"
+  | "upgradeable"
+  | "available"
+  | "unavailable";
+
+/** One plan row for the hotel plan grid: flat plan fields + per-hotel state.
+ * `price`/`price_yearly` are decimal strings — render as-is, never parseFloat. */
+export interface AvailablePlan {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  price: string;
+  price_yearly: string | null;
+  currency: string;
+  billing_cycle: BillingCycle;
+  trial_days: number;
+  room_limit: number | null;
+  user_limit: number | null;
+  max_public_bookings_per_month: number | null;
+  feature_codes: string[];
+  sort_order: number;
+  state: AvailablePlanState;
+  requestable: boolean;
+  request_kind: ChangeRequestKind | null;
+}
+
+export interface AvailablePlansResponse {
+  plans: AvailablePlan[];
+  can_request_renewal: boolean;
+  current_plan_id: number | null;
+}
+
+/** A hotel-initiated subscription change request (hotel-safe view). */
+export interface SubscriptionChangeRequest {
+  id: number;
+  kind: ChangeRequestKind;
+  kind_display: string;
+  status: ChangeRequestStatus;
+  status_display: string;
+  requested_plan: number | null;
+  requested_plan_name: string | null;
+  current_plan_name: string | null;
+  hotel_note: string;
+  admin_note: string;
+  decided_at: string | null;
+  executed_at: string | null;
+  resulting_subscription: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Owner review view — adds hotel + actor context. */
+export interface PlatformChangeRequest extends SubscriptionChangeRequest {
+  hotel: number;
+  hotel_name: string;
+  requested_by: string | null;
+  decided_by: string | null;
 }
 
 /** GET /api/v1/public/plans/ → one public (active + public) plan card. */

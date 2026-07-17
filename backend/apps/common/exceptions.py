@@ -985,6 +985,60 @@ class DuplicatePaymentReference(FunduqiiAPIException):
     default_code = "duplicate_payment_reference"
 
 
+# --- Subscription change requests (§8.5 — hotel-initiated) -------------------
+
+
+class SubscriptionRequestConflict(FunduqiiAPIException):
+    """A hotel may hold at most ONE open (under_review/accepted) subscription
+    change request at a time. Enforced by a partial-unique DB constraint; the
+    service turns the IntegrityError into this clean 409."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This hotel already has an open subscription request. Resolve it before "
+        "submitting another."
+    )
+    default_code = "subscription_request_conflict"
+
+
+class InvalidSubscriptionRequestTransition(FunduqiiAPIException):
+    """The request is not in a state that permits this action (e.g. executing a
+    request that was not accepted, or deciding one that is already terminal)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This subscription request action is not allowed in its current state."
+    default_code = "invalid_subscription_request_transition"
+
+
+class SubscriptionRequestNotAllowed(FunduqiiAPIException):
+    """The request precondition for its kind is not met — e.g. a NEW subscription
+    while one is already live, or a RENEWAL / PLAN CHANGE with no live
+    subscription, or a plan change that is not an upgrade (downgrades are not a
+    hotel-initiated kind). Re-checked server-side at submit AND execute."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This subscription request is not allowed for the hotel's current state."
+    default_code = "subscription_request_not_allowed"
+
+
+class PlanNotAvailableForRequest(FunduqiiAPIException):
+    """The requested plan is not a valid target — it is inactive, hidden, the
+    current plan, or (for a plan change) not an upgrade. Re-checked at execute so
+    a plan deactivated between submit and execute cannot be applied."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The requested plan is not available for this request."
+    default_code = "plan_not_available_for_request"
+
+
+class SubscriptionRequestReasonRequired(FunduqiiAPIException):
+    """A subscription request may only be rejected with a reason."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required to reject a subscription request."
+    default_code = "subscription_request_reason_required"
+
+
 def _extract_code(exc) -> str:
     """Prefer the specific ErrorDetail code (e.g. simplejwt's), then fall back."""
     detail = getattr(exc, "detail", None)

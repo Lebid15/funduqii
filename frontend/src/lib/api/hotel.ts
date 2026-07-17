@@ -8,10 +8,13 @@
  */
 import { hotelFetch, hotelJson } from "./hotelFetch";
 import type {
+  AvailablePlansResponse,
+  ChangeRequestKind,
   HotelMedia,
   HotelProfile,
   HotelSettings,
   MediaKind,
+  SubscriptionChangeRequest,
 } from "./types";
 
 const request = hotelFetch;
@@ -69,4 +72,36 @@ export function updateMedia(
 
 export function deleteMedia(id: number): Promise<void> {
   return jsonRequest<void>(`/media/${id}`, { method: "DELETE" });
+}
+
+// --- Subscription change requests (§8.4/§8.5) -------------------------------
+// The hotel's only write access to the subscription lifecycle. The backend
+// decides all eligibility; these calls just carry the manager's intent.
+
+export function getAvailablePlans(): Promise<AvailablePlansResponse> {
+  return jsonRequest<AvailablePlansResponse>("/subscription/plans");
+}
+
+export function listMyRequests(): Promise<SubscriptionChangeRequest[]> {
+  return jsonRequest<SubscriptionChangeRequest[]>("/subscription/requests");
+}
+
+export function submitChangeRequest(body: {
+  kind: ChangeRequestKind;
+  requested_plan?: number;
+  hotel_note?: string;
+}): Promise<SubscriptionChangeRequest> {
+  return jsonRequest<SubscriptionChangeRequest>("/subscription/requests", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function cancelMyRequest(
+  id: number,
+): Promise<SubscriptionChangeRequest> {
+  return jsonRequest<SubscriptionChangeRequest>(
+    `/subscription/requests/${id}/cancel`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
 }

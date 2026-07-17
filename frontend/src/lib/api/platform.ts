@@ -12,6 +12,7 @@ import type {
   HotelSubscription,
   HotelSubscriptionState,
   PaginatedResponse,
+  PlatformChangeRequest,
   PlatformDashboard,
   PlatformOverview,
   PlatformPayment,
@@ -418,6 +419,64 @@ export function updateSubscription(
   return request<HotelSubscription>(`/subscriptions/${id}`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+// --- Subscription change requests (§8.5 — hotel-initiated, owner review) -----
+
+export interface ChangeRequestListParams {
+  status?: string; // a status, or "open" for under_review + accepted
+  kind?: string;
+  hotel?: number;
+}
+
+export function listChangeRequests(
+  params?: ChangeRequestListParams,
+): Promise<PlatformChangeRequest[]> {
+  return request<PlatformChangeRequest[]>(
+    `/subscription-requests${toQuery(params)}`,
+  );
+}
+
+export function acceptChangeRequest(
+  id: number,
+): Promise<PlatformChangeRequest> {
+  return request<PlatformChangeRequest>(`/subscription-requests/${id}/accept`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function rejectChangeRequest(
+  id: number,
+  reason: string,
+): Promise<PlatformChangeRequest> {
+  return request<PlatformChangeRequest>(`/subscription-requests/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export interface ExecuteChangeRequestBody extends ManualPaymentInput {
+  notes?: string;
+}
+
+export function executeChangeRequest(
+  id: number,
+  body?: ExecuteChangeRequestBody,
+): Promise<PlatformChangeRequest> {
+  return request<PlatformChangeRequest>(
+    `/subscription-requests/${id}/execute`,
+    { method: "POST", body: JSON.stringify(body ?? {}) },
+  );
+}
+
+export function cancelChangeRequest(
+  id: number,
+): Promise<PlatformChangeRequest> {
+  return request<PlatformChangeRequest>(`/subscription-requests/${id}/cancel`, {
+    method: "POST",
+    body: "{}",
   });
 }
 

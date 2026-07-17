@@ -57,6 +57,18 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.subscriptions.errors.duplicatePaymentReference;
     case "plan_in_use":
       return t.plans.inUseCannotDelete;
+    // Subscription change requests (§8.5) — actionable messages instead of the
+    // generic 409/400 fallbacks.
+    case "subscription_request_conflict":
+      return t.subscriptionRequests.errors.conflict;
+    case "invalid_subscription_request_transition":
+      return t.subscriptionRequests.errors.invalidTransition;
+    case "subscription_request_not_allowed":
+      return t.subscriptionRequests.errors.notAllowed;
+    case "plan_not_available_for_request":
+      return t.subscriptionRequests.errors.planNotAvailable;
+    case "subscription_request_reason_required":
+      return t.subscriptionRequests.errors.reasonRequired;
     case "resource_in_use":
       return t.rooms.errors.inUse;
     case "cross_tenant_reference":

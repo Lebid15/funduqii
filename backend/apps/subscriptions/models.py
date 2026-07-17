@@ -63,7 +63,11 @@ class SubscriptionPlan(models.Model):
 
     @property
     def is_in_use(self) -> bool:
-        return self.subscriptions.exists()
+        # A plan is "in use" — and so never hard-deleted, only deactivated — when
+        # any subscription references it OR any subscription change request (even a
+        # terminal one) targets it. Both FKs are PROTECT, so this guard turns what
+        # would be a raw ProtectedError into the clean ``plan_in_use`` (409).
+        return self.subscriptions.exists() or self.change_requests.exists()
 
 
 class SubscriptionStatus(models.TextChoices):
@@ -198,3 +202,127 @@ class PlatformSubscriptionPayment(models.Model):
     @property
     def is_voided(self) -> bool:
         return self.voided_at is not None
+
+
+class ChangeRequestKind(models.TextChoices):
+    NEW_SUBSCRIPTION = "new_subscription", "New subscription"
+    RENEWAL = "renewal", "Renewal"
+    PLAN_CHANGE = "plan_change", "Plan change"
+
+
+class ChangeRequestStatus(models.TextChoices):
+    UNDER_REVIEW = "under_review", "Under review"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+    CANCELLED = "cancelled", "Cancelled"
+    EXECUTED = "executed", "Executed"
+
+
+# The non-terminal (OPEN) request statuses. A hotel may hold at most ONE open
+# request at a time (partial-unique constraint below): the owner must accept +
+# execute, reject, or the hotel must cancel, before another can be submitted.
+OPEN_REQUEST_STATUSES = (
+    ChangeRequestStatus.UNDER_REVIEW,
+    ChangeRequestStatus.ACCEPTED,
+)
+
+
+class SubscriptionChangeRequest(models.Model):
+    """A hotel-initiated request to change its subscription (§8.5).
+
+    This is the ONLY hotel-driven entry into the otherwise platform-owner-driven
+    subscription lifecycle. The hotel submits a request; the platform owner
+    reviews it (two-step: accept, then execute). Executing calls the existing
+    lifecycle service (activate / renew / change plan) so every guarantee —
+    single live subscription, plan snapshot, grandfathering, events — still
+    holds. There is NO payment gateway, NO external messaging and NO customer
+    account here: it is an internal review record only.
+
+    Downgrades are deliberately NOT a hotel-initiated kind (owner decision):
+    a hotel may request a NEW subscription, a RENEWAL, or an UPGRADE plan change.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="subscription_requests",
+    )
+    kind = models.CharField(max_length=20, choices=ChangeRequestKind.choices)
+    # The target plan. NULL for a renewal (the plan does not change). PROTECT for
+    # new_subscription / plan_change so a plan tied to request history is never
+    # hard-deleted (see SubscriptionPlan.is_in_use).
+    requested_plan = models.ForeignKey(
+        SubscriptionPlan,
+        on_delete=models.PROTECT,
+        related_name="change_requests",
+        null=True,
+        blank=True,
+    )
+    # Audit snapshot of the live subscription the request was raised against (for
+    # display + owner context). SET_NULL because subscriptions are never deleted
+    # (void-not-delete), so this is a stable, non-blocking back-reference.
+    current_subscription = models.ForeignKey(
+        HotelSubscription,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ChangeRequestStatus.choices,
+        default=ChangeRequestStatus.UNDER_REVIEW,
+    )
+    hotel_note = models.TextField(blank=True, default="")
+    # The owner's decision note / mandatory rejection reason.
+    admin_note = models.TextField(blank=True, default="")
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscription_requests_made",
+    )
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscription_requests_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+    # The subscription produced when the request is executed (SET_NULL — history
+    # is preserved and the subscription is never deleted).
+    resulting_subscription = models.ForeignKey(
+        HotelSubscription,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "subscription_change_requests"
+        ordering = ["-created_at"]
+        constraints = [
+            # At most one OPEN (under_review/accepted) request per hotel.
+            models.UniqueConstraint(
+                fields=["hotel"],
+                condition=models.Q(status__in=list(OPEN_REQUEST_STATUSES)),
+                name="unique_open_request_per_hotel",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["hotel", "status"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"hotel={self.hotel_id} {self.kind} ({self.status})"
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in OPEN_REQUEST_STATUSES

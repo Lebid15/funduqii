@@ -29,6 +29,12 @@ from .views import (
     SettingsView,
     SubscriptionDetailView,
     SubscriptionListCreateView,
+    SubscriptionRequestAcceptView,
+    SubscriptionRequestCancelView,
+    SubscriptionRequestDetailView,
+    SubscriptionRequestExecuteView,
+    SubscriptionRequestListView,
+    SubscriptionRequestRejectView,
 )
 
 app_name = "platform"
@@ -137,6 +143,37 @@ urlpatterns = [
         "subscription-payments/<int:pk>/void/",
         PlatformPaymentVoidView.as_view(),
         name="payment-void",
+    ),
+    # §8.5 — hotel-initiated subscription change requests (owner review).
+    path(
+        "subscription-requests/",
+        SubscriptionRequestListView.as_view(),
+        name="subscription-request-list",
+    ),
+    path(
+        "subscription-requests/<int:pk>/",
+        SubscriptionRequestDetailView.as_view(),
+        name="subscription-request-detail",
+    ),
+    path(
+        "subscription-requests/<int:pk>/accept/",
+        SubscriptionRequestAcceptView.as_view(),
+        name="subscription-request-accept",
+    ),
+    path(
+        "subscription-requests/<int:pk>/reject/",
+        SubscriptionRequestRejectView.as_view(),
+        name="subscription-request-reject",
+    ),
+    path(
+        "subscription-requests/<int:pk>/execute/",
+        SubscriptionRequestExecuteView.as_view(),
+        name="subscription-request-execute",
+    ),
+    path(
+        "subscription-requests/<int:pk>/cancel/",
+        SubscriptionRequestCancelView.as_view(),
+        name="subscription-request-cancel",
     ),
     path("settings/", SettingsView.as_view(), name="settings"),
     # Phase 16 — public-website admin settings.
