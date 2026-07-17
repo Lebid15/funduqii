@@ -20,6 +20,7 @@ from .views import (
     ReservationLogsView,
     ReservationOverviewView,
     ReservationPaymentCreateView,
+    ReservationReserveNumberView,
     RoomAvailabilityView,
 )
 
@@ -35,6 +36,13 @@ urlpatterns = [
         "reservations/overview/",
         ReservationOverviewView.as_view(),
         name="reservation-overview",
+    ),
+    # Round 3 §7.3 — reserve a REAL number on booking-form open (literal segment,
+    # so it never collides with ``reservations/<int:pk>/``).
+    path(
+        "reservations/reserve-number/",
+        ReservationReserveNumberView.as_view(),
+        name="reservation-reserve-number",
     ),
     path(
         "reservations/room-availability/",

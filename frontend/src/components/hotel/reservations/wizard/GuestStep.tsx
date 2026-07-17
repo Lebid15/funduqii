@@ -92,6 +92,10 @@ export function GuestStep({
   );
 
   return (
+    // §7.1 — the guest step opts INTO the central compact density (Round 1). It is
+    // scoped to this container only, so the project-wide default density and the
+    // other wizard steps are unaffected.
+    <div data-density="compact">
     <SectionCard title={g.title} icon={UserRound} description={g.description}>
       {/* Linked / blocked banner. */}
       {linked ? (
@@ -139,7 +143,8 @@ export function GuestStep({
       {/* Lookup feedback. */}
       <GuestLookupFeedback state={lookup} linked={linked} onPick={pick} />
 
-      {/* Row B — structured names (3-up: first · last · father · mother). */}
+      {/* Row 2 — structured names (3-up: first · last · father). Mother-name
+          moves to the start of Row 3 (§7.1) — the DOM/tab order is unchanged. */}
       <div className="form-grid form-grid--3">
         <FormField label={g.firstName} htmlFor="wiz-guest-first">
           <Input
@@ -162,6 +167,17 @@ export function GuestStep({
             onChange={(e) => actions.setGuestField("father_name", e.target.value)}
           />
         </FormField>
+      </div>
+
+      {/* Display-only composed full name (never an input) — stays after Row 2. */}
+      {composedName ? (
+        <p className="muted small">
+          {g.composedName}: <strong>{composedName}</strong>
+        </p>
+      ) : null}
+
+      {/* Row 3 — mother · nationality · date of birth (3-up). */}
+      <div className="form-grid form-grid--3">
         <FormField label={g.motherName} htmlFor="wiz-guest-mother">
           <Input
             id="wiz-guest-mother"
@@ -169,17 +185,6 @@ export function GuestStep({
             onChange={(e) => actions.setGuestField("mother_name", e.target.value)}
           />
         </FormField>
-      </div>
-
-      {/* Display-only composed full name (never an input). */}
-      {composedName ? (
-        <p className="muted small">
-          {g.composedName}: <strong>{composedName}</strong>
-        </p>
-      ) : null}
-
-      {/* Row C — nationality · date of birth · email. */}
-      <div className="form-grid form-grid--3">
         <FormField label={g.nationality} htmlFor="wiz-guest-nat">
           <Input
             id="wiz-guest-nat"
@@ -195,6 +200,12 @@ export function GuestStep({
             onChange={(e) => actions.setGuestField("date_of_birth", e.target.value)}
           />
         </FormField>
+      </div>
+
+      {/* Row 4 — email + the "no email" toggle (2-up). The switch shares the row
+          as its own cell, aligned to the email INPUT (not its label) via the
+          scoped `.guest-email-switch` helper; the long Arabic label wraps in-cell. */}
+      <div className="form-grid">
         <FormField label={g.email} htmlFor="wiz-guest-email">
           <Input
             id="wiz-guest-email"
@@ -206,14 +217,15 @@ export function GuestStep({
             onChange={(e) => actions.setGuestField("email", e.target.value)}
           />
         </FormField>
+        <div className="guest-email-switch">
+          <Switch
+            id="wiz-guest-no-email"
+            checked={guest.no_email}
+            onChange={actions.setNoEmail}
+            label={g.noEmail}
+          />
+        </div>
       </div>
-
-      <Switch
-        id="wiz-guest-no-email"
-        checked={guest.no_email}
-        onChange={actions.setNoEmail}
-        label={g.noEmail}
-      />
 
       {/* Overwrite guard — importing a match would replace typed-in data. */}
       <ConfirmDialog
@@ -230,6 +242,7 @@ export function GuestStep({
         onClose={() => setConfirmMatch(null)}
       />
     </SectionCard>
+    </div>
   );
 }
 

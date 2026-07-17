@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from unittest import mock
 
+from django.test import TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -3456,6 +3457,463 @@ class ImmediateCheckInFolioRBACTests(APITestCase):
         self.assertIsNotNone(r.data["folio"])
         self.assertIn("folio_number", r.data["folio"])
         self.assertIn("balance", r.data["folio"])
+
+
+class ImmediateCheckInDraftPinTests(APITestCase):
+    """Round 3 §7.3 — the reserved number is PINNED end-to-end through the IMMEDIATE
+    check-in path. Reserve a number (an OPEN ``ReservationDraft`` keyed by an
+    idempotency_key), then immediate-check-in with that SAME idempotency_key nested
+    in the reservation body (exactly as the front desk sends it). The created
+    reservation must carry the EXACT reserved number and the draft must be CONSUMED.
+
+    This is the round's key coverage gap: it proves the reserve → immediate-check-in
+    pin/consume handshake works, not just the plain create path."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "immdraft@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = _priced_type(self.hotel, code="IPD", rate="100.00")
+        self.room = make_room(self.hotel, self.rtype, number="440")
+        self.client.force_authenticate(self.manager)
+
+    def _reserve_number(self, key):
+        return self.client.post(
+            reverse("reservations:reservation-reserve-number"),
+            {"idempotency_key": key},
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _immediate_check_in(self, key):
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            {
+                "reservation": {
+                    "check_in_date": D1.isoformat(),
+                    "check_out_date": D2.isoformat(),
+                    "primary_guest_name": "Pinned Guest",
+                    "adults": 1,
+                    "children": 0,
+                    # The FE nests the reserved key inside the reservation body.
+                    "idempotency_key": key,
+                    "lines": [
+                        {
+                            "room_type": self.rtype.id,
+                            "quantity": 1,
+                            "room": self.room.id,
+                        }
+                    ],
+                },
+                "room": self.room.id,
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_immediate_check_in_pins_reserved_number_and_consumes_draft(self):
+        from apps.reservations.models import (
+            ReservationDraft,
+            ReservationDraftStatus,
+        )
+
+        reserved = self._reserve_number("imm-k1")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        reserved_number = reserved.data["reservation_number"]
+        draft_id = reserved.data["draft_id"]
+
+        result = self._immediate_check_in("imm-k1")
+        self.assertEqual(result.status_code, 201, result.data)
+        # (a) the created reservation carries the EXACT reserved number.
+        self.assertEqual(
+            result.data["reservation"]["reservation_number"], reserved_number
+        )
+        # (b) the draft is now CONSUMED (its number was pinned, never re-allocated).
+        draft = ReservationDraft.objects.get(id=draft_id)
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        # Exactly one reservation exists and it is the pinned one (no fresh number
+        # was allocated alongside the reserved draft).
+        self.assertEqual(
+            Reservation.objects.filter(
+                hotel=self.hotel, reservation_number=reserved_number
+            ).count(),
+            1,
+        )
+
+    def _immediate_check_in_with_deposit(self, key):
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            {
+                "reservation": {
+                    "check_in_date": D1.isoformat(),
+                    "check_out_date": D2.isoformat(),
+                    "primary_guest_name": "Idem Guest",
+                    "adults": 1,
+                    "children": 0,
+                    "idempotency_key": key,
+                    "lines": [
+                        {"room_type": self.rtype.id, "quantity": 1, "room": self.room.id}
+                    ],
+                },
+                "room": self.room.id,
+                "deposit": {"amount": "50.00", "method": "cash"},
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def test_immediate_check_in_idempotent_no_duplicate_side_effects(self):
+        """S6 remediation — a REPLAYED immediate check-in (same idempotency key, e.g.
+        a lost-201 retry) returns the SAME reservation and creates NO second Stay,
+        Folio, or deposit Payment — no operational/financial duplication."""
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.reservations.models import ReservationDraft, ReservationDraftStatus
+        from apps.stays.models import Stay
+
+        reserved = self._reserve_number("imm-idem")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        reserved_number = reserved.data["reservation_number"]
+        draft_id = reserved.data["draft_id"]
+
+        first = self._immediate_check_in_with_deposit("imm-idem")
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(
+            first.data["reservation"]["reservation_number"], reserved_number
+        )
+
+        # Replay with the SAME key (simulates a retry after a lost response).
+        second = self._immediate_check_in_with_deposit("imm-idem")
+        self.assertEqual(second.status_code, 201, second.data)
+        self.assertEqual(
+            second.data["reservation"]["reservation_number"], reserved_number
+        )
+
+        # Exactly ONE of everything — no duplicate booking / stay / folio / payment.
+        res = Reservation.objects.get(hotel=self.hotel)
+        self.assertEqual(res.reservation_number, reserved_number)
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(
+            Folio.objects.filter(hotel=self.hotel, reservation=res).count(), 1
+        )
+        folio = Folio.objects.get(hotel=self.hotel, reservation=res)
+        self.assertEqual(Payment.objects.filter(folio=folio).count(), 1)
+        # No duplicate/orphan Guest leaked by the replay (the guest is created only
+        # on the fresh-booking path, after the idempotency gate).
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), 1)
+        draft = ReservationDraft.objects.get(id=draft_id)
+        self.assertEqual(draft.status, ReservationDraftStatus.CONSUMED)
+        self.assertEqual(draft.reservation_id, res.id)
+
+    # ---- S6 remediation: complete-fingerprint immediate-check-in coverage -----
+    def _immediate_custom(self, key, *, deposit=None, reservation_over=None):
+        body = {
+            "reservation": {
+                "check_in_date": D1.isoformat(),
+                "check_out_date": D2.isoformat(),
+                "primary_guest_name": "Idem Guest",
+                "adults": 1,
+                "children": 0,
+                "idempotency_key": key,
+                "lines": [
+                    {"room_type": self.rtype.id, "quantity": 1, "room": self.room.id}
+                ],
+            },
+            "room": self.room.id,
+        }
+        if reservation_over:
+            body["reservation"].update(reservation_over)
+        if deposit is not None:
+            body["deposit"] = deposit
+        return self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _effect_counts(self):
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.stays.models import Stay
+
+        return (
+            Reservation.objects.filter(hotel=self.hotel).count(),
+            Stay.objects.filter(hotel=self.hotel).count(),
+            Folio.objects.filter(hotel=self.hotel).count(),
+            Payment.objects.filter(folio__hotel=self.hotel).count(),
+            Guest.objects.filter(hotel=self.hotel).count(),
+        )
+
+    def test_immediate_different_deposit_amount_rejected(self):
+        self._reserve_number("dep-amt")
+        first = self._immediate_custom("dep-amt", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(first.status_code, 201, first.data)
+        second = self._immediate_custom("dep-amt", deposit={"amount": "500.00", "method": "cash"})
+        self.assertEqual(second.status_code, 409, second.data)
+        self.assertEqual(self._effect_counts(), (1, 1, 1, 1, 1))
+
+    def test_immediate_different_deposit_method_rejected(self):
+        self._reserve_number("dep-method")
+        first = self._immediate_custom("dep-method", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(first.status_code, 201, first.data)
+        second = self._immediate_custom("dep-method", deposit={"amount": "50.00", "method": "card"})
+        self.assertEqual(second.status_code, 409, second.data)
+        self.assertEqual(self._effect_counts(), (1, 1, 1, 1, 1))
+
+    def test_immediate_different_deposit_currency_rejected(self):
+        self._reserve_number("dep-cur")
+        first = self._immediate_custom(
+            "dep-cur", deposit={"amount": "50.00", "currency": "USD", "method": "cash"}
+        )
+        self.assertEqual(first.status_code, 201, first.data)
+        second = self._immediate_custom(
+            "dep-cur",
+            deposit={
+                "amount": "50.00", "currency": "EUR", "method": "cash",
+                "exchange_rate": "1.10", "original_amount": "45.45",
+            },
+        )
+        self.assertEqual(second.status_code, 409, second.data)
+        self.assertEqual(self._effect_counts(), (1, 1, 1, 1, 1))
+
+    def test_immediate_key_reuse_across_operations_conflict(self):
+        # The key is first used for a PLAIN reservation create; reusing it for an
+        # immediate check-in is a DIFFERENT operation scope -> 409, no side effects.
+        create = self.client.post(
+            reverse("reservations:reservation-list"),
+            {
+                "check_in_date": D1.isoformat(),
+                "check_out_date": D2.isoformat(),
+                "primary_guest_name": "Cross Guest",
+                "status": "confirmed",
+                "idempotency_key": "cross-op",
+                "lines": [{"room_type": self.rtype.id, "quantity": 1}],
+            },
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(create.status_code, 201, create.data)
+        conflict = self._immediate_custom("cross-op", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(conflict.status_code, 409, conflict.data)
+        from apps.stays.models import Stay
+
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_immediate_json_order_independent_replay(self):
+        self._reserve_number("json-order")
+        first = self._immediate_custom("json-order", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(first.status_code, 201, first.data)
+        number = first.data["reservation"]["reservation_number"]
+        # SAME logical payload, DIFFERENT key ordering everywhere — the canonical
+        # fingerprint must match, so this is a replay (same reservation), not a 409.
+        reordered = {
+            "room": self.room.id,
+            "deposit": {"method": "cash", "amount": "50.00"},
+            "reservation": {
+                "lines": [
+                    {"quantity": 1, "room": self.room.id, "room_type": self.rtype.id}
+                ],
+                "idempotency_key": "json-order",
+                "children": 0,
+                "adults": 1,
+                "primary_guest_name": "Idem Guest",
+                "check_out_date": D2.isoformat(),
+                "check_in_date": D1.isoformat(),
+            },
+        }
+        second = self.client.post(
+            reverse("stays:stay-immediate-check-in"),
+            reordered,
+            format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(second.status_code, 201, second.data)
+        self.assertEqual(second.data["reservation"]["reservation_number"], number)
+        self.assertEqual(self._effect_counts(), (1, 1, 1, 1, 1))
+
+    def test_immediate_replay_after_folio_closed(self):
+        from apps.finance.models import Folio, FolioStatus
+
+        self._reserve_number("folio-closed")
+        first = self._immediate_custom("folio-closed", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(first.status_code, 201, first.data)
+        res = Reservation.objects.get(hotel=self.hotel)
+        folio = Folio.objects.get(hotel=self.hotel, reservation=res)
+        # Simulate check-out closing the folio between the original call and the retry.
+        Folio.objects.filter(pk=folio.pk).update(status=FolioStatus.CLOSED)
+        second = self._immediate_custom("folio-closed", deposit={"amount": "50.00", "method": "cash"})
+        self.assertEqual(second.status_code, 201, second.data)
+        # Same reservation; the CLOSED folio is returned (not None, not re-opened).
+        self.assertEqual(second.data["reservation"]["reservation_number"], res.reservation_number)
+        self.assertIsNotNone(second.data["folio"])
+        self.assertEqual(second.data["folio"]["status"], FolioStatus.CLOSED)
+        folio.refresh_from_db()
+        self.assertEqual(folio.status, FolioStatus.CLOSED)
+        self.assertEqual(self._effect_counts(), (1, 1, 1, 1, 1))
+
+
+class ImmediateCheckInIdempotencyConcurrencyTests(TransactionTestCase):
+    """S6 remediation — a TRUE two-connection concurrent immediate check-in with the
+    same idempotency key produces exactly ONE of everything (Reservation / Stay /
+    Folio / Payment / Guest) and no 500. PostgreSQL-only (real row locks)."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="imm-conc")
+        self.manager = add_member(
+            self.hotel, "imm-conc@x.com", kind=MembershipType.MANAGER
+        )
+        self.rtype = _priced_type(self.hotel, code="ICC", rate="100.00")
+        self.room = make_room(self.hotel, self.rtype, number="501")
+        # A second room of the type so the NO-DRAFT loser's type-availability check
+        # passes and it reaches the creation_idempotency_key backstop (then replays)
+        # rather than failing on inventory. (The WITH-draft loser replays earlier.)
+        self.room2 = make_room(self.hotel, self.rtype, number="502")
+
+    def _worker(self, barrier, results, index, key):
+        from django.db import connections
+
+        from apps.stays.orchestration import execute_immediate_check_in
+
+        try:
+            barrier.wait(timeout=15)
+            result = execute_immediate_check_in(
+                self.hotel,
+                lines=[{"room_type": self.rtype, "quantity": 1, "room": self.room}],
+                room=self.room,
+                deposit={"amount": "50.00", "method": "cash"},
+                check_in_date=D1,
+                check_out_date=D2,
+                primary_guest_name="Conc Guest",
+                adults=1,
+                children=0,
+                idempotency_key=key,
+                user=self.manager,
+            )
+            results[index] = result["reservation"].reservation_number
+        except Exception as exc:  # noqa: BLE001 - a leaked error must be visible
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def test_concurrent_immediate_check_in_no_duplicates(self):
+        import threading
+
+        from django.db import connection, transaction
+
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.reservations.services import reserve_reservation_number
+
+        if connection.vendor != "postgresql":
+            self.skipTest(
+                "True two-connection immediate check-in concurrency needs PostgreSQL "
+                "row locks; skipped on SQLite to avoid a false green."
+            )
+
+        with transaction.atomic():
+            reserve_reservation_number(
+                self.hotel, idempotency_key="icc", user=self.manager
+            )
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._worker, args=(barrier, results, i, "icc"))
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "an immediate-check-in worker timed out")
+        for r in results:
+            self.assertFalse(
+                str(r).startswith("unexpected:"),
+                f"an unexpected error escaped a worker: {r}",
+            )
+        self.assertEqual(results[0], results[1])  # both see the SAME reservation
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Payment.objects.filter(folio__hotel=self.hotel).count(), 1)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_concurrent_immediate_check_in_no_draft_is_safe(self):
+        """The NO-DRAFT immediate-check-in path (no pre-reserved draft → no early
+        draft-lock serialization). Under a true concurrent same-key race pinning the
+        SAME room, the path is NOT cleanly replayable: room overlap is enforced at
+        availability BEFORE the creation-key backstop. The owner-adopted outcome is a
+        SAFE REJECTION — exactly ONE check-in succeeds fully, the other fails with a
+        clear DOMAIN conflict (room/availability), with ZERO partial effects (still
+        one of everything), never a duplicate booking and never a 500/IntegrityError
+        leak. (The real front-desk flow always reserves a draft first, which replays
+        cleanly — see test_concurrent_immediate_check_in_no_duplicates.)"""
+        import threading
+
+        from django.db import connection
+
+        from apps.finance.models import Folio, Payment
+        from apps.guests.models import Guest
+        from apps.reservations.models import ReservationDraft
+
+        if connection.vendor != "postgresql":
+            self.skipTest(
+                "True two-connection immediate check-in concurrency needs PostgreSQL "
+                "row locks; skipped on SQLite to avoid a false green."
+            )
+
+        # Deliberately NO reserve_reservation_number -> no draft for this key.
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="icc-nd"
+            ).count(),
+            0,
+        )
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._worker, args=(barrier, results, i, "icc-nd"))
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "a no-draft immediate-check-in worker timed out")
+
+        successes = [r for r in results if not str(r).startswith("unexpected:")]
+        rejections = [r for r in results if str(r).startswith("unexpected:")]
+        # Exactly one succeeds; exactly one is safely rejected.
+        self.assertEqual(len(successes), 1, results)
+        self.assertEqual(len(rejections), 1, results)
+        # The rejection is a clean DOMAIN conflict, NOT a server error / integrity leak.
+        self.assertTrue(
+            any(
+                name in rejections[0]
+                for name in (
+                    "RoomAssignmentConflict",
+                    "NoAvailability",
+                    "IdempotencyKeyConflict",
+                )
+            ),
+            rejections[0],
+        )
+        self.assertNotIn("IntegrityError", rejections[0])
+        # ZERO partial effects from the rejected worker — exactly one of everything.
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Stay.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Folio.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(Payment.objects.filter(folio__hotel=self.hotel).count(), 1)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), 1)
 
 
 class GapStayBlockFlowTests(APITestCase):

@@ -60,14 +60,23 @@ services:
       - db
     restart: unless-stopped
 
-  # --- Celery beat (scheduled tasks) — enable later when needed -----------
-  # beat:
-  #   build: ./backend
-  #   command: celery -A config beat -l info
-  #   env_file: [./backend.env.prod]
-  #   environment: { DJANGO_SETTINGS_MODULE: config.settings.production }
-  #   depends_on: [redis, db]
-  #   restart: unless-stopped
+  # --- Celery beat (scheduled tasks) --------------------------------------
+  # ONE scheduler process — never run more than one beat, or periodic tasks fire
+  # multiple times. It dispatches the hourly ReservationDraft cleanup
+  # (reservations.cleanup_reservation_drafts, from CELERY_BEAT_SCHEDULE) to the
+  # worker above via the SAME Redis broker (CELERY_BROKER_URL from backend.env.prod).
+  # No secrets are embedded here — they live only in the uncommitted env file.
+  beat:
+    build: ./backend
+    command: celery -A config beat -l info
+    env_file:
+      - ./backend.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
 
   # --- Next.js frontend (production server) -------------------------------
   frontend:

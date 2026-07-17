@@ -521,6 +521,13 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    # Round 3 §7.3: an OPTIONAL idempotency key (NOT a model field). On CREATE, a
+    # matching OPEN, non-expired ``ReservationDraft`` for this hotel + key pins its
+    # pre-reserved number onto the new reservation and is marked consumed; absent =>
+    # a fresh number is allocated. Ignored on UPDATE (an edit reserves nothing).
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
     status = serializers.ChoiceField(
         choices=[(s.value, s.label) for s in _WRITE_STATUSES],
         required=False,
@@ -575,6 +582,7 @@ class ReservationWriteSerializer(serializers.ModelSerializer):
             "occupants",
             "lines",
             "room_assignment_mode",
+            "idempotency_key",
         ]
 
     # --- field-level ---------------------------------------------------------
@@ -839,6 +847,22 @@ class CancelReservationSerializer(serializers.Serializer):
         if not value.strip():
             raise serializers.ValidationError("A cancellation reason is required.")
         return value.strip()
+
+
+class ReserveNumberSerializer(serializers.Serializer):
+    """Request body for the reserve-number endpoint (Round 3 §7.3).
+
+    ``idempotency_key`` is a client-generated token (a fresh UUID per form-open).
+    Replaying the same key returns the SAME reserved number (idempotent).
+    """
+
+    idempotency_key = serializers.CharField(max_length=64)
+
+    def validate_idempotency_key(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("An idempotency key is required.")
+        return value
 
 
 class ReservationStatusLogSerializer(serializers.Serializer):

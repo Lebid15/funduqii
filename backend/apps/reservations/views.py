@@ -38,6 +38,7 @@ from .serializers import (
     ReservationSerializer,
     ReservationStatusLogSerializer,
     ReservationWriteSerializer,
+    ReserveNumberSerializer,
     RoomAvailabilityQuerySerializer,
     TypeAvailabilitySerializer,
 )
@@ -278,11 +279,13 @@ class ReservationListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         lines = data.pop("lines")
-        # ``occupants`` and ``room_assignment_mode`` are not Reservation model
-        # fields — they must be passed explicitly, never spread into the model
-        # create via ``**data``.
+        # ``occupants``, ``room_assignment_mode`` and ``idempotency_key`` are not
+        # Reservation model fields — they must be passed explicitly, never spread
+        # into the model create via ``**data``.
         occupants = data.pop("occupants", None)
         room_assignment_mode = data.pop("room_assignment_mode", None)
+        # Round 3 §7.3: pin a pre-reserved number when a matching OPEN draft exists.
+        idempotency_key = (data.pop("idempotency_key", "") or "").strip() or None
         _guard_assignment(request, lines)
         res_status = data.pop("status")
         reservation = services.create_reservation(
@@ -292,10 +295,45 @@ class ReservationListCreateView(generics.ListCreateAPIView):
             user=request.user,
             occupants=occupants,
             room_assignment_mode=room_assignment_mode,
+            idempotency_key=idempotency_key,
             **data,
         )
         return Response(
             ReservationSerializer(reservation, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ReservationReserveNumberView(APIView):
+    """Reserve a REAL reservation number the moment the booking form opens
+    (Round 3 §7.3).
+
+    ``POST /api/v1/hotel/reservations/reserve-number/`` with
+    ``{"idempotency_key": "<uuid>"}`` allocates (or idempotently returns) a real
+    per-hotel ``R#####`` number and a lightweight :class:`ReservationDraft`. There
+    are NO side effects — no folio, payment, availability, or inventory is touched.
+    Gated by the EXISTING ``reservations.create`` permission (owner decision: reuse
+    create — no new permission). Hotel-scoped; a suspended/inactive hotel is refused.
+    """
+
+    def get_permissions(self):
+        return [CanCreate()]
+
+    def post(self, request: Request, *args, **kwargs) -> Response:
+        _guard_write(request)
+        serializer = ReserveNumberSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        draft = services.reserve_reservation_number(
+            request.hotel,
+            idempotency_key=serializer.validated_data["idempotency_key"],
+            user=request.user,
+        )
+        return Response(
+            {
+                "reservation_number": draft.reservation_number,
+                "draft_id": draft.id,
+                "expires_at": draft.expires_at.isoformat(),
+            },
             status=status.HTTP_201_CREATED,
         )
 
@@ -331,6 +369,9 @@ class ReservationDetailView(generics.RetrieveUpdateAPIView):
         lines = data.pop("lines", None)
         occupants = data.pop("occupants", None)
         room_assignment_mode = data.pop("room_assignment_mode", None)
+        # Round 3 §7.3: an edit reserves nothing — never consumes/allocates a
+        # number. Drop any idempotency_key so it is never treated as a model field.
+        data.pop("idempotency_key", None)
         if lines is not None:
             _guard_assignment(request, lines)
         data.pop("status", None)  # status is changed only via confirm/cancel/hold

@@ -27,6 +27,9 @@ staticfiles/
 media/
 backend/staticfiles/
 backend/media/
+# Private guest documents / PII (ID scans, passports). Never commit — this tree
+# holds real personal data served only through authenticated, tenant-scoped views.
+/backend/private_media/
 
 # =========================================================================
 # Node / Next.js

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from .document_storage import (
     private_document_storage,
@@ -196,6 +197,26 @@ class Reservation(models.Model):
     public_cancel_requested_at = models.DateTimeField(null=True, blank=True)
     public_cancel_reason = models.CharField(max_length=255, blank=True, default="")
 
+    # --- End-to-end creation idempotency (S6 remediation) -------------------
+    # Set ONLY when the create ran with a client idempotency key. It makes
+    # reservation CREATION idempotent end-to-end: the per-hotel PARTIAL-UNIQUE
+    # constraint below (non-NULL values only) is the DB BACKSTOP, and
+    # ``create_reservation`` returns the EXISTING reservation on a replayed key
+    # instead of creating a second booking, re-consuming the draft, or re-running
+    # side effects (deposit / stay / folio). Legacy reservations and no-key
+    # callers keep it NULL and are excluded from the constraint — fully backward
+    # compatible.
+    creation_idempotency_key = models.CharField(
+        max_length=64, null=True, blank=True, default=None
+    )
+    # A SHA-256 fingerprint of the salient booking payload (lines, dates, status,
+    # guest identity) captured when the key was first used. Only the HASH is
+    # stored (never raw PII). A replay whose fingerprint DIFFERS is rejected as a
+    # conflict rather than silently returning the original booking.
+    creation_request_fingerprint = models.CharField(
+        max_length=64, blank=True, default=""
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -224,6 +245,17 @@ class Reservation(models.Model):
             models.CheckConstraint(
                 check=models.Q(check_out_date__gt=models.F("check_in_date")),
                 name="reservation_checkout_after_checkin",
+            ),
+            # S6 remediation — the DB backstop for end-to-end creation
+            # idempotency. PARTIAL: applies ONLY to non-NULL keys, so legacy
+            # reservations and no-key callers (key IS NULL) are unaffected. Two
+            # concurrent creates with the same key can both miss the app-level
+            # lookup; this constraint lets exactly ONE land and the loser
+            # re-fetches the winner (idempotent, no duplicate booking).
+            models.UniqueConstraint(
+                fields=["hotel", "creation_idempotency_key"],
+                condition=models.Q(creation_idempotency_key__isnull=False),
+                name="unique_reservation_creation_idempotency_key_per_hotel",
             ),
         ]
 
@@ -464,3 +496,113 @@ class ReservationDocument(models.Model):
 
     def __str__(self) -> str:
         return f"document#{self.pk} ({self.doc_type}, res={self.reservation_id})"
+
+
+class ReservationNumberSequence(models.Model):
+    """A per-hotel monotonic counter for reservation numbers (Round 3 §7.3).
+
+    This is the SOLE allocator of ``R#####`` reservation numbers. Allocation runs
+    inside a transaction with ``select_for_update`` on the hotel's row (see
+    :func:`apps.reservations.services.next_reservation_number`) so two concurrent
+    allocations can never collide — the blessed locked-counter pattern already used
+    by :class:`apps.finance.models.FinancialNumberSequence`.
+
+    On first use for a hotel the counter SEEDS from the current max valid
+    reservation number (ignoring imported/corrupt non ``^R[0-9]+$`` prefixes), so
+    it continues seamlessly from the existing max. One row per hotel (OneToOne).
+    """
+
+    hotel = models.OneToOneField(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_number_sequence",
+    )
+    # BigInteger: a matching-but-huge historical tail (e.g. ``R3000000000``) must
+    # not overflow when the counter seeds from / continues past it.
+    last_number = models.BigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "reservation_number_sequences"
+
+    def __str__(self) -> str:
+        return f"reservation seq hotel={self.hotel_id} @ {self.last_number}"
+
+
+class ReservationDraftStatus(models.TextChoices):
+    OPEN = "open", "Open"
+    CONSUMED = "consumed", "Consumed"
+    EXPIRED = "expired", "Expired"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class ReservationDraft(models.Model):
+    """A lightweight placeholder that RESERVES a real reservation number the moment
+    the booking form opens (Round 3 §7.3).
+
+    It holds ONLY the allocated number + metadata — there is deliberately NO folio,
+    availability, or inventory field and NO side effect. Idempotency is keyed on
+    ``(hotel, idempotency_key)``: a repeated reserve with the same key returns the
+    SAME draft. When the form is submitted the create flow consumes the matching
+    OPEN, non-expired draft and pins its number onto the new reservation.
+
+    Numbers are NEVER reused: an expired/cancelled draft simply leaves a gap in the
+    sequence (acceptable — the counter is authoritative and monotonic).
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="reservation_drafts",
+    )
+    # The number allocated from ``ReservationNumberSequence`` at draft creation.
+    reservation_number = models.CharField(max_length=32)
+    # A client-supplied idempotency token (a fresh UUID per form-open). Unique per
+    # hotel so a replayed reserve returns the same draft.
+    idempotency_key = models.CharField(max_length=64)
+    # The final reservation this draft was CONSUMED into (S6 remediation). NULL
+    # while OPEN / expired / cancelled; set ATOMICALLY at consume time. It is the
+    # serialization anchor + replay target for concurrent same-key creates: a
+    # second create locks this row, sees it CONSUMED + linked, and returns the
+    # SAME reservation without re-running side effects. SET_NULL preserves the
+    # draft row for audit if the (never hard-deleted) reservation ever goes away.
+    reservation = models.OneToOneField(
+        "Reservation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_draft",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservation_drafts_created",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ReservationDraftStatus.choices,
+        default=ReservationDraftStatus.OPEN,
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "reservation_drafts"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["hotel", "idempotency_key"],
+                name="unique_reservation_draft_idempotency_key_per_hotel",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"draft {self.reservation_number} (hotel={self.hotel_id}, {self.status})"
+        )
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()

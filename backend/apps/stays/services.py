@@ -851,7 +851,8 @@ def _guest_from_occupant(hotel, occupant, *, user=None):
     """Get-or-create a hotel-scoped ``Guest`` for an occupant with no guest link.
 
     Reuses an existing guest by NORMALIZED national ID — the same key the partial
-    per-hotel national-id unique constraint uses (see ``_ensure_primary_guest``) —
+    per-hotel national-id unique constraint uses (see
+    ``orchestration._resolve_existing_primary_guest``) —
     so a differently-formatted national ID reuses the existing guest instead of
     creating a duplicate that would then trip the constraint and roll the whole
     check-in back; the promotion stays idempotent. Otherwise a lightweight Guest
