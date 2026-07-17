@@ -3225,11 +3225,8 @@
     "effectiveStatus": "Status",
     "price": "Price",
     "billingCycle": "Billing cycle",
-    "usageTitle": "Usage & limits",
     "rooms": "Rooms",
     "staff": "Staff",
-    "publicBookings": "Public bookings",
-    "remaining": "remaining",
     "features": "Features",
     "noFeatures": "No add-on features",
     "payments": "Payment history",
@@ -3259,7 +3256,10 @@
     "currentBadge": "Current",
     "decisionNote": "Platform note",
     "requestedOn": "Requested",
-    "noPlans": "No plans are available to request right now."
+    "noPlans": "No plans are available to request right now.",
+    "startsAt": "Start date",
+    "trialEndsAt": "Trial ends",
+    "limitsTitle": "Usage & limits"
   },
   "publicSiteAdmin": {
     "title": "Public website",

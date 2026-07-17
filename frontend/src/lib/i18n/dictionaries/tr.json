@@ -3225,11 +3225,8 @@
     "effectiveStatus": "Durum",
     "price": "Fiyat",
     "billingCycle": "Faturalandırma döngüsü",
-    "usageTitle": "Kullanım ve sınırlar",
     "rooms": "Odalar",
     "staff": "Personel",
-    "publicBookings": "Genel rezervasyonlar",
-    "remaining": "kalan",
     "features": "Özellikler",
     "noFeatures": "Ek özellik yok",
     "payments": "Ödeme geçmişi",
@@ -3259,7 +3256,10 @@
     "currentBadge": "Mevcut",
     "decisionNote": "Platform notu",
     "requestedOn": "Talep tarihi",
-    "noPlans": "Şu anda talep edilebilecek paket yok."
+    "noPlans": "Şu anda talep edilebilecek paket yok.",
+    "startsAt": "Başlangıç tarihi",
+    "trialEndsAt": "Deneme bitişi",
+    "limitsTitle": "Kullanım ve limitler"
   },
   "publicSiteAdmin": {
     "title": "Genel site",

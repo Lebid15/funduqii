@@ -3225,11 +3225,8 @@
     "effectiveStatus": "الحالة",
     "price": "السعر",
     "billingCycle": "دورة الفوترة",
-    "usageTitle": "الاستهلاك والحدود",
     "rooms": "الغرف",
     "staff": "الموظفون",
-    "publicBookings": "الحجوزات العامة",
-    "remaining": "متبقٍّ",
     "features": "المزايا",
     "noFeatures": "لا مزايا إضافية",
     "payments": "سجل الدفعات",
@@ -3259,7 +3256,10 @@
     "currentBadge": "الحالية",
     "decisionNote": "ملاحظة المنصة",
     "requestedOn": "تاريخ الطلب",
-    "noPlans": "لا توجد باقات متاحة للطلب حاليًا."
+    "noPlans": "لا توجد باقات متاحة للطلب حاليًا.",
+    "startsAt": "تاريخ البداية",
+    "trialEndsAt": "انتهاء التجربة",
+    "limitsTitle": "الاستخدام والحدود"
   },
   "publicSiteAdmin": {
     "title": "الموقع العام",

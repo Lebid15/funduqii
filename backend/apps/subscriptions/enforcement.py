@@ -159,6 +159,17 @@ def subscription_state(hotel) -> dict:
             else (SubscriptionStatus.EXPIRED if has_history else None)
         ),
         "plan_name": live.plan.name if live else None,
+        # §8.3 current-subscription card: the live subscription's own dates
+        # (read straight from the model — never invented). starts_at/trial_ends_at
+        # are null when there is no live subscription or the field is unset (a
+        # paid subscription has no trial_ends_at). The days_left calc is
+        # unchanged; these are display-only additions.
+        "starts_at": (
+            live.starts_at.isoformat() if live and live.starts_at else None
+        ),
+        "trial_ends_at": (
+            live.trial_ends_at.isoformat() if live and live.trial_ends_at else None
+        ),
         "ends_at": None,
         "days_left": None,
         "expiring_soon": False,

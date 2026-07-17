@@ -103,3 +103,73 @@ class SubscriptionPlanModelTests(TestCase):
         self.assertFalse(plan.is_in_use)
         services.activate_subscription(hotel, plan)
         self.assertTrue(plan.is_in_use)
+
+
+class SubscriptionStateDatesTests(TestCase):
+    """§8.3 — subscription_state exposes the live subscription's own dates
+    (read straight from the model, never invented) without altering days_left."""
+
+    def setUp(self):
+        from apps.subscriptions.enforcement import subscription_state
+
+        self._state = subscription_state
+        self.hotel = Hotel.objects.create(name="Dune", slug="dune")
+        self.plan = make_plan()
+
+    def test_active_exposes_starts_at_and_no_trial(self):
+        sub = services.activate_subscription(self.hotel, self.plan)
+        st = self._state(self.hotel)
+        # Exact value — proves the date is the model's own, never invented.
+        self.assertEqual(st["starts_at"], sub.starts_at.isoformat())
+        self.assertIsNone(st["trial_ends_at"])  # a paid sub has no trial
+        self.assertIsNotNone(st["ends_at"])
+        self.assertIsNotNone(st["days_left"])  # days_left calc unchanged
+
+    def test_trial_exposes_trial_ends_at(self):
+        sub = services.start_trial(self.hotel, self.plan)
+        st = self._state(self.hotel)
+        self.assertEqual(st["starts_at"], sub.starts_at.isoformat())
+        self.assertEqual(st["trial_ends_at"], sub.trial_ends_at.isoformat())
+
+    def test_past_due_behaves_like_active(self):
+        from apps.subscriptions.models import SubscriptionStatus
+
+        sub = services.activate_subscription(self.hotel, self.plan)
+        sub.status = SubscriptionStatus.PAST_DUE
+        sub.save(update_fields=["status"])
+        st = self._state(self.hotel)
+        self.assertEqual(st["starts_at"], sub.starts_at.isoformat())
+        self.assertIsNone(st["trial_ends_at"])
+
+    def test_no_subscription_is_null_safe(self):
+        st = self._state(self.hotel)
+        self.assertIsNone(st["starts_at"])
+        self.assertIsNone(st["trial_ends_at"])
+        self.assertIsNone(st["days_left"])
+        self.assertFalse(st["has_subscription"])
+
+    def test_expired_history_is_null_safe(self):
+        # History exists but no live subscription (live is None) -> dates null.
+        services.expire_subscription(services.activate_subscription(self.hotel, self.plan))
+        st = self._state(self.hotel)
+        self.assertTrue(st["has_subscription"])
+        self.assertTrue(st["expired"])
+        self.assertIsNone(st["starts_at"])
+        self.assertIsNone(st["trial_ends_at"])
+
+    def test_effective_subscription_state_carries_dates(self):
+        # The FE + owner panel consume the effective_subscription_state WRAPPER,
+        # not subscription_state directly — prove the fields survive the wrapper.
+        from apps.subscriptions.entitlements import effective_subscription_state
+
+        sub = services.activate_subscription(self.hotel, self.plan)
+        st = effective_subscription_state(self.hotel)
+        self.assertEqual(st["starts_at"], sub.starts_at.isoformat())
+        self.assertIn("trial_ends_at", st)
+
+    def test_dates_are_tenant_scoped(self):
+        other = Hotel.objects.create(name="Reef", slug="reef")
+        services.activate_subscription(self.hotel, self.plan)
+        # The other hotel has no subscription — its state must not borrow ours.
+        self.assertIsNotNone(self._state(self.hotel)["starts_at"])
+        self.assertIsNone(self._state(other)["starts_at"])

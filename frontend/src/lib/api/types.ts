@@ -325,6 +325,10 @@ export interface HotelSubscriptionState {
   /** Date-derived status — PREFER this over `status` for display. */
   effective_status: SubscriptionStatus | null;
   plan_name: string | null;
+  /** The live subscription's start date (§8.3). Null when there is no live sub. */
+  starts_at: string | null;
+  /** Trial end date — only set for a trial subscription, else null. */
+  trial_ends_at: string | null;
   ends_at: string | null;
   days_left: number | null;
   expiring_soon: boolean;

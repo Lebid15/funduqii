@@ -169,29 +169,6 @@ export default function HotelSubscriptionPage() {
     }
   }
 
-  const dimensionRow = (label: string, dim: EntitlementDimension) => (
-    <div className="detail-item">
-      <span className="detail-item__label">{label}</span>
-      <span className="detail-item__value">
-        {dim.usage} / {dim.limit ?? t.entitlements.unlimited}
-        {dim.limit !== null ? (
-          <>
-            {" "}
-            <Badge tone={entitlementStateTone(dim.state)}>
-              {entitlementStateLabel(dim.state, t)}
-            </Badge>
-            {dim.remaining !== null ? (
-              <span className="muted">
-                {" "}
-                · {dim.remaining} {t.hotelSubscription.remaining}
-              </span>
-            ) : null}
-          </>
-        ) : null}
-      </span>
-    </div>
-  );
-
   const effective = state?.effective_status ?? state?.status ?? null;
 
   return (
@@ -281,6 +258,14 @@ export default function HotelSubscriptionPage() {
                 ) : null}
                 <div className="detail-item">
                   <span className="detail-item__label">
+                    {t.hotelSubscription.startsAt}
+                  </span>
+                  <span className="detail-item__value">
+                    {state.starts_at ? formatDate(state.starts_at, locale) : "—"}
+                  </span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-item__label">
                     {t.hotelSubscription.endsAt}
                   </span>
                   <span className="detail-item__value">
@@ -295,6 +280,17 @@ export default function HotelSubscriptionPage() {
                     {state.days_left ?? "—"}
                   </span>
                 </div>
+                {/* Trial end date — only shown for a trial (else null). */}
+                {state.trial_ends_at ? (
+                  <div className="detail-item">
+                    <span className="detail-item__label">
+                      {t.hotelSubscription.trialEndsAt}
+                    </span>
+                    <span className="detail-item__value">
+                      {formatDate(state.trial_ends_at, locale)}
+                    </span>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="muted">{t.hotelSubscription.noSubscription}</p>
@@ -317,16 +313,24 @@ export default function HotelSubscriptionPage() {
 
           {state.terms ? (
             <Card>
-              <SectionHeader title={t.hotelSubscription.usageTitle} icon={Gauge} />
-              <div className="detail-grid">
-                {dimensionRow(t.hotelSubscription.rooms, state.entitlements.rooms)}
-                {dimensionRow(t.hotelSubscription.staff, state.entitlements.staff)}
-                {dimensionRow(
-                  t.hotelSubscription.publicBookings,
-                  state.entitlements.public_bookings,
-                )}
+              <SectionHeader
+                title={t.hotelSubscription.limitsTitle}
+                icon={Gauge}
+              />
+              {/* §8.3 progress indicators — only the real, enforced plan-capacity
+                  limits (rooms, staff). Public bookings (a monthly counter) and
+                  branches (not in the model) are intentionally excluded. */}
+              <div className="stack" style={{ gap: "1rem" }}>
+                <UsageMeter
+                  label={t.hotelSubscription.rooms}
+                  dim={state.entitlements.rooms}
+                />
+                <UsageMeter
+                  label={t.hotelSubscription.staff}
+                  dim={state.entitlements.staff}
+                />
               </div>
-              <div style={{ marginTop: "0.75rem" }}>
+              <div style={{ marginTop: "1rem" }}>
                 <span className="detail-item__label">
                   {t.hotelSubscription.features}
                 </span>
@@ -490,6 +494,77 @@ export default function HotelSubscriptionPage() {
         onClose={() => setCancelTarget(null)}
       />
     </PageContainer>
+  );
+}
+
+// Meter fill colour per usage state — kept in lockstep with the Badge tone
+// (entitlementStateTone): limit_reached is warning (amber), only over_limit is
+// danger. Colour is redundant with the text label, never the sole signal.
+const METER_COLOR: Record<EntitlementDimension["state"], string> = {
+  normal: "var(--color-success)",
+  nearing_limit: "var(--color-warning)",
+  limit_reached: "var(--color-warning)",
+  over_limit: "var(--color-danger)",
+};
+
+/**
+ * One usage/limit row with a progress bar (§8.3). Unlimited dimensions show no
+ * bar (there is no maximum). The bar width is clamped to 100% so an over-limit
+ * value never breaks the layout, while the text shows the real usage/limit.
+ */
+function UsageMeter({
+  label,
+  dim,
+}: {
+  label: string;
+  dim: EntitlementDimension;
+}) {
+  const { t } = useI18n();
+  const unlimited = dim.limit === null;
+  const pct =
+    dim.limit === null || dim.limit === 0
+      ? 0
+      : Math.min(100, Math.round((dim.usage / dim.limit) * 100));
+  return (
+    <div className="stack" style={{ gap: "0.35rem" }}>
+      <div className="cluster" style={{ justifyContent: "space-between" }}>
+        <span className="detail-item__label">{label}</span>
+        <span className="detail-item__value">
+          {dim.usage} / {unlimited ? t.entitlements.unlimited : dim.limit}{" "}
+          <Badge tone={entitlementStateTone(dim.state)}>
+            {entitlementStateLabel(dim.state, t)}
+          </Badge>
+        </span>
+      </div>
+      {dim.limit !== null ? (
+        <div
+          role="progressbar"
+          aria-label={label}
+          // Clamp to [min, max] per the ARIA spec; the true (possibly
+          // over-limit) figure is conveyed by aria-valuetext.
+          aria-valuenow={Math.min(dim.usage, dim.limit)}
+          aria-valuemin={0}
+          aria-valuemax={dim.limit}
+          aria-valuetext={`${dim.usage} / ${dim.limit}`}
+          style={{
+            height: "0.5rem",
+            borderRadius: "999px",
+            background: "var(--color-surface-sunken, var(--color-border))",
+            border: "1px solid var(--color-border)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: METER_COLOR[dim.state],
+              transition: "width 0.2s ease",
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
