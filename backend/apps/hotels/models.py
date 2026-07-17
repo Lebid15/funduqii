@@ -35,6 +35,14 @@ PET_CHOICES = [
     ("allowed", "Allowed"),
     ("on_request", "On request"),
 ]
+FACILITY_TYPE_CHOICES = [
+    ("hotel", "Hotel"),
+    ("apartments", "Apartments"),
+    ("resort", "Resort"),
+    ("motel", "Motel"),
+    ("guesthouse", "Guest house"),
+    ("other", "Other"),
+]
 
 
 class HotelSettings(models.Model):
@@ -52,6 +60,10 @@ class HotelSettings(models.Model):
     short_description = models.CharField(max_length=280, blank=True, default="")
     description = models.TextField(blank=True, default="")
     star_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    # §9.3 facility type — surfaced on the public site + printing/identity.
+    facility_type = models.CharField(
+        max_length=20, choices=FACILITY_TYPE_CHOICES, default="hotel"
+    )
     default_language = models.CharField(
         max_length=2, choices=LANGUAGE_CHOICES, default="en"
     )
@@ -228,3 +240,55 @@ class HotelMedia(models.Model):
 
     def __str__(self) -> str:
         return f"{self.kind}(hotel={self.hotel_id}, id={self.pk})"
+
+
+class SettingsAuditScope(models.TextChoices):
+    HOTEL = "hotel", "Hotel"
+    PLATFORM = "platform", "Platform"
+
+
+class SettingsAuditLog(models.Model):
+    """Central audit trail for settings changes (§9.17/§9.19).
+
+    One row per settings update (hotel OR platform), recording who changed what:
+    the section, the actor, and a field-level diff of previous -> new values. It
+    is append-only (never edited/deleted) and holds no image bytes or secrets —
+    only the changed setting fields. Hotel-scoped rows carry the tenant; platform
+    rows have ``hotel = NULL`` and ``scope = platform``.
+    """
+
+    scope = models.CharField(
+        max_length=16,
+        choices=SettingsAuditScope.choices,
+        default=SettingsAuditScope.HOTEL,
+    )
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="settings_audit_logs",
+        null=True,
+        blank=True,
+    )
+    section = models.CharField(max_length=40)
+    actor = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="settings_changes",
+    )
+    # {field: {"old": <json>, "new": <json>}} — only the fields that changed.
+    changes = models.JSONField(default=dict)
+    reason = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "settings_audit_logs"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["hotel", "-created_at"]),
+            models.Index(fields=["scope", "-created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.scope}:{self.section} (hotel={self.hotel_id}) @ {self.created_at:%Y-%m-%d}"

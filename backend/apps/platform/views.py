@@ -621,6 +621,29 @@ class PlatformPaymentVoidView(PlatformOwnerMixin, APIView):
 # --- Public site settings (Phase 16) -------------------------------------------
 
 
+def _save_and_audit_platform(request, settings_obj, serializer, section):
+    """§9.17 — save a validated platform-settings serializer and append a
+    platform-scoped (hotel=NULL) audit row with the field-level diff."""
+    from apps.hotels.models import SettingsAuditScope
+    from apps.hotels.settings_services import (
+        diff_settings,
+        record_settings_change,
+        snapshot,
+    )
+
+    fields = list(serializer.validated_data.keys())
+    before = snapshot(settings_obj, fields)
+    serializer.save()
+    settings_obj.refresh_from_db()
+    record_settings_change(
+        scope=SettingsAuditScope.PLATFORM,
+        section=section,
+        changes=diff_settings(settings_obj, before, snapshot(settings_obj, fields)),
+        hotel=None,
+        actor=request.user,
+    )
+
+
 class PublicSiteSettingsView(PlatformOwnerMixin, APIView):
     """Read or patch the singleton public-website settings row."""
 
@@ -634,7 +657,7 @@ class PublicSiteSettingsView(PlatformOwnerMixin, APIView):
             settings, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        _save_and_audit_platform(request, settings, serializer, "public_site")
         return Response(serializer.data)
 
 
@@ -824,5 +847,23 @@ class SettingsView(PlatformOwnerMixin, APIView):
             settings, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        _save_and_audit_platform(request, settings, serializer, "platform")
         return Response(serializer.data)
+
+
+class PlatformSettingsAuditView(PlatformOwnerMixin, generics.ListAPIView):
+    """§9.17 read-only audit trail of platform-settings changes."""
+
+    def get_serializer_class(self):
+        from apps.hotels.serializers import SettingsAuditLogSerializer
+
+        return SettingsAuditLogSerializer
+
+    def get_queryset(self):
+        from apps.hotels.models import SettingsAuditLog, SettingsAuditScope
+
+        return (
+            SettingsAuditLog.objects.filter(scope=SettingsAuditScope.PLATFORM)
+            .select_related("actor")
+            .order_by("-created_at", "-id")
+        )

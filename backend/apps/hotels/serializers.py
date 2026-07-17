@@ -11,7 +11,7 @@ import re
 
 from rest_framework import serializers
 
-from .models import HotelMedia, HotelSettings, MediaKind
+from .models import HotelMedia, HotelSettings, MediaKind, SettingsAuditLog
 
 _PHONE_RE = re.compile(r"^[0-9+()\-\s]{5,32}$")
 _CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
@@ -98,6 +98,20 @@ class HotelSettingsSerializer(serializers.ModelSerializer):
         if "whatsapp_number" in attrs:
             _validate_phoneish(attrs["whatsapp_number"], "whatsapp_number")
         return attrs
+
+
+class SettingsAuditLogSerializer(serializers.ModelSerializer):
+    """Read-only audit row: who changed which section, and the field diff."""
+
+    actor = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SettingsAuditLog
+        fields = ["id", "scope", "section", "actor", "changes", "reason", "created_at"]
+        read_only_fields = fields
+
+    def get_actor(self, obj):
+        return obj.actor.email if obj.actor_id else None
 
 
 class HotelMediaSerializer(serializers.ModelSerializer):

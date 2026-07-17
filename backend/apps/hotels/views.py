@@ -19,16 +19,47 @@ from apps.rbac.permissions import HasHotelPermission
 from apps.tenancy.models import HotelStatus
 
 from . import services
-from .models import HotelMedia, HotelSettings, MediaKind
+from .models import HotelMedia, HotelSettings, MediaKind, SettingsAuditScope
 from .serializers import (
     HotelMediaSerializer,
     HotelMediaUpdateSerializer,
     HotelMediaUploadSerializer,
+    SettingsAuditLogSerializer,
     HotelSettingsSerializer,
+)
+from .settings_services import (
+    GROUPED_FIELDS,
+    diff_settings,
+    group_fields,
+    record_settings_change,
+    snapshot,
 )
 
 CanView = HasHotelPermission("settings.view")
 CanUpdate = HasHotelPermission("settings.update")
+
+
+def _apply_settings_update(request, settings_obj, data, section, fields):
+    """Validate + save a (partial) settings update over ``fields`` and append an
+    audit row with the field-level diff. Returns the saved serializer.
+
+    ``data`` is already restricted to the allowed fields by the caller. The diff
+    is taken from a snapshot before/after save, so only fields whose value truly
+    changed are audited (no-op saves record nothing)."""
+    before = snapshot(settings_obj, fields)
+    serializer = HotelSettingsSerializer(settings_obj, data=data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    settings_obj.refresh_from_db()
+    changes = diff_settings(settings_obj, before, snapshot(settings_obj, fields))
+    record_settings_change(
+        scope=SettingsAuditScope.HOTEL,
+        section=section,
+        changes=changes,
+        hotel=request.hotel,
+        actor=request.user,
+    )
+    return serializer
 
 
 def _ensure_not_suspended(request: Request) -> None:
@@ -55,14 +86,53 @@ class HotelSettingsView(APIView):
         return Response(HotelSettingsSerializer(settings_obj).data)
 
     def patch(self, request: Request) -> Response:
+        # Full patch (backward compatible): audited over all grouped fields.
         _ensure_not_suspended(request)
         settings_obj = _get_settings(request.hotel)
-        serializer = HotelSettingsSerializer(
-            settings_obj, data=request.data, partial=True
+        serializer = _apply_settings_update(
+            request, settings_obj, request.data, "all", GROUPED_FIELDS
         )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
         return Response(serializer.data)
+
+
+class HotelSettingsSectionView(APIView):
+    """§9.2 per-section save. PATCH only the fields of one settings group, so a
+    validation error in one section never blocks saving another, and each save
+    is audited with its section name."""
+
+    permission_classes = [CanUpdate]
+
+    def patch(self, request: Request, section: str) -> Response:
+        _ensure_not_suspended(request)
+        fields = group_fields(section)
+        if fields is None:
+            return Response(
+                {"code": "unknown_settings_section", "message": "Unknown section."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        settings_obj = _get_settings(request.hotel)
+        # Restrict the payload to this section's fields (ignore anything else).
+        data = {k: v for k, v in request.data.items() if k in fields}
+        serializer = _apply_settings_update(
+            request, settings_obj, data, section, fields
+        )
+        return Response(serializer.data)
+
+
+class HotelSettingsAuditView(generics.ListAPIView):
+    """§9.17 read-only audit trail of this hotel's settings changes."""
+
+    permission_classes = [CanView]
+    serializer_class = SettingsAuditLogSerializer
+
+    def get_queryset(self):
+        from .models import SettingsAuditLog
+
+        return (
+            SettingsAuditLog.objects.filter(hotel=self.request.hotel)
+            .select_related("actor")
+            .order_by("-created_at", "-id")
+        )
 
 
 class HotelProfileView(APIView):
@@ -93,6 +163,7 @@ class HotelProfileView(APIView):
                     "status": hotel.status,
                 },
                 "display_name": settings_obj.display_name,
+                "facility_type": settings_obj.facility_type,
                 "city": settings_obj.city,
                 "country": settings_obj.country,
                 "logo": HotelMediaSerializer(logo, context=ctx).data if logo else None,

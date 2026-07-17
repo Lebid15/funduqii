@@ -1,0 +1,180 @@
+"""Round 5 §9 foundation — typed settings groups, per-section save, central audit."""
+from __future__ import annotations
+
+from django.urls import reverse
+from rest_framework.test import APITestCase
+
+from apps.accounts.models import AccountType, User
+from apps.hotels.models import HotelSettings, SettingsAuditLog, SettingsAuditScope
+from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
+
+from .tests import add_member, make_hotel
+
+STRONG = "StrongPass!234"
+
+
+class HotelSettingsSectionTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager, _ = add_member(
+            self.hotel, "mgr@x.com", kind=MembershipType.MANAGER
+        )
+        self.headers = {"HTTP_X_HOTEL_ID": str(self.hotel.id)}
+        self.client.force_authenticate(self.manager)
+
+    def _section_url(self, section):
+        return reverse("hotel:settings-section", args=[section])
+
+    def test_section_save_updates_only_its_fields_and_audits(self):
+        res = self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "Sea View", "facility_type": "resort"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        s = HotelSettings.objects.get(hotel=self.hotel)
+        self.assertEqual(s.display_name, "Sea View")
+        self.assertEqual(s.facility_type, "resort")
+        log = SettingsAuditLog.objects.get(hotel=self.hotel, section="identity")
+        self.assertEqual(log.scope, SettingsAuditScope.HOTEL)
+        self.assertEqual(log.actor_id, self.manager.id)
+        self.assertIn("display_name", log.changes)
+        self.assertEqual(log.changes["facility_type"]["new"], "resort")
+
+    def test_section_save_ignores_foreign_fields(self):
+        # A field from another section is ignored, not applied.
+        res = self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "X", "default_currency": "EUR"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 200)
+        s = HotelSettings.objects.get(hotel=self.hotel)
+        self.assertEqual(s.display_name, "X")
+        self.assertEqual(s.default_currency, "USD")  # unchanged (other section)
+
+    def test_unknown_section_404(self):
+        res = self.client.patch(
+            self._section_url("does-not-exist"), {"x": 1}, format="json", **self.headers
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_noop_save_records_no_audit(self):
+        # First establish the value.
+        self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "Same"},
+            format="json",
+            **self.headers,
+        )
+        SettingsAuditLog.objects.all().delete()
+        # Saving the same value again changes nothing -> no audit row.
+        self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "Same"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(SettingsAuditLog.objects.count(), 0)
+
+    def test_staff_without_update_cannot_section_save(self):
+        staff = add_member(self.hotel, "staff@x.com", perms=("settings.view",))[0]
+        self.client.force_authenticate(staff)
+        res = self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "Nope"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 403)
+
+    def test_suspended_hotel_cannot_section_save(self):
+        self.hotel.status = HotelStatus.SUSPENDED
+        self.hotel.save(update_fields=["status"])
+        res = self.client.patch(
+            self._section_url("identity"),
+            {"display_name": "Nope"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "hotel_suspended")
+
+    def test_full_patch_still_audits(self):
+        res = self.client.patch(
+            reverse("hotel:settings"),
+            {"legal_name": "Legal LLC"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(
+            SettingsAuditLog.objects.filter(
+                hotel=self.hotel, section="all"
+            ).exists()
+        )
+
+
+class HotelSettingsAuditReadTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager, _ = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER
+        )
+        self.headers = {"HTTP_X_HOTEL_ID": str(self.hotel.id)}
+
+    def test_audit_read_is_tenant_scoped(self):
+        other = make_hotel(slug="other")
+        SettingsAuditLog.objects.create(
+            scope=SettingsAuditScope.HOTEL, hotel=self.hotel, section="identity",
+            changes={"display_name": {"old": "", "new": "A"}},
+        )
+        SettingsAuditLog.objects.create(
+            scope=SettingsAuditScope.HOTEL, hotel=other, section="identity",
+            changes={"display_name": {"old": "", "new": "B"}},
+        )
+        self.client.force_authenticate(self.manager)
+        res = self.client.get(reverse("hotel:settings-audit"), **self.headers)
+        self.assertEqual(res.status_code, 200)
+        rows = res.data["results"] if isinstance(res.data, dict) else res.data
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["section"], "identity")
+
+    def test_platform_audit_scope_not_visible_to_hotel(self):
+        SettingsAuditLog.objects.create(
+            scope=SettingsAuditScope.PLATFORM, hotel=None, section="platform",
+            changes={"platform_name": {"old": "A", "new": "B"}},
+        )
+        self.client.force_authenticate(self.manager)
+        res = self.client.get(reverse("hotel:settings-audit"), **self.headers)
+        rows = res.data["results"] if isinstance(res.data, dict) else res.data
+        self.assertEqual(len(rows), 0)  # hotel filter excludes platform rows
+
+
+class PlatformSettingsAuditTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email="owner@platform.local", password=STRONG, full_name="Owner",
+            account_type=AccountType.PLATFORM_OWNER,
+        )
+
+    def test_platform_settings_patch_audits(self):
+        self.client.force_authenticate(self.owner)
+        res = self.client.patch(
+            reverse("platform:settings"),
+            {"platform_name": "Funduqii Pro"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        log = SettingsAuditLog.objects.get(scope=SettingsAuditScope.PLATFORM, section="platform")
+        self.assertIsNone(log.hotel_id)
+        self.assertEqual(log.changes["platform_name"]["new"], "Funduqii Pro")
+
+    def test_hotel_user_cannot_read_platform_audit(self):
+        hotel = make_hotel()
+        manager = add_member(hotel, "m2@x.com", kind=MembershipType.MANAGER)[0]
+        self.client.force_authenticate(manager)
+        res = self.client.get(reverse("platform:settings-audit"))
+        self.assertEqual(res.status_code, 403)
