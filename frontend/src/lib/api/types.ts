@@ -436,9 +436,39 @@ export interface PublicPlan {
 
 export type MediaKind = "logo" | "cover" | "gallery";
 
+export type FacilityType =
+  | "hotel"
+  | "apartments"
+  | "resort"
+  | "motel"
+  | "guesthouse"
+  | "other";
+
+/** A settings section key (§9.1 typed groups) — matches the backend registry. */
+export type SettingsSection =
+  | "identity"
+  | "localization"
+  | "contact"
+  | "location"
+  | "policies"
+  | "operational"
+  | "public";
+
+/** One append-only settings audit row (§9.17). */
+export interface SettingsAuditLog {
+  id: number;
+  scope: "hotel" | "platform";
+  section: string;
+  actor: string | null;
+  changes: Record<string, { old: unknown; new: unknown }>;
+  reason: string;
+  created_at: string;
+}
+
 export interface HotelSettings {
   display_name: string;
   legal_name: string;
+  facility_type: FacilityType;
   short_description: string;
   description: string;
   star_rating: number | null;

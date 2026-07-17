@@ -14,6 +14,9 @@ import type {
   HotelProfile,
   HotelSettings,
   MediaKind,
+  PaginatedResponse,
+  SettingsAuditLog,
+  SettingsSection,
   SubscriptionChangeRequest,
 } from "./types";
 
@@ -37,6 +40,22 @@ export function updateSettings(
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+/** §9.2 per-section save — persists only one settings group. */
+export function updateSettingsSection(
+  section: SettingsSection,
+  body: Partial<HotelSettings>,
+): Promise<HotelSettings> {
+  return jsonRequest<HotelSettings>(`/settings/section/${section}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+/** §9.17 read-only settings audit trail for this hotel. */
+export function getSettingsAudit(): Promise<PaginatedResponse<SettingsAuditLog>> {
+  return jsonRequest<PaginatedResponse<SettingsAuditLog>>("/settings/audit");
 }
 
 // --- Media ------------------------------------------------------------------

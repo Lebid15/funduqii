@@ -5607,3 +5607,81 @@ a {
   font-weight: var(--font-weight-bold);
   overflow-wrap: anywhere;
 }
+
+/* --- Round 5: settings shell (§9.2 side-nav + panel) ---------------------- */
+.settings-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+.settings-shell__nav {
+  position: sticky;
+  top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  border: none;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+}
+.settings-nav__item:hover {
+  background: var(--color-surface-muted, var(--color-surface-sunken));
+}
+.settings-nav__item[data-active="true"] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-weight: 600;
+}
+.settings-nav__dot {
+  margin-inline-start: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-warning);
+}
+.settings-shell__panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.chip__remove {
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  line-height: 1;
+}
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+  .settings-shell__nav {
+    position: static;
+  }
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .settings-nav__dot {
+    margin-inline-start: var(--space-1, 4px);
+  }
+}
