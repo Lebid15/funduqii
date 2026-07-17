@@ -211,7 +211,7 @@ def _lock_folio(folio) -> Folio:
 
 
 def _record_event(hotel, *, event_type, severity, title, message="", user=None,
-                  obj=None) -> None:
+                  obj=None, dedup_key=None) -> None:
     # Phase 14 activity system (lazy import keeps app loading order simple).
     from apps.notifications.services import record_activity
 
@@ -225,6 +225,7 @@ def _record_event(hotel, *, event_type, severity, title, message="", user=None,
         actor=user,
         related_object=obj,
         related_url="/hotel/finance",
+        dedup_key=dedup_key,
     )
 
 
@@ -960,6 +961,10 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
             ),
             user=user,
             obj=folio,
+            # De-dup the alert per folio: ensure_due_room_charges runs on every
+            # check-in / pre-checkout / daily close, so without this the same
+            # unreconciled folio would notify finance staff on every run.
+            dedup_key=f"room-unlinked-folio-{folio.pk}",
         )
     posted = set(
         folio.charges.filter(
