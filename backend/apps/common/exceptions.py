@@ -546,6 +546,20 @@ class ArrivalDateInFuture(FunduqiiAPIException):
     default_code = "arrival_date_in_future"
 
 
+class StayWindowExpired(FunduqiiAPIException):
+    """The reservation's stay window has fully elapsed (check-out date <= the
+    HOTEL's business date), so it can no longer be checked in — it must be handled
+    as a no-show. Checking it in would create an immediate-overstay stay with no
+    billable nights."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This reservation's stay window has already ended; it cannot be checked "
+        "in and should be handled as a no-show."
+    )
+    default_code = "reservation_stay_window_expired"
+
+
 class InvalidStayChange(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "This stay change is not allowed."

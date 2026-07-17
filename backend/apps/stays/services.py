@@ -42,6 +42,7 @@ from apps.common.exceptions import (
     RoomAssignmentConflict,
     RoomNotReady,
     RoomOccupied,
+    StayWindowExpired,
 )
 from apps.reservations.availability import (
     NON_BOOKABLE_ROOM_STATUSES,
@@ -201,6 +202,19 @@ class CheckInService:
             raise ArrivalDateInFuture(
                 {
                     "check_in_date": str(reservation.check_in_date),
+                    "business_date": str(business_date),
+                }
+            )
+        # Expired-stay-window guard (H2 safety): a late arrival is admissible only
+        # while its stay window is still open. Once the check-out date has been
+        # reached (check_out_date <= business_date) the whole window has elapsed —
+        # checking in now would create an immediate-overstay Stay with zero
+        # billable nights. Refuse here (BEFORE any Stay/folio/room mutation, inside
+        # this atomic method) and route the reservation to no-show instead.
+        if reservation.check_out_date <= business_date:
+            raise StayWindowExpired(
+                {
+                    "check_out_date": str(reservation.check_out_date),
                     "business_date": str(business_date),
                 }
             )
@@ -944,8 +958,16 @@ def stays_overview(hotel) -> dict:
         hotel=hotel, status=ReservationStatus.CONFIRMED, stays__isnull=True,
     )
     arriving_today = confirmed_no_stay.filter(check_in_date=bd).count()
-    awaiting_check_in = confirmed_no_stay.filter(check_in_date__lte=bd).count()
-    overdue_arrivals = confirmed_no_stay.filter(check_in_date__lt=bd).count()
+    # H2 safety: "awaiting check-in" counts ONLY reservations the system will
+    # actually admit — arrived (today or overdue) AND still within the stay window
+    # (check_out_date > bd). A reservation whose window has fully elapsed is a
+    # no-show candidate, not an awaiting arrival, so it must not inflate this card.
+    awaiting_check_in = confirmed_no_stay.filter(
+        check_in_date__lte=bd, check_out_date__gt=bd
+    ).count()
+    # Fully-past confirmed reservations (stay window ended, never checked in): they
+    # can no longer be checked in and are surfaced for no-show handling.
+    expired_arrivals = confirmed_no_stay.filter(check_out_date__lte=bd).count()
 
     in_house = Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
     current_residents = in_house.count()
@@ -969,5 +991,5 @@ def stays_overview(hotel) -> dict:
         "checked_in_today": checked_in_today,
         "current_residents": current_residents,
         "departing_today": departing_today,
-        "needs_attention": overdue_arrivals + stays_attention,
+        "needs_attention": expired_arrivals + stays_attention,
     }
