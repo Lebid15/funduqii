@@ -226,7 +226,9 @@
       "newCurrency": "كود عملة جديد",
       "sectionAll": "كل الإعدادات",
       "sectionPlatformGeneral": "إعدادات المنصة",
-      "sectionPublicSiteAdmin": "الموقع العام"
+      "sectionPublicSiteAdmin": "الموقع العام",
+      "publicSortOrder": "ترتيب العرض العام",
+      "publicSortOrderHint": "رقم أصغر يظهر أولًا في قائمة الموقع العام."
     }
   },
   "rooms": {

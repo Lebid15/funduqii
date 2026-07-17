@@ -130,7 +130,7 @@ function pick(obj: HotelSettings, fields: (keyof HotelSettings)[]) {
 }
 
 export default function HotelSettingsPage() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { notify } = useToast();
 
   const [settings, setSettings] = useState<HotelSettings | null>(null);
@@ -230,6 +230,10 @@ export default function HotelSettingsPage() {
   const visibleNav = term
     ? NAV.filter((n) => n.label.toLowerCase().includes(term))
     : NAV;
+  // If the search filters out the active section, follow the first visible match
+  // so the nav highlight and the panel stay in sync (no stranded/mismatched view).
+  const effectiveActive: NavKey =
+    visibleNav.some((n) => n.key === active) ? active : visibleNav[0]?.key ?? active;
 
   return (
     <PageContainer>
@@ -280,9 +284,9 @@ export default function HotelSettingsPage() {
                         type="button"
                         className="settings-nav__item"
                         // In-page panel switch (no URL change) -> "true", not "page".
-                        aria-current={active === n.key ? "true" : undefined}
+                        aria-current={effectiveActive === n.key ? "true" : undefined}
                         aria-controls="settings-panel"
-                        data-active={active === n.key}
+                        data-active={effectiveActive === n.key}
                         onClick={() => setActive(n.key)}
                       >
                         <n.icon size={16} aria-hidden />
@@ -304,28 +308,26 @@ export default function HotelSettingsPage() {
 
             <div className="settings-shell__panel" id="settings-panel">
               {saveError ? <Alert tone="error">{saveError}</Alert> : null}
-              {/* If the search hides the active section, don't leave its panel
-                  stranded — guide the user instead. */}
-              {term && !visibleNav.some((n) => n.key === active) ? (
+              {/* "No results" only when NOTHING matches — otherwise the panel
+                  follows effectiveActive (a visible match). */}
+              {term && visibleNav.length === 0 ? (
                 <Card>
                   <p className="muted">{t.hotel.settings.noSearchResults}</p>
                 </Card>
-              ) : active === "media" ? (
+              ) : effectiveActive === "media" ? (
                 <HotelMediaSection disabled={suspended} />
-              ) : active === "audit" ? (
-                <AuditPanel />
+              ) : effectiveActive === "audit" ? (
+                <SettingsAuditList fetcher={getSettingsAudit} />
               ) : (
                 <SectionCard
-                  section={active}
-                  s={s}
-                  patch={patch}
+                  section={effectiveActive}
                   suspended={suspended}
-                  dirty={isSectionDirty(active)}
-                  saving={savingSection === active}
-                  onSave={() => saveSection(active)}
+                  dirty={isSectionDirty(effectiveActive)}
+                  saving={savingSection === effectiveActive}
+                  onSave={() => saveSection(effectiveActive)}
                 >
                   <SectionFields
-                    section={active}
+                    section={effectiveActive}
                     s={s}
                     patch={patch}
                     suspended={suspended}
@@ -338,60 +340,65 @@ export default function HotelSettingsPage() {
       ) : null}
     </PageContainer>
   );
+}
 
-  // --- audit panel (kept inside for i18n/locale closure) --------------------
-  function AuditPanel() {
-    const [rows, setRows] = useState<SettingsAuditLog[] | null>(null);
-    const [auditError, setAuditError] = useState<string | null>(null);
+// --- audit trail (§9.17) — a reusable settings-audit list ------------------
+function SettingsAuditList({
+  fetcher,
+}: {
+  fetcher: () => Promise<{ results: SettingsAuditLog[] }>;
+}) {
+  const { t, locale } = useI18n();
+  const [rows, setRows] = useState<SettingsAuditLog[] | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
-    useEffect(() => {
-      let alive = true;
-      getSettingsAudit()
-        .then((res) => alive && setRows(res.results))
-        .catch((err) => alive && setAuditError(messageForError(err, t)));
-      return () => {
-        alive = false;
-      };
-    }, []);
+  useEffect(() => {
+    let alive = true;
+    fetcher()
+      .then((res) => alive && setRows(res.results))
+      .catch((err) => alive && setAuditError(messageForError(err, t)));
+    return () => {
+      alive = false;
+    };
+    // fetcher is a stable module function; run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    return (
-      <Card>
-        <SectionHeader
-          title={t.hotel.settings.sectionAudit}
-          description={t.hotel.settings.sectionAuditDesc}
-          icon={History}
-        />
-        {auditError ? <Alert tone="error">{auditError}</Alert> : null}
-        {rows === null && !auditError ? (
-          <LoadingState label={t.common.loading} />
-        ) : rows && rows.length === 0 ? (
-          <p className="muted">{t.hotel.settings.noAuditYet}</p>
-        ) : (
-          <div className="stack">
-            {(rows ?? []).map((r) => (
-              <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
-                <span className="detail-item__label">
-                  {settingsSectionLabel(r.section, t)}
-                  <span className="muted"> · {formatDateTime(r.created_at, locale)}</span>
-                </span>
-                <span className="detail-item__value">
-                  {Object.keys(r.changes).length} {t.hotel.settings.auditFieldsChanged}
-                  {r.actor ? <span className="muted"> · {r.actor}</span> : null}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    );
-  }
+  return (
+    <Card>
+      <SectionHeader
+        title={t.hotel.settings.sectionAudit}
+        description={t.hotel.settings.sectionAuditDesc}
+        icon={History}
+      />
+      {auditError ? <Alert tone="error">{auditError}</Alert> : null}
+      {rows === null && !auditError ? (
+        <LoadingState label={t.common.loading} />
+      ) : rows && rows.length === 0 ? (
+        <p className="muted">{t.hotel.settings.noAuditYet}</p>
+      ) : (
+        <div className="stack">
+          {(rows ?? []).map((r) => (
+            <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
+              <span className="detail-item__label">
+                {settingsSectionLabel(r.section, t)}
+                <span className="muted"> · {formatDateTime(r.created_at, locale)}</span>
+              </span>
+              <span className="detail-item__value">
+                {Object.keys(r.changes).length} {t.hotel.settings.auditFieldsChanged}
+                {r.actor ? <span className="muted"> · {r.actor}</span> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 // --- section wrapper card (title + per-section save) ------------------------
 function SectionCard({
   section,
-  s,
-  patch,
   suspended,
   dirty,
   saving,
@@ -399,16 +406,12 @@ function SectionCard({
   children,
 }: {
   section: SettingsSection;
-  s: HotelSettings;
-  patch: <K extends keyof HotelSettings>(k: K, v: HotelSettings[K]) => void;
   suspended: boolean;
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
   children: ReactNode;
 }) {
-  void s;
-  void patch;
   const { t } = useI18n();
   const meta: Record<SettingsSection, { title: string; desc: string }> = {
     identity: { title: t.hotel.settings.sectionIdentity, desc: t.hotel.settings.sectionIdentityDesc },
@@ -503,6 +506,9 @@ function AcceptedCurrenciesEditor({
 }
 
 // --- social-links label→url editor -----------------------------------------
+// Rows are held by INDEX (local state), not keyed by the label, so typing a URL
+// before its label — or clearing a label — never silently drops the row. Only
+// rows with a non-empty label are synced into the persisted dict.
 function SocialLinksEditor({
   value,
   disabled,
@@ -513,46 +519,46 @@ function SocialLinksEditor({
   onChange: (next: Record<string, string>) => void;
 }) {
   const { t } = useI18n();
-  const entries = Object.entries(value ?? {});
-  function update(oldKey: string, key: string, url: string) {
-    const next: Record<string, string> = {};
-    for (const [k, v] of Object.entries(value ?? {})) {
-      if (k === oldKey) {
-        if (key.trim()) next[key.trim()] = url;
-      } else {
-        next[k] = v;
-      }
+  const [rows, setRows] = useState<{ key: string; value: string }[]>(() =>
+    Object.entries(value ?? {}).map(([key, v]) => ({ key, value: v })),
+  );
+  function sync(next: { key: string; value: string }[]) {
+    setRows(next);
+    const dict: Record<string, string> = {};
+    for (const r of next) {
+      const k = r.key.trim();
+      if (k) dict[k] = r.value;
     }
-    onChange(next);
+    onChange(dict);
   }
   return (
     <div className="stack" style={{ gap: "var(--space-2)" }}>
-      {entries.map(([k, v]) => (
-        <div key={k} className="cluster" style={{ gap: "var(--space-2)" }}>
+      {rows.map((r, i) => (
+        <div key={i} className="cluster" style={{ gap: "var(--space-2)" }}>
           <Input
-            value={k}
+            value={r.key}
             disabled={disabled}
             aria-label={t.hotel.settings.socialLinkLabel}
             placeholder={t.hotel.settings.socialLinkLabel}
-            onChange={(e) => update(k, e.target.value, v)}
+            onChange={(e) =>
+              sync(rows.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))
+            }
           />
           <Input
             dir="ltr"
-            value={v}
+            value={r.value}
             disabled={disabled}
             aria-label={t.hotel.settings.socialLinkUrl}
             placeholder={t.hotel.settings.socialLinkUrl}
-            onChange={(e) => update(k, k, e.target.value)}
+            onChange={(e) =>
+              sync(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+            }
           />
           {!disabled ? (
             <IconButton
               icon={X}
-              label={`${t.hotel.settings.removeSocialLink}: ${k || t.hotel.settings.socialLinkLabel}`}
-              onClick={() => {
-                const next = { ...value };
-                delete next[k];
-                onChange(next);
-              }}
+              label={`${t.hotel.settings.removeSocialLink}: ${r.key || t.hotel.settings.socialLinkLabel}`}
+              onClick={() => sync(rows.filter((_, j) => j !== i))}
             />
           ) : null}
         </div>
@@ -560,8 +566,8 @@ function SocialLinksEditor({
       {!disabled ? (
         <Button
           variant="secondary"
-          onClick={() => onChange({ ...(value ?? {}), "": "" })}
-          disabled={Object.prototype.hasOwnProperty.call(value ?? {}, "")}
+          onClick={() => setRows([...rows, { key: "", value: "" }])}
+          disabled={rows.some((r) => !r.key.trim())}
         >
           {t.hotel.settings.addSocialLink}
         </Button>
@@ -871,6 +877,25 @@ function SectionFields({
             </FormField>
             {numberField("public_min_nights", t.hotel.settings.publicMinNights)}
             {numberField("public_max_nights", t.hotel.settings.publicMaxNights)}
+            <FormField
+              label={t.hotel.settings.publicSortOrder}
+              htmlFor="public_sort_order"
+              hint={t.hotel.settings.publicSortOrderHint}
+            >
+              <Input
+                id="public_sort_order"
+                type="number"
+                min="0"
+                value={s.public_sort_order}
+                disabled={suspended}
+                onChange={(e) =>
+                  patch(
+                    "public_sort_order",
+                    e.target.value === "" ? 0 : Number(e.target.value),
+                  )
+                }
+              />
+            </FormField>
             {area("public_terms_text", t.hotel.settings.publicTerms, t.hotel.settings.publicTermsHint)}
           </div>
         </>

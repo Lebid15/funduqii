@@ -262,15 +262,17 @@ export default function SettingsPage() {
 function PlatformAuditCard() {
   const { t, locale } = useI18n();
   const [rows, setRows] = useState<SettingsAuditLog[] | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     getPlatformSettingsAudit()
       .then((res) => alive && setRows(res.results))
-      .catch(() => alive && setRows([]));
+      .catch((err) => alive && setAuditError(messageForError(err, t)));
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -280,13 +282,14 @@ function PlatformAuditCard() {
         description={t.hotel.settings.sectionAuditDesc}
         icon={History}
       />
-      {rows === null ? (
+      {auditError ? <Alert tone="error">{auditError}</Alert> : null}
+      {rows === null && !auditError ? (
         <LoadingState label={t.common.loading} />
-      ) : rows.length === 0 ? (
+      ) : rows && rows.length === 0 ? (
         <p className="muted">{t.hotel.settings.noAuditYet}</p>
       ) : (
         <div className="stack">
-          {rows.map((r) => (
+          {(rows ?? []).map((r) => (
             <div key={r.id} className="detail-item" style={{ alignItems: "flex-start" }}>
               <span className="detail-item__label">
                 {settingsSectionLabel(r.section, t)}

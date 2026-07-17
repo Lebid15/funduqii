@@ -226,7 +226,9 @@
       "newCurrency": "Yeni para birimi kodu",
       "sectionAll": "Tüm ayarlar",
       "sectionPlatformGeneral": "Platform ayarları",
-      "sectionPublicSiteAdmin": "Genel site"
+      "sectionPublicSiteAdmin": "Genel site",
+      "publicSortOrder": "Genel görüntüleme sırası",
+      "publicSortOrderHint": "Düşük sayılar genel listede önce görünür."
     }
   },
   "rooms": {

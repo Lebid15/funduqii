@@ -226,7 +226,9 @@
       "newCurrency": "New currency code",
       "sectionAll": "All settings",
       "sectionPlatformGeneral": "Platform settings",
-      "sectionPublicSiteAdmin": "Public site"
+      "sectionPublicSiteAdmin": "Public site",
+      "publicSortOrder": "Public display order",
+      "publicSortOrderHint": "Lower numbers appear first in the public listing."
     }
   },
   "rooms": {
