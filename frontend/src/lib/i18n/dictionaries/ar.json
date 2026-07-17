@@ -45,7 +45,8 @@
     "openMenu": "فتح القائمة",
     "closeMenu": "إغلاق القائمة",
     "mainSection": "الرئيسية",
-    "publicSite": "الموقع العام"
+    "publicSite": "الموقع العام",
+    "subscriptionRequests": "طلبات الاشتراك"
   },
   "sidebar": {
     "roomsFloors": "الغرف والطوابق",
@@ -3235,7 +3236,30 @@
     "noPayments": "لا دفعات بعد",
     "voided": "مُبطَلة",
     "expiredMessage": "انتهى اشتراكك. بعض العمليات مقيّدة حتى التجديد — بياناتك محفوظة. يُرجى التواصل مع إدارة المنصة.",
-    "expiringMessage": "اشتراكك على وشك الانتهاء."
+    "expiringMessage": "اشتراكك على وشك الانتهاء.",
+    "availablePlansTitle": "الباقات المتاحة",
+    "availablePlansDesc": "الباقات التي يمكنك طلبها. تراجع المنصة كل طلب.",
+    "myRequestsTitle": "طلباتي",
+    "myRequestsDesc": "طلبات اشتراكك وحالتها.",
+    "noRequests": "لا توجد طلبات بعد.",
+    "pendingNotice": "لديك طلب قيد المعالجة. عالجه قبل إرسال طلب آخر.",
+    "requestRenewal": "طلب تجديد",
+    "requestUpgrade": "طلب ترقية",
+    "subscribe": "طلب اشتراك",
+    "requestModalTitle": "إرسال طلب",
+    "noteLabel": "ملاحظة (اختياري)",
+    "notePlaceholder": "أي معلومة تريد إبلاغ المنصة بها",
+    "submit": "إرسال",
+    "submitting": "جارٍ الإرسال…",
+    "cancelRequest": "إلغاء الطلب",
+    "cancelConfirmTitle": "إلغاء هذا الطلب؟",
+    "cancelConfirmBody": "سيؤدي هذا إلى سحب طلبك قيد المعالجة.",
+    "requestSubmitted": "تم إرسال طلبك.",
+    "requestCancelled": "تم إلغاء الطلب.",
+    "currentBadge": "الحالية",
+    "decisionNote": "ملاحظة المنصة",
+    "requestedOn": "تاريخ الطلب",
+    "noPlans": "لا توجد باقات متاحة للطلب حاليًا."
   },
   "publicSiteAdmin": {
     "title": "الموقع العام",
@@ -3609,5 +3633,66 @@
   "platformNotifications": {
     "title": "الإشعارات",
     "subtitle": "الفنادق الجديدة والاشتراكات ونشاط المنصة"
+  },
+  "subscriptionRequests": {
+    "status": {
+      "under_review": "قيد المراجعة",
+      "accepted": "مقبول",
+      "rejected": "مرفوض",
+      "cancelled": "ملغى",
+      "executed": "مُطبَّق"
+    },
+    "kind": {
+      "new_subscription": "اشتراك جديد",
+      "renewal": "تجديد",
+      "plan_change": "تغيير الباقة"
+    },
+    "planState": {
+      "current": "الحالية",
+      "upgradeable": "ترقية",
+      "available": "متاحة",
+      "unavailable": "غير متاحة"
+    },
+    "title": "طلبات الاشتراك",
+    "subtitle": "راجع وطبّق طلبات الاشتراك المقدَّمة من الفنادق.",
+    "filterStatus": "الحالة",
+    "filterOpen": "المفتوحة فقط",
+    "colHotel": "الفندق",
+    "colKind": "النوع",
+    "colPlan": "الباقة المطلوبة",
+    "colStatus": "الحالة",
+    "colSubmitted": "تاريخ الإرسال",
+    "colRequestedBy": "بواسطة",
+    "accept": "قبول",
+    "reject": "رفض",
+    "execute": "تطبيق",
+    "cancel": "إلغاء",
+    "acceptTitle": "قبول الطلب؟",
+    "acceptBody": "القبول لا يطبّق التغيير بعد — تطبّقه في خطوة ثانية.",
+    "adminNoteLabel": "ملاحظة (اختياري)",
+    "rejectTitle": "رفض الطلب",
+    "rejectReasonLabel": "السبب",
+    "rejectReasonPlaceholder": "لماذا تم الرفض؟",
+    "executeTitle": "تطبيق الطلب",
+    "executeBody": "سيطبّق هذا التغيير الآن (تبدأ دورة فوترة جديدة من اليوم).",
+    "recordPaymentOptional": "تسجيل دفعة (اختياري)",
+    "paymentAmount": "المبلغ",
+    "paymentMethod": "الطريقة",
+    "paymentReference": "المرجع",
+    "cancelTitle": "إلغاء الطلب؟",
+    "cancelBody": "سيؤدي هذا إلى إلغاء الطلب دون تطبيقه.",
+    "hotelNoteLabel": "ملاحظة الفندق",
+    "decidedBy": "قرّرها",
+    "empty": "لا توجد طلبات",
+    "emptyHint": "ستظهر طلبات اشتراك الفنادق هنا.",
+    "done": "تم",
+    "current": "الباقة الحالية",
+    "errors": {
+      "conflict": "لديك طلب مفتوح بالفعل. عالجه قبل إرسال طلب آخر.",
+      "invalidTransition": "لا يمكن تغيير هذا الطلب بعد الآن.",
+      "notAllowed": "هذا الطلب غير مسموح لحالة اشتراكك الحالية.",
+      "planNotAvailable": "لم تعد هذه الباقة متاحة لهذا الطلب.",
+      "reasonRequired": "السبب مطلوب."
+    }
   }
 }

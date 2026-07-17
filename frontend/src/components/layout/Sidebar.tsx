@@ -7,6 +7,7 @@ import {
   CreditCard,
   Globe,
   Hotel,
+  Inbox,
   LayoutDashboard,
   Package,
   Settings,
@@ -45,6 +46,11 @@ export function Sidebar({
     { href: "/platform/hotels", label: t.nav.hotels, icon: Building2 },
     { href: "/platform/plans", label: t.nav.plans, icon: Package },
     { href: "/platform/subscriptions", label: t.nav.subscriptions, icon: CreditCard },
+    {
+      href: "/platform/subscription-requests",
+      label: t.nav.subscriptionRequests,
+      icon: Inbox,
+    },
     { href: "/platform/public-site", label: t.nav.publicSite, icon: Globe },
     { href: "/platform/settings", label: t.nav.settings, icon: Settings },
   ];

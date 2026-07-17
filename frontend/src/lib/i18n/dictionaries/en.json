@@ -45,7 +45,8 @@
     "openMenu": "Open menu",
     "closeMenu": "Close menu",
     "mainSection": "Main",
-    "publicSite": "Public site"
+    "publicSite": "Public site",
+    "subscriptionRequests": "Requests"
   },
   "sidebar": {
     "roomsFloors": "Rooms & Floors",
@@ -3235,7 +3236,30 @@
     "noPayments": "No payments yet",
     "voided": "Voided",
     "expiredMessage": "Your subscription has ended. Some operations are restricted until it is renewed — your data is preserved. Please contact the platform administration.",
-    "expiringMessage": "Your subscription is expiring soon."
+    "expiringMessage": "Your subscription is expiring soon.",
+    "availablePlansTitle": "Available plans",
+    "availablePlansDesc": "Plans you can request. The platform reviews every request.",
+    "myRequestsTitle": "My requests",
+    "myRequestsDesc": "Your subscription requests and their status.",
+    "noRequests": "No requests yet.",
+    "pendingNotice": "You have a pending request. Resolve it before submitting another.",
+    "requestRenewal": "Request renewal",
+    "requestUpgrade": "Request upgrade",
+    "subscribe": "Request subscription",
+    "requestModalTitle": "Submit request",
+    "noteLabel": "Note (optional)",
+    "notePlaceholder": "Anything the platform should know",
+    "submit": "Submit",
+    "submitting": "Submitting…",
+    "cancelRequest": "Cancel request",
+    "cancelConfirmTitle": "Cancel this request?",
+    "cancelConfirmBody": "This withdraws your pending request.",
+    "requestSubmitted": "Your request was submitted.",
+    "requestCancelled": "Request cancelled.",
+    "currentBadge": "Current",
+    "decisionNote": "Platform note",
+    "requestedOn": "Requested",
+    "noPlans": "No plans are available to request right now."
   },
   "publicSiteAdmin": {
     "title": "Public website",
@@ -3609,5 +3633,66 @@
   "platformNotifications": {
     "title": "Notifications",
     "subtitle": "New hotels, subscriptions and platform activity"
+  },
+  "subscriptionRequests": {
+    "status": {
+      "under_review": "Under review",
+      "accepted": "Accepted",
+      "rejected": "Rejected",
+      "cancelled": "Cancelled",
+      "executed": "Applied"
+    },
+    "kind": {
+      "new_subscription": "New subscription",
+      "renewal": "Renewal",
+      "plan_change": "Plan change"
+    },
+    "planState": {
+      "current": "Current",
+      "upgradeable": "Upgrade",
+      "available": "Available",
+      "unavailable": "Unavailable"
+    },
+    "title": "Subscription requests",
+    "subtitle": "Review and apply hotel-submitted subscription requests.",
+    "filterStatus": "Status",
+    "filterOpen": "Open only",
+    "colHotel": "Hotel",
+    "colKind": "Type",
+    "colPlan": "Requested plan",
+    "colStatus": "Status",
+    "colSubmitted": "Submitted",
+    "colRequestedBy": "By",
+    "accept": "Accept",
+    "reject": "Reject",
+    "execute": "Apply",
+    "cancel": "Cancel",
+    "acceptTitle": "Accept request?",
+    "acceptBody": "Accepting does not apply the change yet — you apply it in a second step.",
+    "adminNoteLabel": "Note (optional)",
+    "rejectTitle": "Reject request",
+    "rejectReasonLabel": "Reason",
+    "rejectReasonPlaceholder": "Why is this rejected?",
+    "executeTitle": "Apply request",
+    "executeBody": "This applies the change now (a fresh billing cycle starts from today).",
+    "recordPaymentOptional": "Record a payment (optional)",
+    "paymentAmount": "Amount",
+    "paymentMethod": "Method",
+    "paymentReference": "Reference",
+    "cancelTitle": "Cancel request?",
+    "cancelBody": "This cancels the request without applying it.",
+    "hotelNoteLabel": "Hotel note",
+    "decidedBy": "Decided by",
+    "empty": "No requests",
+    "emptyHint": "Hotel subscription requests will appear here.",
+    "done": "Done",
+    "current": "Current plan",
+    "errors": {
+      "conflict": "You already have an open request. Resolve it before submitting another.",
+      "invalidTransition": "This request can no longer be changed.",
+      "notAllowed": "This request isn't allowed for your current subscription.",
+      "planNotAvailable": "That plan is no longer available for this request.",
+      "reasonRequired": "A reason is required."
+    }
   }
 }

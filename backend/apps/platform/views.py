@@ -20,15 +20,24 @@ from rest_framework.views import APIView
 
 from apps.common.exceptions import PlanInUse
 from apps.rbac.permissions import IsPlatformOwner
-from apps.subscriptions import services as sub_services
+from apps.subscriptions import request_services, services as sub_services
 from apps.subscriptions.enforcement import effectively_live_q
 from apps.subscriptions.entitlements import effective_subscription_state
 from apps.subscriptions.models import (
     LIVE_STATUSES,
+    OPEN_REQUEST_STATUSES,
+    ChangeRequestKind,
+    ChangeRequestStatus,
     HotelSubscription,
     PlatformSubscriptionPayment,
+    SubscriptionChangeRequest,
     SubscriptionPlan,
     SubscriptionStatus,
+)
+from apps.subscriptions.serializers import (
+    ExecuteRequestSerializer,
+    PlatformChangeRequestSerializer,
+    RejectRequestSerializer,
 )
 from apps.tenancy.models import Hotel, HotelStatus
 
@@ -709,6 +718,94 @@ class SubscriptionDetailView(PlatformOwnerMixin, generics.RetrieveUpdateAPIView)
 
         sub.refresh_from_db()
         return Response(HotelSubscriptionSerializer(sub).data)
+
+
+# --- Subscription change requests (§8.5 — hotel-initiated, owner review) ------
+
+
+def _get_request_qs():
+    return SubscriptionChangeRequest.objects.select_related(
+        "hotel",
+        "requested_plan",
+        "current_subscription__plan",
+        "requested_by",
+        "decided_by",
+    )
+
+
+class SubscriptionRequestListView(PlatformOwnerMixin, APIView):
+    """All hotel-submitted change requests, newest first (filterable)."""
+
+    def get(self, request: Request) -> Response:
+        qs = _get_request_qs().all()
+        status_filter = request.query_params.get("status")
+        if status_filter == "open":
+            qs = qs.filter(status__in=list(OPEN_REQUEST_STATUSES))
+        elif status_filter in {c for c, _ in ChangeRequestStatus.choices}:
+            qs = qs.filter(status=status_filter)
+        kind = request.query_params.get("kind")
+        if kind in {c for c, _ in ChangeRequestKind.choices}:
+            qs = qs.filter(kind=kind)
+        hotel_id = request.query_params.get("hotel")
+        if hotel_id and str(hotel_id).isdigit():
+            qs = qs.filter(hotel_id=int(hotel_id))
+        return Response(
+            PlatformChangeRequestSerializer(qs[:300], many=True).data
+        )
+
+
+class SubscriptionRequestDetailView(PlatformOwnerMixin, APIView):
+    def get(self, request: Request, pk: int) -> Response:
+        req = generics.get_object_or_404(_get_request_qs(), pk=pk)
+        return Response(PlatformChangeRequestSerializer(req).data)
+
+
+class SubscriptionRequestAcceptView(PlatformOwnerMixin, APIView):
+    def post(self, request: Request, pk: int) -> Response:
+        req = generics.get_object_or_404(SubscriptionChangeRequest, pk=pk)
+        req = request_services.accept_change_request(req, actor=request.user)
+        return Response(PlatformChangeRequestSerializer(req).data)
+
+
+class SubscriptionRequestRejectView(PlatformOwnerMixin, APIView):
+    def post(self, request: Request, pk: int) -> Response:
+        req = generics.get_object_or_404(SubscriptionChangeRequest, pk=pk)
+        serializer = RejectRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        req = request_services.reject_change_request(
+            req, actor=request.user, reason=serializer.validated_data["reason"]
+        )
+        return Response(PlatformChangeRequestSerializer(req).data)
+
+
+class SubscriptionRequestExecuteView(PlatformOwnerMixin, APIView):
+    """Apply an accepted request via the matching lifecycle service."""
+
+    def post(self, request: Request, pk: int) -> Response:
+        req = generics.get_object_or_404(SubscriptionChangeRequest, pk=pk)
+        serializer = ExecuteRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        payment = None
+        if data.get("payment_amount") is not None:
+            payment = {
+                "amount": data["payment_amount"],
+                "method": data.get("payment_method"),
+                "reference": data.get("payment_reference", ""),
+            }
+        req, _sub = request_services.execute_change_request(
+            req, actor=request.user, payment=payment, notes=data.get("notes", "")
+        )
+        return Response(PlatformChangeRequestSerializer(req).data)
+
+
+class SubscriptionRequestCancelView(PlatformOwnerMixin, APIView):
+    def post(self, request: Request, pk: int) -> Response:
+        req = generics.get_object_or_404(SubscriptionChangeRequest, pk=pk)
+        req = request_services.cancel_change_request(
+            req, actor=request.user, by_hotel=False
+        )
+        return Response(PlatformChangeRequestSerializer(req).data)
 
 
 # --- Platform settings ------------------------------------------------------
