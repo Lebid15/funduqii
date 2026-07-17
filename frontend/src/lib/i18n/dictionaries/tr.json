@@ -1434,6 +1434,8 @@
       "cancelled": "İptal"
     },
     "arrivals": {
+      "lateArrival": "Geç varış",
+      "expiredStayWindow": "Konaklama süresi sona erdi",
       "empty": "Bugün giriş yok",
       "emptyHint": "Bugün gelen onaylı rezervasyonlar burada görünür.",
       "guest": "Misafir",

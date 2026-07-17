@@ -327,7 +327,7 @@ export function FrontDeskPanel() {
       />
       <Tabs tabs={tabs} active={tab} onChange={(k) => { setTab(k); setActiveCard(null); }} />
       <FrontDeskFilters filters={filters} onChange={setFilters} />
-      {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
+      {tab === "arrivals" ? <ArrivalsTab reloadKey={reloadKey} onChange={refresh} filters={filters} businessDate={overview?.business_date ?? null} /> : null}
       {tab === "current" ? <CurrentTab reloadKey={reloadKey} onChange={refresh} filters={filters} businessDate={overview?.business_date ?? null} /> : null}
       {tab === "departures" ? <DeparturesTab reloadKey={reloadKey} onChange={refresh} filters={filters} /> : null}
     </>
@@ -338,7 +338,7 @@ export function FrontDeskPanel() {
 // Arrivals today                                                              //
 // --------------------------------------------------------------------------- //
 
-function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onChange: () => void; filters: BoardFilters }) {
+function ArrivalsTab({ reloadKey, onChange, filters, businessDate }: { reloadKey: number; onChange: () => void; filters: BoardFilters; businessDate: string | null }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const can = useCan();
@@ -380,12 +380,20 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
         <EmptyState title={t.frontDesk.filters.noMatches} hint={t.frontDesk.filters.noMatchesHint} icon={PlaneLanding} />
       ) : null}
       <div className="stack">
-        {visible.map((res) => (
+        {visible.map((res) => {
+          // H2: an arrival before the hotel business date is a LATE / overdue
+          // arrival — still fully check-in-able. But if its whole window has
+          // ELAPSED (check_out_date <= business date) it can no longer be checked
+          // in (the backend refuses it) and must be handled as a no-show.
+          const overdue = businessDate !== null && res.check_in_date < businessDate;
+          const expired = businessDate !== null && res.check_out_date <= businessDate;
+          return (
           <ActionCard
             key={res.id}
             icon={PlaneLanding}
             title={`${res.reservation_number} · ${res.primary_guest_name}`}
             description={`${formatDate(res.check_in_date, locale)} → ${formatDate(res.check_out_date, locale)} · ${res.lines.map((l) => `${l.quantity}× ${l.room_type_name}${l.room_number ? ` (${l.room_number})` : ""}`).join(", ")}`}
+            meta={expired ? <Badge tone="danger" icon={CalendarClock}>{t.frontDesk.arrivals.expiredStayWindow}</Badge> : overdue ? <Badge tone="warning" icon={CalendarClock}>{t.frontDesk.arrivals.lateArrival}</Badge> : undefined}
             action={
               <div className="cluster">
                 {can("reservation_documents.view") && res.document_count > 0 ? (
@@ -393,7 +401,7 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
                     {t.frontDesk.documents}
                   </Button>
                 ) : null}
-                {can("stays.check_in") ? (
+                {can("stays.check_in") && !expired ? (
                   <Button icon={DoorOpen} size="sm" onClick={() => setTarget(res)}>
                     {t.frontDesk.arrivals.checkIn}
                   </Button>
@@ -406,7 +414,8 @@ function ArrivalsTab({ reloadKey, onChange, filters }: { reloadKey: number; onCh
               </div>
             }
           />
-        ))}
+          );
+        })}
       </div>
       <CheckInModal
         reservation={target}

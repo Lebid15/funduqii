@@ -401,24 +401,140 @@ class ArrivalsDeparturesTests(APITestCase):
         r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
         self.assertEqual(len(r.data), 0)
 
-    def test_departures_today_lists_in_house_leaving_today(self):
-        res, line = make_reservation(self.hotel, self.rtype, ci=date(self.today.year - 1, 1, 1), co=self.today)
-        self.client.post(
+    def test_arrivals_includes_overdue_late_arrival(self):
+        # H2: a CONFIRMED reservation whose arrival date is in the PAST (late /
+        # overdue), not yet checked in, must appear in the arrivals list — it is
+        # counted in ``awaiting_check_in`` and must not be invisible/uncheckable.
+        past = date(self.today.year - 1, 1, 5)
+        make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(len(r.data), 1)
+        self.assertEqual(r.data[0]["check_in_date"], past.isoformat())
+
+    def test_arrivals_lists_overdue_before_today(self):
+        # Ordered oldest-first: the most overdue surfaces above today's arrivals.
+        past = date(self.today.year - 1, 1, 5)
+        make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        make_reservation(self.hotel, self.rtype, ci=self.today, co=self.tomorrow)
+        r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(
+            [row["check_in_date"] for row in r.data],
+            [past.isoformat(), self.today.isoformat()],
+        )
+
+    def test_overdue_late_arrival_can_be_checked_in(self):
+        # H2 end-to-end: the check-in service admits a late arrival (it refuses
+        # only FUTURE arrivals), so an overdue arrival checks in successfully and
+        # then leaves the arrivals list.
+        past = date(self.today.year - 1, 1, 5)
+        res, line = make_reservation(self.hotel, self.rtype, ci=past, co=self.tomorrow)
+        r = self.client.post(
             reverse("stays:stay-check-in"),
             {"reservation": res.id, "reservation_line": line.id, "room": self.room.id, "primary_guest": self.guest.id},
             format="json", **HDR(self.hotel),
         )
+        self.assertEqual(r.status_code, 201, r.data)
+        after = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(len(after.data), 0)
+
+    def _check_in(self, res, line):
+        return self.client.post(
+            reverse("stays:stay-check-in"),
+            {"reservation": res.id, "reservation_line": line.id,
+             "room": self.room.id, "primary_guest": self.guest.id},
+            format="json", **HDR(self.hotel),
+        )
+
+    def test_expired_window_checkout_on_business_date_rejects_check_in(self):
+        # H2 safety: check_out_date == business_date → the stay window has fully
+        # elapsed → check-in refused server-side, no side effects.
+        past = date(self.today.year - 1, 1, 5)
+        res, line = make_reservation(self.hotel, self.rtype, ci=past, co=self.today)
+        r = self._check_in(res, line)
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertEqual(r.data["code"], "reservation_stay_window_expired")
+        self.assertFalse(Stay.objects.filter(reservation=res).exists())
+
+    def test_expired_window_checkout_before_business_date_rejects_no_side_effects(self):
+        from apps.finance.models import Folio
+
+        res, line = make_reservation(
+            self.hotel, self.rtype,
+            ci=date(self.today.year - 1, 1, 5), co=date(self.today.year - 1, 1, 8),
+        )
+        r = self._check_in(res, line)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "reservation_stay_window_expired")
+        # No Stay, no reservation-linked folio, reservation still confirmed.
+        self.assertFalse(Stay.objects.filter(reservation=res).exists())
+        self.assertFalse(Folio.objects.filter(reservation=res).exists())
+        res.refresh_from_db()
+        self.assertEqual(res.status, ReservationStatus.CONFIRMED)
+
+    def test_expired_window_reservation_still_listed_for_handling(self):
+        # It remains visible in the arrivals list (for no-show handling); the UI
+        # shows the "expired" badge + no-show, not check-in.
+        make_reservation(
+            self.hotel, self.rtype,
+            ci=date(self.today.year - 1, 1, 5), co=date(self.today.year - 1, 1, 8),
+        )
+        r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
+        self.assertEqual(len(r.data), 1)
+
+    def test_expired_window_can_be_marked_no_show(self):
+        res, line = make_reservation(
+            self.hotel, self.rtype,
+            ci=date(self.today.year - 1, 1, 5), co=date(self.today.year - 1, 1, 8),
+        )
+        r = self.client.post(
+            reverse("reservations:reservation-no-show", args=[res.id]),
+            {"reason": "guest never arrived"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        res.refresh_from_db()
+        self.assertEqual(res.status, ReservationStatus.NO_SHOW)
+
+    def test_overview_awaiting_excludes_expired_needs_attention_includes(self):
+        # An overdue arrival still WITHIN its window counts in awaiting_check_in;
+        # a FULLY-EXPIRED one does not (it cannot be checked in) and instead
+        # raises needs_attention (a no-show candidate).
+        make_reservation(  # overdue but in-window (check_out in the future)
+            self.hotel, self.rtype,
+            ci=date(self.today.year - 1, 1, 5), co=self.tomorrow,
+        )
+        make_reservation(  # fully expired (whole window in the past)
+            self.hotel, self.rtype,
+            ci=date(self.today.year - 1, 2, 5), co=date(self.today.year - 1, 2, 8),
+        )
+        data = self.client.get(
+            reverse("stays:stay-overview"), **HDR(self.hotel)
+        ).json()
+        self.assertEqual(data["awaiting_check_in"], 1)      # only the in-window one
+        self.assertGreaterEqual(data["needs_attention"], 1)  # the expired one
+
+    def _inhouse_stay_departing_today(self):
+        # A stay whose check-out is today was admitted on an EARLIER day (checking
+        # in on the check-out day is refused by the expired-window guard), so build
+        # it directly rather than via the check-in endpoint.
+        res, line = make_reservation(
+            self.hotel, self.rtype, ci=date(self.today.year - 1, 1, 1), co=self.today
+        )
+        return Stay.objects.create(
+            hotel=self.hotel, reservation=res, reservation_line=line,
+            room=self.room, primary_guest=self.guest, status=StayStatus.IN_HOUSE,
+            planned_check_in_date=res.check_in_date,
+            planned_check_out_date=res.check_out_date,
+            actual_check_in_at=timezone.now(),
+        )
+
+    def test_departures_today_lists_in_house_leaving_today(self):
+        self._inhouse_stay_departing_today()
         r = self.client.get(reverse("stays:stay-departures-today"), **HDR(self.hotel))
         self.assertEqual(r.data["count"], 1)
 
     def test_departures_excludes_checked_out(self):
-        res, line = make_reservation(self.hotel, self.rtype, ci=date(self.today.year - 1, 1, 1), co=self.today)
-        sid = self.client.post(
-            reverse("stays:stay-check-in"),
-            {"reservation": res.id, "reservation_line": line.id, "room": self.room.id, "primary_guest": self.guest.id},
-            format="json", **HDR(self.hotel),
-        ).data["id"]
-        self.client.post(reverse("stays:stay-check-out", args=[sid]), {}, format="json", **HDR(self.hotel))
+        stay = self._inhouse_stay_departing_today()
+        self.client.post(reverse("stays:stay-check-out", args=[stay.id]), {}, format="json", **HDR(self.hotel))
         r = self.client.get(reverse("stays:stay-departures-today"), **HDR(self.hotel))
         self.assertEqual(r.data["count"], 0)
 
@@ -610,14 +726,19 @@ class ArrivalDateGuardTests(APITestCase):
     def test_arrivals_and_departures_views_use_business_date(self):
         patcher, server_date, hotel_date = self._with_hotel_far_timezone()
         with patcher:
-            # An arrival dated on the HOTEL's business date is listed...
+            # An arrival dated on the HOTEL's business date is listed — this alone
+            # proves the view keys off the HOTEL business date, not the server
+            # date: under the server date (one day earlier) this arrival would be
+            # a FUTURE one and excluded.
             make_reservation(
                 self.hotel, self.rtype, ci=hotel_date, co=hotel_date + timedelta(days=2)
             )
-            # ...while one dated on the SERVER's date is not.
+            # ...while a FUTURE arrival (one day PAST the hotel business date) is
+            # not listed. (Overdue arrivals ARE now listed — H2 — so the excluded
+            # case must be a future one, not a past one.)
             make_reservation(
-                self.hotel, self.rtype, ci=server_date - timedelta(days=1),
-                co=server_date,
+                self.hotel, self.rtype, ci=hotel_date + timedelta(days=1),
+                co=hotel_date + timedelta(days=3),
             )
             r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
             self.assertEqual(len(r.data), 1)
@@ -1032,14 +1153,11 @@ class EarlyDepartureTests(APITestCase):
 
     def _admit(self, *, ci, co, room=None):
         res, line = make_reservation(self.hotel, self.rtype, ci=ci, co=co)
-        r = self.client.post(
-            reverse("stays:stay-check-in"),
-            {"reservation": res.id, "reservation_line": line.id,
-             "room": (room or self.r101).id, "primary_guest": self.guest.id},
-            format="json", **HDR(self.hotel),
+        stay = _admit_stay(
+            self.hotel, reservation=res, reservation_line=line,
+            room=(room or self.r101), primary_guest=self.guest, user=self.manager,
         )
-        assert r.status_code == 201, r.data
-        return res, Stay.objects.get(pk=r.data["id"])
+        return res, stay
 
     def _co(self, stay, **body):
         return self.client.post(
@@ -1315,16 +1433,9 @@ class RoomChargePostingTests(APITestCase):
         )  # D1 -> D2 = nights D1, D1+1
 
     def _check_in(self, res, line, room, guest):
-        from apps.stays.services import CheckInService
-
-        return CheckInService.execute(
-            self.hotel,
-            reservation=res,
-            reservation_line=line,
-            room=room,
-            primary_guest=guest,
-            companions=(),
-            user=self.manager,
+        return _admit_stay(
+            self.hotel, reservation=res, reservation_line=line, room=room,
+            primary_guest=guest, user=self.manager,
         )
 
     def test_no_future_nights_posted_at_check_in(self):
@@ -2203,17 +2314,14 @@ class FolioCycleEndpointsTests(APITestCase):
         ARRIVED two days ago (``actual_check_in_at`` back-dated), so under FIX-1
         the billing window starts at D1-2 and nights D1-2, D1-1 are real consumed
         nights before today's business date."""
-        from apps.stays.services import CheckInService
-
         room = make_room(self.hotel, self.rtype, number=number)
         res, line = make_reservation(
             self.hotel, self.rtype, room=room,
             ci=D1 - timedelta(days=2), co=D1,  # nights D1-2, D1-1 (both due at D1)
         )
-        stay = CheckInService.execute(
+        stay = _admit_stay(
             self.hotel, reservation=res, reservation_line=line, room=room,
-            primary_guest=make_guest(self.hotel, name=f"G{number}"),
-            companions=(), user=self.manager,
+            primary_guest=make_guest(self.hotel, name=f"G{number}"), user=self.manager,
         )
         # Realistic: the guest physically arrived 2 days ago, so FIX-1's window
         # opens at D1-2 (not today) and both nights are genuinely consumed.
@@ -2266,16 +2374,41 @@ def _priced_type(hotel, *, code="STD", rate="100.00"):
     )
 
 
+def _admit_stay(hotel, *, reservation, reservation_line, room, primary_guest,
+                user, companions=()):
+    """Guarded check-in that transparently reproduces an already-elapsed stay
+    window (``reservation.check_out_date <= business_date``) — a valid production
+    STATE (a stay admitted earlier, when its window was open, that is now due out
+    today or overstaying) which a FRESH check-in now (correctly) refuses. Admits
+    with a temporarily-future check-out, then restores the intended dates on the
+    reservation, stay and rate period so the fixture matches the real state."""
+    from apps.stays.models import StayRatePeriod
+    from apps.stays.services import CheckInService, get_business_date
+
+    intended_co = reservation.check_out_date
+    needs_restore = intended_co <= get_business_date(hotel)
+    if needs_restore:
+        reservation.check_out_date = get_business_date(hotel) + timedelta(days=1)
+        reservation.save(update_fields=["check_out_date"])
+    stay = CheckInService.execute(
+        hotel, reservation=reservation, reservation_line=reservation_line,
+        room=room, primary_guest=primary_guest, companions=companions, user=user,
+    )
+    if needs_restore:
+        Reservation.objects.filter(pk=reservation.pk).update(check_out_date=intended_co)
+        Stay.objects.filter(pk=stay.pk).update(planned_check_out_date=intended_co)
+        StayRatePeriod.objects.filter(stay=stay).update(end_date=intended_co)
+        stay.refresh_from_db()
+    return stay
+
+
 def _check_in(hotel, manager, rtype, *, number, ci=D1, co=D2, guest_name="G"):
     """Check a fresh reservation into a fresh room and return the Stay."""
-    from apps.stays.services import CheckInService
-
     room = make_room(hotel, rtype, number=number)
     res, line = make_reservation(hotel, rtype, room=room, ci=ci, co=co)
-    return CheckInService.execute(
+    return _admit_stay(
         hotel, reservation=res, reservation_line=line, room=room,
-        primary_guest=make_guest(hotel, name=guest_name),
-        companions=(), user=manager,
+        primary_guest=make_guest(hotel, name=guest_name), user=manager,
     )
 
 

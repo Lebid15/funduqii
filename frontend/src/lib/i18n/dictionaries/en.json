@@ -1434,6 +1434,8 @@
       "cancelled": "Cancelled"
     },
     "arrivals": {
+      "lateArrival": "Late arrival",
+      "expiredStayWindow": "Expired stay window",
       "empty": "No arrivals today",
       "emptyHint": "Confirmed reservations arriving today appear here.",
       "guest": "Guest",
