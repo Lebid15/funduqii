@@ -3302,3 +3302,193 @@ class ReservationCreationIdempotencyConcurrencyTests(TransactionTestCase):
         res = Reservation.objects.get(hotel=self.hotel)
         self.assertEqual(draft.reservation_id, res.id)
         self.assertEqual(res.reservation_number, reserved)
+
+    def test_concurrent_same_key_no_draft_yields_one_reservation(self):
+        """The NO-DRAFT path: two concurrent creates with the SAME key but WITHOUT a
+        pre-reserved ReservationDraft. There is no draft row to lock, so the ONLY
+        serialization is the per-hotel partial-unique on ``creation_idempotency_key``
+        + the ``IntegrityError`` -> re-fetch backstop. Exactly ONE reservation must
+        land, both workers must return the SAME number, and there must be no 500."""
+        import threading
+
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_ALLOC)
+
+        # Deliberately NO reserve_reservation_number call -> no draft for this key.
+        self.assertEqual(
+            ReservationDraft.objects.filter(
+                hotel=self.hotel, idempotency_key="nodraft"
+            ).count(),
+            0,
+        )
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(
+                target=self._consume_worker, args=(barrier, results, i, "nodraft")
+            )
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), "a no-draft create worker timed out")
+        for r in results:
+            self.assertFalse(
+                str(r).startswith("unexpected:"),
+                f"an unexpected error escaped a worker: {r}",
+            )
+        # Exactly ONE reservation; the loser re-fetched the winner (same number).
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+        self.assertEqual(results[0], results[1])
+        res = Reservation.objects.get(hotel=self.hotel)
+        self.assertEqual(res.creation_idempotency_key, "nodraft")
+
+
+class ReservationAllocatorConcurrencyScenarioTests(TransactionTestCase):
+    """Two remaining allocator concurrency scenarios as committed two-connection PG
+    proofs: a final reservation created in parallel with a draft-number reserve
+    (no cross-table collision — the locked counter is the sole allocator), and two
+    hotels allocating in parallel (independent per-hotel counters). PostgreSQL-only."""
+
+    def setUp(self):
+        self.hotel_a = make_hotel(slug="alloc-a")
+        self.hotel_b = make_hotel(slug="alloc-b")
+        self.manager_a = add_member(self.hotel_a, "alloc-a@x.com", kind=MembershipType.MANAGER)
+        self.manager_b = add_member(self.hotel_b, "alloc-b@x.com", kind=MembershipType.MANAGER)
+        self.rt_a = make_type(self.hotel_a, code="AA", base_rate="100.00")
+        make_rooms(self.hotel_a, self.rt_a, 4, start=101)
+
+    def _reserve_worker(self, barrier, results, index):
+        from django.db import connections
+
+        from apps.reservations.services import reserve_reservation_number
+
+        try:
+            barrier.wait(timeout=15)
+            d = reserve_reservation_number(
+                self.hotel_a, idempotency_key="draftkey", user=self.manager_a
+            )
+            results[index] = d.reservation_number
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def _final_worker(self, barrier, results, index):
+        from django.db import connections
+
+        from apps.reservations.services import create_reservation
+
+        try:
+            barrier.wait(timeout=15)
+            r = create_reservation(
+                self.hotel_a,
+                lines=[{"room_type": self.rt_a, "quantity": 1}],
+                status=ReservationStatus.CONFIRMED,
+                user=self.manager_a,
+                check_in_date=D1,
+                check_out_date=D2,
+                primary_guest_name="G",
+            )
+            results[index] = r.reservation_number
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def _alloc_hotel_worker(self, barrier, results, index, hotel):
+        from django.db import connections, transaction
+
+        from apps.reservations.services import next_reservation_number
+
+        try:
+            barrier.wait(timeout=15)
+            with transaction.atomic():
+                results[index] = next_reservation_number(hotel)
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    # S3 — a final reservation concurrent with a draft-number reserve: distinct
+    # numbers, no collision between the reservation and draft tables.
+    def test_concurrent_final_reservation_and_draft_reserve_no_collision(self):
+        import threading
+
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_ALLOC)
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._reserve_worker, args=(barrier, results, 0)),
+            threading.Thread(target=self._final_worker, args=(barrier, results, 1)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive())
+        for r in results:
+            self.assertFalse(str(r).startswith("unexpected:"), r)
+        # Distinct numbers from the one locked counter; the reserved draft number is
+        # NOT used by the final reservation (no cross-table collision).
+        self.assertNotEqual(results[0], results[1])
+        self.assertEqual(set(results), {"R00001", "R00002"})
+        draft = ReservationDraft.objects.get(hotel=self.hotel_a, idempotency_key="draftkey")
+        self.assertFalse(
+            Reservation.objects.filter(
+                hotel=self.hotel_a, reservation_number=draft.reservation_number
+            ).exists()
+        )
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel_a).last_number, 2
+        )
+
+    # S5 — two hotels allocating in parallel: independent per-hotel counters.
+    def test_concurrent_two_hotels_independent_counters(self):
+        import threading
+
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_ALLOC)
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(
+                target=self._alloc_hotel_worker, args=(barrier, results, 0, self.hotel_a)
+            ),
+            threading.Thread(
+                target=self._alloc_hotel_worker, args=(barrier, results, 1, self.hotel_b)
+            ),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive())
+        for r in results:
+            self.assertFalse(str(r).startswith("unexpected:"), r)
+        # Each hotel's first allocation is independent.
+        self.assertEqual(results[0], "R00001")
+        self.assertEqual(results[1], "R00001")
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel_a).last_number, 1
+        )
+        self.assertEqual(
+            ReservationNumberSequence.objects.get(hotel=self.hotel_b).last_number, 1
+        )
