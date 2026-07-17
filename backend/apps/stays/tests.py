@@ -646,14 +646,19 @@ class ArrivalDateGuardTests(APITestCase):
     def test_arrivals_and_departures_views_use_business_date(self):
         patcher, server_date, hotel_date = self._with_hotel_far_timezone()
         with patcher:
-            # An arrival dated on the HOTEL's business date is listed...
+            # An arrival dated on the HOTEL's business date is listed — this alone
+            # proves the view keys off the HOTEL business date, not the server
+            # date: under the server date (one day earlier) this arrival would be
+            # a FUTURE one and excluded.
             make_reservation(
                 self.hotel, self.rtype, ci=hotel_date, co=hotel_date + timedelta(days=2)
             )
-            # ...while one dated on the SERVER's date is not.
+            # ...while a FUTURE arrival (one day PAST the hotel business date) is
+            # not listed. (Overdue arrivals ARE now listed — H2 — so the excluded
+            # case must be a future one, not a past one.)
             make_reservation(
-                self.hotel, self.rtype, ci=server_date - timedelta(days=1),
-                co=server_date,
+                self.hotel, self.rtype, ci=hotel_date + timedelta(days=1),
+                co=hotel_date + timedelta(days=3),
             )
             r = self.client.get(reverse("stays:stay-arrivals-today"), **HDR(self.hotel))
             self.assertEqual(len(r.data), 1)
