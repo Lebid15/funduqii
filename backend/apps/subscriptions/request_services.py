@@ -34,19 +34,13 @@ from apps.common.exceptions import (
 from .enforcement import effective_subscription
 from .models import (
     OPEN_REQUEST_STATUSES,
+    BillingCycle,
     ChangeRequestKind,
     ChangeRequestStatus,
     SubscriptionChangeRequest,
     SubscriptionPlan,
     SubscriptionStatus,
 )
-
-# Only a paid, live subscription can be renewed. A TRIAL is converted to paid by
-# the owner (or upgraded via a plan change) — never "renewed" — so allowing a
-# renewal request on a trial would create an accepted request that cannot be
-# executed (renew_subscription rejects a trial). Keep this in sync with the
-# renewal precondition and can_request_renewal below.
-RENEWABLE_STATUSES = (SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)
 from .services import (
     _CYCLE_DAYS,
     _classify_change,
@@ -57,6 +51,15 @@ from .services import (
     renew_subscription,
     subscription_terms,
 )
+
+# Only a paid, live subscription can be renewed. A TRIAL is converted to paid by
+# the owner (or upgraded via a plan change) — never "renewed" — so allowing a
+# renewal request on a trial would create an accepted request that cannot be
+# executed (renew_subscription rejects a trial). A CUSTOM (open-ended) cycle has
+# no defined renewal period either — it is managed by the platform, not
+# self-renewed. Keep this in sync with the renewal precondition and
+# can_request_renewal below.
+RENEWABLE_STATUSES = (SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)
 
 
 # --- Per-hotel plan availability (§8.4) --------------------------------------
@@ -114,10 +117,20 @@ def available_plans_for_hotel(hotel):
     return rows, live_sub
 
 
+def _is_renewable(live_sub) -> bool:
+    """A live, PAID (active/past_due), non-CUSTOM-cycle subscription. A trial is
+    not renewable, and a CUSTOM/open-ended cycle has no defined renewal period
+    (the platform manages it) — so neither is self-renewable."""
+    return (
+        live_sub is not None
+        and live_sub.status in RENEWABLE_STATUSES
+        and live_sub.plan.billing_cycle != BillingCycle.CUSTOM
+    )
+
+
 def can_request_renewal(live_sub) -> bool:
-    """A renewal can be requested only for a live, PAID (active/past_due)
-    subscription. A trial is not renewable (see RENEWABLE_STATUSES)."""
-    return live_sub is not None and live_sub.status in RENEWABLE_STATUSES
+    """Whether the hotel may request a renewal (drives the FE button)."""
+    return _is_renewable(live_sub)
 
 
 # --- Server-side validation (submit AND execute) -----------------------------
@@ -133,13 +146,13 @@ def _validate_kind_precondition(kind: str, live_sub) -> None:
         raise SubscriptionRequestNotAllowed(
             "This hotel has no live subscription to change."
         )
-    if kind == ChangeRequestKind.RENEWAL and (
-        live_sub is None or live_sub.status not in RENEWABLE_STATUSES
-    ):
-        # A trial (or no subscription) cannot be renewed — it is converted to
-        # paid by the owner or upgraded via a plan change instead.
+    if kind == ChangeRequestKind.RENEWAL and not _is_renewable(live_sub):
+        # A trial / no subscription cannot be renewed (converted to paid or
+        # upgraded instead); a CUSTOM open-ended cycle has no renewal period and
+        # is renewed by the platform, not self-service.
         raise SubscriptionRequestNotAllowed(
-            "Only an active or past-due subscription can be renewed."
+            "Only an active or past-due subscription with a fixed billing cycle "
+            "can be renewed."
         )
 
 
@@ -260,13 +273,16 @@ def accept_change_request(
 def reject_change_request(
     req: SubscriptionChangeRequest, *, actor=None, reason: str
 ) -> SubscriptionChangeRequest:
-    """Owner rejects an ``under_review`` request. A reason is mandatory."""
-    reason = (reason or "").strip()
-    if not reason:
-        raise SubscriptionRequestReasonRequired()
+    """Owner rejects an ``under_review`` request. A reason is mandatory.
+
+    State is checked FIRST (under the row lock): rejecting a request that is not
+    under review is an invalid transition (409) regardless of the reason."""
     req = SubscriptionChangeRequest.objects.select_for_update().get(pk=req.pk)
     if req.status != ChangeRequestStatus.UNDER_REVIEW:
         raise InvalidSubscriptionRequestTransition()
+    reason = (reason or "").strip()
+    if not reason:
+        raise SubscriptionRequestReasonRequired()
     req.status = ChangeRequestStatus.REJECTED
     req.decided_by = actor
     req.decided_at = timezone.now()

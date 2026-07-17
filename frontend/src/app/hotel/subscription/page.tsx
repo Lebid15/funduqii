@@ -586,7 +586,7 @@ function PlanCard({
     <div
       className="card"
       style={{
-        border: "1px solid var(--border, #e5e7eb)",
+        border: "1px solid var(--color-border)",
         borderRadius: "0.75rem",
         padding: "1rem",
         display: "flex",

@@ -17,6 +17,7 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from apps.common.exceptions import (
+    ConflictingSubscription,
     InvalidSubscriptionRequestTransition,
     PlanNotAvailableForRequest,
     SubscriptionRequestConflict,
@@ -86,6 +87,18 @@ class SubmitRequestTests(TestCase):
             rs.can_request_renewal(
                 services.get_current_subscription(self.hotel)
             )
+        )
+        with self.assertRaises(SubscriptionRequestNotAllowed):
+            rs.submit_change_request(self.hotel, kind=ChangeRequestKind.RENEWAL)
+
+    def test_renewal_on_custom_cycle_rejected(self):
+        # A CUSTOM (open-ended) cycle has no renewal period — the platform
+        # manages it; a hotel-initiated renewal would default to 30 days and
+        # shorten an open-ended subscription, so it is blocked at submit.
+        custom = make_plan(name="Custom", slug="custom-plan", billing_cycle="custom")
+        services.activate_subscription(self.hotel, custom)
+        self.assertFalse(
+            rs.can_request_renewal(services.get_current_subscription(self.hotel))
         )
         with self.assertRaises(SubscriptionRequestNotAllowed):
             rs.submit_change_request(self.hotel, kind=ChangeRequestKind.RENEWAL)
@@ -382,3 +395,104 @@ class RequestConcurrencyTests(TransactionTestCase):
             hotel=self.hotel, status__in=list(rs.OPEN_REQUEST_STATUSES)
         ).count()
         self.assertEqual(open_count, 1)
+
+    def test_concurrent_execute_applies_once(self):
+        """FCG scenario 2 — two threads execute the SAME accepted request: exactly
+        one execution, one live subscription, one payment, no second cycle."""
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        # A committed accepted request (TransactionTestCase commits outside atomic).
+        req = rs.submit_change_request(
+            self.hotel,
+            kind=ChangeRequestKind.NEW_SUBSCRIPTION,
+            requested_plan=self.plan,
+        )
+        rs.accept_change_request(req)
+
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+
+        def worker():
+            barrier.wait()
+            try:
+                with transaction.atomic():
+                    rs.execute_change_request(
+                        req,
+                        payment={"amount": Decimal("49.00"), "method": "cash"},
+                    )
+                results.append("ok")
+            except (
+                InvalidSubscriptionRequestTransition,
+                ConflictingSubscription,
+                IntegrityError,
+            ):
+                results.append("conflict")
+            finally:
+                connections.close_all()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(sorted(results), ["conflict", "ok"])
+        req.refresh_from_db()
+        self.assertEqual(req.status, ChangeRequestStatus.EXECUTED)
+        # Exactly one live subscription and exactly one manual payment.
+        self.assertEqual(
+            HotelSubscription.objects.filter(
+                hotel=self.hotel, status__in=list(services.LIVE_STATUSES)
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            PlatformSubscriptionPayment.objects.filter(hotel=self.hotel).count(), 1
+        )
+
+    def test_concurrent_accept_and_reject(self):
+        """FCG scenario 3 — accept races reject on the same under_review request:
+        exactly one transition applies; the loser is a clean invalid-transition."""
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        req = rs.submit_change_request(
+            self.hotel,
+            kind=ChangeRequestKind.NEW_SUBSCRIPTION,
+            requested_plan=self.plan,
+        )
+
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+
+        def do(action: str):
+            barrier.wait()
+            try:
+                with transaction.atomic():
+                    if action == "accept":
+                        rs.accept_change_request(req)
+                    else:
+                        rs.reject_change_request(req, reason="race")
+                results.append(action)
+            except InvalidSubscriptionRequestTransition:
+                results.append("conflict")
+            finally:
+                connections.close_all()
+
+        threads = [
+            threading.Thread(target=do, args=(a,)) for a in ("accept", "reject")
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # One valid transition + one clean conflict; final state is not contradictory.
+        self.assertIn("conflict", results)
+        self.assertEqual(len([r for r in results if r != "conflict"]), 1)
+        req.refresh_from_db()
+        self.assertIn(
+            req.status,
+            (ChangeRequestStatus.ACCEPTED, ChangeRequestStatus.REJECTED),
+        )
