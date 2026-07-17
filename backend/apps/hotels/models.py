@@ -60,7 +60,8 @@ class HotelSettings(models.Model):
     short_description = models.CharField(max_length=280, blank=True, default="")
     description = models.TextField(blank=True, default="")
     star_rating = models.PositiveSmallIntegerField(null=True, blank=True)
-    # §9.3 facility type — surfaced on the public site + printing/identity.
+    # §9.3 facility type — a hotel-identity attribute, surfaced on the public
+    # site card and the hotel profile (printing templates are a deferred round).
     facility_type = models.CharField(
         max_length=20, choices=FACILITY_TYPE_CHOICES, default="hotel"
     )
@@ -288,6 +289,18 @@ class SettingsAuditLog(models.Model):
         indexes = [
             models.Index(fields=["hotel", "-created_at"]),
             models.Index(fields=["scope", "-created_at"]),
+        ]
+        constraints = [
+            # scope↔hotel consistency at the DB layer: a hotel row always carries
+            # its tenant; a platform row never does. Prevents an orphan audit row
+            # (hotel-scope + NULL hotel) that no read path would ever surface.
+            models.CheckConstraint(
+                check=(
+                    models.Q(scope="hotel", hotel__isnull=False)
+                    | models.Q(scope="platform", hotel__isnull=True)
+                ),
+                name="settings_audit_scope_hotel_consistency",
+            ),
         ]
 
     def __str__(self) -> str:
