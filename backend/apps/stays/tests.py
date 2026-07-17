@@ -1530,38 +1530,73 @@ class RoomChargePostingTests(APITestCase):
         self.assertEqual(nights, {D1 + timedelta(days=1)})
         self.assertNotIn(D1, nights)  # the pre-arrival night is NOT billed
 
-    def test_legacy_aggregated_charge_prevents_double_billing(self):
-        """FIX-2 — if the folio already holds a legacy aggregated ROOM charge
-        (whole stay on one line, no room_night), per-night posting bails out with
-        0 so the room is never double-billed."""
-        from apps.finance.models import ChargeType
-        from apps.finance.services import add_charge, ensure_due_room_charges
+    def test_unlinked_room_charge_does_not_disable_nightly_billing(self):
+        """H1 revenue-integrity (supersedes the old FIX-2 silent guard): an
+        UNLINKED ROOM charge (room_night IS NULL) must NEVER disable automated
+        per-night billing. The old design silently bailed with 0 here — which is
+        exactly how a stray manual ROOM charge caused silent revenue leakage. A
+        manual/unlinked ROOM charge is now impossible to create (``add_charge``
+        refuses it below), so any such row is pre-existing legacy data: billing
+        now PROCEEDS and the anomaly is surfaced with a non-silent warning event.
+        NOTE: a genuine legacy WHOLE-STAY aggregate must be reconciled
+        (void-not-delete) separately (owner decision, see the H1 report) because
+        per-night posting will otherwise double-count against it."""
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from apps.common.exceptions import InvalidFinanceOperation
+        from apps.finance import services as fin
+        from apps.finance.models import (
+            ChargeType,
+            FolioCharge,
+            NumberKind,
+            PostingStatus,
+        )
+        from apps.notifications.models import ActivityEvent
 
         stay = self._check_in(self.res, self.line, self.room, self.guest)
         folio = stay.folios.get()
-        # Legacy-style aggregated room charge: the whole stay on ONE line with no
-        # room_night (room_night stays NULL).
-        add_charge(
-            folio,
-            charge_type=ChargeType.ROOM,
-            description="Room (legacy aggregate)",
-            quantity=2,
-            unit_amount="100.00",
-            source="stay_room",
-            user=self.manager,
+        # add_charge (the single FolioCharge creator) now REFUSES a ROOM charge
+        # with no room_night, so a legacy aggregate can no longer be created here.
+        with self.assertRaises(InvalidFinanceOperation):
+            fin.add_charge(
+                folio, charge_type=ChargeType.ROOM, description="blocked",
+                quantity=1, unit_amount="100.00", user=self.manager,
+            )
+        # Simulate the pre-existing legacy row via a direct create.
+        FolioCharge.objects.create(
+            hotel=self.hotel, folio=folio,
+            charge_number=fin.next_number(self.hotel, NumberKind.CHARGE),
+            type=ChargeType.ROOM, description="Room (legacy aggregate)",
+            quantity=Decimal("2"), unit_amount=Decimal("100.00"),
+            amount=Decimal("200.00"), tax_rate=Decimal("0"),
+            tax_amount=Decimal("0"), total_amount=Decimal("200.00"),
+            charge_date=timezone.localdate(), source="stay_room",
+            room_night=None, status=PostingStatus.POSTED, created_by=self.manager,
         )
-        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
-        posted = ensure_due_room_charges(
+        posted = fin.ensure_due_room_charges(
             stay, as_of=stay.planned_check_out_date, user=self.manager
         )
-        self.assertEqual(posted, 0)  # nothing posted — the legacy line already bills
-        # No per-night (room_night set) charge was added.
-        self.assertEqual(folio.charges.filter(type=ChargeType.ROOM).count(), 1)
+        # Billing was NOT disabled by the unlinked legacy charge.
+        self.assertGreater(posted, 0)
         self.assertEqual(
             folio.charges.filter(
                 type=ChargeType.ROOM, room_night__isnull=False
             ).count(),
-            0,
+            posted,
+        )
+        # The legacy row is preserved (void-not-delete) and surfaced non-silently.
+        self.assertEqual(
+            folio.charges.filter(
+                type=ChargeType.ROOM, room_night__isnull=True
+            ).count(),
+            1,
+        )
+        self.assertTrue(
+            ActivityEvent.objects.filter(
+                hotel=self.hotel, event_type="charge.room_unlinked_detected"
+            ).exists()
         )
 
     def test_safety_net_posts_via_real_business_date(self):

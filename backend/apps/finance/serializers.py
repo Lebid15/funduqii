@@ -4,6 +4,7 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from .models import (
+    ChargeType,
     Expense,
     Folio,
     FolioCharge,
@@ -271,6 +272,14 @@ class ChargeCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         _reject_fields(self, "charge_date")
+        # H1 revenue-integrity: ROOM charges are per-NIGHT charges generated only
+        # by the system (``ensure_due_room_charges``, which always sets the night).
+        # A manual ROOM charge would be unlinked (no room_night) and could suppress
+        # automated nightly billing — reject it here with a clear field error.
+        if attrs.get("type") == ChargeType.ROOM:
+            raise serializers.ValidationError(
+                {"type": "room_charges_are_system_generated"}
+            )
         return attrs
 
 

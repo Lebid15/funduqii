@@ -529,7 +529,11 @@ function ChargeForm({ folioId, onDone }: { folioId: number; onDone: () => void }
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const typeOptions = (["room", "service", "tax", "adjustment", "discount", "other"] as const).map((v) => ({ value: v, label: t.finance.chargeTypes[v] }));
+  // H1 revenue-integrity: "room" is NOT a manual charge type — room-night charges
+  // are system-generated (per night) and the backend rejects a manual ROOM charge.
+  // Offering it here let a stray manual ROOM charge disable automated nightly
+  // billing, so it is removed from the picker.
+  const typeOptions = (["service", "tax", "adjustment", "discount", "other"] as const).map((v) => ({ value: v, label: t.finance.chargeTypes[v] }));
 
   async function submit(event: FormEvent) {
     event.preventDefault();

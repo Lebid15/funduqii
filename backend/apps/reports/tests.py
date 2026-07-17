@@ -666,7 +666,8 @@ class FinanceEngineTests(APITestCase, ReportsMixin):
     def test_revenue_by_category_from_charges(self):
         folio = create_folio(self.hotel, customer_name="W")
         add_charge(folio, charge_type=ChargeType.ROOM, description="room",
-                   quantity=1, unit_amount="120.00", user=self.manager)
+                   quantity=1, unit_amount="120.00", room_night=self.today,
+                   user=self.manager)
         add_charge(folio, charge_type=ChargeType.SERVICE, description="svc",
                    quantity=1, unit_amount="40.00", user=self.manager)
         rev = self.get_report("revenue", **self.rng()).data
@@ -677,7 +678,8 @@ class FinanceEngineTests(APITestCase, ReportsMixin):
     def test_tax_report_reads_stored_tax_amount(self):
         folio = create_folio(self.hotel, customer_name="W")
         add_charge(folio, charge_type=ChargeType.ROOM, description="r",
-                   quantity=1, unit_amount="100.00", tax_rate="10.00", user=self.manager)
+                   quantity=1, unit_amount="100.00", tax_rate="10.00",
+                   room_night=self.today, user=self.manager)
         t = self.get_report("taxes", **self.rng()).data
         self.assertEqual(t["total_tax"], "10.00")
         self.assertEqual(t["net_revenue_ex_tax"], "100.00")
@@ -755,7 +757,8 @@ class FinanceEngineTests(APITestCase, ReportsMixin):
         make_stay(self.hotel, room, days_ago_in=0)
         folio = create_folio(self.hotel, customer_name="W")
         add_charge(folio, charge_type=ChargeType.ROOM, description="r",
-                   quantity=1, unit_amount="150.00", user=self.manager)
+                   quantity=1, unit_amount="150.00", room_night=self.today,
+                   user=self.manager)
         d = self.get_report("finance-overview", **self.rng()).data
         self.assertEqual(d["kpis"]["room_revenue"], "150.00")
         self.assertEqual(d["adr"], "150.00")
@@ -780,7 +783,8 @@ class FinanceEngineTests(APITestCase, ReportsMixin):
     def test_closed_day_read_from_snapshot(self):
         folio = create_folio(self.hotel, customer_name="W")
         add_charge(folio, charge_type=ChargeType.ROOM, description="r",
-                   quantity=1, unit_amount="90.00", user=self.manager)
+                   quantity=1, unit_amount="90.00", room_night=self.today,
+                   user=self.manager)
         record_payment(folio, amount="90.00", method=PaymentMethod.CASH, user=self.manager)
         close_business_day(self.fresh(), self.today, user=self.manager)
         d = self.get_report(

@@ -211,7 +211,7 @@ def _lock_folio(folio) -> Folio:
 
 
 def _record_event(hotel, *, event_type, severity, title, message="", user=None,
-                  obj=None) -> None:
+                  obj=None, dedup_key=None) -> None:
     # Phase 14 activity system (lazy import keeps app loading order simple).
     from apps.notifications.services import record_activity
 
@@ -225,6 +225,7 @@ def _record_event(hotel, *, event_type, severity, title, message="", user=None,
         actor=user,
         related_object=obj,
         related_url="/hotel/finance",
+        dedup_key=dedup_key,
     )
 
 
@@ -752,6 +753,14 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
     caller never chooses the date — no back- or future-dating). ``room_night``
     is set only for a room-night charge and is the idempotency key enforced by
     the partial unique index (folio + room_night)."""
+    # H1 revenue-integrity: this is the SINGLE creator of every FolioCharge, so it
+    # is the one chokepoint that guarantees a ROOM charge can only ever be a
+    # per-night charge. A ROOM charge without a ``room_night`` is never legitimate
+    # (the central night poster ``ensure_due_room_charges`` always supplies it); an
+    # unlinked ROOM charge would otherwise sit on the folio and be mistaken for
+    # "already billed", silently disabling automated nightly billing (revenue leak).
+    if charge_type == ChargeType.ROOM and room_night is None:
+        raise InvalidFinanceOperation({"reason": "manual_room_charge_forbidden"})
     folio = _lock_folio(folio)
     _guard_open(folio)
     business_date = _business_date(folio.hotel)
@@ -920,16 +929,43 @@ def ensure_due_room_charges(stay, *, as_of=None, user=None):
     # last billed), so the per-night resolver issues no per-night query and never
     # reads a stale list. Uses the prefetched relation when the caller provided it.
     stay._rate_periods_cache = list(stay.rate_periods.all())
-    # FIX-2 (legacy double-billing guard): an OLDER design posted ONE aggregated
-    # ROOM charge for the whole stay with no ``room_night`` (room_night IS NULL).
-    # If such a POSTED aggregated charge already exists on this folio, posting
-    # per-night charges now would DOUBLE-BILL the room — so post nothing and bail.
+    # H1 revenue-integrity: per-night idempotency is owned SOLELY by the
+    # ``room_night``-keyed ``posted`` set below plus the partial unique index
+    # (folio, room_night). A ROOM charge with room_night IS NULL is NOT a per-night
+    # charge and must NEVER be read as evidence that a night is billed, nor be
+    # allowed to disable this poster — the previous silent ``return 0`` here is
+    # exactly what let an unlinked ROOM charge silently suppress ALL nightly
+    # billing (revenue leak). New unlinked ROOM charges are now impossible (blocked
+    # in ``add_charge`` + the charge serializer), so any such row is a pre-existing
+    # LEGACY anomaly: surface it (non-silent) for owner remediation and CONTINUE
+    # billing the due nights.
+    #
+    # NOTE (legacy-data policy — OWNER DECISION): if a genuine legacy row is a
+    # whole-stay AGGREGATE, continuing to post per-night charges double-counts
+    # against it, so such rows must be reconciled (void-not-delete) before this
+    # runs on that folio. See the H1 report; no legacy rows are altered here.
     if folio.charges.filter(
         type=ChargeType.ROOM,
         status=PostingStatus.POSTED,
         room_night__isnull=True,
     ).exists():
-        return 0
+        _record_event(
+            stay.hotel,
+            event_type="charge.room_unlinked_detected",
+            severity="warning",
+            title="Unlinked room charge detected on folio",
+            message=(
+                f"Folio {folio.folio_number} carries a ROOM charge with no "
+                "room_night; nightly billing proceeds — this legacy row needs "
+                "review (void-not-delete)."
+            ),
+            user=user,
+            obj=folio,
+            # De-dup the alert per folio: ensure_due_room_charges runs on every
+            # check-in / pre-checkout / daily close, so without this the same
+            # unreconciled folio would notify finance staff on every run.
+            dedup_key=f"room-unlinked-folio-{folio.pk}",
+        )
     posted = set(
         folio.charges.filter(
             type=ChargeType.ROOM,
