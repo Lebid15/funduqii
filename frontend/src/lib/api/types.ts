@@ -939,6 +939,25 @@ export interface GuestDeleteResult {
   guest?: Guest;
 }
 
+/**
+ * GET /guests/directory — the compact CURRENT-UNIT summary (R4a, trimmed R4c to
+ * the EXACTLY four keys the guest card consumes). Populated ONLY when the guest
+ * occupies EXACTLY ONE in-house unit; for 0 or >= 2 current units the row's
+ * `current_unit` is `null` (the card uses `current_units_count`).
+ */
+export interface GuestCurrentUnit {
+  /** The unit number (an IDENTIFIER — render verbatim + LTR). */
+  room_number: string;
+  /** FREE TEXT — the hotel's real registered unit type. Shown AS-IS (like a
+   * guest name); never translated and never a generic "unit" fallback. */
+  room_type_name: string;
+  /** The floor label (e.g. "G", "2"). Preferred floor value shown on the card. */
+  floor_name: string;
+  /** Optional floor code; the card's floor-label fallback when `floor_name` is
+   * empty. */
+  floor_number: string | null;
+}
+
 /** GET /guests/directory — a directory row with derived stats. */
 export interface GuestDirectoryRow {
   id: number;
@@ -957,6 +976,13 @@ export interface GuestDirectoryRow {
   is_repeat: boolean;
   is_resident: boolean;
   current_room_number: string | null;
+  /** R4a — the number of DISTINCT current (in-house) units. 0 = not in-house,
+   * 1 = exactly one unit (`current_unit` populated), >= 2 = multiple (the card
+   * shows a compact count summary and `current_unit` is null). */
+  current_units_count: number;
+  /** R4a — the single current-unit summary, populated ONLY when
+   * `current_units_count === 1`; otherwise null. */
+  current_unit: GuestCurrentUnit | null;
   /** GUESTS-CLOSURE central identity — true when the guest holds an active
    * forthcoming reservation. Backend-derived (never client-inferred). Surfaced as
    * a SHORT card badge only; the full details live in the reservations modal. */

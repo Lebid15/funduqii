@@ -3,7 +3,7 @@ import { screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GuestCard } from "../GuestCard";
-import { makeDirectoryRow, renderWithProviders } from "@/test-utils";
+import { makeCurrentUnit, makeDirectoryRow, renderWithProviders } from "@/test-utils";
 
 /**
  * GuestCard (R2-FE). The comprehensive profile modal was removed: the CARD is the
@@ -94,14 +94,6 @@ describe("GuestCard — status badges", () => {
     expect(screen.getByText("Blocked")).toBeInTheDocument();
   });
 
-  it("shows the in-house badge with the room number for a resident", () => {
-    renderCard({
-      guest: makeDirectoryRow({ is_resident: true, current_room_number: "204" }),
-    });
-    expect(screen.getByText(/In house/)).toBeInTheDocument();
-    expect(screen.getByText(/204/)).toBeInTheDocument();
-  });
-
   it("shows the has-upcoming badge from the directory row flag (short info only)", () => {
     renderCard({ guest: makeDirectoryRow({ has_upcoming: true }) });
     expect(screen.getByText("Upcoming")).toBeInTheDocument();
@@ -123,6 +115,220 @@ describe("GuestCard — status badges", () => {
   it("shows the past-guest badge for a non-resident with stay history", () => {
     renderCard({ guest: makeDirectoryRow({ is_resident: false, stays_count: 2 }) });
     expect(screen.getByText("Past guest")).toBeInTheDocument();
+  });
+});
+
+describe("GuestCard — new / repeat guest status (top badge, not a stat)", () => {
+  it("shows 'نزيل جديد' in the top status row for a first-time guest", () => {
+    const { container } = renderCard(
+      { guest: makeDirectoryRow({ stays_count: 1, is_resident: false }) },
+      { locale: "ar" },
+    );
+    // Rendered exactly once, inside the TOP status row.
+    expect(screen.getAllByText("نزيل جديد")).toHaveLength(1);
+    expect(container.querySelector(".guest-card__status-row")).toHaveTextContent(
+      "نزيل جديد",
+    );
+    expect(screen.queryByText("نزيل متكرر")).not.toBeInTheDocument();
+  });
+
+  it("shows 'نزيل متكرر' in the top status row for a repeat guest", () => {
+    const { container } = renderCard(
+      { guest: makeDirectoryRow({ stays_count: 3, is_resident: false }) },
+      { locale: "ar" },
+    );
+    expect(screen.getAllByText("نزيل متكرر")).toHaveLength(1);
+    expect(container.querySelector(".guest-card__status-row")).toHaveTextContent(
+      "نزيل متكرر",
+    );
+    expect(screen.queryByText("نزيل جديد")).not.toBeInTheDocument();
+  });
+
+  it("derives repeat/new from stays_count > 1 (boundary: exactly one stay is new)", () => {
+    renderCard({ guest: makeDirectoryRow({ stays_count: 1 }) });
+    expect(screen.getByText("New guest")).toBeInTheDocument();
+    expect(screen.queryByText("Repeat guest")).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the new/repeat status inside the stats/numbers area", () => {
+    // Every badge lives in the top status row; the fact lists (identity + stats)
+    // carry NUMBERS only, never a status pill.
+    const { container } = renderCard(
+      { guest: makeDirectoryRow({ stays_count: 3 }) },
+      { locale: "ar" },
+    );
+    const factBadges = container.querySelectorAll(".guest-card__facts .badge");
+    expect(factBadges).toHaveLength(0);
+    const stats = Array.from(container.querySelectorAll(".guest-card__facts"))
+      .map((f) => f.textContent)
+      .join(" ");
+    expect(stats).not.toContain("نزيل متكرر");
+    expect(stats).not.toContain("نزيل جديد");
+  });
+
+  it("renders each status badge exactly once — no duplication", () => {
+    renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        is_vip: true,
+        stays_count: 3,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit(),
+      }),
+    });
+    expect(screen.getAllByText("Repeat guest")).toHaveLength(1);
+    expect(screen.getAllByText("In-house")).toHaveLength(1);
+    expect(screen.getAllByText("VIP")).toHaveLength(1);
+  });
+});
+
+describe("GuestCard — current unit clarity", () => {
+  it("shows the resident's unit as '<type> <number>' plus a translated floor", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_room_number: "512",
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({
+          room_number: "512",
+          room_type_name: "Deluxe Suite",
+          floor_name: "3",
+        }),
+      }),
+    });
+    // The in-house status + the registered type name (shown AS-IS) + the number.
+    expect(screen.getByText("In-house")).toBeInTheDocument();
+    expect(screen.getByText(/Deluxe Suite/)).toBeInTheDocument();
+    expect(screen.getByText("512")).toBeInTheDocument();
+    // A translated floor label whose numeric value is direction-isolated (LTR),
+    // not a bare number and not a re-ordered one.
+    const floorBadge = container.querySelector(".guest-card__floor");
+    expect(floorBadge).not.toBeNull();
+    expect(floorBadge).toHaveTextContent("Floor 3");
+    expect(floorBadge?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("3");
+    // NEVER the old ambiguous "· 1" residency marker.
+    expect(container.textContent ?? "").not.toContain("· 1");
+  });
+
+  it("renders the free-text unit type as-is and keeps the unit number LTR under RTL", () => {
+    const { container } = renderCard(
+      {
+        guest: makeDirectoryRow({
+          is_resident: true,
+          current_units_count: 1,
+          current_unit: makeCurrentUnit({
+            room_number: "512",
+            room_type_name: "سويت",
+            floor_name: "2",
+          }),
+        }),
+      },
+      { locale: "ar" },
+    );
+    // The hotel's registered Arabic type name is shown verbatim (DATA, not a key).
+    expect(screen.getByText(/سويت/)).toBeInTheDocument();
+    // Translated floor label in Arabic, its value LTR-isolated.
+    const floorBadge = container.querySelector(".guest-card__floor");
+    expect(floorBadge).toHaveTextContent("الطابق 2");
+    // The unit number AND the floor value both stay LTR identifiers under RTL.
+    const ltr = Array.from(container.querySelectorAll('bdi[dir="ltr"]')).map(
+      (n) => n.textContent,
+    );
+    expect(ltr).toContain("512");
+    expect(ltr).toContain("2");
+  });
+
+  it("bidi-isolates the free-text unit type in an auto-direction <bdi>", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ room_type_name: "سويت", room_number: "512" }),
+      }),
+    });
+    const typeEl = container.querySelector(".guest-card__unit-type");
+    expect(typeEl).not.toBeNull();
+    // A <bdi> with NO explicit dir → the UA infers direction per content (auto),
+    // so a mixed Arabic/Latin type name can never reorder around the number.
+    expect(typeEl?.tagName.toLowerCase()).toBe("bdi");
+    expect(typeEl?.getAttribute("dir")).toBeNull();
+    expect(typeEl?.textContent).toBe("سويت");
+  });
+
+  it("gives the current-unit chip a tone/variant distinct from the status badges", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        stays_count: 3, // repeat guest → a WHO/status badge
+        current_units_count: 1,
+        current_unit: makeCurrentUnit(),
+      }),
+    });
+    // "Where they are" = a neutral OUTLINE chip.
+    const unitBadge = container.querySelector(".guest-card__unit");
+    expect(unitBadge?.className).toMatch(/badge--neutral/);
+    expect(unitBadge?.className).toMatch(/badge--outline/);
+    // "Who they are" = a soft-toned status pill, never the unit's neutral outline.
+    const repeatBadge = screen.getByText("Repeat guest").closest(".badge");
+    expect(repeatBadge?.className).not.toMatch(/badge--outline/);
+    expect(repeatBadge?.className).not.toMatch(/badge--neutral/);
+  });
+
+  it("clamps a long unit type to a single-line titled span, number stays attached", () => {
+    const longName = "Presidential Panoramic Corner Suite";
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ room_type_name: longName, room_number: "900" }),
+      }),
+    });
+    const typeEl = container.querySelector(".guest-card__unit-type");
+    // The full value is exposed via a native title tooltip; the text is only
+    // visually clipped (CSS ellipsis), never truncated in the DOM.
+    expect(typeEl).toHaveAttribute("title", longName);
+    expect(typeEl?.textContent).toBe(longName);
+    // The unit NUMBER stays attached to the same chip and is never clipped.
+    const unitBadge = container.querySelector(".guest-card__unit");
+    expect(unitBadge?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("900");
+  });
+
+  it("shows a compact 'current units' summary (not a single unit) for 2+ units", () => {
+    renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 2,
+        current_unit: null,
+      }),
+    });
+    expect(screen.getByText("2 current units")).toBeInTheDocument();
+    // The in-house status is still shown, but no single unit type/number or floor.
+    expect(screen.getByText("In-house")).toBeInTheDocument();
+    expect(screen.queryByText(/^Floor/)).not.toBeInTheDocument();
+  });
+
+  it("uses the '{n} current units' plural form for three-plus units", () => {
+    renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 3,
+        current_unit: null,
+      }),
+    });
+    expect(screen.getByText("3 current units")).toBeInTheDocument();
+  });
+
+  it("shows NO unit or floor for a non-resident", () => {
+    renderCard({
+      guest: makeDirectoryRow({
+        is_resident: false,
+        current_units_count: 0,
+        current_unit: null,
+      }),
+    });
+    expect(screen.queryByText("In-house")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Floor/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/current units$/)).not.toBeInTheDocument();
   });
 });
 

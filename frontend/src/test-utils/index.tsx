@@ -15,6 +15,7 @@ import type { ApiError } from "@/lib/api/client";
 import type {
   Guest,
   GuestChangeLogRow,
+  GuestCurrentUnit,
   GuestDirectoryRow,
   GuestDocumentRow,
   GuestProfile,
@@ -81,8 +82,24 @@ export function makeDirectoryRow(
     is_repeat: true,
     is_resident: false,
     current_room_number: null,
+    current_units_count: 0,
+    current_unit: null,
     has_upcoming: false,
     needs_review: false,
+    ...overrides,
+  };
+}
+
+/** R4a/R4c current-unit summary (defaults: one Standard unit "101" on floor "G").
+ * Trimmed R4c to the exact four keys the card consumes. */
+export function makeCurrentUnit(
+  overrides: Partial<GuestCurrentUnit> = {},
+): GuestCurrentUnit {
+  return {
+    room_number: "101",
+    room_type_name: "Standard",
+    floor_name: "G",
+    floor_number: "0",
     ...overrides,
   };
 }

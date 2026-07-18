@@ -1302,11 +1302,8 @@
     "inactive": "Pasif",
     "directory": {
       "residency": "Konaklama",
-      "resident": "Şu an konaklıyor",
       "stays": "Konaklamalar",
       "lastStay": "Son konaklama",
-      "repeat": "Tekrarlayan",
-      "firstTime": "Yeni",
       "empty": "Henüz misafir yok",
       "emptyHint": "En az bir konaklaması olan her misafir — mevcut veya geçmiş — burada görünür."
     },
@@ -1343,6 +1340,14 @@
       "viewHistory": "Geçmişi görüntüle",
       "pastBadge": "Eski misafir",
       "upcomingBadge": "Yaklaşan",
+      "inHouse": "Konaklıyor",
+      "newGuest": "Yeni misafir",
+      "repeatGuest": "Tekrar eden misafir",
+      "floor": "Kat {floor}",
+      "currentUnits": {
+        "dual": "2 mevcut birim",
+        "plural": "{n} mevcut birim"
+      },
       "ariaStays": "Konaklama geçmişi — {name}",
       "ariaReservations": "Rezervasyon geçmişi — {name}",
       "ariaDocuments": "Belgeler — {name}",

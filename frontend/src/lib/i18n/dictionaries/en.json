@@ -1302,11 +1302,8 @@
     "inactive": "Inactive",
     "directory": {
       "residency": "Residency",
-      "resident": "In house",
       "stays": "Stays",
       "lastStay": "Last stay",
-      "repeat": "Repeat",
-      "firstTime": "New",
       "empty": "No guests yet",
       "emptyHint": "Every guest with at least one stay — current or past — appears here."
     },
@@ -1343,6 +1340,14 @@
       "viewHistory": "View history",
       "pastBadge": "Past guest",
       "upcomingBadge": "Upcoming",
+      "inHouse": "In-house",
+      "newGuest": "New guest",
+      "repeatGuest": "Repeat guest",
+      "floor": "Floor {floor}",
+      "currentUnits": {
+        "dual": "2 current units",
+        "plural": "{n} current units"
+      },
       "ariaStays": "Stay history — {name}",
       "ariaReservations": "Reservation history — {name}",
       "ariaDocuments": "Documents — {name}",

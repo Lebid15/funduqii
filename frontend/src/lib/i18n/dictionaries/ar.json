@@ -1302,11 +1302,8 @@
     "inactive": "غير نشط",
     "directory": {
       "residency": "الإقامة",
-      "resident": "مقيم الآن",
       "stays": "الإقامات",
       "lastStay": "آخر إقامة",
-      "repeat": "متكرر",
-      "firstTime": "جديد",
       "empty": "لا نزلاء بعد",
       "emptyHint": "يظهر هنا كل نزيل له إقامة واحدة على الأقل — حالية أو سابقة."
     },
@@ -1343,6 +1340,14 @@
       "viewHistory": "عرض السجل",
       "pastBadge": "نزيل سابق",
       "upcomingBadge": "حجز قادم",
+      "inHouse": "مقيم حاليًا",
+      "newGuest": "نزيل جديد",
+      "repeatGuest": "نزيل متكرر",
+      "floor": "الطابق {floor}",
+      "currentUnits": {
+        "dual": "وحدتان حاليتان",
+        "plural": "{n} وحدات حالية"
+      },
       "ariaStays": "سجل إقامات {name}",
       "ariaReservations": "سجل حجوزات {name}",
       "ariaDocuments": "وثائق {name}",

@@ -10,10 +10,13 @@ import {
   FileText,
   Globe,
   History,
+  Layers,
   Pencil,
   Phone,
+  Repeat,
   ShieldCheck,
   Star,
+  UserPlus,
 } from "lucide-react";
 
 import { ActionIconButton, Badge, Icon } from "@/components/ui";
@@ -36,19 +39,23 @@ import {
  * front desk owns those.
  *
  * Regions:
- *   (1) Header — a status-badge row (VIP / banned / in-house+room / has-upcoming /
- *       needs-review / past / inactive) then the focal name (a plain heading — the
+ *   (1) Header — a STATUS-badge row then the focal name (a plain heading — the
  *       comprehensive profile modal was removed, so the card IS the interface and
- *       its action icons open each record sub-modal directly).
+ *       its action icons open each record sub-modal directly). The badges are the
+ *       guest's STATES, never numbers: in-house + the current unit ("<type>
+ *       <number>") + floor (or a compact "N current units" summary for a guest in
+ *       two-plus units at once), the new/repeat guest status (derived from the
+ *       stay count, shown exactly once), then VIP / banned / has-upcoming /
+ *       needs-review / past / inactive.
  *   (2) Identity facts — phone / nationality / document number. Phone + document
  *       are IDENTIFIERS: rendered verbatim (never localised digits) inside a
  *       `<bdi dir="ltr">` so an RTL layout can never reorder them. The document
  *       number is shown exactly as the server sent it — a masked value stays
  *       masked (the card never unmasks client-side).
- *   (3) Stay stats — stays count + repeat/first-time chip, total nights (only when
- *       at least one stay exists), and the last / current stay date. Counts use
- *       the locale numerals (`formatQuantity`); the date uses `formatDateOnly`
- *       (no UTC day-shift).
+ *   (3) Stay stats — NUMBERS only: stays count, total nights (only when at least
+ *       one stay exists), and the last / current stay date. Counts use the locale
+ *       numerals (`formatQuantity`); the date uses `formatDateOnly` (no UTC
+ *       day-shift). The new/repeat STATUS never lives here — it is a top badge.
  *   (4) Actions — few + permission-gated icon buttons that open each record
  *       sub-modal DIRECTLY (no profile step): edit / stays / reservations /
  *       documents / change-log / VIP / block. Each renders only when its callback
@@ -103,6 +110,27 @@ export function GuestCard({
   // still be accruing, so it is shown but framed by the "in house" badge.
   const isPast = !g.is_resident && g.stays_count > 0;
   const showNights = g.stays_count > 0;
+  // New vs repeat is a STATUS (top badge), not a statistic: repeat once the guest
+  // has more than one stay, otherwise a new guest. Every listed guest has >= 1
+  // stay, so the badge always renders — exactly once.
+  const isRepeat = g.stays_count > 1;
+  // The compact current-unit summary. `current_unit` is populated by the backend
+  // ONLY for exactly one in-house unit; two-plus units surface as a count.
+  const unit = g.current_unit;
+  const floorLabel = unit ? unit.floor_name || unit.floor_number || "" : "";
+  // The translated floor label is split around its `{floor}` placeholder so ONLY
+  // the value is direction-isolated (LTR) while the label itself stays translated.
+  const floorPlaceholder = "{floor}";
+  const floorSplitAt = c.floor.indexOf(floorPlaceholder);
+  const floorBefore = floorSplitAt === -1 ? c.floor : c.floor.slice(0, floorSplitAt);
+  const floorAfter =
+    floorSplitAt === -1 ? "" : c.floor.slice(floorSplitAt + floorPlaceholder.length);
+  const multipleUnits = !unit && g.current_units_count >= 2;
+  const unitsSummary = multipleUnits
+    ? g.current_units_count === 2
+      ? c.currentUnits.dual
+      : c.currentUnits.plural.replace("{n}", formatQuantity(g.current_units_count, locale))
+    : "";
 
   // Status accent bar — one visual state, never colour-only (badges carry text).
   const accent = g.is_blocked
@@ -121,6 +149,61 @@ export function GuestCard({
           the card's action icons open every record sub-modal directly). */}
       <div className="guest-card__header">
         <div className="guest-card__status-row">
+          {/* Residency FIRST: the "in-house" status, then the current unit as a
+              clear "<type> <number>" (type = free-text RoomType.name, shown
+              as-is; number is an LTR identifier) and a translated floor label —
+              OR a compact "N current units" summary for a guest in two-plus units
+              at once. A non-resident shows none of these. */}
+          {g.is_resident ? (
+            <Badge tone="success" variant="filled" icon={DoorOpen}>
+              {c.inHouse}
+            </Badge>
+          ) : null}
+          {unit ? (
+            <>
+              {/* WHERE they are — neutral OUTLINE chips, deliberately apart from
+                  the soft-toned WHO/status pills below so "where" reads as its own
+                  group. The free-text type name is bidi-isolated (auto <bdi>) and
+                  clamped to a single line with an ellipsis + a full-value title;
+                  the LTR unit number stays attached to it and is never clipped. */}
+              <Badge
+                className="guest-card__unit"
+                tone="neutral"
+                variant="outline"
+                icon={BedDouble}
+              >
+                <bdi className="guest-card__unit-type" title={unit.room_type_name}>
+                  {unit.room_type_name}
+                </bdi>{" "}
+                <bdi dir={IDENTIFIER_DIR}>{unit.room_number}</bdi>
+              </Badge>
+              {floorLabel ? (
+                <Badge className="guest-card__floor" tone="neutral" variant="outline">
+                  {floorBefore}
+                  <bdi dir={IDENTIFIER_DIR}>{floorLabel}</bdi>
+                  {floorAfter}
+                </Badge>
+              ) : null}
+            </>
+          ) : multipleUnits ? (
+            <Badge
+              className="guest-card__unit"
+              tone="neutral"
+              variant="outline"
+              icon={Layers}
+            >
+              {unitsSummary}
+            </Badge>
+          ) : null}
+          {/* New vs repeat guest — a STATUS, shown exactly once. `success` (soft)
+              for a returning guest keeps it clear of the adjacent `info` upcoming
+              badge; `primary` welcomes a first-time guest. */}
+          <Badge
+            tone={isRepeat ? "success" : "primary"}
+            icon={isRepeat ? Repeat : UserPlus}
+          >
+            {isRepeat ? c.repeatGuest : c.newGuest}
+          </Badge>
           {g.is_vip ? (
             <Badge tone="vip" variant="filled" icon={Star}>
               {t.guests.vip.badge}
@@ -131,20 +214,14 @@ export function GuestCard({
               {t.guests.block.badge}
             </Badge>
           ) : null}
-          {needsReview ? (
-            <Badge tone="warning" icon={AlertTriangle}>
-              {t.guests.needsReview}
-            </Badge>
-          ) : null}
-          {g.is_resident ? (
-            <Badge tone="success" variant="filled" icon={DoorOpen}>
-              {t.guests.directory.resident}
-              {g.current_room_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{g.current_room_number}</bdi></> : ""}
-            </Badge>
-          ) : null}
           {hasUpcoming ? (
             <Badge tone="info" icon={CalendarRange}>
               {c.upcomingBadge}
+            </Badge>
+          ) : null}
+          {needsReview ? (
+            <Badge tone="warning" icon={AlertTriangle}>
+              {t.guests.needsReview}
             </Badge>
           ) : null}
           {isPast ? <Badge tone="neutral">{c.pastBadge}</Badge> : null}
@@ -190,16 +267,12 @@ export function GuestCard({
         </div>
       </dl>
 
-      {/* 3) Stay stats — localised counts + repeat chip; date without a UTC shift. */}
+      {/* 3) Stay stats — NUMBERS only (the new/repeat STATUS moved to the top
+          badges); date without a UTC shift. */}
       <dl className="guest-card__facts">
         <div className="guest-card__fact">
           <dt>{t.guests.directory.stays}</dt>
-          <dd className="guest-card__stat">
-            {formatQuantity(g.stays_count, locale)}
-            <Badge tone={g.is_repeat ? "info" : "neutral"}>
-              {g.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
-            </Badge>
-          </dd>
+          <dd>{formatQuantity(g.stays_count, locale)}</dd>
         </div>
         {showNights ? (
           <div className="guest-card__fact">
