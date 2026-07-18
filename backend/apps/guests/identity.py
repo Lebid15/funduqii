@@ -479,37 +479,57 @@ def resolve_or_create_guest(hotel, *, identity: Mapping, user, allow_create: boo
         The acting user (recorded as ``created_by`` / ``updated_by`` and audit
         actor). May be an unauthenticated/anonymous user on the public path.
     allow_create:
-        ``True`` (authenticated paths) may create a new guest and reactivate an
-        inactive match. ``False`` (public path) never creates and never
-        reactivates.
+        ``True`` (authenticated console / wizard / check-in paths) resolves,
+        creates, reactivates and LINKS one canonical guest, and RAISES a 409 on an
+        identity conflict. ``False`` (public submission — Decision 10 / OBS-2) is
+        SNAPSHOT-ONLY: it runs the ban check and then returns ``None`` without
+        classifying, resolving, linking, creating, reactivating, or raising a
+        conflict.
 
     Returns
     -------
     Guest
-        The resolved / created / reactivated central guest.
+        The resolved / created / reactivated central guest (``allow_create=True``
+        only).
     None
-        Only when ``allow_create=False`` AND no LIVE central guest can be linked
-        (no match, or the sole match is a hotel-deactivated profile). The caller
-        keeps its own snapshot; there is no central guest yet.
+        * Always when ``allow_create=False`` — the public submission stays a pure
+          snapshot; any identity conflict is deferred to the internal check-in /
+          operational-review path, never surfaced to the visitor.
+        * When ``allow_create=True`` AND an explicit ``guest_id`` resolves to a
+          hotel-deactivated profile that this path chose not to reactivate.
 
     Raises
     ------
     rest_framework.exceptions.ValidationError
-        Uninterpretable phone (code ``invalid_phone``) or an unknown
-        ``guest_id`` (code ``invalid_guest``).
+        Uninterpretable phone (code ``invalid_phone``) — raised on BOTH paths, as
+        an approximate phone is never stored — or an unknown ``guest_id`` (code
+        ``invalid_guest``, ``allow_create=True`` only).
     GuestBlocked (409, ``guest_blocked``)
         The identity fingerprint (national id / passport / canonical phone) or the
-        explicit reuse target is blocked in this hotel. Carries no reason.
+        explicit reuse target is blocked in this hotel. Carries no reason. Enforced
+        on BOTH paths (the public ban check is the sole public identity gate).
     GuestIdentityConflict (409, ``guest_identity_conflict``)
-        Strong id vs phone (or strong vs strong) point at different guests, or the
-        match is otherwise ambiguous. NO side effects — nothing is created,
-        chosen, reactivated, or merged. No merge path this round.
+        ``allow_create=True`` ONLY. Strong id vs phone (or strong vs strong) point
+        at different guests, or the match is otherwise ambiguous. NO side effects —
+        nothing is created, chosen, reactivated, or merged. No merge path this
+        round.
     """
     keys = _normalize_identity(hotel, identity)
 
     with transaction.atomic():
-        # Ban check FIRST, before any create/reuse/reactivate.
+        # Ban check FIRST, before any create/reuse/reactivate/classify.
         _ensure_not_banned_by_keys(hotel, keys)
+
+        # WORKFLOW OBS-2 / Decision 10 — the PUBLIC submission path
+        # (``allow_create=False``) is SNAPSHOT-ONLY: the ban check above is the
+        # ONLY identity gate. It never classifies, resolves, links, creates,
+        # reactivates, or raises :class:`GuestIdentityConflict`. An identity
+        # clash (strong id vs phone, or strong vs strong) is an INTERNAL concern
+        # surfaced LATER at operational confirm / check-in (``allow_create=True``,
+        # below) — a visitor can never be shown a 409 for a duplicate the hotel
+        # owns. The caller keeps its own snapshot; there is no central guest yet.
+        if not allow_create:
+            return None
 
         # Explicit reuse target wins over discovery (still ban-re-asserted).
         guest_id = _coerce_guest_id(identity.get("guest_id"))

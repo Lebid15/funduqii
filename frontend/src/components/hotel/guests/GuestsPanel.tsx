@@ -458,7 +458,7 @@ function GuestProfileModal({
           <div className="stack">
             <div className="cluster">
               {p.is_resident ? (
-                <Badge tone="success">{t.guests.directory.resident}{p.current_room_number ? ` · ${p.current_room_number}` : ""}</Badge>
+                <Badge tone="success">{t.guests.directory.resident}{p.current_room_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{p.current_room_number}</bdi></> : ""}</Badge>
               ) : (
                 <Badge tone="neutral">{t.guests.directory.notResident}</Badge>
               )}
@@ -564,13 +564,13 @@ function GuestProfileModal({
               <Alert tone="info">
                 <span className="cluster" style={{ gap: "0.5rem" }}>
                   <DoorOpen size={14} aria-hidden />
-                  {t.guests.profile.currentStay}: {p.current.room_number}
-                  {p.current.reservation_number ? ` · ${p.current.reservation_number}` : ""}
+                  {t.guests.profile.currentStay}: <bdi dir={IDENTIFIER_DIR}>{p.current.room_number}</bdi>
+                  {p.current.reservation_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{p.current.reservation_number}</bdi></> : ""}
                   {can("stays.view") ? (
                     <Link className="inline-link" href="/hotel/front-desk?tab=current">{t.guests.profile.openFrontDesk}</Link>
                   ) : null}
                   {p.current.folio_number && can("finance.view") ? (
-                    <Link className="inline-link" href="/hotel/finance?tab=folios">{t.guests.profile.openFolio} ({p.current.folio_number})</Link>
+                    <Link className="inline-link" href="/hotel/finance?tab=folios">{t.guests.profile.openFolio} (<bdi dir={IDENTIFIER_DIR}>{p.current.folio_number}</bdi>)</Link>
                   ) : null}
                 </span>
               </Alert>
@@ -613,16 +613,16 @@ function GuestProfileModal({
                   {p.stays.map((s) => (
                     <li key={s.stay_id} className="mini-list__row">
                       <span>
-                        {s.room_number} · {s.room_type_name} · {formatDateOnly(s.check_in_date, locale)} → {formatDateOnly(s.check_out_date, locale)} · {formatQuantity(s.nights, locale)} {t.frontDesk.current.nights}
+                        <bdi dir={IDENTIFIER_DIR}>{s.room_number}</bdi> · {s.room_type_name} · {formatDateOnly(s.check_in_date, locale)} → {formatDateOnly(s.check_out_date, locale)} · {formatQuantity(s.nights, locale)} {t.frontDesk.current.nights}
                         {s.is_current ? <> <Badge tone="success">{t.guests.profile.currentBadge}</Badge></> : null}
                         {s.status === "cancelled" ? <> <Badge tone="neutral">{t.frontDesk.status.cancelled}</Badge></> : null}
                       </span>
                       <span className="cluster" style={{ gap: "0.5rem" }}>
                         {s.reservation_number && can("reservations.view") ? (
-                          <Link className="inline-link" href={`/hotel/reservations?action=find&q=${s.reservation_number}`}>{s.reservation_number}</Link>
+                          <Link className="inline-link" href={`/hotel/reservations?action=find&q=${s.reservation_number}`}><bdi dir={IDENTIFIER_DIR}>{s.reservation_number}</bdi></Link>
                         ) : null}
                         {s.folio_number && can("finance.view") ? (
-                          <Link className="inline-link" href="/hotel/finance?tab=folios">{s.folio_number}</Link>
+                          <Link className="inline-link" href="/hotel/finance?tab=folios"><bdi dir={IDENTIFIER_DIR}>{s.folio_number}</bdi></Link>
                         ) : null}
                       </span>
                     </li>

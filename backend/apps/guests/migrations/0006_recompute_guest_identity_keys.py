@@ -164,11 +164,29 @@ def _forward(apps, schema_editor):
     if collisions:
         raise RuntimeError(_collision_report(collisions))
 
-    # Safe to write — recompute every row's keys (and any backfilled national_id).
+    # --- Safe to write. The FINAL data state is identical to a single bulk pass;
+    # only the write STRATEGY changes to defend national_id_normalized against a
+    # TRANSIENT collision (DATA-F1).
+    #
+    # The partial unique index ``unique_guest_national_id_per_hotel`` (added in
+    # 0004, on national_id_normalized WHERE it is non-empty) already exists here.
+    # In a SINGLE bulk UPDATE that re-folds many keys at once, PostgreSQL checks
+    # uniqueness per row mid-statement, so a row's NEW value can transiently equal
+    # ANOTHER row's still-OLD value even though the FINAL state is conflict-free
+    # (already proven above). SQLite hides this; PostgreSQL raises a spurious
+    # IntegrityError. So national_id_normalized is written in TWO phases.
+    #
+    # The other three columns carry NO unique index at THIS point in history —
+    # document_number_normalized / phone_normalized get their constraints later in
+    # 0007, and the 0001 document constraint is on the RAW document_number (not the
+    # normalized column, untouched here) — so they update in one ordinary pass and
+    # cannot transiently collide.
+
+    # 1) phone_normalized + document_number_normalized + the backfilled
+    #    national_id in one pass (no unique index involved).
     to_update = []
-    for g, new_phone, new_nid, new_doc, final_national_id in planned:
+    for g, new_phone, _new_nid, new_doc, final_national_id in planned:
         g.phone_normalized = new_phone
-        g.national_id_normalized = new_nid
         g.document_number_normalized = new_doc
         g.national_id = final_national_id
         to_update.append(g)
@@ -177,12 +195,41 @@ def _forward(apps, schema_editor):
             to_update,
             [
                 "phone_normalized",
-                "national_id_normalized",
                 "document_number_normalized",
                 "national_id",
             ],
             batch_size=500,
         )
+
+    # 2) national_id_normalized in two phases, over ONLY the rows whose key is
+    #    actually changing.
+    #    Phase A — clear the changing rows to '' so they LEAVE the partial index
+    #      (empty keys are not indexed, so this phase can never collide).
+    #    Phase B — set their final NON-EMPTY keys. Every changing row now starts
+    #      from '' and the final state is unique, so no NEW value can equal any
+    #      value still present in the index: no transient collision is possible.
+    nid_changing = [
+        (g, new_nid)
+        for g, _phone, new_nid, _doc, _fn in planned
+        if new_nid != (g.national_id_normalized or "")
+    ]
+    if nid_changing:
+        for g, _new in nid_changing:
+            g.national_id_normalized = ""
+        Guest.objects.bulk_update(
+            [g for g, _ in nid_changing],
+            ["national_id_normalized"],
+            batch_size=500,
+        )
+        nid_final = [(g, new_nid) for g, new_nid in nid_changing if new_nid]
+        for g, new_nid in nid_final:
+            g.national_id_normalized = new_nid
+        if nid_final:
+            Guest.objects.bulk_update(
+                [g for g, _ in nid_final],
+                ["national_id_normalized"],
+                batch_size=500,
+            )
 
 
 class Migration(migrations.Migration):

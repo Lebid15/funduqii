@@ -228,6 +228,10 @@ class GuestDetailView(_GuestScopedMixin, generics.RetrieveUpdateDestroyAPIView):
         old = {
             "full_name": serializer.instance.full_name,
             "phone": serializer.instance.phone,
+            # SEC-F1 / U-06: national_id is a first-class identity field and a
+            # change to it MUST be audited. It is captured here (and compared +
+            # logged MASKED in record_guest_updated) so an edit is never silent.
+            "national_id": serializer.instance.national_id,
             "document_type": serializer.instance.document_type,
             "document_number": serializer.instance.document_number,
         }

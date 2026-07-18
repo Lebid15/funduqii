@@ -138,7 +138,7 @@ export function GuestCard({
           {g.is_resident ? (
             <Badge tone="success" variant="filled" icon={DoorOpen}>
               {t.guests.directory.resident}
-              {g.current_room_number ? ` · ${g.current_room_number}` : ""}
+              {g.current_room_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{g.current_room_number}</bdi></> : ""}
             </Badge>
           ) : null}
           {hasUpcoming ? (

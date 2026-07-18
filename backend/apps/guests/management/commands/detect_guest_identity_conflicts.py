@@ -2,11 +2,20 @@
 
 Run this BEFORE applying the guests identity migrations. It re-simulates the new
 canonicalization (fold non-Latin digits, uppercase, alphanumeric-only for
-ids/documents; E.164-style key for phones) directly from each active guest's RAW
-fields, then groups by the three identity dimensions and reports any group with
-more than one guest — plus any national-id vs national-id-document mismatch
-(Decision 3). Output is PII-masked; the command WRITES, MERGES and DELETES
-NOTHING and exits non-zero when any conflict is found (0 when clean).
+ids/documents; E.164-style key for phones) directly from each guest's RAW fields,
+then groups by the three identity dimensions and reports any group with more than
+one guest — plus any national-id vs national-id-document mismatch (Decision 3).
+
+Scope MIRRORS what migrations 0006 / 0007 enforce (DATA-F2):
+  - ``national_id`` and ``document`` dimensions scan ALL rows (any ``is_active``),
+    because ``unique_guest_national_id_per_hotel`` (0004) and
+    ``unique_guest_document_normalized_per_hotel`` (0007) are LIFETIME constraints.
+  - the ``phone`` dimension scans ACTIVE rows only, because
+    ``unique_guest_phone_per_hotel_active`` (0007) is ``is_active``-scoped (a
+    deactivated guest never blocks reusing a phone for a live profile).
+
+Output is PII-masked; the command WRITES, MERGES and DELETES NOTHING and exits
+non-zero when any conflict is found (0 when clean).
 
 Usage::
 
@@ -59,12 +68,17 @@ class Command(BaseCommand):
         groups_phone: dict[tuple, list] = defaultdict(list)
         decision3: list[tuple] = []
 
-        qs = Guest.objects.filter(is_active=True)
+        # DATA-F2: scan ALL rows. The national_id / document dimensions are
+        # LIFETIME-unique (they must see inactive rows too); the phone dimension is
+        # filtered to active rows in the loop below to mirror its active-scoped
+        # constraint.
+        qs = Guest.objects.all()
         if hotel_id is not None:
             qs = qs.filter(hotel_id=hotel_id)
         qs = qs.only(
             "id",
             "hotel_id",
+            "is_active",
             "phone",
             "national_id",
             "document_type",
@@ -89,11 +103,12 @@ class Command(BaseCommand):
                     )
             nid_key = normalize_id(eff_nid_raw)
 
+            # national_id / document = LIFETIME (all rows); phone = active-only.
             if nid_key:
                 groups_nid[(g.hotel_id, nid_key)].append(g.id)
             if doc_key:
                 groups_doc[(g.hotel_id, g.document_type, doc_key)].append(g.id)
-            if phone_key:
+            if phone_key and g.is_active:
                 groups_phone[(g.hotel_id, phone_key)].append(g.id)
 
         conflicts = 0

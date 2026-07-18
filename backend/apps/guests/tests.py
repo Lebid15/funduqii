@@ -801,6 +801,45 @@ class GuestActivityTests(APITestCase):
         self.assertNotIn("ACT1111111", event.message)
         self.assertIn("••••", event.message)
 
+    def test_national_id_change_is_logged_masked(self):
+        # SEC-F1 / U-06: a national_id edit MUST be audited (it is a first-class
+        # identity field), but MASKED — the activity log is readable without
+        # guests.view_sensitive_data, so the raw identifier must never appear.
+        g = Guest.objects.create(
+            hotel=self.hotel, full_name="Idris Traveler",
+            national_id="NIDOLD9999",
+        )
+        self.client.patch(
+            reverse("guests:guest-detail", args=[g.id]),
+            {"national_id": "NIDNEW8888"},
+            format="json", **HDR(self.hotel),
+        )
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="guest.updated"
+        ).latest("id")
+        # The change IS recorded ...
+        self.assertIn("national_id:", event.message)
+        # ... but only MASKED (last four); no raw identifier leaks.
+        self.assertNotIn("NIDOLD9999", event.message)
+        self.assertNotIn("NIDNEW8888", event.message)
+        self.assertIn("••••9999", event.message)
+        self.assertIn("••••8888", event.message)
+
+    def test_national_id_unchanged_is_not_logged(self):
+        # A PATCH that does not touch national_id records no national_id change.
+        g = Guest.objects.create(
+            hotel=self.hotel, full_name="Stable Id", national_id="NIDSTAY1234",
+        )
+        self.client.patch(
+            reverse("guests:guest-detail", args=[g.id]),
+            {"full_name": "Stable Renamed"},
+            format="json", **HDR(self.hotel),
+        )
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="guest.updated"
+        ).latest("id")
+        self.assertNotIn("national_id:", event.message)
+
     def test_no_full_document_anywhere_in_activity(self):
         g = Guest.objects.create(
             hotel=self.hotel, full_name="Secret Holder",
@@ -816,6 +855,22 @@ class GuestActivityTests(APITestCase):
             self.assertNotIn("FULLSECRET99", event.message)
             self.assertNotIn("FULLSECRET88", event.title)
             self.assertNotIn("FULLSECRET88", event.message)
+
+    def test_full_national_id_never_appears_in_activity(self):
+        # Companion to the document check: a raw national_id never lands anywhere.
+        g = Guest.objects.create(
+            hotel=self.hotel, full_name="Nid Secret", national_id="RAWNID55550",
+        )
+        self.client.patch(
+            reverse("guests:guest-detail", args=[g.id]),
+            {"national_id": "RAWNID66660"},
+            format="json", **HDR(self.hotel),
+        )
+        for event in ActivityEvent.objects.filter(hotel=self.hotel):
+            self.assertNotIn("RAWNID55550", event.title)
+            self.assertNotIn("RAWNID55550", event.message)
+            self.assertNotIn("RAWNID66660", event.title)
+            self.assertNotIn("RAWNID66660", event.message)
 
 
 class GuestNewPermissionTests(APITestCase):

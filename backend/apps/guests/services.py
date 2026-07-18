@@ -81,12 +81,22 @@ def record_guest_reactivated(guest, *, user=None):
 
 def record_guest_updated(guest, *, old_values, user=None):
     """Log a profile edit. Old/new values are included for the sensitive
-    identity fields — except document numbers, which are logged MASKED."""
+    identity fields — except the national ID and document numbers, which are
+    logged MASKED (the activity log is readable without
+    ``guests.view_sensitive_data``, so a raw identifier must never land there)."""
     changes = []
     if old_values.get("full_name") != guest.full_name:
         changes.append(f"name: {old_values['full_name']} → {guest.full_name}")
     if old_values.get("phone") != guest.phone:
         changes.append(f"phone: {old_values['phone'] or '—'} → {guest.phone or '—'}")
+    # SEC-F1 / U-06: a national_id change is audited MASKED (same masking as the
+    # document number) — a change is recorded without exposing the identifier.
+    if old_values.get("national_id") != guest.national_id:
+        changes.append(
+            "national_id: "
+            f"{mask_document(old_values.get('national_id', '') or '') or '—'} → "
+            f"{mask_document(guest.national_id) or '—'}"
+        )
     if old_values.get("document_type") != guest.document_type or old_values.get(
         "document_number"
     ) != guest.document_number:

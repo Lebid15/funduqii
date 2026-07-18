@@ -233,12 +233,15 @@ def create_public_booking(
     manage token. Returns ``(reservation, plaintext_token)`` — the only
     moment the plaintext exists.
 
-    Guests central identity (W3, Decision 10): ``create_reservation`` is called with
-    ``allow_create=False`` so a public submission NEVER creates a central guest — it
-    stays a pure snapshot (the guest is created / linked later at operational confirm
-    or at check-in). The ban check still runs through the identity service (on the
-    canonical phone / document / national id) and refuses a blocked visitor WITHOUT
-    exposing the reason.
+    Guests central identity (W3, Decision 10 / OBS-2): ``create_reservation`` is
+    called with ``allow_create=False`` so a public submission is SNAPSHOT-ONLY — it
+    NEVER creates or links a central guest (the guest is created / linked later at
+    operational confirm or at check-in). The ban check still runs through the identity
+    service (on the canonical phone / document / national id) and refuses a blocked
+    visitor WITHOUT exposing the reason. An identity CONFLICT (e.g. a national id and
+    a phone that point at two different existing guests) is deliberately NOT surfaced
+    here: it is an INTERNAL concern raised only on the authenticated check-in /
+    operational path — a visitor is never shown a 409 for a duplicate the hotel owns.
 
     ``idempotency_key`` (Decision 3) is an EXPLICIT client-supplied token — the
     frontend generates one random, unguessable UUID per submission and reuses it on
