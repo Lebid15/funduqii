@@ -200,12 +200,14 @@ class EnforcementAPITests(APITestCase):
         ]
         for name, url in cases:
             self.assert_blocked(name, url)
-        # Guests validate before their guard (perform_create) — send a valid
-        # body so the request reaches the enforcement and is refused there.
+        # Guests no longer have an API create path (guests-closure Decision 9);
+        # the representative guests WRITE is now the block action, which runs its
+        # operational guard first (before the guest lookup), so a placeholder pk
+        # is fine.
         self.assert_blocked(
-            "guest create",
-            reverse("guests:guest-list"),
-            {"full_name": "Blocked Guest", "phone": "+90 555 000"},
+            "guest block",
+            reverse("guests:guest-block", args=[999]),
+            {"reason": "x"},
         )
 
     def test_permissions_update_blocked(self):

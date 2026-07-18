@@ -5,7 +5,7 @@ from .views import (
     GuestBlockView,
     GuestDetailView,
     GuestDirectoryView,
-    GuestListCreateView,
+    GuestListView,
     GuestLookupView,
     GuestProfileView,
     GuestUnblockView,
@@ -15,7 +15,7 @@ from .views import (
 app_name = "guests"
 
 urlpatterns = [
-    path("guests/", GuestListCreateView.as_view(), name="guest-list"),
+    path("guests/", GuestListView.as_view(), name="guest-list"),
     path(
         "guests/directory/",
         GuestDirectoryView.as_view(),

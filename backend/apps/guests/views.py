@@ -15,6 +15,7 @@ Final closure additions:
 """
 from __future__ import annotations
 
+from django.db.models import Count, Q
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -38,14 +39,12 @@ from .services import (
     block_guest,
     deactivate_or_delete,
     mask_document,
-    record_guest_created,
     record_guest_updated,
     set_vip,
     unblock_guest,
 )
 
 CanView = HasHotelPermission("guests.view")
-CanCreate = HasHotelPermission("guests.create")
 CanUpdate = HasHotelPermission("guests.update")
 CanDelete = HasHotelPermission("guests.delete")
 CanMarkVip = HasHotelPermission("guests.mark_vip")
@@ -89,8 +88,6 @@ def _stats(stays: list) -> dict:
 class _GuestScopedMixin:
     def get_permissions(self):
         method = self.request.method
-        if method == "POST":
-            return [CanCreate()]
         if method in ("PUT", "PATCH"):
             return [CanUpdate()]
         if method == "DELETE":
@@ -98,11 +95,44 @@ class _GuestScopedMixin:
         return [CanView()]
 
 
-class GuestListCreateView(_GuestScopedMixin, generics.ListCreateAPIView):
-    """The PLAIN guest list — reservation/check-in pickers depend on it, so
-    its behavior is unchanged (all active guests, no stay requirement)."""
+def _guest_search_q(search: str, request: Request) -> Q:
+    """Build the guest-search filter for the plain list and the directory.
+
+    Name / phone / email keep their operational SUBSTRING search. The national
+    ID is matched EXACTLY on its normalized key only (U-10) — never a substring,
+    so it can never be reconstructed digit-by-digit. The document-number
+    SUBSTRING search is a reconstruction oracle for a MASKED number, so it is
+    gated behind ``guests.view_sensitive_data`` (Decision 5 / U-09 / S3): a basic
+    viewer cannot progressively rebuild a masked document number. Both lists
+    still MASK the returned values per permission — this only governs which
+    guests a search term can surface.
+    """
+    cond = (
+        Q(full_name__icontains=search)
+        | Q(phone__icontains=search)
+        | Q(email__icontains=search)
+    )
+    national_id_key = normalize_id(search)
+    if national_id_key:
+        cond |= Q(national_id_normalized=national_id_key)
+    if can_view_sensitive(request):
+        cond |= Q(document_number__icontains=search)
+    return cond
+
+
+class GuestListView(generics.ListAPIView):
+    """The PLAIN guest list — reservation/check-in pickers depend on it.
+
+    LIST-ONLY (Decision 9): there is deliberately NO create endpoint here. A
+    Guest is created ONLY through the central identity service (wired in a later
+    wave), so a ``POST`` to this route is ``405 Method Not Allowed`` and the API
+    can never mint an orphan Guest. GET behavior is unchanged (all active guests,
+    no stay requirement)."""
 
     serializer_class = GuestSerializer
+
+    def get_permissions(self):
+        return [CanView()]
 
     def get_queryset(self):
         qs = Guest.objects.filter(hotel=self.request.hotel)
@@ -112,22 +142,8 @@ class GuestListCreateView(_GuestScopedMixin, generics.ListCreateAPIView):
             qs = qs.filter(is_active=(is_active == "true"))
         search = params.get("search")
         if search:
-            qs = (
-                qs.filter(full_name__icontains=search)
-                | qs.filter(phone__icontains=search)
-                | qs.filter(document_number__icontains=search)
-                | qs.filter(email__icontains=search)
-            )
+            qs = qs.filter(_guest_search_q(search, self.request))
         return qs.distinct()
-
-    def perform_create(self, serializer):
-        _guard_write(self.request)
-        guest = serializer.save(
-            hotel=self.request.hotel,
-            created_by=self.request.user,
-            updated_by=self.request.user,
-        )
-        record_guest_created(guest, user=self.request.user)
 
 
 class GuestDirectoryView(generics.ListAPIView):
@@ -139,8 +155,6 @@ class GuestDirectoryView(generics.ListAPIView):
         return [CanView()]
 
     def get_queryset(self):
-        from django.db.models import Count, Q
-
         qs = (
             Guest.objects.filter(hotel=self.request.hotel)
             .annotate(
@@ -158,12 +172,7 @@ class GuestDirectoryView(generics.ListAPIView):
             qs = qs.filter(is_active=(is_active == "true"))
         search = params.get("search")
         if search:
-            qs = (
-                qs.filter(full_name__icontains=search)
-                | qs.filter(phone__icontains=search)
-                | qs.filter(document_number__icontains=search)
-                | qs.filter(email__icontains=search)
-            ).distinct()
+            qs = qs.filter(_guest_search_q(search, self.request)).distinct()
         # Explicit ordering: ``.annotate(Count(...))`` drops the model Meta
         # ordering, so DRF pagination would emit UnorderedObjectListWarning and
         # page inconsistently. Order by the same keys as Meta.
@@ -239,11 +248,15 @@ class GuestProfileView(APIView):
         return [CanView()]
 
     def get(self, request: Request, pk: int) -> Response:
+        from apps.reservations.models import BLOCKING_STATUSES
+        from apps.shifts.services import get_business_date
+
         guest = generics.get_object_or_404(
             Guest.objects.filter(hotel=request.hotel).prefetch_related(
                 "stay_links__stay__room__room_type",
                 "stay_links__stay__reservation",
                 "stay_links__stay__folios",
+                "reservations",
             ),
             pk=pk,
         )
@@ -251,6 +264,24 @@ class GuestProfileView(APIView):
         can_see_block_reason = has_hotel_permission(
             request.user, request.hotel, "guests.block"
         )
+
+        # U-15: the guest's UPCOMING reservations — a booking they hold as
+        # primary guest that is still ACTIVE (blocking status) and has not yet
+        # departed (check-out on/after the hotel business date). Filtered in
+        # Python over the single ``reservations`` prefetch (no per-row query).
+        business_date = get_business_date(request.hotel)
+        upcoming_reservations = sorted(
+            (
+                res
+                for res in guest.reservations.all()
+                if res.status in BLOCKING_STATUSES
+                and res.check_out_date >= business_date
+            ),
+            key=lambda res: (res.check_in_date, res.id),
+        )
+        # S5: a blocked guest who still holds an active/future booking needs a
+        # human to reconcile the block with the pending arrival.
+        needs_review = guest.is_blocked and bool(upcoming_reservations)
 
         all_stays = sorted(
             (link.stay for link in guest.stay_links.all()),
@@ -306,14 +337,26 @@ class GuestProfileView(APIView):
             "email": guest.email,
             "nationality": guest.nationality,
             "gender": guest.gender,
-            "date_of_birth": str(guest.date_of_birth) if guest.date_of_birth else None,
+            # S5: date_of_birth and address are sensitive personal data — mask
+            # them fail-closed for callers without ``guests.view_sensitive_data``
+            # (same gate as document_number). A present value is fully hidden
+            # ("••••"); an absent value stays absent so nothing is invented.
+            "date_of_birth": (
+                (str(guest.date_of_birth) if guest.date_of_birth else None)
+                if sensitive
+                else ("••••" if guest.date_of_birth else None)
+            ),
             "document_type": guest.document_type,
             "document_number": (
                 guest.document_number
                 if sensitive
                 else mask_document(guest.document_number)
             ),
-            "address": guest.address,
+            "address": (
+                guest.address
+                if sensitive
+                else ("••••" if guest.address else "")
+            ),
             "notes": guest.notes,
             "is_active": guest.is_active,
             "is_vip": guest.is_vip,
@@ -328,6 +371,18 @@ class GuestProfileView(APIView):
             "blocked_by": guest.blocked_by.email if guest.blocked_by_id else None,
             # The reason is sensitive: only block-permission holders see it.
             "block_reason": guest.block_reason if can_see_block_reason else None,
+            "needs_review": needs_review,
+            "upcoming_reservations": [
+                {
+                    "reservation_id": res.id,
+                    "reservation_number": res.reservation_number,
+                    "status": res.status,
+                    "booking_kind": res.booking_kind,
+                    "check_in_date": str(res.check_in_date),
+                    "check_out_date": str(res.check_out_date),
+                }
+                for res in upcoming_reservations
+            ],
             **stats,
             "current": (
                 {

@@ -13,9 +13,10 @@ from __future__ import annotations
 import re
 
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
 
-from .models import Guest
-from .normalize import normalize_id
+from .models import DocumentType, Guest
+from .normalize import PhoneNormalizationError, canonical_phone, normalize_id
 from .services import mask_document
 
 _PHONE_RE = re.compile(r"^[0-9+\-\s()]{4,32}$")
@@ -110,6 +111,49 @@ class GuestSerializer(serializers.ModelSerializer):
         doc_number = attrs.get(
             "document_number", getattr(self.instance, "document_number", "")
         )
+        # Decision 3: the national ID is a first-class field (``Guest.national_id``)
+        # and the central identity service keys the ban/dedup on it. It must NEVER
+        # be smuggled in as a generic document, so reject ``document_type =
+        # 'national_id'`` outright. Passport stays a normal document.
+        if doc_type == DocumentType.NATIONAL_ID:
+            raise serializers.ValidationError(
+                {
+                    "document_type": [
+                        ErrorDetail(
+                            "A national ID must be stored in the national_id "
+                            "field, not as a document.",
+                            code="national_id_must_use_national_id_field",
+                        )
+                    ]
+                }
+            )
+        # Decision 1: an edited phone is stored CANONICAL E.164 so the stored key
+        # and every lookup key stay identical. An uninterpretable phone (or a
+        # local number with no resolvable hotel country) is a clean 400 — it is
+        # never persisted as-typed / approximately. Only runs when phone is part
+        # of this write (a PATCH that omits phone leaves it untouched).
+        if "phone" in attrs:
+            default_country = (
+                getattr(getattr(hotel, "settings", None), "default_phone_country", "")
+                or None
+            )
+            try:
+                attrs["phone"] = canonical_phone(
+                    (attrs.get("phone") or "").strip(),
+                    default_country=default_country,
+                )
+            except PhoneNormalizationError:
+                raise serializers.ValidationError(
+                    {
+                        "phone": [
+                            ErrorDetail(
+                                "This phone number could not be interpreted; "
+                                "enter it in international +country form.",
+                                code="invalid_phone",
+                            )
+                        ]
+                    }
+                )
         if doc_number:
             qs = Guest.objects.filter(
                 hotel=hotel, document_type=doc_type, document_number=doc_number

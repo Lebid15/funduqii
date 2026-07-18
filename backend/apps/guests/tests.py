@@ -79,102 +79,135 @@ class GuestAccessTests(APITestCase):
             403,
         )
 
-    def test_staff_create_needs_permission(self):
+    def test_create_endpoint_removed_returns_405(self):
+        # Decision 9: there is NO create endpoint. Even a viewer whose request
+        # clears the view permission gets 405 — the API can never mint a guest.
         staff = add_member(self.hotel, "s3@x.com", perms=["guests.view"])
         self.client.force_authenticate(staff)
         res = self.client.post(
             reverse("guests:guest-list"), guest_body(), format="json", **HDR(self.hotel)
         )
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 405)
 
     def test_suspended_hotel_read_only(self):
         self.client.force_authenticate(self.manager)
+        # Seed directly — creation no longer goes through the API (Decision 9).
+        guest = Guest.objects.create(hotel=self.hotel, full_name="Existing")
         self.hotel.status = HotelStatus.SUSPENDED
         self.hotel.save()
+        # Reads keep working.
         self.assertEqual(
             self.client.get(reverse("guests:guest-list"), **HDR(self.hotel)).status_code,
             200,
         )
-        res = self.client.post(
-            reverse("guests:guest-list"), guest_body(), format="json", **HDR(self.hotel)
+        # The list route has no write path anymore: a POST is 405, not a guard.
+        self.assertEqual(
+            self.client.post(
+                reverse("guests:guest-list"), guest_body(), format="json",
+                **HDR(self.hotel),
+            ).status_code,
+            405,
+        )
+        # A genuine guests WRITE (update) is refused while suspended.
+        res = self.client.patch(
+            reverse("guests:guest-detail", args=[guest.id]),
+            {"nationality": "TR"}, format="json", **HDR(self.hotel),
         )
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.data["code"], "hotel_suspended")
 
 
 class GuestCrudTests(APITestCase):
+    """Read / update / delete over the guests API. Creation is no longer an API
+    concern (Decision 9) — guests are seeded directly and every write here goes
+    through the UPDATE path."""
+
     def setUp(self):
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
         self.client.force_authenticate(self.manager)
 
-    def _create(self, **over):
-        return self.client.post(
-            reverse("guests:guest-list"), guest_body(**over), format="json", **HDR(self.hotel)
+    def _guest(self, **over):
+        body = {"full_name": "Jane Traveler", "phone": "+905551112233"}
+        body.update(over)
+        return Guest.objects.create(hotel=self.hotel, **body)
+
+    def _patch(self, guest, body):
+        return self.client.patch(
+            reverse("guests:guest-detail", args=[guest.id]),
+            body, format="json", **HDR(self.hotel),
         )
 
-    def test_create_and_update(self):
-        res = self._create()
-        self.assertEqual(res.status_code, 201)
-        gid = res.data["id"]
-        upd = self.client.patch(
-            reverse("guests:guest-detail", args=[gid]),
-            {"nationality": "TR"},
-            format="json",
-            **HDR(self.hotel),
-        )
+    def test_update(self):
+        g = self._guest()
+        upd = self._patch(g, {"nationality": "TR"})
+        self.assertEqual(upd.status_code, 200)
         self.assertEqual(upd.data["nationality"], "TR")
 
     def test_list_scoped_by_hotel(self):
-        self._create()
+        self._guest()
         other = make_hotel(slug="o")
         Guest.objects.create(hotel=other, full_name="Other Guest")
         res = self.client.get(reverse("guests:guest-list"), **HDR(self.hotel))
         self.assertEqual(res.data["count"], 1)
 
     def test_search_by_name_phone_document(self):
-        self._create(full_name="Ali Hassan", phone="+905550001111",
-                     document_type="passport", document_number="P123")
-        self._create(full_name="Sara Kaya", phone="+905552223333")
+        self._guest(full_name="Ali Hassan", phone="+905550001111",
+                    document_type="passport", document_number="P123")
+        self._guest(full_name="Sara Kaya", phone="+905552223333")
         base = reverse("guests:guest-list")
         self.assertEqual(self.client.get(base, {"search": "Ali"}, **HDR(self.hotel)).data["count"], 1)
         self.assertEqual(self.client.get(base, {"search": "2223333"}, **HDR(self.hotel)).data["count"], 1)
+        # The manager holds guests.view_sensitive_data -> the document substring
+        # search is available (a basic viewer's oracle is closed — see
+        # GuestSearchOracleTests).
         self.assertEqual(self.client.get(base, {"search": "P123"}, **HDR(self.hotel)).data["count"], 1)
 
-    def test_invalid_phone_rejected(self):
-        res = self._create(phone="not-a-phone!!")
+    def test_invalid_phone_rejected_on_update(self):
+        g = self._guest()
+        res = self._patch(g, {"phone": "not-a-phone!!"})
         self.assertEqual(res.status_code, 400)
 
-    def test_invalid_email_rejected(self):
-        res = self._create(email="bad-email")
+    def test_invalid_email_rejected_on_update(self):
+        g = self._guest()
+        res = self._patch(g, {"email": "bad-email"})
         self.assertEqual(res.status_code, 400)
 
-    def test_document_unique_per_hotel(self):
-        self._create(document_type="passport", document_number="X1")
-        dup = self._create(full_name="Someone Else", document_type="passport", document_number="X1")
+    def test_document_unique_per_hotel_on_update(self):
+        # Distinct phones — the active-phone uniqueness constraint is per hotel.
+        self._guest(document_type="passport", document_number="X1")
+        other = self._guest(full_name="Someone Else", phone="+905559998888")
+        dup = self._patch(other, {"document_type": "passport", "document_number": "X1"})
         self.assertEqual(dup.status_code, 400)
 
     def test_same_document_allowed_other_hotel(self):
-        self._create(document_type="passport", document_number="X1")
+        self._guest(document_type="passport", document_number="X1")
         other = make_hotel(slug="o")
         add_member(other, "m2@x.com", kind=MembershipType.MANAGER)
         Guest.objects.create(hotel=other, full_name="Twin", document_type="passport", document_number="X1")
         self.assertEqual(Guest.objects.filter(document_number="X1").count(), 2)
 
     def test_delete_unreferenced_guest_hard_deletes(self):
-        gid = self._create().data["id"]
-        res = self.client.delete(reverse("guests:guest-detail", args=[gid]), **HDR(self.hotel))
+        g = self._guest()
+        res = self.client.delete(reverse("guests:guest-detail", args=[g.id]), **HDR(self.hotel))
         # Final closure: the response distinguishes deleted vs deactivated.
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["result"], "deleted")
-        self.assertFalse(Guest.objects.filter(pk=gid).exists())
+        self.assertFalse(Guest.objects.filter(pk=g.id).exists())
+
+    def test_no_create_endpoint(self):
+        # Decision 9: even a full-permission manager cannot create via the API.
+        res = self.client.post(
+            reverse("guests:guest-list"), guest_body(), format="json", **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 405)
 
 
 # --------------------------------------------------------------------------- #
 # Final closure round                                                          #
 # --------------------------------------------------------------------------- #
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.utils import timezone as dj_tz
 
@@ -729,9 +762,10 @@ class GuestSensitiveDataTests(APITestCase):
 
     def test_document_uniqueness_unchanged(self):
         self.client.force_authenticate(self.manager)
-        r = self.client.post(
-            reverse("guests:guest-list"),
-            guest_body(document_type="passport", document_number="SENS123456"),
+        other = Guest.objects.create(hotel=self.hotel, full_name="Other")
+        r = self.client.patch(
+            reverse("guests:guest-detail", args=[other.id]),
+            {"document_type": "passport", "document_number": "SENS123456"},
             format="json", **HDR(self.hotel),
         )
         self.assertEqual(r.status_code, 400)
@@ -743,20 +777,15 @@ class GuestActivityTests(APITestCase):
         self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
         self.client.force_authenticate(self.manager)
 
-    def test_create_and_update_are_logged(self):
-        r = self.client.post(
-            reverse("guests:guest-list"),
-            guest_body(document_type="passport", document_number="ACT9876543"),
-            format="json", **HDR(self.hotel),
-        )
-        gid = r.data["id"]
-        self.assertTrue(
-            ActivityEvent.objects.filter(
-                hotel=self.hotel, event_type="guest.created"
-            ).exists()
+    def test_update_is_logged(self):
+        # Creation no longer flows through the API (Decision 9); seed directly,
+        # then prove the UPDATE is logged with the document numbers MASKED.
+        g = Guest.objects.create(
+            hotel=self.hotel, full_name="Jane Traveler", phone="+905551112233",
+            document_type="passport", document_number="ACT9876543",
         )
         self.client.patch(
-            reverse("guests:guest-detail", args=[gid]),
+            reverse("guests:guest-detail", args=[g.id]),
             {"full_name": "Jane Renamed", "phone": "+905550000000",
              "document_number": "ACT1111111"},
             format="json", **HDR(self.hotel),
@@ -772,14 +801,20 @@ class GuestActivityTests(APITestCase):
         self.assertIn("••••", event.message)
 
     def test_no_full_document_anywhere_in_activity(self):
-        self.client.post(
-            reverse("guests:guest-list"),
-            guest_body(document_type="passport", document_number="FULLSECRET99"),
+        g = Guest.objects.create(
+            hotel=self.hotel, full_name="Secret Holder",
+            document_type="passport", document_number="FULLSECRET99",
+        )
+        self.client.patch(
+            reverse("guests:guest-detail", args=[g.id]),
+            {"document_number": "FULLSECRET88"},
             format="json", **HDR(self.hotel),
         )
         for event in ActivityEvent.objects.filter(hotel=self.hotel):
             self.assertNotIn("FULLSECRET99", event.title)
             self.assertNotIn("FULLSECRET99", event.message)
+            self.assertNotIn("FULLSECRET88", event.title)
+            self.assertNotIn("FULLSECRET88", event.message)
 
 
 class GuestNewPermissionTests(APITestCase):
@@ -829,3 +864,202 @@ class GuestNewPermissionTests(APITestCase):
             ).status_code,
             403,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Guests API hardening (EXEC-GUESTS-CLOSURE-01, W3a)                           #
+# --------------------------------------------------------------------------- #
+
+
+class GuestSearchOracleTests(APITestCase):
+    """Decision 5 / U-09 / U-10 / S3.
+
+    The document-number SUBSTRING search is a reconstruction oracle and is closed
+    for a basic viewer. The national ID is searchable EXACT-normalized only (never
+    partial). Output stays masked per permission. Covers BOTH the plain list and
+    the directory (they share ``_guest_search_q``)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.rtype, (self.r101, _unused) = make_room_env(self.hotel)
+        # Phone deliberately avoids the "1234"/"5678" substrings so the
+        # "national id never partial-matches" checks can't pass via the phone.
+        self.guest = Guest.objects.create(
+            hotel=self.hotel, full_name="Oracle Target", phone="+905550009999",
+            document_type="passport", document_number="SECRET789",
+            national_id="12345678",
+        )
+        make_stay(self.hotel, self.guest, self.r101)  # so it appears in directory
+        self.viewer = add_member(self.hotel, "v@x.com", perms=["guests.view"])
+        self.sensitive = add_member(
+            self.hotel, "vs@x.com",
+            perms=["guests.view", "guests.view_sensitive_data"],
+        )
+
+    def _list_count(self, term):
+        return self.client.get(
+            reverse("guests:guest-list"), {"search": term}, **HDR(self.hotel)
+        ).data["count"]
+
+    def _dir_count(self, term):
+        return self.client.get(
+            reverse("guests:guest-directory"), {"search": term}, **HDR(self.hotel)
+        ).data["count"]
+
+    def test_document_substring_hidden_from_basic_viewer(self):
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self._list_count("SECRET"), 0)
+        self.assertEqual(self._dir_count("SECRET"), 0)
+        # Name search still works for the basic viewer.
+        self.assertEqual(self._list_count("Oracle"), 1)
+
+    def test_document_substring_visible_with_sensitive_perm(self):
+        self.client.force_authenticate(self.sensitive)
+        self.assertEqual(self._list_count("SECRET"), 1)
+        self.assertEqual(self._dir_count("SECRET"), 1)
+
+    def test_national_id_exact_match_for_basic_viewer(self):
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self._list_count("12345678"), 1)
+        self.assertEqual(self._list_count("1234-5678"), 1)  # punctuation ignored
+        self.assertEqual(self._dir_count("12345678"), 1)
+        # The row is still masked for a basic viewer.
+        row = self.client.get(
+            reverse("guests:guest-list"), {"search": "12345678"}, **HDR(self.hotel)
+        ).data["results"][0]
+        self.assertIn("•", row["national_id"])
+
+    def test_national_id_never_partial_matches(self):
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self._list_count("1234"), 0)
+        self.assertEqual(self._list_count("5678"), 0)
+        self.assertEqual(self._dir_count("1234"), 0)
+
+
+class GuestProfileUpcomingTests(APITestCase):
+    """U-15 / S5: the profile surfaces upcoming reservations + ``needs_review``,
+    and masks ``date_of_birth`` / ``address`` behind guests.view_sensitive_data."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.guest = Guest.objects.create(
+            hotel=self.hotel, full_name="Upcoming Guest", phone="+905551110000",
+            date_of_birth=date(1990, 5, 12), address="12 Baker Street",
+        )
+
+    def _reservation(self, *, number, status, ci, co):
+        from apps.reservations.models import Reservation
+
+        return Reservation.objects.create(
+            hotel=self.hotel, reservation_number=number,
+            status=status, booking_kind="future",
+            check_in_date=ci, check_out_date=co,
+            primary_guest=self.guest, primary_guest_name="Upcoming Guest",
+        )
+
+    def _profile(self):
+        return self.client.get(
+            reverse("guests:guest-profile", args=[self.guest.id]), **HDR(self.hotel)
+        )
+
+    def test_only_active_future_reservations_are_upcoming(self):
+        future = self._reservation(
+            number="R-future", status=ReservationStatus.CONFIRMED,
+            ci=TODAY + timedelta(days=2), co=TODAY + timedelta(days=4),
+        )
+        # Departed booking -> not upcoming.
+        self._reservation(
+            number="R-past", status=ReservationStatus.CONFIRMED,
+            ci=TODAY - timedelta(days=5), co=TODAY - timedelta(days=2),
+        )
+        # Cancelled future booking -> not active.
+        self._reservation(
+            number="R-cancelled", status=ReservationStatus.CANCELLED,
+            ci=TODAY + timedelta(days=3), co=TODAY + timedelta(days=6),
+        )
+        data = self._profile().data
+        numbers = [r["reservation_number"] for r in data["upcoming_reservations"]]
+        self.assertEqual(numbers, ["R-future"])
+        self.assertEqual(data["upcoming_reservations"][0]["reservation_id"], future.id)
+
+    def test_needs_review_true_only_when_blocked_with_upcoming(self):
+        from apps.guests.services import block_guest
+
+        self._reservation(
+            number="R1", status=ReservationStatus.CONFIRMED,
+            ci=TODAY + timedelta(days=1), co=TODAY + timedelta(days=3),
+        )
+        self.assertFalse(self._profile().data["needs_review"])
+        block_guest(self.guest, reason="pending dispute", user=self.manager)
+        self.assertTrue(self._profile().data["needs_review"])
+
+    def test_blocked_without_upcoming_does_not_need_review(self):
+        from apps.guests.services import block_guest
+
+        block_guest(self.guest, reason="old issue", user=self.manager)
+        self.assertFalse(self._profile().data["needs_review"])
+
+    def test_dob_and_address_masked_without_sensitive_perm(self):
+        viewer = add_member(self.hotel, "v@x.com", perms=["guests.view"])
+        self.client.force_authenticate(viewer)
+        data = self._profile().data
+        self.assertEqual(data["date_of_birth"], "••••")
+        self.assertEqual(data["address"], "••••")
+        # The manager (holds the sensitive permission) sees the real values.
+        self.client.force_authenticate(self.manager)
+        data = self._profile().data
+        self.assertEqual(data["date_of_birth"], "1990-05-12")
+        self.assertEqual(data["address"], "12 Baker Street")
+
+
+class GuestUpdateHardeningTests(APITestCase):
+    """Decision 3 (reject a national_id document) + Decision 1 (canonical phone
+    on update)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.guest = Guest.objects.create(
+            hotel=self.hotel, full_name="Edit Target", phone="+905551110000",
+        )
+
+    def _patch(self, body):
+        return self.client.patch(
+            reverse("guests:guest-detail", args=[self.guest.id]),
+            body, format="json", **HDR(self.hotel),
+        )
+
+    def test_national_id_document_type_rejected(self):
+        r = self._patch({"document_type": "national_id", "document_number": "999"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            r.data["details"]["document_type"][0].code,
+            "national_id_must_use_national_id_field",
+        )
+
+    def test_passport_document_type_allowed(self):
+        r = self._patch({"document_type": "passport", "document_number": "P55"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_phone_canonicalized_on_update(self):
+        from apps.hotels.models import HotelSettings
+
+        HotelSettings.objects.create(hotel=self.hotel, default_phone_country="SA")
+        r = self._patch({"phone": "0555 111 222"})
+        self.assertEqual(r.status_code, 200)
+        self.guest.refresh_from_db()
+        self.assertEqual(self.guest.phone, "+966555111222")
+        self.assertEqual(self.guest.phone_normalized, "+966555111222")
+
+    def test_uninterpretable_local_phone_rejected(self):
+        # No default_phone_country on this hotel -> a LOCAL number cannot be
+        # canonicalized and is refused (never stored approximately).
+        r = self._patch({"phone": "0555111222"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["details"]["phone"][0].code, "invalid_phone")
+        self.guest.refresh_from_db()
+        self.assertEqual(self.guest.phone, "+905551110000")  # unchanged
