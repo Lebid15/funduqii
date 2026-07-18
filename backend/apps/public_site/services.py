@@ -204,48 +204,6 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _public_idempotency_key(
-    hotel,
-    *,
-    room_type: RoomType,
-    check_in,
-    check_out,
-    rooms_count: int,
-    adults: int,
-    children: int,
-    guest_name: str,
-    guest_phone: str,
-    guest_email: str,
-    guest_nationality: str,
-    special_requests: str,
-) -> str:
-    """A DETERMINISTIC per-booking idempotency key derived ONLY from the material
-    public-booking payload (Decision 10). Two IDENTICAL submissions (a double-click
-    / a network retry) produce the SAME key, so ``create_reservation`` returns the
-    original booking instead of creating a duplicate. It carries no secret and is a
-    64-char SHA-256 hex (fits ``creation_idempotency_key``). Values are trimmed /
-    case-folded so trivial formatting never changes the key; a materially different
-    field (dates, room type, counts, guest) yields a different key (a genuinely new
-    booking)."""
-    material = "|".join(
-        [
-            str(hotel.id),
-            str(room_type.id),
-            str(check_in),
-            str(check_out),
-            str(int(rooms_count)),
-            str(int(adults)),
-            str(int(children)),
-            (guest_name or "").strip().casefold(),
-            (guest_phone or "").strip(),
-            (guest_email or "").strip().casefold(),
-            (guest_nationality or "").strip().casefold(),
-            (special_requests or "").strip(),
-        ]
-    )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
 def token_matches(reservation: Reservation, token: str) -> bool:
     if not reservation.public_manage_token_hash or not token:
         return False
@@ -269,6 +227,7 @@ def create_public_booking(
     guest_email: str = "",
     guest_nationality: str = "",
     special_requests: str = "",
+    idempotency_key: str = "",
 ) -> tuple[Reservation, str]:
     """Create the reservation through the INTERNAL engine and attach the
     manage token. Returns ``(reservation, plaintext_token)`` — the only
@@ -279,8 +238,17 @@ def create_public_booking(
     stays a pure snapshot (the guest is created / linked later at operational confirm
     or at check-in). The ban check still runs through the identity service (on the
     canonical phone / document / national id) and refuses a blocked visitor WITHOUT
-    exposing the reason. A DETERMINISTIC ``idempotency_key`` (from the payload) makes
-    a duplicate submission return the ORIGINAL booking instead of a second one. No
+    exposing the reason.
+
+    ``idempotency_key`` (Decision 3) is an EXPLICIT client-supplied token — the
+    frontend generates one random, unguessable UUID per submission and reuses it on
+    retry. It is forwarded verbatim to ``create_reservation``: the SAME key + the
+    SAME payload replays the ORIGINAL booking (never a duplicate); the SAME key + a
+    MATERIALLY DIFFERENT payload raises ``IdempotencyKeyConflict`` (HTTP 409) via the
+    engine's stored content fingerprint; a NEW key is always a new booking.
+    Uniqueness is enforced per (hotel, key) by the existing constraint, and the
+    random per-submission value means the same key in two hotels is independent. When
+    the key is omitted, the submission has NO idempotency (each is a new booking). No
     guest search results and no VIP / ban / internal data are ever exposed here."""
     hotel = settings_obj.hotel
     # Entitlement gate (subscriptions closure): the plan's monthly public-booking
@@ -315,38 +283,30 @@ def create_public_booking(
         fields["hold_expires_at"] = timezone.now() + datetime.timedelta(
             hours=PUBLIC_HOLD_HOURS
         )
-    idempotency_key = _public_idempotency_key(
-        hotel,
-        room_type=room_type,
-        check_in=check_in,
-        check_out=check_out,
-        rooms_count=rooms_count,
-        adults=adults,
-        children=children,
-        guest_name=guest_name,
-        guest_phone=guest_phone,
-        guest_email=guest_email,
-        guest_nationality=guest_nationality,
-        special_requests=special_requests,
-    )
+    # Decision 3 — the EXPLICIT client idempotency key (or None when omitted). A
+    # random per-submission value means uniqueness per (hotel, key) already satisfies
+    # "per hotel and booking source"; the engine's stored content fingerprint rejects
+    # a same-key replay carrying a materially different payload (409). The content
+    # fingerprint is thus a payload-match signal only — never the key itself.
+    creation_key = (idempotency_key or "").strip() or None
     # The SAME engine the hotel console uses: availability is re-checked inside and
     # overbooking raises `no_availability` — never bypassed. ``allow_create=False``
     # keeps this a pure snapshot (no central guest created) while still ban-checking
-    # the identity; the deterministic ``idempotency_key`` collapses duplicate
-    # submissions onto the ORIGINAL reservation.
+    # the identity; the client ``idempotency_key`` collapses a genuine retry onto the
+    # ORIGINAL reservation, and a reused key with a different payload becomes a 409.
     reservation = create_reservation(
         hotel,
         lines=[{"room_type": room_type, "quantity": rooms_count}],
         status=status,
         user=None,
         allow_create=False,
-        idempotency_key=idempotency_key,
+        idempotency_key=creation_key,
         **fields,
     )
-    # A duplicate submission (same deterministic key) returns the EXISTING booking —
-    # no second reservation, no guest, no token reset. Its plaintext token cannot be
-    # recovered (only the hash is stored), so a replay returns an EMPTY token; the
-    # visitor keeps the token from the original response.
+    # A retry (same key + same payload) returns the EXISTING booking — no second
+    # reservation, no guest, no token reset. Its plaintext token cannot be recovered
+    # (only the hash is stored), so a replay returns an EMPTY token; the visitor keeps
+    # the token from the original response.
     if getattr(reservation, "_idempotent_replay", False):
         return reservation, ""
     token = secrets.token_urlsafe(32)

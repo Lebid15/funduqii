@@ -268,22 +268,3 @@ def ensure_guest_not_blocked(*guests) -> None:
     for guest in guests:
         if guest is not None and guest.is_blocked:
             raise GuestBlocked({"guest": guest.id})
-
-
-def find_blocked_guest_matching(hotel, *, phone="", document_number=""):
-    """The reservation-side guard: reservations hold guest SNAPSHOTS (no FK),
-    so a blocked person is matched by exact document number or exact phone.
-    Creating a fresh Guest row for the same person therefore cannot sidestep
-    the block. Hotel-scoped by construction."""
-    qs = Guest.objects.filter(hotel=hotel, is_blocked=True)
-    document_number = (document_number or "").strip()
-    phone = (phone or "").strip()
-    if document_number:
-        match = qs.filter(document_number=document_number).first()
-        if match is not None:
-            return match
-    if phone:
-        match = qs.filter(phone=phone).first()
-        if match is not None:
-            return match
-    return None

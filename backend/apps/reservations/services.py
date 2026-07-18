@@ -661,8 +661,8 @@ def create_reservation(
     # the validation guards, BEFORE the reservation row is written. The service runs
     # the ban check on the NORMALIZED identity (national id + passport + canonical
     # phone) for EVERY case — an explicit linked guest (passed as ``guest_id``) or a
-    # pure snapshot — closing the fresh-guest bypass the old raw
-    # ``find_blocked_guest_matching`` left open. A GuestBlocked /
+    # pure snapshot — closing the fresh-guest bypass that the old raw reservation-side
+    # phone/document guard (now removed) left open. A GuestBlocked /
     # GuestIdentityConflict / invalid-phone raises INSIDE this atomic and rolls the
     # WHOLE reservation back with no side effects; a guest it creates is rolled back
     # too if a later step fails (same atomic). The creation fingerprint above stays

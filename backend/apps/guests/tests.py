@@ -2,6 +2,7 @@
 tenant isolation, and the deactivate-instead-of-delete rule."""
 from __future__ import annotations
 
+from django.test import SimpleTestCase
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
@@ -1451,3 +1452,24 @@ class GuestChangeLogEndpointTests(APITestCase):
             self._url(), {"page_size": 2, "page": 2}, **HDR(self.hotel)
         )
         self.assertEqual(len(p2.data["results"]), 1)
+
+
+# --------------------------------------------------------------------------- #
+# Dead-code removal guard (Decision 4)                                          #
+# --------------------------------------------------------------------------- #
+
+
+class DeadCodeRemovalGuardTests(SimpleTestCase):
+    """`find_blocked_guest_matching` was the old raw reservation-side ban guard.
+    The central identity service (``resolve_or_create_guest``) now runs the ban
+    check on the normalized identity for every path, so the function was deleted
+    (Decision 4). This guard proves the symbol cannot silently return — if anyone
+    re-adds it, this test fails."""
+
+    def test_symbol_is_gone(self):
+        import apps.guests.services as guests_services
+
+        self.assertFalse(
+            hasattr(guests_services, "find_blocked_guest_matching"),
+            "find_blocked_guest_matching must stay deleted (Decision 4)",
+        )

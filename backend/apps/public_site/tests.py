@@ -331,6 +331,24 @@ class PublicBookingTests(APITestCase, PublicMixin):
         r = self.book("bookme", self.room_type, check_in=str(yesterday))
         self.assertEqual(r.status_code, 400)
 
+    def test_uninterpretable_local_phone_is_clean_400_invalid_phone(self):
+        # Decision 1 — the hotel has no default_phone_country, so a LOCAL number
+        # cannot be canonicalized and is NOT guessed. The public path returns a
+        # CLEAN 400 with the stable code `invalid_phone` (the frontend maps it to a
+        # "enter the number with the country code" message); nothing about a prior
+        # guest / VIP / ban is ever leaked, and no reservation is created.
+        self.assertEqual(self.settings_obj.default_phone_country, "")
+        r = self.book("bookme", self.room_type, guest_phone="0555 000 111")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["details"]["phone"][0].code, "invalid_phone")
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_international_phone_accepted(self):
+        # Decision 1 — an international (+country) number is always accepted; only
+        # an uninterpretable one is refused.
+        r = self.book("bookme", self.room_type, guest_phone="+90 555 000 1122")
+        self.assertEqual(r.status_code, 201)
+
     def test_foreign_room_type_rejected(self):
         _, _, other_rt = make_public_hotel("elsewhere")
         r = self.book("bookme", other_rt)
@@ -350,8 +368,8 @@ class PublicBookingTests(APITestCase, PublicMixin):
         )
 
     def test_tokens_unique_and_long(self):
-        # Guests central identity (W3): two DISTINCT bookings (different guest phone
-        # -> different deterministic idempotency key) get their own unique tokens.
+        # Two DISTINCT bookings with NO idempotency key (Decision 3) are independent
+        # submissions, so each gets its own unique manage token.
         t1 = self.book(
             "bookme", self.room_type, guest_phone="+90 555 111"
         ).data["manage_token"]
@@ -393,8 +411,8 @@ class ManageBookingTests(APITestCase, PublicMixin):
         self.assertEqual(self.manage(token="wrong-token").status_code, 404)
 
     def test_another_bookings_token_404(self):
-        # A genuinely DIFFERENT booking (different guest phone -> different
-        # deterministic idempotency key, so it is not collapsed onto setUp's).
+        # A genuinely DIFFERENT booking (no idempotency key -> an independent
+        # submission, so it is not collapsed onto setUp's booking).
         other = self.book("manage", self.room_type, guest_phone="+90 555 999")
         self.assertEqual(
             self.manage(
@@ -621,12 +639,15 @@ class PublicCentralIdentityTests(APITestCase, PublicMixin):
         self.assertEqual(reservation.status, ReservationStatus.HELD)  # stays pending
 
     def test_duplicate_submission_is_idempotent(self):
-        first = self.book("pci", self.room_type)
-        second = self.book("pci", self.room_type)  # byte-identical payload
+        # Decision 3 — idempotency is now driven by an EXPLICIT client key. A retry
+        # reusing the SAME key with the SAME payload replays the ORIGINAL booking.
+        key = "11111111-1111-4111-8111-111111111111"
+        first = self.book("pci", self.room_type, idempotency_key=key)
+        second = self.book("pci", self.room_type, idempotency_key=key)
         self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 201)
         self.assertEqual(first.data["reference"], second.data["reference"])
-        # Exactly ONE reservation exists — the duplicate did not create a second.
+        # Exactly ONE reservation exists — the retry did not create a second.
         self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
 
     def test_public_booking_ban_checked_without_reason_leak(self):
@@ -645,3 +666,84 @@ class PublicCentralIdentityTests(APITestCase, PublicMixin):
         self.assertEqual(
             Reservation.objects.filter(hotel=self.hotel).count(), 0
         )
+
+
+# --------------------------------------------------------------------------- #
+# Explicit public idempotency key (Decision 3)                                  #
+# --------------------------------------------------------------------------- #
+
+
+class PublicExplicitIdempotencyTests(APITestCase, PublicMixin):
+    """Decision 3 — the public idempotency key is an EXPLICIT client value carried
+    in the request BODY (not the payload content hash). Same key + same payload
+    replays the ORIGINAL booking; same key + a materially different payload is a 409
+    conflict; a new key is always a new booking; keys are isolated per hotel; an
+    omitted key means no idempotency (each submission is independent)."""
+
+    def setUp(self):
+        self.hotel, self.settings_obj, self.room_type = make_public_hotel("idem")
+
+    def _count(self, hotel=None):
+        return Reservation.objects.filter(hotel=hotel or self.hotel).count()
+
+    def test_same_key_same_payload_replays_prior_booking(self):
+        key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        first = self.book("idem", self.room_type, idempotency_key=key)
+        second = self.book("idem", self.room_type, idempotency_key=key)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(first.data["reference"], second.data["reference"])
+        self.assertEqual(self._count(), 1)
+
+    def test_same_key_different_payload_is_409_conflict(self):
+        key = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        first = self.book("idem", self.room_type, idempotency_key=key, adults=2)
+        self.assertEqual(first.status_code, 201)
+        # Same key, materially different payload (adults 2 -> 1) -> 409, and NO
+        # second booking is created (the original is never silently returned as the
+        # result of a different request).
+        second = self.book("idem", self.room_type, idempotency_key=key, adults=1)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["code"], "idempotency_key_conflict")
+        self.assertEqual(self._count(), 1)
+
+    def test_two_different_keys_same_payload_are_two_bookings(self):
+        # Identical payload, two DIFFERENT keys -> two intentional bookings
+        # (rooms=2 so both fit inventory).
+        first = self.book("idem", self.room_type, idempotency_key="key-one")
+        second = self.book("idem", self.room_type, idempotency_key="key-two")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertNotEqual(first.data["reference"], second.data["reference"])
+        self.assertEqual(self._count(), 2)
+
+    def test_key_is_isolated_between_hotels(self):
+        hotel_b, _, room_type_b = make_public_hotel("idem-b")
+        key = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        a = self.book("idem", self.room_type, idempotency_key=key)
+        b = self.book("idem-b", room_type_b, idempotency_key=key)
+        self.assertEqual(a.status_code, 201)
+        self.assertEqual(b.status_code, 201)
+        # The SAME key value in hotel A and hotel B are INDEPENDENT bookings: each
+        # hotel got exactly one reservation carrying that key (B did NOT replay A's).
+        # (reservation_number is a per-hotel sequence, so both may read "R00001" —
+        # isolation is proven by two distinct rows scoped to their own hotel.)
+        self.assertEqual(self._count(), 1)
+        self.assertEqual(self._count(hotel_b), 1)
+        res_a = Reservation.objects.get(
+            hotel=self.hotel, creation_idempotency_key=key
+        )
+        res_b = Reservation.objects.get(
+            hotel=hotel_b, creation_idempotency_key=key
+        )
+        self.assertNotEqual(res_a.pk, res_b.pk)
+
+    def test_omitted_key_makes_each_submission_new(self):
+        # Contract fallback: no key -> no idempotency, so two identical resubmits
+        # are independent bookings (the frontend always sends a key in practice).
+        first = self.book("idem", self.room_type)
+        second = self.book("idem", self.room_type)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertNotEqual(first.data["reference"], second.data["reference"])
+        self.assertEqual(self._count(), 2)
