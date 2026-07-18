@@ -148,6 +148,14 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.guests.errors.blocked;
     case "block_reason_required":
       return t.guests.errors.blockReasonRequired;
+    // GUESTS-CLOSURE central identity — a reservation create / check-in whose
+    // identity collides with a different existing guest (409). Never merged.
+    case "guest_identity_conflict":
+      return t.guests.errors.identityConflict;
+    // GUESTS-CLOSURE public booking — a phone number without a usable country
+    // code (400). Actionable guidance instead of the generic validation line.
+    case "invalid_phone":
+      return t.guests.errors.invalidPhone;
     case "folio_closed":
       return t.finance.errors.folioClosed;
     case "folio_not_balanced":

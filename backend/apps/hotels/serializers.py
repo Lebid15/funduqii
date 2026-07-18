@@ -107,6 +107,17 @@ class HotelSettingsSerializer(serializers.ModelSerializer):
                 cleaned.append(code)
         return cleaned
 
+    def validate_default_phone_country(self, value):
+        """ISO-3166-1 alpha-2, stored uppercase. Blank is allowed ("no default").
+        Only the shape is validated here — not membership of a country list — so
+        the setting never silently rejects a legitimate code."""
+        code = (value or "").strip().upper()
+        if code and (len(code) != 2 or not code.isalpha()):
+            raise serializers.ValidationError(
+                "Country must be a 2-letter ISO-3166-1 alpha-2 code."
+            )
+        return code
+
     def validate_social_links(self, value):
         if not isinstance(value, dict):
             raise serializers.ValidationError("social_links must be an object.")

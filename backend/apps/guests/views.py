@@ -15,20 +15,29 @@ Final closure additions:
 """
 from __future__ import annotations
 
+from django.db.models import Count, Exists, OuterRef, Q
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.pagination import DefaultPagination
+from apps.notifications.models import ActivityEvent
 from apps.rbac.permissions import HasHotelPermission
 from apps.rbac.services import has_hotel_permission
+from apps.reservations.models import Reservation, ReservationDocument
+from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from .models import Guest
 from .normalize import normalize_id, normalize_phone
 from .serializers import (
     GuestBlockSerializer,
+    GuestChangeLogSerializer,
+    GuestDocumentSerializer,
+    GuestReservationHistorySerializer,
     GuestSerializer,
+    GuestStayHistorySerializer,
     GuestUnblockSerializer,
     GuestVipSerializer,
     can_view_sensitive,
@@ -38,18 +47,20 @@ from .services import (
     block_guest,
     deactivate_or_delete,
     mask_document,
-    record_guest_created,
     record_guest_updated,
     set_vip,
     unblock_guest,
 )
 
 CanView = HasHotelPermission("guests.view")
-CanCreate = HasHotelPermission("guests.create")
 CanUpdate = HasHotelPermission("guests.update")
 CanDelete = HasHotelPermission("guests.delete")
 CanMarkVip = HasHotelPermission("guests.mark_vip")
 CanBlock = HasHotelPermission("guests.block")
+# Reused as-is for the guest-documents endpoint: the EXISTING reservation
+# document access control is required IN ADDITION to ``guests.view`` (no new
+# permission is introduced).
+CanViewReservationDocuments = HasHotelPermission("reservation_documents.view")
 
 
 def _guard_write(request: Request) -> None:
@@ -68,13 +79,60 @@ def _real_stays(guest):
     ]
 
 
+def _current_unit_summary(stay) -> dict:
+    """A compact CURRENT-UNIT descriptor for one in-house stay's room.
+
+    The card renders ``<unit type> <unit number> — <floor>`` (e.g.
+    "الغرفة 101 — الطابق الأرضي"). This repo has NO unit-KIND choices enum
+    (room/suite/wing/chalet): the registered unit type is the FREE-TEXT
+    ``RoomType.name``, returned AS-IS (``room_type_name``). The floor label is
+    ``Floor.name`` with ``Floor.number`` as a fallback code.
+
+    Owner minimal-scope rule: return ONLY the four fields the card consumes and
+    NO other stay/room details —
+
+    * ``room_number`` — ``Room.number`` (the unit number).
+    * ``room_type_name`` — ``RoomType.name`` free text (the registered type).
+    * ``floor_name`` — ``Floor.name`` (the floor label).
+    * ``floor_number`` — ``Floor.number`` or ``None`` (fallback for the label).
+
+    ``room``/``floor``/``room_type`` are read off the PREFETCHED objects (see the
+    directory and profile prefetch chains ``stay_links__stay__room__room_type`` /
+    ``...__floor``) — no per-row query. ``Room.floor`` / ``Room.room_type`` are
+    non-null FKs, so both are always present.
+    """
+    room = stay.room
+    room_type = room.room_type
+    floor = room.floor
+    return {
+        "room_number": room.number,
+        # FREE TEXT — no unit-kind enum exists (see docstring / owner decision).
+        "room_type_name": room_type.name,
+        "floor_name": floor.name,
+        "floor_number": floor.number or None,
+    }
+
+
 def _stats(stays: list) -> dict:
-    """Derived stats — never stored: counts, nights, first/last, residency."""
+    """Derived stats — never stored: counts, nights, first/last, residency.
+
+    ``current_units_count`` = the number of DISTINCT current (in-house) units the
+    guest occupies right now (0 for a non-resident). ``current_unit`` carries the
+    single-unit summary ONLY when the guest occupies exactly one current unit; for
+    zero or for more than one it is ``None`` (the card shows the count instead).
+    """
     count = len(stays)
     nights = sum(s.nights for s in stays)
     in_house = [s for s in stays if s.status == "in_house"]
     ordered = sorted(stays, key=lambda s: (s.planned_check_in_date, s.id))
     current = in_house[0] if in_house else None
+    # Distinct current units — DB guarantees one in-house stay per room, so this
+    # equals the count of in-house stays, but counting distinct room ids is
+    # robust regardless.
+    current_units_count = len({s.room_id for s in in_house})
+    current_unit = (
+        _current_unit_summary(current) if current_units_count == 1 else None
+    )
     return {
         "stays_count": count,
         "nights_total": nights,
@@ -83,14 +141,14 @@ def _stats(stays: list) -> dict:
         "is_repeat": count > 1,
         "is_resident": current is not None,
         "current_room_number": current.room.number if current else None,
+        "current_units_count": current_units_count,
+        "current_unit": current_unit,
     }
 
 
 class _GuestScopedMixin:
     def get_permissions(self):
         method = self.request.method
-        if method == "POST":
-            return [CanCreate()]
         if method in ("PUT", "PATCH"):
             return [CanUpdate()]
         if method == "DELETE":
@@ -98,11 +156,44 @@ class _GuestScopedMixin:
         return [CanView()]
 
 
-class GuestListCreateView(_GuestScopedMixin, generics.ListCreateAPIView):
-    """The PLAIN guest list — reservation/check-in pickers depend on it, so
-    its behavior is unchanged (all active guests, no stay requirement)."""
+def _guest_search_q(search: str, request: Request) -> Q:
+    """Build the guest-search filter for the plain list and the directory.
+
+    Name / phone / email keep their operational SUBSTRING search. The national
+    ID is matched EXACTLY on its normalized key only (U-10) — never a substring,
+    so it can never be reconstructed digit-by-digit. The document-number
+    SUBSTRING search is a reconstruction oracle for a MASKED number, so it is
+    gated behind ``guests.view_sensitive_data`` (Decision 5 / U-09 / S3): a basic
+    viewer cannot progressively rebuild a masked document number. Both lists
+    still MASK the returned values per permission — this only governs which
+    guests a search term can surface.
+    """
+    cond = (
+        Q(full_name__icontains=search)
+        | Q(phone__icontains=search)
+        | Q(email__icontains=search)
+    )
+    national_id_key = normalize_id(search)
+    if national_id_key:
+        cond |= Q(national_id_normalized=national_id_key)
+    if can_view_sensitive(request):
+        cond |= Q(document_number__icontains=search)
+    return cond
+
+
+class GuestListView(generics.ListAPIView):
+    """The PLAIN guest list — reservation/check-in pickers depend on it.
+
+    LIST-ONLY (Decision 9): there is deliberately NO create endpoint here. A
+    Guest is created ONLY through the central identity service (wired in a later
+    wave), so a ``POST`` to this route is ``405 Method Not Allowed`` and the API
+    can never mint an orphan Guest. GET behavior is unchanged (all active guests,
+    no stay requirement)."""
 
     serializer_class = GuestSerializer
+
+    def get_permissions(self):
+        return [CanView()]
 
     def get_queryset(self):
         qs = Guest.objects.filter(hotel=self.request.hotel)
@@ -112,22 +203,8 @@ class GuestListCreateView(_GuestScopedMixin, generics.ListCreateAPIView):
             qs = qs.filter(is_active=(is_active == "true"))
         search = params.get("search")
         if search:
-            qs = (
-                qs.filter(full_name__icontains=search)
-                | qs.filter(phone__icontains=search)
-                | qs.filter(document_number__icontains=search)
-                | qs.filter(email__icontains=search)
-            )
+            qs = qs.filter(_guest_search_q(search, self.request))
         return qs.distinct()
-
-    def perform_create(self, serializer):
-        _guard_write(self.request)
-        guest = serializer.save(
-            hotel=self.request.hotel,
-            created_by=self.request.user,
-            updated_by=self.request.user,
-        )
-        record_guest_created(guest, user=self.request.user)
 
 
 class GuestDirectoryView(generics.ListAPIView):
@@ -139,18 +216,40 @@ class GuestDirectoryView(generics.ListAPIView):
         return [CanView()]
 
     def get_queryset(self):
-        from django.db.models import Count, Q
+        from apps.reservations.models import BLOCKING_STATUSES
+        from apps.shifts.services import get_business_date
 
+        # Card support: ``has_upcoming`` = the guest holds a future/active booking as
+        # PRIMARY guest — an ACTIVE (blocking) reservation whose window has not yet
+        # departed (check-out on/after the hotel business date). Computed once via an
+        # ``Exists()`` subquery on the directory queryset (no per-row query / N+1),
+        # mirroring the profile's ``upcoming_reservations`` definition exactly so the
+        # card badge and the profile can never disagree.
+        business_date = get_business_date(self.request.hotel)
+        upcoming = Reservation.objects.filter(
+            hotel=self.request.hotel,
+            primary_guest_id=OuterRef("pk"),
+            status__in=BLOCKING_STATUSES,
+            check_out_date__gte=business_date,
+        )
         qs = (
             Guest.objects.filter(hotel=self.request.hotel)
             .annotate(
                 real_stay_count=Count(
                     "stay_links",
                     filter=Q(stay_links__stay__status__in=REAL_STAY_STATUSES),
-                )
+                ),
+                has_upcoming=Exists(upcoming),
             )
             .filter(real_stay_count__gte=1)
-            .prefetch_related("stay_links__stay__room")
+            # Prefetch the whole current-unit chain in ONE batched pass per level
+            # (room -> room_type / floor) so ``_current_unit_summary`` reads them
+            # off the cache with no per-row query (N+1). The deep FK paths also
+            # cover the shallower ``stay_links__stay__room`` used by the stats.
+            .prefetch_related(
+                "stay_links__stay__room__room_type",
+                "stay_links__stay__room__floor",
+            )
         )
         params = self.request.query_params
         is_active = params.get("is_active")
@@ -158,12 +257,7 @@ class GuestDirectoryView(generics.ListAPIView):
             qs = qs.filter(is_active=(is_active == "true"))
         search = params.get("search")
         if search:
-            qs = (
-                qs.filter(full_name__icontains=search)
-                | qs.filter(phone__icontains=search)
-                | qs.filter(document_number__icontains=search)
-                | qs.filter(email__icontains=search)
-            ).distinct()
+            qs = qs.filter(_guest_search_q(search, self.request)).distinct()
         # Explicit ordering: ``.annotate(Count(...))`` drops the model Meta
         # ordering, so DRF pagination would emit UnorderedObjectListWarning and
         # page inconsistently. Order by the same keys as Meta.
@@ -175,6 +269,10 @@ class GuestDirectoryView(generics.ListAPIView):
         rows = []
         for guest in page:
             stats = _stats(_real_stays(guest))
+            # ``needs_review`` = blocked AND still holds a future/active booking — a
+            # human must reconcile the block with the pending arrival. Same rule as
+            # the profile's ``needs_review`` (is_blocked AND upcoming).
+            needs_review = guest.is_blocked and guest.has_upcoming
             rows.append(
                 {
                     "id": guest.id,
@@ -190,6 +288,8 @@ class GuestDirectoryView(generics.ListAPIView):
                     "is_active": guest.is_active,
                     "is_vip": guest.is_vip,
                     "is_blocked": guest.is_blocked,
+                    "has_upcoming": guest.has_upcoming,
+                    "needs_review": needs_review,
                     **stats,
                 }
             )
@@ -207,6 +307,10 @@ class GuestDetailView(_GuestScopedMixin, generics.RetrieveUpdateDestroyAPIView):
         old = {
             "full_name": serializer.instance.full_name,
             "phone": serializer.instance.phone,
+            # SEC-F1 / U-06: national_id is a first-class identity field and a
+            # change to it MUST be audited. It is captured here (and compared +
+            # logged MASKED in record_guest_updated) so an edit is never silent.
+            "national_id": serializer.instance.national_id,
             "document_type": serializer.instance.document_type,
             "document_number": serializer.instance.document_number,
         }
@@ -239,11 +343,19 @@ class GuestProfileView(APIView):
         return [CanView()]
 
     def get(self, request: Request, pk: int) -> Response:
+        from apps.reservations.models import BLOCKING_STATUSES
+        from apps.shifts.services import get_business_date
+
         guest = generics.get_object_or_404(
             Guest.objects.filter(hotel=request.hotel).prefetch_related(
                 "stay_links__stay__room__room_type",
+                # ``_stats`` -> ``_current_unit_summary`` reads ``room.floor`` for
+                # the shared ``current_unit`` summary; prefetch it here too so the
+                # profile stays N+1-free.
+                "stay_links__stay__room__floor",
                 "stay_links__stay__reservation",
                 "stay_links__stay__folios",
+                "reservations",
             ),
             pk=pk,
         )
@@ -251,6 +363,24 @@ class GuestProfileView(APIView):
         can_see_block_reason = has_hotel_permission(
             request.user, request.hotel, "guests.block"
         )
+
+        # U-15: the guest's UPCOMING reservations — a booking they hold as
+        # primary guest that is still ACTIVE (blocking status) and has not yet
+        # departed (check-out on/after the hotel business date). Filtered in
+        # Python over the single ``reservations`` prefetch (no per-row query).
+        business_date = get_business_date(request.hotel)
+        upcoming_reservations = sorted(
+            (
+                res
+                for res in guest.reservations.all()
+                if res.status in BLOCKING_STATUSES
+                and res.check_out_date >= business_date
+            ),
+            key=lambda res: (res.check_in_date, res.id),
+        )
+        # S5: a blocked guest who still holds an active/future booking needs a
+        # human to reconcile the block with the pending arrival.
+        needs_review = guest.is_blocked and bool(upcoming_reservations)
 
         all_stays = sorted(
             (link.stay for link in guest.stay_links.all()),
@@ -306,14 +436,26 @@ class GuestProfileView(APIView):
             "email": guest.email,
             "nationality": guest.nationality,
             "gender": guest.gender,
-            "date_of_birth": str(guest.date_of_birth) if guest.date_of_birth else None,
+            # S5: date_of_birth and address are sensitive personal data — mask
+            # them fail-closed for callers without ``guests.view_sensitive_data``
+            # (same gate as document_number). A present value is fully hidden
+            # ("••••"); an absent value stays absent so nothing is invented.
+            "date_of_birth": (
+                (str(guest.date_of_birth) if guest.date_of_birth else None)
+                if sensitive
+                else ("••••" if guest.date_of_birth else None)
+            ),
             "document_type": guest.document_type,
             "document_number": (
                 guest.document_number
                 if sensitive
                 else mask_document(guest.document_number)
             ),
-            "address": guest.address,
+            "address": (
+                guest.address
+                if sensitive
+                else ("••••" if guest.address else "")
+            ),
             "notes": guest.notes,
             "is_active": guest.is_active,
             "is_vip": guest.is_vip,
@@ -328,6 +470,18 @@ class GuestProfileView(APIView):
             "blocked_by": guest.blocked_by.email if guest.blocked_by_id else None,
             # The reason is sensitive: only block-permission holders see it.
             "block_reason": guest.block_reason if can_see_block_reason else None,
+            "needs_review": needs_review,
+            "upcoming_reservations": [
+                {
+                    "reservation_id": res.id,
+                    "reservation_number": res.reservation_number,
+                    "status": res.status,
+                    "booking_kind": res.booking_kind,
+                    "check_in_date": str(res.check_in_date),
+                    "check_out_date": str(res.check_out_date),
+                }
+                for res in upcoming_reservations
+            ],
             **stats,
             "current": (
                 {
@@ -443,3 +597,140 @@ class GuestLookupView(APIView):
             data["is_vip"] = guest.is_vip
             results.append(data)
         return Response({"results": results})
+
+
+# --------------------------------------------------------------------------- #
+# GAP-1 read-only profile sub-resources (paginated)                           #
+# EXEC-GUESTS-CLOSURE-01 / W3b — Decision 11. Four READ-ONLY, hotel-scoped,    #
+# permission-scoped, paginated ListAPIViews that back the profile modals with  #
+# real data. GET only; a guest of another hotel resolves to 404; every query   #
+# is scoped to ``hotel=request.hotel``; sensitive fields reuse the existing    #
+# masking gates. No route-guard / RBAC / file-service change — pure reuse.     #
+# --------------------------------------------------------------------------- #
+
+
+class _GuestSubResourceView(generics.ListAPIView):
+    """Shared base: resolve the guest under ``hotel=request.hotel`` (404 for
+    another hotel's guest) and require ``guests.view``. Reads are never blocked
+    by the suspended-hotel guard (that guard is for writes only)."""
+
+    pagination_class = DefaultPagination
+
+    def get_permissions(self):
+        return [CanView()]
+
+    def get_guest(self) -> Guest:
+        # Tenant isolation: another hotel's guest (or a missing one) is a 404.
+        return generics.get_object_or_404(
+            Guest, pk=self.kwargs["pk"], hotel=self.request.hotel
+        )
+
+
+class GuestStaysView(_GuestSubResourceView):
+    """GET ``guests/<pk>/stays/`` — the guest's stay history, newest first.
+
+    Scope = every stay the guest is attached to (any role), matching the
+    profile's ``stay_links`` definition. Paginated by ``DefaultPagination``.
+    """
+
+    serializer_class = GuestStayHistorySerializer
+
+    def get_queryset(self):
+        guest = self.get_guest()
+        return (
+            Stay.objects.filter(hotel=self.request.hotel, guests__guest=guest)
+            .select_related("room__room_type", "reservation")
+            .prefetch_related("folios")
+            .order_by("-planned_check_in_date", "-id")
+        )
+
+
+class GuestReservationsView(_GuestSubResourceView):
+    """GET ``guests/<pk>/reservations/`` — the guest's reservation history.
+
+    Scope = bookings the guest holds as the PRIMARY guest
+    (``Reservation.primary_guest``), matching the profile's reservations
+    concept. Past / current / upcoming are all included; newest arrival first.
+    """
+
+    serializer_class = GuestReservationHistorySerializer
+
+    def get_queryset(self):
+        guest = self.get_guest()
+        return Reservation.objects.filter(
+            hotel=self.request.hotel, primary_guest=guest
+        ).order_by("-check_in_date", "-id")
+
+
+class GuestDocumentsView(_GuestSubResourceView):
+    """GET ``guests/<pk>/documents/`` — the guest's identity documents.
+
+    "Guest documents" is RESOLVED from the EXISTING ``ReservationDocument``
+    mechanism (there is no separate guest-document store): the aggregate of
+
+      * documents whose named occupant IS this guest
+        (``occupant.guest == guest``), plus
+      * whole-reservation / primary-guest documents (``occupant IS NULL``) on a
+        reservation whose ``primary_guest`` IS this guest.
+
+    All hotel-scoped. Access requires ``guests.view`` AND the existing
+    ``reservation_documents.view`` — and the image bytes still flow only through
+    the existing signed-URL mint + protected stream endpoints (surfaced as
+    ``front_url`` / ``back_url``). The identity ``number`` is masked unless the
+    caller holds ``guests.view_sensitive_data``.
+    """
+
+    serializer_class = GuestDocumentSerializer
+
+    def get_permissions(self):
+        # AND-composition: DRF requires every listed permission to pass, and
+        # each raises PermissionDenied on failure — so this enforces BOTH the
+        # guests read AND the reservation-document read control.
+        return [CanView(), CanViewReservationDocuments()]
+
+    def get_queryset(self):
+        guest = self.get_guest()
+        return (
+            ReservationDocument.objects.filter(hotel=self.request.hotel)
+            .filter(
+                Q(occupant__guest=guest)
+                | Q(occupant__isnull=True, reservation__primary_guest=guest)
+            )
+            .select_related("reservation", "occupant")
+            .order_by("-created_at", "-id")
+            .distinct()
+        )
+
+
+class GuestChangeLogView(_GuestSubResourceView):
+    """GET ``guests/<pk>/change-log/`` — the guest's change-log / audit history
+    (created / updated / vip / blocked / unblocked / reactivated / deactivated),
+    newest first, read from the existing ``ActivityEvent`` store.
+
+    Sensitive identity values are already masked at record time and stay masked.
+    The BLOCK REASON / unblock note (the ``guest.blocked`` / ``guest.unblocked``
+    message) stays gated behind ``guests.block`` — mirrors the profile.
+    """
+
+    serializer_class = GuestChangeLogSerializer
+
+    def get_queryset(self):
+        guest = self.get_guest()
+        # ``related_object_*`` pins the events to THIS guest only; the hotel
+        # filter is the tenant boundary. ``related_object_type="Guest"`` excludes
+        # reservation-document events (which are category=guest but not about the
+        # Guest row itself).
+        return ActivityEvent.objects.filter(
+            hotel=self.request.hotel,
+            related_object_type="Guest",
+            related_object_id=guest.id,
+        ).order_by("-occurred_at", "-id")
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        # Computed ONCE for the page (not per row): does the caller hold
+        # ``guests.block`` and may therefore see the block reason / unblock note.
+        ctx["can_see_block_reason"] = has_hotel_permission(
+            self.request.user, self.request.hotel, "guests.block"
+        )
+        return ctx

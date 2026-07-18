@@ -1031,7 +1031,11 @@
         "lookupConflict": "Bu kimlik ve telefon iki farklı misafire ait — hiçbir şey içe aktarılmadı. Devam etmeden önce kimlik ve telefonu kontrol edin.",
         "lookupOverwriteTitle": "Bu misafirin bilgileri içe aktarılsın mı?",
         "lookupOverwriteBody": "Bu, girdiğiniz bilgilerin yerine kayıtlı misafirin bilgilerini koyar.",
-        "lookupOverwriteConfirm": "İçe aktar ve değiştir"
+        "lookupOverwriteConfirm": "İçe aktar ve değiştir",
+        "lookupAnnounceNone": "Eşleşen misafir bulunamadı — yeni bir misafir oluşturulacak.",
+        "lookupAnnounceSingle": "Bir eşleşen misafir bulundu.",
+        "lookupAnnounceMultiple": "{count} eşleşen misafir bulundu.",
+        "lookupUseAria": "Bu misafiri kullan — {name}"
       },
       "companions": {
         "title": "Refakatçiler",
@@ -1254,6 +1258,10 @@
       "empty": "Henüz misafir yok",
       "emptyHint": "Eklediğiniz misafirler burada görünür.",
       "searchPlaceholder": "Ad, telefon veya belge ile ara",
+      "searchHint": "Arama; ad, telefon ve ulusal kimliği kapsar (tam eşleşme).",
+      "searching": "Aranıyor…",
+      "resultsCount": "{count} sonuç",
+      "noResults": "Sonuç yok",
       "name": "Ad",
       "phone": "Telefon",
       "document": "Belge",
@@ -1297,26 +1305,14 @@
     "inactive": "Pasif",
     "directory": {
       "residency": "Konaklama",
-      "resident": "Şu an konaklıyor",
-      "notResident": "Konaklamıyor",
       "stays": "Konaklamalar",
       "lastStay": "Son konaklama",
-      "repeat": "Tekrarlayan",
-      "firstTime": "Yeni",
-      "openProfile": "Profili aç",
       "empty": "Henüz misafir yok",
       "emptyHint": "En az bir konaklaması olan her misafir — mevcut veya geçmiş — burada görünür."
     },
     "profile": {
-      "title": "Misafir profili",
       "nights": "Geceler",
-      "firstStay": "İlk konaklama",
-      "currentStay": "Mevcut konaklama",
-      "openFrontDesk": "Ön büroyu aç",
-      "openFolio": "Folyoyu aç",
-      "stayHistory": "Konaklama geçmişi",
-      "noStays": "Kayıtlı konaklama yok.",
-      "currentBadge": "Mevcut"
+      "currentStay": "Mevcut konaklama"
     },
     "vip": {
       "badge": "VIP",
@@ -1339,9 +1335,91 @@
       "deleted": "Profil kalıcı olarak silindi (geçmişi yok).",
       "deactivated": "Profil yalnızca devre dışı bırakıldı — geçmiş korunur."
     },
+    "needsReview": "İnceleme gerekli",
+    "card": {
+      "viewStays": "Konaklamaları görüntüle",
+      "viewReservations": "Rezervasyonları görüntüle",
+      "viewDocuments": "Belgeleri görüntüle",
+      "viewHistory": "Geçmişi görüntüle",
+      "pastBadge": "Eski misafir",
+      "upcomingBadge": "Yaklaşan",
+      "inHouse": "Konaklıyor",
+      "newGuest": "Yeni misafir",
+      "repeatGuest": "Tekrar eden misafir",
+      "floor": "Kat {floor}",
+      "currentUnits": {
+        "dual": "2 mevcut birim",
+        "plural": "{n} mevcut birim"
+      },
+      "ariaStays": "Konaklama geçmişi — {name}",
+      "ariaReservations": "Rezervasyon geçmişi — {name}",
+      "ariaDocuments": "Belgeler — {name}",
+      "ariaChangeLog": "Geçmiş — {name}",
+      "ariaEdit": "Düzenle — {name}",
+      "ariaMarkVip": "VIP işaretle — {name}",
+      "ariaUnmarkVip": "VIP kaldır — {name}",
+      "ariaBlock": "Engelle — {name}",
+      "ariaUnblock": "Engeli kaldır — {name}"
+    },
+    "staysList": {
+      "title": "Konaklamalar",
+      "room": "Oda",
+      "roomType": "Oda türü",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "nights": "Geceler",
+      "reservation": "Rezervasyon",
+      "folio": "Folyo",
+      "checkedOut": "Çıkış yaptı",
+      "empty": "Kayıtlı konaklama yok.",
+      "viewFolio": "Folyoyu görüntüle",
+      "viewFolioLabel": "Folyoyu görüntüle {folio}"
+    },
+    "reservationsList": {
+      "title": "Rezervasyonlar",
+      "number": "Rezervasyon",
+      "status": "Durum",
+      "source": "Kaynak",
+      "kind": "Tür",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "empty": "Rezervasyon yok.",
+      "groupUpcoming": "Yaklaşan",
+      "groupCurrent": "Mevcut",
+      "groupPast": "Geçmiş",
+      "openReservation": "Rezervasyonu aç {number}"
+    },
+    "documents": {
+      "title": "Belgeler",
+      "type": "Tür",
+      "number": "Numara",
+      "front": "Ön",
+      "back": "Arka",
+      "viewFront": "Ön yüzü gör",
+      "viewBack": "Arka yüzü gör",
+      "expiry": "Son geçerlilik",
+      "added": "Eklendi",
+      "empty": "Belge yok.",
+      "view": "Görüntüle",
+      "permissionHint": "Belgeleri görüntüleme izniniz yok."
+    },
+    "changeLog": {
+      "title": "Geçmiş",
+      "event": "Olay",
+      "category": "Kategori",
+      "severity": "Önem",
+      "actor": "Yapan",
+      "occurredAt": "Tarih",
+      "empty": "Henüz geçmiş yok.",
+      "severityInfo": "Bilgi",
+      "severityWarning": "Uyarı",
+      "severityCritical": "Kritik"
+    },
     "errors": {
       "blocked": "Bu misafir bu otelde engelli — işlem yapılamaz.",
-      "blockReasonRequired": "Engelleme sebebi zorunludur."
+      "blockReasonRequired": "Engelleme sebebi zorunludur.",
+      "identityConflict": "Bu kimlik farklı bir misafirle eşleşiyor — devam etmeden önce çakışmayı çözün.",
+      "invalidPhone": "Telefon numarasını ülke koduyla girin."
     }
   },
   "frontDesk": {
@@ -1481,6 +1559,8 @@
       "roomAssigned": "Atanan oda",
       "primaryGuest": "Ana misafir",
       "selectGuest": "Bir misafir seçin",
+      "guestDefaultOption": "Rezervasyon misafiri (varsayılan)",
+      "guestOptionalHint": "İsteğe bağlı — rezervasyonun kayıtlı misafiriyle giriş yapmak için boş bırakın (yeni ise merkezi olarak oluşturulur). Yalnızca değiştirmek için bir misafir seçin.",
       "companions": "Refakatçiler",
       "notes": "Notlar",
       "submit": "Giriş yap",
@@ -3622,7 +3702,6 @@
     "newReservation": "Yeni Rezervasyon",
     "checkIn": "Giriş Yap",
     "checkOut": "Çıkış Yap",
-    "addGuest": "Misafir Ekle",
     "guestFolio": "Misafir Folyosu",
     "recordPayment": "Ödeme Kaydet",
     "addExpense": "Gider Ekle",

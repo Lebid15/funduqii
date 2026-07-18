@@ -64,14 +64,39 @@ def record_guest_created(guest, *, user=None):
     )
 
 
+def record_guest_reactivated(guest, *, user=None):
+    """Log that a previously-deactivated profile was reused and reactivated by
+    the central identity resolution service (GUESTS central identity). The
+    reactivation itself is written by that service; this only records the audit
+    event so the history shows WHY the profile came back to life."""
+    _record(
+        guest,
+        event_type="guest.reactivated",
+        severity="info",
+        title=f"Guest profile reactivated: {guest.full_name}",
+        message="reused by central identity resolution",
+        user=user,
+    )
+
+
 def record_guest_updated(guest, *, old_values, user=None):
     """Log a profile edit. Old/new values are included for the sensitive
-    identity fields — except document numbers, which are logged MASKED."""
+    identity fields — except the national ID and document numbers, which are
+    logged MASKED (the activity log is readable without
+    ``guests.view_sensitive_data``, so a raw identifier must never land there)."""
     changes = []
     if old_values.get("full_name") != guest.full_name:
         changes.append(f"name: {old_values['full_name']} → {guest.full_name}")
     if old_values.get("phone") != guest.phone:
         changes.append(f"phone: {old_values['phone'] or '—'} → {guest.phone or '—'}")
+    # SEC-F1 / U-06: a national_id change is audited MASKED (same masking as the
+    # document number) — a change is recorded without exposing the identifier.
+    if old_values.get("national_id") != guest.national_id:
+        changes.append(
+            "national_id: "
+            f"{mask_document(old_values.get('national_id', '') or '') or '—'} → "
+            f"{mask_document(guest.national_id) or '—'}"
+        )
     if old_values.get("document_type") != guest.document_type or old_values.get(
         "document_number"
     ) != guest.document_number:
@@ -195,12 +220,23 @@ def unblock_guest(guest, *, note: str = "", user=None) -> Guest:
 
 def guest_has_operational_traces(guest) -> bool:
     """True when ANY operational history references the guest — stays (any
-    role), folios, or lost & found. Such a profile is never hard-deleted."""
+    role), folios, lost & found, reservations (upcoming or historical), a
+    reservation-occupant link, or a block-log entry. Such a profile is never
+    hard-deleted; it is deactivated so its history (and its identity, for the
+    block guard) is preserved (Decision 7)."""
     if guest.stay_links.exists() or guest.primary_stays.exists():
         return True
     if guest.folios.exists():
         return True
     if guest.lost_found_items.exists():
+        return True
+    # A guest carrying a reservation (as primary guest or a named occupant) — an
+    # upcoming booking included — keeps history and must not hard-delete.
+    if guest.reservations.exists() or guest.reservation_occupancies.exists():
+        return True
+    # A block-log entry is security history; the guest FK is PROTECTed, so a hard
+    # delete would raise anyway — deactivate instead.
+    if guest.block_logs.exists():
         return True
     return False
 
@@ -242,22 +278,3 @@ def ensure_guest_not_blocked(*guests) -> None:
     for guest in guests:
         if guest is not None and guest.is_blocked:
             raise GuestBlocked({"guest": guest.id})
-
-
-def find_blocked_guest_matching(hotel, *, phone="", document_number=""):
-    """The reservation-side guard: reservations hold guest SNAPSHOTS (no FK),
-    so a blocked person is matched by exact document number or exact phone.
-    Creating a fresh Guest row for the same person therefore cannot sidestep
-    the block. Hotel-scoped by construction."""
-    qs = Guest.objects.filter(hotel=hotel, is_blocked=True)
-    document_number = (document_number or "").strip()
-    phone = (phone or "").strip()
-    if document_number:
-        match = qs.filter(document_number=document_number).first()
-        if match is not None:
-            return match
-    if phone:
-        match = qs.filter(phone=phone).first()
-        if match is not None:
-            return match
-    return None

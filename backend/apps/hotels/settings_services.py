@@ -29,6 +29,7 @@ HOTEL_SETTINGS_GROUPS: dict[str, list[str]] = {
         "timezone",
         "default_currency",
         "accepted_currencies",
+        "default_phone_country",
     ],
     "contact": [
         "phone",

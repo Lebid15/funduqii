@@ -263,6 +263,14 @@ class PublicBookingSerializer(serializers.Serializer):
     special_requests = serializers.CharField(
         max_length=1000, required=False, allow_blank=True, default=""
     )
+    # Decision 3 — an EXPLICIT client idempotency token. The request BODY is the
+    # contract (no header is read): the frontend generates one random, unguessable
+    # UUID per submission and reuses it on retry. Bounded to the engine's
+    # ``creation_idempotency_key`` column width (64). When omitted, the submission
+    # has no idempotency and each retry is an independent booking.
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
     accept_terms = serializers.BooleanField()
 
     def validate_accept_terms(self, value):
@@ -299,6 +307,7 @@ class PublicBookingCreateView(PublicAPIView):
             guest_email=data.get("guest_email", ""),
             guest_nationality=data.get("guest_nationality", ""),
             special_requests=data.get("special_requests", ""),
+            idempotency_key=data.get("idempotency_key", ""),
         )
         payload = services.public_booking_payload(settings_obj, reservation)
         # The ONLY time the plaintext token is ever returned.

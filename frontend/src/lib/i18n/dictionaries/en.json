@@ -1031,7 +1031,11 @@
         "lookupConflict": "This ID and phone belong to two different guests — nothing was imported. Check the ID and phone before continuing.",
         "lookupOverwriteTitle": "Import this guest's data?",
         "lookupOverwriteBody": "This replaces the details you already entered with the registered guest's data.",
-        "lookupOverwriteConfirm": "Import and replace"
+        "lookupOverwriteConfirm": "Import and replace",
+        "lookupAnnounceNone": "No matching guest found — a new guest will be created.",
+        "lookupAnnounceSingle": "One matching guest found.",
+        "lookupAnnounceMultiple": "{count} matching guests found.",
+        "lookupUseAria": "Use this guest — {name}"
       },
       "companions": {
         "title": "Companions",
@@ -1254,6 +1258,10 @@
       "empty": "No guests yet",
       "emptyHint": "Guests you add appear here.",
       "searchPlaceholder": "Search by name, phone or document",
+      "searchHint": "Search matches name, phone or national ID (exact).",
+      "searching": "Searching…",
+      "resultsCount": "{count} results",
+      "noResults": "No results",
       "name": "Name",
       "phone": "Phone",
       "document": "Document",
@@ -1297,26 +1305,14 @@
     "inactive": "Inactive",
     "directory": {
       "residency": "Residency",
-      "resident": "In house",
-      "notResident": "Not staying",
       "stays": "Stays",
       "lastStay": "Last stay",
-      "repeat": "Repeat",
-      "firstTime": "New",
-      "openProfile": "Open profile",
       "empty": "No guests yet",
       "emptyHint": "Every guest with at least one stay — current or past — appears here."
     },
     "profile": {
-      "title": "Guest profile",
       "nights": "Nights",
-      "firstStay": "First stay",
-      "currentStay": "Current stay",
-      "openFrontDesk": "Open front desk",
-      "openFolio": "Open folio",
-      "stayHistory": "Stay history",
-      "noStays": "No stays recorded.",
-      "currentBadge": "Current"
+      "currentStay": "Current stay"
     },
     "vip": {
       "badge": "VIP",
@@ -1339,9 +1335,91 @@
       "deleted": "Profile permanently deleted (no history).",
       "deactivated": "Profile deactivated only — history is preserved."
     },
+    "needsReview": "Needs review",
+    "card": {
+      "viewStays": "View stays",
+      "viewReservations": "View reservations",
+      "viewDocuments": "View documents",
+      "viewHistory": "View history",
+      "pastBadge": "Past guest",
+      "upcomingBadge": "Upcoming",
+      "inHouse": "In-house",
+      "newGuest": "New guest",
+      "repeatGuest": "Repeat guest",
+      "floor": "Floor {floor}",
+      "currentUnits": {
+        "dual": "2 current units",
+        "plural": "{n} current units"
+      },
+      "ariaStays": "Stay history — {name}",
+      "ariaReservations": "Reservation history — {name}",
+      "ariaDocuments": "Documents — {name}",
+      "ariaChangeLog": "History — {name}",
+      "ariaEdit": "Edit — {name}",
+      "ariaMarkVip": "Mark VIP — {name}",
+      "ariaUnmarkVip": "Remove VIP — {name}",
+      "ariaBlock": "Block — {name}",
+      "ariaUnblock": "Unblock — {name}"
+    },
+    "staysList": {
+      "title": "Stays",
+      "room": "Room",
+      "roomType": "Room type",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "nights": "Nights",
+      "reservation": "Reservation",
+      "folio": "Folio",
+      "checkedOut": "Checked out",
+      "empty": "No stays recorded.",
+      "viewFolio": "View folio",
+      "viewFolioLabel": "View folio {folio}"
+    },
+    "reservationsList": {
+      "title": "Reservations",
+      "number": "Reservation",
+      "status": "Status",
+      "source": "Source",
+      "kind": "Type",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "empty": "No reservations.",
+      "groupUpcoming": "Upcoming",
+      "groupCurrent": "Current",
+      "groupPast": "Past",
+      "openReservation": "Open reservation {number}"
+    },
+    "documents": {
+      "title": "Documents",
+      "type": "Type",
+      "number": "Number",
+      "front": "Front",
+      "back": "Back",
+      "viewFront": "View front",
+      "viewBack": "View back",
+      "expiry": "Expiry",
+      "added": "Added",
+      "empty": "No documents.",
+      "view": "View",
+      "permissionHint": "You do not have permission to view documents."
+    },
+    "changeLog": {
+      "title": "History",
+      "event": "Event",
+      "category": "Category",
+      "severity": "Severity",
+      "actor": "By",
+      "occurredAt": "When",
+      "empty": "No history yet.",
+      "severityInfo": "Info",
+      "severityWarning": "Warning",
+      "severityCritical": "Critical"
+    },
     "errors": {
       "blocked": "This guest is blocked in this hotel — the operation cannot proceed.",
-      "blockReasonRequired": "A block reason is required."
+      "blockReasonRequired": "A block reason is required.",
+      "identityConflict": "This identity matches a different guest — please resolve the conflict before continuing.",
+      "invalidPhone": "Enter the phone number with the country code."
     }
   },
   "frontDesk": {
@@ -1481,6 +1559,8 @@
       "roomAssigned": "Assigned room",
       "primaryGuest": "Primary guest",
       "selectGuest": "Select a guest",
+      "guestDefaultOption": "Reservation guest (default)",
+      "guestOptionalHint": "Optional — leave blank to check in the reservation's registered guest (resolved or created centrally). Pick a guest only to override.",
       "companions": "Companions",
       "notes": "Notes",
       "submit": "Check in",
@@ -3622,7 +3702,6 @@
     "newReservation": "New Reservation",
     "checkIn": "Check In",
     "checkOut": "Check Out",
-    "addGuest": "Add Guest",
     "guestFolio": "Guest Folio",
     "recordPayment": "Record Payment",
     "addExpense": "Add Expense",

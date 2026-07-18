@@ -295,7 +295,11 @@ class CheckInSerializer(serializers.Serializer):
     reservation = serializers.IntegerField()
     reservation_line = serializers.IntegerField(required=False, allow_null=True)
     room = serializers.IntegerField(required=False, allow_null=True)
-    primary_guest = serializers.IntegerField()
+    # Guests central identity (W3): OPTIONAL. When omitted, the check-in service
+    # derives the primary guest from the reservation — its linked guest, else one
+    # resolved/created from the reservation snapshot through the identity service
+    # (e.g. a public booking that has no guest FK yet).
+    primary_guest = serializers.IntegerField(required=False, allow_null=True)
     companions = serializers.ListField(
         child=serializers.IntegerField(), required=False, default=list
     )

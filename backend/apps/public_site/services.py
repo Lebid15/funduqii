@@ -32,6 +32,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.common.exceptions import BookingCannotBeCompleted, GuestBlocked
 from apps.hotels.models import HotelMedia, HotelSettings, MediaKind
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
@@ -227,10 +228,38 @@ def create_public_booking(
     guest_email: str = "",
     guest_nationality: str = "",
     special_requests: str = "",
+    idempotency_key: str = "",
 ) -> tuple[Reservation, str]:
     """Create the reservation through the INTERNAL engine and attach the
     manage token. Returns ``(reservation, plaintext_token)`` — the only
-    moment the plaintext exists."""
+    moment the plaintext exists.
+
+    Guests central identity (W3, Decision 10 / OBS-2): ``create_reservation`` is
+    called with ``allow_create=False`` so a public submission is SNAPSHOT-ONLY — it
+    NEVER creates or links a central guest (the guest is created / linked later at
+    operational confirm or at check-in). The ban check still runs through the identity
+    service (on the canonical phone / document / national id) and refuses a blocked
+    visitor WITHOUT exposing the reason: the internal ``GuestBlocked`` (409,
+    ``guest_blocked``) is caught at this public boundary and translated into the
+    generic ``BookingCannotBeCompleted`` (409, ``booking_cannot_be_completed``) so the
+    response never discloses that a ban — or the guest — exists and is
+    status/shape-indistinguishable from any other booking that could not be completed
+    (the internal hotel-panel paths keep the visible ``guest_blocked``). An identity
+    CONFLICT (e.g. a national id and a phone that point at two different existing
+    guests) is deliberately NOT surfaced here: it is an INTERNAL concern raised only on
+    the authenticated check-in / operational path — a visitor is never shown a 409 for
+    a duplicate the hotel owns.
+
+    ``idempotency_key`` (Decision 3) is an EXPLICIT client-supplied token — the
+    frontend generates one random, unguessable UUID per submission and reuses it on
+    retry. It is forwarded verbatim to ``create_reservation``: the SAME key + the
+    SAME payload replays the ORIGINAL booking (never a duplicate); the SAME key + a
+    MATERIALLY DIFFERENT payload raises ``IdempotencyKeyConflict`` (HTTP 409) via the
+    engine's stored content fingerprint; a NEW key is always a new booking.
+    Uniqueness is enforced per (hotel, key) by the existing constraint, and the
+    random per-submission value means the same key in two hotels is independent. When
+    the key is omitted, the submission has NO idempotency (each is a new booking). No
+    guest search results and no VIP / ban / internal data are ever exposed here."""
     hotel = settings_obj.hotel
     # Entitlement gate (subscriptions closure): the plan's monthly public-booking
     # allowance blocks a NEW public booking; existing bookings are never touched.
@@ -264,15 +293,47 @@ def create_public_booking(
         fields["hold_expires_at"] = timezone.now() + datetime.timedelta(
             hours=PUBLIC_HOLD_HOURS
         )
-    # The SAME engine the hotel console uses: availability is re-checked
-    # inside and overbooking raises `no_availability` — never bypassed.
-    reservation = create_reservation(
-        hotel,
-        lines=[{"room_type": room_type, "quantity": rooms_count}],
-        status=status,
-        user=None,
-        **fields,
-    )
+    # Decision 3 — the EXPLICIT client idempotency key (or None when omitted). A
+    # random per-submission value means uniqueness per (hotel, key) already satisfies
+    # "per hotel and booking source"; the engine's stored content fingerprint rejects
+    # a same-key replay carrying a materially different payload (409). The content
+    # fingerprint is thus a payload-match signal only — never the key itself.
+    creation_key = (idempotency_key or "").strip() or None
+    # The SAME engine the hotel console uses: availability is re-checked inside and
+    # overbooking raises `no_availability` — never bypassed. ``allow_create=False``
+    # keeps this a pure snapshot (no central guest created) while still ban-checking
+    # the identity; the client ``idempotency_key`` collapses a genuine retry onto the
+    # ORIGINAL reservation, and a reused key with a different payload becomes a 409.
+    #
+    # SEC (public-booking ban is INDISTINGUISHABLE): the identity ban check inside
+    # the engine raises the internal-facing :class:`GuestBlocked` (409,
+    # ``guest_blocked``, reason visible to authorized staff). A public VISITOR must
+    # never be told that a ban — or the guest — exists, so at the public boundary we
+    # translate it into the ONE generic :class:`BookingCannotBeCompleted` (409,
+    # ``booking_cannot_be_completed``), which is status/shape-indistinguishable from
+    # the public site's other generic booking failure (``no_availability``). The
+    # translation happens BEFORE any token/reservation persists — the enclosing
+    # atomic rolls back the (never-committed) reservation, so a refused booking
+    # leaves nothing behind. The internal reservation-create / check-in paths are
+    # untouched and keep raising the visible ``guest_blocked``.
+    try:
+        reservation = create_reservation(
+            hotel,
+            lines=[{"room_type": room_type, "quantity": rooms_count}],
+            status=status,
+            user=None,
+            allow_create=False,
+            idempotency_key=creation_key,
+            **fields,
+        )
+    except GuestBlocked:
+        raise BookingCannotBeCompleted()
+    # A retry (same key + same payload) returns the EXISTING booking — no second
+    # reservation, no guest, no token reset. Its plaintext token cannot be recovered
+    # (only the hash is stored), so a replay returns an EMPTY token; the visitor keeps
+    # the token from the original response.
+    if getattr(reservation, "_idempotent_replay", False):
+        return reservation, ""
     token = secrets.token_urlsafe(32)
     reservation.public_manage_token_hash = _hash_token(token)
     reservation.public_manage_token_created_at = timezone.now()

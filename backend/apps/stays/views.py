@@ -607,9 +607,14 @@ class CheckInView(APIView):
         room = None
         if data.get("room"):
             room = generics.get_object_or_404(Room, pk=data["room"], hotel=hotel)
-        primary_guest = generics.get_object_or_404(
-            Guest, pk=data["primary_guest"], hotel=hotel
-        )
+        # Guests central identity (W3): primary_guest is OPTIONAL. When omitted the
+        # service derives it from the reservation (linked guest, else resolved /
+        # created from the snapshot) AFTER the arrival + H2 guards.
+        primary_guest = None
+        if data.get("primary_guest"):
+            primary_guest = generics.get_object_or_404(
+                Guest, pk=data["primary_guest"], hotel=hotel
+            )
         companions = [
             generics.get_object_or_404(Guest, pk=cid, hotel=hotel)
             for cid in data.get("companions", [])

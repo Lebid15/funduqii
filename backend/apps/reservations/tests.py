@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -3554,4 +3555,304 @@ class ReservationAllocatorConcurrencyScenarioTests(TransactionTestCase):
         )
         self.assertEqual(
             ReservationNumberSequence.objects.get(hotel=self.hotel_b).last_number, 1
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Guests central identity (W3) — create_reservation wiring                      #
+# --------------------------------------------------------------------------- #
+
+
+class CentralIdentityIntegrationTests(TestCase):
+    """create_reservation now turns the primary guest into ONE canonical central
+    Guest through the identity service: it reuses/creates + LINKS a guest, runs the
+    ban on the NORMALIZED identity for every case, refuses a conflict (409) with no
+    side effects, and stays fully idempotent."""
+
+    def setUp(self):
+        self.hotel = make_hotel(slug="ci")
+        self.rtype = make_type(self.hotel)
+        make_rooms(self.hotel, self.rtype, 3)
+        self.user = add_member(self.hotel, "ci@x.com", kind=MembershipType.MANAGER)
+
+    def _create(self, **over):
+        from apps.reservations.services import create_reservation
+
+        fields = dict(
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest_name="Central Guest",
+            status=ReservationStatus.CONFIRMED,
+            lines=[{"room_type": self.rtype, "quantity": 1}],
+            user=self.user,
+        )
+        fields.update(over)
+        return create_reservation(self.hotel, **fields)
+
+    def _guest_count(self):
+        return Guest.objects.filter(hotel=self.hotel).count()
+
+    def test_create_links_exactly_one_central_guest(self):
+        before = self._guest_count()
+        res = self._create(primary_guest_national_id="CID10001")
+        self.assertEqual(self._guest_count(), before + 1)
+        self.assertIsNotNone(res.primary_guest_id)
+        self.assertEqual(res.primary_guest.national_id_normalized, "CID10001")
+
+    def test_idempotent_replay_creates_no_second_guest(self):
+        res1 = self._create(
+            primary_guest_national_id="CID20002", idempotency_key="rk-1"
+        )
+        count = self._guest_count()
+        res2 = self._create(
+            primary_guest_national_id="CID20002", idempotency_key="rk-1"
+        )
+        self.assertEqual(res2.id, res1.id)
+        self.assertTrue(getattr(res2, "_idempotent_replay", False))
+        self.assertEqual(self._guest_count(), count)  # no second guest
+
+    def test_second_reservation_same_person_reuses_the_guest(self):
+        r1 = self._create(primary_guest_national_id="CID30003")
+        count = self._guest_count()
+        # Same identity, DIFFERENT raw format -> same canonical guest reused.
+        r2 = self._create(primary_guest_national_id="cid 30003", check_in_date=D2,
+                          check_out_date=D3)
+        self.assertEqual(r2.primary_guest_id, r1.primary_guest_id)
+        self.assertEqual(self._guest_count(), count)  # reused, not duplicated
+
+    def test_identity_conflict_rolls_back_reservation_and_guest(self):
+        from apps.common.exceptions import GuestIdentityConflict
+
+        # A national id owned by guest A, a canonical phone owned by a DIFFERENT
+        # live guest B -> an unmergeable identity clash.
+        self._create(primary_guest_national_id="CONFA111", primary_guest_name="A")
+        self._create(primary_guest_phone="+905551110000", primary_guest_name="B")
+        res_before = Reservation.objects.filter(hotel=self.hotel).count()
+        guest_before = self._guest_count()
+        with self.assertRaises(GuestIdentityConflict):
+            self._create(
+                primary_guest_national_id="CONFA111",
+                primary_guest_phone="+905551110000",
+                primary_guest_name="Clash",
+            )
+        # Full rollback in BOTH directions: no reservation, no guest.
+        self.assertEqual(
+            Reservation.objects.filter(hotel=self.hotel).count(), res_before
+        )
+        self.assertEqual(self._guest_count(), guest_before)
+
+    def test_ban_blocks_create_on_format_variance_no_fresh_guest_bypass(self):
+        from apps.common.exceptions import GuestBlocked
+        from apps.guests.services import block_guest
+
+        res = self._create(primary_guest_national_id="BAN-900-1", primary_guest_name="X")
+        block_guest(res.primary_guest, reason="fraud", user=self.user)
+        guest_before = self._guest_count()
+        res_before = Reservation.objects.filter(hotel=self.hotel).count()
+        # A differently FORMATTED national id for the SAME person is still banned;
+        # no fresh guest sneaks past the identity-based ban.
+        with self.assertRaises(GuestBlocked):
+            self._create(
+                primary_guest_national_id="ban 900 1", primary_guest_name="Fresh"
+            )
+        self.assertEqual(self._guest_count(), guest_before)
+        self.assertEqual(
+            Reservation.objects.filter(hotel=self.hotel).count(), res_before
+        )
+
+    def test_explicit_linked_guest_is_kept_and_ban_reasserted(self):
+        from apps.common.exceptions import GuestBlocked
+        from apps.guests.services import block_guest
+
+        guest = Guest.objects.create(
+            hotel=self.hotel, full_name="Linked", national_id="LINK5555"
+        )
+        res = self._create(primary_guest=guest, primary_guest_name="Linked")
+        self.assertEqual(res.primary_guest_id, guest.id)  # explicit link kept
+        # Once blocked, an explicit link to the same guest is refused too.
+        block_guest(guest, reason="fraud", user=self.user)
+        with self.assertRaises(GuestBlocked):
+            self._create(primary_guest=guest, primary_guest_name="Linked")
+
+
+class ReservationDocumentImageAccessTests(APITestCase):
+    """RV-SEC F-1 / Decision 8 regression: the ORIGINAL identity-document IMAGE
+    (mint + stream) is gated behind ``guests.view_sensitive_data`` IN ADDITION
+    to ``reservation_documents.view``, enforced SERVER-SIDE.
+
+    This proves the reconstruction bypass is CLOSED: a caller who lists a
+    document (holding ``reservation_documents.view`` — and even ``guests.view``)
+    but LACKS ``guests.view_sensitive_data`` cannot MINT a signed URL nor
+    session-stream the raw bytes from the document ``id``. It also proves the
+    happy path (all permissions) still mints + streams, that a minted token
+    remains a valid capability on the token path, and tenant isolation.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Doc Owner")
+        self.res = Reservation.objects.create(
+            hotel=self.hotel,
+            reservation_number="RDOC1",
+            status=ReservationStatus.CONFIRMED,
+            source=ReservationSource.DIRECT,
+            booking_kind="future",
+            check_in_date=D1,
+            check_out_date=D2,
+            primary_guest=self.guest,
+            primary_guest_name=self.guest.full_name,
+        )
+        self.doc = ReservationDocument.objects.create(
+            hotel=self.hotel,
+            reservation=self.res,
+            occupant=None,
+            doc_type="passport",
+            number="PP1234567",
+            front_file=SimpleUploadedFile(
+                "id.jpg", b"\xff\xd8\xff\xe0jpegbytes", content_type="image/jpeg"
+            ),
+            back_file=SimpleUploadedFile(
+                "id2.jpg", b"\xff\xd8\xff\xe0jpegbytes2", content_type="image/jpeg"
+            ),
+        )
+        # Track the private files for best-effort disk cleanup.
+        self._files = [self.doc.front_file, self.doc.back_file]
+
+    def tearDown(self):
+        for field in self._files:
+            try:
+                field.delete(save=False)
+            except Exception:  # pragma: no cover - best-effort disk cleanup
+                pass
+
+    # --- URL helpers -------------------------------------------------------- #
+    def _mint_url(self, side="front", doc=None):
+        return reverse(
+            "reservations:reservation-document-signed-url",
+            kwargs={"doc_id": (doc or self.doc).id, "side": side},
+        )
+
+    def _stream_url(self, side="front", doc=None):
+        return reverse(
+            "reservations:reservation-document-stream",
+            kwargs={"doc_id": (doc or self.doc).id, "side": side},
+        )
+
+    def _member(self, email, perms):
+        user = add_member(self.hotel, email, perms=perms)
+        self.client.force_authenticate(user)
+        return user
+
+    # --- The bypass is CLOSED (the core regression) ------------------------ #
+    def test_mint_forbidden_without_view_sensitive_data(self):
+        # A caller with reservation_documents.view (and guests.view) but WITHOUT
+        # guests.view_sensitive_data reconstructs the mint URL from the doc id ->
+        # 403 (cannot obtain a stream token).
+        self._member(
+            "rdv@x.com", ["guests.view", "reservation_documents.view"]
+        )
+        resp = self.client.get(self._mint_url(), **HDR(self.hotel))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_session_stream_forbidden_without_view_sensitive_data(self):
+        # Same caller reconstructs the bare (tokenless) stream URL -> 403. The
+        # raw image bytes are unreachable server-side, not merely hidden in UI.
+        self._member(
+            "rdv2@x.com", ["guests.view", "reservation_documents.view"]
+        )
+        resp = self.client.get(self._stream_url(), **HDR(self.hotel))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_reservation_documents_view_alone_cannot_reach_image(self):
+        # Even with ONLY reservation_documents.view (the exact permission that
+        # used to grant image access) both image paths are now 403.
+        self._member("rdonly@x.com", ["reservation_documents.view"])
+        self.assertEqual(
+            self.client.get(self._mint_url(), **HDR(self.hotel)).status_code, 403
+        )
+        self.assertEqual(
+            self.client.get(self._stream_url(), **HDR(self.hotel)).status_code, 403
+        )
+
+    # --- The happy path (all required permissions) ------------------------- #
+    def test_mint_and_stream_with_all_permissions(self):
+        self._member(
+            "full@x.com",
+            ["reservation_documents.view", "guests.view_sensitive_data"],
+        )
+        minted = self.client.get(self._mint_url(), **HDR(self.hotel))
+        self.assertEqual(minted.status_code, 200)
+        self.assertIn("token=", minted.data["url"])
+        # The direct/session stream also works for this caller.
+        streamed = self.client.get(self._stream_url(), **HDR(self.hotel))
+        self.assertEqual(streamed.status_code, 200)
+        body = b"".join(streamed.streaming_content)
+        self.assertEqual(body, b"\xff\xd8\xff\xe0jpegbytes")
+
+    def test_minted_token_stays_a_valid_capability_on_token_path(self):
+        # A privileged caller mints a token; that token then streams the bytes
+        # even without a session (the token IS the capability). The point of the
+        # fix is that an unprivileged caller can never MINT such a token.
+        self._member(
+            "full2@x.com",
+            ["reservation_documents.view", "guests.view_sensitive_data"],
+        )
+        url = self.client.get(self._mint_url(), **HDR(self.hotel)).data["url"]
+        token = url.split("token=", 1)[1]
+        self.client.force_authenticate(None)  # anonymous token fetch
+        resp = self.client.get(self._stream_url(), {"token": token})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            b"".join(resp.streaming_content), b"\xff\xd8\xff\xe0jpegbytes"
+        )
+
+    # --- Read serializer nulls the image URLs (item 2, no broken button) --- #
+    def test_document_list_nulls_image_urls_without_view_sensitive_data(self):
+        self._member(
+            "list1@x.com", ["guests.view", "reservation_documents.view"]
+        )
+        url = reverse(
+            "reservations:reservation-document-list",
+            kwargs={"reservation_id": self.res.id},
+        )
+        rows = {r["id"]: r for r in self.client.get(url, **HDR(self.hotel)).data}
+        row = rows[self.doc.id]
+        self.assertTrue(row["has_front"])
+        self.assertTrue(row["has_back"])
+        self.assertIsNone(row["front_url"])
+        self.assertIsNone(row["back_url"])
+        self.assertEqual(row["number"], "••••4567")  # masked identity number
+
+    def test_document_list_returns_image_urls_with_view_sensitive_data(self):
+        self._member(
+            "list2@x.com",
+            ["reservation_documents.view", "guests.view_sensitive_data"],
+        )
+        url = reverse(
+            "reservations:reservation-document-list",
+            kwargs={"reservation_id": self.res.id},
+        )
+        rows = {r["id"]: r for r in self.client.get(url, **HDR(self.hotel)).data}
+        row = rows[self.doc.id]
+        self.assertIsNotNone(row["front_url"])
+        self.assertIsNotNone(row["back_url"])
+        self.assertTrue(row["front_url"].endswith(self._mint_url("front")))
+        self.assertEqual(row["number"], "PP1234567")  # full number visible
+
+    # --- Tenant isolation preserved ---------------------------------------- #
+    def test_other_hotel_cannot_mint_or_stream(self):
+        other = make_hotel(slug="other")
+        add_member(
+            other,
+            "oh@x.com",
+            perms=["reservation_documents.view", "guests.view_sensitive_data"],
+        )
+        self.client.force_authenticate(User.objects.get(email="oh@x.com"))
+        # Even fully permissioned in their OWN hotel, another hotel's document id
+        # 404s (never a cross-tenant read).
+        self.assertEqual(
+            self.client.get(self._mint_url(), **HDR(other)).status_code, 404
+        )
+        self.assertEqual(
+            self.client.get(self._stream_url(), **HDR(other)).status_code, 404
         )

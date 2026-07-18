@@ -10,7 +10,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
-from .normalize import normalize_id, normalize_phone
+from .normalize import normalize_document, normalize_id, normalize_phone
 
 
 class DocumentType(models.TextChoices):
@@ -113,27 +113,45 @@ class Guest(models.Model):
     national_id_normalized = models.CharField(
         max_length=80, blank=True, default="", db_index=True
     )
+    # Canonical document-number key (fold + uppercase + alphanumeric-only),
+    # kept in sync on every save. The per-hotel document uniqueness constraint is
+    # enforced on THIS normalized key (not the raw number) so "AB-123" / "ab123"
+    # cannot both persist and then collide on lookup.
+    document_number_normalized = models.CharField(
+        max_length=80, blank=True, default="", db_index=True
+    )
 
     class Meta:
         db_table = "guests"
         ordering = ["full_name", "id"]
         constraints = [
-            # When a document is recorded, it is unique per hotel + type. Blank
-            # document numbers are allowed and never collide (partial index).
+            # When a document is recorded, it is unique per hotel + type —
+            # enforced on the NORMALIZED number. Blank numbers are allowed and
+            # never collide (partial index). Passport stays a normal
+            # ``document_type='passport'`` row keyed by this normalized number.
             models.UniqueConstraint(
-                fields=["hotel", "document_type", "document_number"],
-                condition=~models.Q(document_number=""),
-                name="unique_guest_document_per_hotel",
+                fields=["hotel", "document_type", "document_number_normalized"],
+                condition=~models.Q(document_number_normalized=""),
+                name="unique_guest_document_normalized_per_hotel",
             ),
             # When a national ID is recorded, it is unique per hotel — enforced
             # on the NORMALIZED key so "1234-5678" and "12345678" cannot both
-            # persist and then collide on lookup. Blank IDs are allowed and never
-            # collide (partial index); legacy rows have
-            # ``national_id_normalized=""`` and are excluded by the condition.
+            # persist and then collide on lookup. This uniqueness is LIFETIME
+            # (not is_active-scoped): a national id / passport identity stays
+            # reserved even after a profile is deactivated. Blank IDs are allowed
+            # and never collide (partial index).
             models.UniqueConstraint(
                 fields=["hotel", "national_id_normalized"],
                 condition=~models.Q(national_id_normalized=""),
                 name="unique_guest_national_id_per_hotel",
+            ),
+            # A phone number is unique per hotel only among ACTIVE profiles: a
+            # deactivated guest never blocks reusing the same phone for a live
+            # profile. Blank phones never collide (partial index).
+            models.UniqueConstraint(
+                fields=["hotel", "phone_normalized"],
+                condition=models.Q(is_active=True) & ~models.Q(phone_normalized=""),
+                name="unique_guest_phone_per_hotel_active",
             ),
         ]
 
@@ -144,6 +162,7 @@ class Guest(models.Model):
         # write path.
         self.phone_normalized = normalize_phone(self.phone)
         self.national_id_normalized = normalize_id(self.national_id)
+        self.document_number_normalized = normalize_document(self.document_number)
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = set(update_fields)
@@ -151,6 +170,8 @@ class Guest(models.Model):
                 update_fields.add("phone_normalized")
             if "national_id" in update_fields:
                 update_fields.add("national_id_normalized")
+            if "document_number" in update_fields:
+                update_fields.add("document_number_normalized")
             kwargs["update_fields"] = update_fields
         super().save(*args, **kwargs)
 
@@ -174,7 +195,7 @@ class GuestBlockLog(models.Model):
         "tenancy.Hotel", on_delete=models.CASCADE, related_name="guest_block_logs"
     )
     guest = models.ForeignKey(
-        Guest, on_delete=models.CASCADE, related_name="block_logs"
+        Guest, on_delete=models.PROTECT, related_name="block_logs"
     )
     action = models.CharField(max_length=16, choices=GuestBlockAction.choices)
     # Mandatory for `blocked`; an optional note for `unblocked`.

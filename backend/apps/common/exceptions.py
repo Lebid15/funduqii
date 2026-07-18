@@ -488,6 +488,28 @@ class ReservationKeyAlreadyUsed(FunduqiiAPIException):
     default_code = "reservation_key_already_used"
 
 
+# --- Public site booking (the ban is indistinguishable) ----------------------
+
+
+class BookingCannotBeCompleted(FunduqiiAPIException):
+    """The PUBLIC booking path's ONE generic, non-differentiating failure.
+
+    A public VISITOR is never told WHY a booking could not be completed when the
+    reason is sensitive — above all when the submitted identity matches a BLOCKED
+    guest. The internal hotel-panel paths keep raising the specific
+    :class:`GuestBlocked` (409, reason visible to authorized staff); the public
+    boundary translates that (and any other ban-derived refusal) into this
+    generic code so a banned identity is shape/status-indistinguishable from any
+    other booking that simply could not be completed. Its 409 status matches the
+    public site's other generic booking failure (``no_availability``), so neither
+    the status nor the code discloses that a ban — or the guest — exists. Carries
+    NO reason and NO identifier."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This booking could not be completed. Please contact the hotel."
+    default_code = "booking_cannot_be_completed"
+
+
 # --- Guests, check-in & check-out (Phase 7) --------------------------------
 
 
@@ -646,6 +668,22 @@ class BlockReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A reason is required to block a guest."
     default_code = "block_reason_required"
+
+
+class GuestIdentityConflict(FunduqiiAPIException):
+    """A guest identity key (national id, typed document number, or active phone)
+    collides with an EXISTING guest in the same hotel. The central identity
+    layer refuses the write rather than silently merging, overwriting, or
+    creating a duplicate identity.
+
+    It carries NO sensitive identity value — never the id/document/phone itself,
+    only the neutral ``default_code`` — so a 409 body cannot leak one guest's
+    identifiers to a caller acting on another guest. The specific field may be
+    surfaced as a non-sensitive ``details.field`` marker by the caller."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This identity already belongs to another guest in this hotel."
+    default_code = "guest_identity_conflict"
 
 
 # --- Housekeeping (final closure round) ---------------------------------------

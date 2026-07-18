@@ -5694,3 +5694,203 @@ a {
 .settings-fieldset > legend {
   padding: 0;
 }
+
+/* --- Guests directory cards (GUESTS-CLOSURE U-17) --------------------------- *
+ * A guest IDENTITY card mirroring the central .res-card / .room-op-card pattern:
+ * a calm surface with a status accent bar and quietly-divided regions. The grid
+ * flows in the document's inline direction, so RTL is automatic; auto-fill +
+ * minmax(min(100%, …)) keeps every column able to shrink so long text wraps
+ * INSIDE the card instead of forcing horizontal scroll at any width. */
+.guest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+/* The listitem wrapper fills its grid cell so the card inside stretches to the
+ * row's height (equal-height cards). */
+.guest-grid > [role="listitem"] {
+  display: flex;
+  min-width: 0;
+}
+
+/* The directory results area — a stable column holding the reserved status row
+ * (background-refetch cue) above the card grid OR the empty state. */
+.guest-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* FIX D — the background-refetch cue lives in this ALWAYS-present row with a
+ * reserved min-height, so it never pushes the grid / empty state down when it
+ * appears or disappears (no vertical jump on live search). The min-height
+ * comfortably exceeds the cue's own height so toggling it reflows nothing. */
+.guest-results__status {
+  display: flex;
+  align-items: center;
+  min-height: 1.5rem;
+}
+/* Subtle inline "searching…" cue shown during a BACKGROUND directory refetch
+ * (live search / filter change). The cards / empty state stay mounted, so a fast
+ * typist never sees the full-screen loader flicker per keystroke. */
+.guest-results__searching {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
+.guest-results__searching .spinner {
+  width: 1rem;
+  height: 1rem;
+  border-width: 2px;
+}
+
+.guest-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  gap: var(--card-section-gap);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--guest-accent, var(--color-border-strong));
+  border-radius: var(--radius-xl);
+  padding: var(--card-pad);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.guest-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.guest-card--in_house {
+  --guest-accent: var(--color-success);
+}
+.guest-card--past {
+  --guest-accent: var(--color-border-strong);
+}
+.guest-card--blocked {
+  --guest-accent: var(--color-danger);
+}
+.guest-card--inactive {
+  --guest-accent: var(--color-fg-muted);
+}
+
+/* 1) Header — the status-badge row then the focal name (a plain heading; the
+ * card's action icons open every record sub-modal directly, no profile step). */
+.guest-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-inline-gap);
+}
+.guest-card__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+/* The current-unit "where" chip keeps a long free-text type name to a single
+ * line (ellipsis + a native full-value title) so the pill never wraps into a
+ * ragged multi-line block and the attached LTR unit number is never detached. */
+.guest-card__unit-type {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* The floor NAME is hotel free text (e.g. "الطابق 1", "Ground") shown verbatim;
+ * clamp a long one to a single line (ellipsis + a native full-value title) so the
+ * floor chip mirrors the unit chip and never wraps into a ragged block. */
+.guest-card__floor-name {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.guest-card__idrow {
+  display: flex;
+  align-items: center;
+  gap: var(--card-inline-gap);
+}
+.guest-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+.guest-card__name {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 2 + 3) Fact rows — labelled mini-fields framed by subtle top/bottom dividers. */
+.guest-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--color-border);
+}
+.guest-card__facts + .guest-card__facts {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+.guest-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.guest-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.guest-card__fact dt .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.guest-card__fact dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+
+/* 4) Actions — the permission-gated icon bar. The row starts at a
+ * consistent baseline (block-start auto) so cards of differing content still
+ * align their action rows. */
+.guest-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--card-action-gap);
+  margin-block-start: auto;
+  padding-block-start: var(--space-1);
+}
+.guest-card__iconbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-inline-start: auto;
+}

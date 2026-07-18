@@ -262,48 +262,87 @@ function GuestLookupFeedback({
   const { t } = useI18n();
   const g = t.reservations.wizard.guest;
 
-  if (linked) return null;
-  if (state.status === "idle") return null;
-  if (state.status === "searching") {
-    return (
-      <p className="cluster muted small" aria-live="polite">
-        <span className="spinner" aria-hidden="true" />
-        {g.lookupSearching}
-      </p>
-    );
-  }
-  if (state.status === "error") {
-    return <p className="muted small">{g.lookupError}</p>;
-  }
-  if (state.status === "none") {
-    return <p className="muted small">{g.lookupNone}</p>;
-  }
-  if (state.status === "conflict") {
-    return <Alert tone="warning">{g.lookupConflict}</Alert>;
-  }
+  if (linked || state.status === "idle") return null;
+
+  // U-18 a11y: a single PERSISTENT polite live region announces the lookup
+  // OUTCOME (none / one / N matches). It stays mounted across searching→result
+  // so the text change is reliably announced. The conflict is spoken by its own
+  // ASSERTIVE alert below and is deliberately NOT echoed here, so the two never
+  // double-announce; searching/error carry no outcome text.
+  const announcement =
+    state.status === "none"
+      ? g.lookupAnnounceNone
+      : state.status === "single"
+        ? g.lookupAnnounceSingle
+        : state.status === "multiple"
+          ? g.lookupAnnounceMultiple.replace(
+              "{count}",
+              String(state.results.length),
+            )
+          : "";
 
   const heading =
     state.status === "single" ? g.lookupSingleTitle : g.lookupMultipleTitle;
+
   return (
-    <div className="stack-tight" role="group" aria-label={heading}>
-      <p className="muted small">{heading}</p>
-      {state.results.map((match) => (
-        <div key={match.id} className="line-row">
-          <span className="cluster">
-            <strong>{match.full_name || "—"}</strong>
-            {match.is_vip ? <Badge tone="vip">{g.vip}</Badge> : null}
-            {match.is_blocked ? (
-              <Badge tone="danger">{g.blockedBadge}</Badge>
-            ) : null}
-            {match.phone ? (
-              <span className="muted small">{match.phone}</span>
-            ) : null}
-          </span>
-          <Button variant="secondary" size="sm" onClick={() => onPick(match)}>
-            {g.lookupUse}
-          </Button>
+    <div className="stack-tight">
+      <p className="sr-only" aria-live="polite">
+        {announcement}
+      </p>
+
+      {state.status === "searching" ? (
+        <p className="cluster muted small">
+          <span className="spinner" aria-hidden="true" />
+          {g.lookupSearching}
+        </p>
+      ) : state.status === "error" ? (
+        <p className="muted small">{g.lookupError}</p>
+      ) : state.status === "none" ? (
+        <p className="muted small">{g.lookupNone}</p>
+      ) : state.status === "conflict" ? (
+        // Assertive: a blocking id↔phone conflict must interrupt. The visible
+        // warning Alert is aria-hidden so its own (polite) status region cannot
+        // re-announce the text the assertive region already speaks.
+        <>
+          <p className="sr-only" role="alert">
+            {g.lookupConflict}
+          </p>
+          <div aria-hidden="true">
+            <Alert tone="warning">{g.lookupConflict}</Alert>
+          </div>
+        </>
+      ) : (
+        <div className="stack-tight" role="group" aria-label={heading}>
+          <p className="muted small">{heading}</p>
+          {state.results.map((match) => (
+            <div key={match.id} className="line-row">
+              <span className="cluster">
+                <strong>{match.full_name || "—"}</strong>
+                {match.is_vip ? <Badge tone="vip">{g.vip}</Badge> : null}
+                {match.is_blocked ? (
+                  <Badge tone="danger">{g.blockedBadge}</Badge>
+                ) : null}
+                {match.phone ? (
+                  <span className="muted small">
+                    <bdi dir="ltr">{match.phone}</bdi>
+                  </span>
+                ) : null}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onPick(match)}
+                aria-label={g.lookupUseAria.replace(
+                  "{name}",
+                  match.full_name || g.lookupUse,
+                )}
+              >
+                {g.lookupUse}
+              </Button>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }

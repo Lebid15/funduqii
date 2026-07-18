@@ -1031,7 +1031,11 @@
         "lookupConflict": "رقم الهوية والهاتف يعودان لنزيلين مختلفين — لم يُستورَد شيء. تحقّق من الهوية والهاتف قبل المتابعة.",
         "lookupOverwriteTitle": "استيراد بيانات هذا النزيل؟",
         "lookupOverwriteBody": "سيحلّ هذا محل البيانات التي أدخلتها ببيانات النزيل المسجَّل.",
-        "lookupOverwriteConfirm": "استيراد واستبدال"
+        "lookupOverwriteConfirm": "استيراد واستبدال",
+        "lookupAnnounceNone": "لا يوجد نزيل مطابق — سيُنشأ نزيل جديد.",
+        "lookupAnnounceSingle": "تم العثور على نزيل مطابق واحد.",
+        "lookupAnnounceMultiple": "تم العثور على {count} نزلاء مطابقين.",
+        "lookupUseAria": "استخدام هذا النزيل — {name}"
       },
       "companions": {
         "title": "المرافقون",
@@ -1254,6 +1258,10 @@
       "empty": "لا نزلاء بعد",
       "emptyHint": "النزلاء الذين تضيفهم يظهرون هنا.",
       "searchPlaceholder": "ابحث بالاسم أو الهاتف أو الوثيقة",
+      "searchHint": "يشمل البحث الاسم والهاتف والرقم الوطني (تطابق تام).",
+      "searching": "جارٍ البحث…",
+      "resultsCount": "{count} نتيجة",
+      "noResults": "لا نتائج",
       "name": "الاسم",
       "phone": "الهاتف",
       "document": "الوثيقة",
@@ -1297,26 +1305,14 @@
     "inactive": "غير نشط",
     "directory": {
       "residency": "الإقامة",
-      "resident": "مقيم الآن",
-      "notResident": "غير مقيم",
       "stays": "الإقامات",
       "lastStay": "آخر إقامة",
-      "repeat": "متكرر",
-      "firstTime": "جديد",
-      "openProfile": "فتح الملف",
       "empty": "لا نزلاء بعد",
       "emptyHint": "يظهر هنا كل نزيل له إقامة واحدة على الأقل — حالية أو سابقة."
     },
     "profile": {
-      "title": "ملف النزيل",
       "nights": "الليالي",
-      "firstStay": "أول إقامة",
-      "currentStay": "الإقامة الحالية",
-      "openFrontDesk": "فتح الاستقبال",
-      "openFolio": "فتح الفوليو",
-      "stayHistory": "سجل الإقامات",
-      "noStays": "لا إقامات مسجلة.",
-      "currentBadge": "حالية"
+      "currentStay": "الإقامة الحالية"
     },
     "vip": {
       "badge": "VIP",
@@ -1339,9 +1335,91 @@
       "deleted": "حُذف الملف نهائيًا (لا سجل تاريخي له).",
       "deactivated": "عُطّل الملف فقط — السجل التاريخي محفوظ."
     },
+    "needsReview": "بحاجة إلى مراجعة",
+    "card": {
+      "viewStays": "عرض الإقامات",
+      "viewReservations": "عرض الحجوزات",
+      "viewDocuments": "عرض الوثائق",
+      "viewHistory": "عرض السجل",
+      "pastBadge": "نزيل سابق",
+      "upcomingBadge": "حجز قادم",
+      "inHouse": "مقيم حاليًا",
+      "newGuest": "نزيل جديد",
+      "repeatGuest": "نزيل متكرر",
+      "floor": "الطابق {floor}",
+      "currentUnits": {
+        "dual": "وحدتان حاليتان",
+        "plural": "{n} وحدات حالية"
+      },
+      "ariaStays": "سجل إقامات {name}",
+      "ariaReservations": "سجل حجوزات {name}",
+      "ariaDocuments": "وثائق {name}",
+      "ariaChangeLog": "سجل {name}",
+      "ariaEdit": "تعديل {name}",
+      "ariaMarkVip": "تعيين {name} كضيف مميز",
+      "ariaUnmarkVip": "إزالة تمييز {name}",
+      "ariaBlock": "حظر {name}",
+      "ariaUnblock": "رفع الحظر عن {name}"
+    },
+    "staysList": {
+      "title": "الإقامات",
+      "room": "الغرفة",
+      "roomType": "نوع الغرفة",
+      "checkIn": "الدخول",
+      "checkOut": "المغادرة",
+      "nights": "الليالي",
+      "reservation": "الحجز",
+      "folio": "الفوليو",
+      "checkedOut": "غادر",
+      "empty": "لا إقامات مسجلة.",
+      "viewFolio": "عرض الفوليو",
+      "viewFolioLabel": "عرض الفوليو {folio}"
+    },
+    "reservationsList": {
+      "title": "الحجوزات",
+      "number": "الحجز",
+      "status": "الحالة",
+      "source": "المصدر",
+      "kind": "النوع",
+      "checkIn": "الدخول",
+      "checkOut": "المغادرة",
+      "empty": "لا حجوزات.",
+      "groupUpcoming": "قادمة",
+      "groupCurrent": "حالية",
+      "groupPast": "سابقة",
+      "openReservation": "فتح الحجز {number}"
+    },
+    "documents": {
+      "title": "الوثائق",
+      "type": "النوع",
+      "number": "الرقم",
+      "front": "الوجه",
+      "back": "الظهر",
+      "viewFront": "عرض الوجه",
+      "viewBack": "عرض الظهر",
+      "expiry": "الانتهاء",
+      "added": "أُضيفت",
+      "empty": "لا وثائق.",
+      "view": "عرض",
+      "permissionHint": "لا تملك صلاحية عرض الوثائق."
+    },
+    "changeLog": {
+      "title": "السجل",
+      "event": "الحدث",
+      "category": "الفئة",
+      "severity": "الخطورة",
+      "actor": "بواسطة",
+      "occurredAt": "التاريخ",
+      "empty": "لا سجل بعد.",
+      "severityInfo": "معلومة",
+      "severityWarning": "تحذير",
+      "severityCritical": "حرج"
+    },
     "errors": {
       "blocked": "هذا النزيل محظور في هذا الفندق — لا يمكن إتمام العملية.",
-      "blockReasonRequired": "سبب الحظر إلزامي."
+      "blockReasonRequired": "سبب الحظر إلزامي.",
+      "identityConflict": "هذه الهوية تطابق نزيلًا آخر — يرجى حل التعارض قبل المتابعة.",
+      "invalidPhone": "أدخل رقم الهاتف مع رمز الدولة."
     }
   },
   "frontDesk": {
@@ -1481,6 +1559,8 @@
       "roomAssigned": "الغرفة المعيَّنة",
       "primaryGuest": "الضيف الرئيسي",
       "selectGuest": "اختر ضيفًا",
+      "guestDefaultOption": "ضيف الحجز (افتراضي)",
+      "guestOptionalHint": "اختياري — اتركه فارغًا لتسجيل دخول ضيف الحجز المُسجّل (يُنشأ مركزيًا إن كان جديدًا). اختر ضيفًا فقط للاستبدال.",
       "companions": "المرافقون",
       "notes": "ملاحظات",
       "submit": "تسجيل الدخول",
@@ -3622,7 +3702,6 @@
     "newReservation": "حجز جديد",
     "checkIn": "دخول نزيل",
     "checkOut": "مغادرة نزيل",
-    "addGuest": "إضافة نزيل",
     "guestFolio": "فوليو النزيل",
     "recordPayment": "تسجيل دفعة",
     "addExpense": "إضافة مصروف",

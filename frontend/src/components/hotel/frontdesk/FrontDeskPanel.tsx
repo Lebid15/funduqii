@@ -16,7 +16,6 @@ import {
   LogOut,
   PlaneLanding,
   PlaneTakeoff,
-  Plus,
   Printer,
   Star,
   Undo2,
@@ -72,7 +71,7 @@ import {
   setFolioAwaitingCharges,
   settleFolio,
 } from "@/lib/api/finance";
-import { createGuest, listGuests } from "@/lib/api/guests";
+import { listGuests } from "@/lib/api/guests";
 import { getReservation, markNoShow } from "@/lib/api/reservations";
 import { ReservationDocumentsModal } from "@/components/hotel/reservations/ReservationDocumentsModal";
 import { messageForError } from "@/lib/api/errors";
@@ -868,9 +867,6 @@ function CheckInModal({
   const [notes, setNotes] = useState("");
   const [guests, setGuests] = useState<Guest[]>([]);
   const [rooms, setRooms] = useState<AdmissibleRoom[]>([]);
-  const [quickName, setQuickName] = useState("");
-  const [quickPhone, setQuickPhone] = useState("");
-  const [showQuick, setShowQuick] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Stay | null>(null);
@@ -890,9 +886,6 @@ function CheckInModal({
     setCompanionPick("");
     setNotes("");
     setError(null);
-    setShowQuick(false);
-    setQuickName("");
-    setQuickPhone("");
     setResult(null);
     setResultFolio(null);
     setPrintReg(false);
@@ -914,34 +907,24 @@ function CheckInModal({
       .catch(() => setRooms([]));
   }, [open, lineId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function quickAdd() {
-    if (!quickName.trim()) return;
-    try {
-      const g = await createGuest({ full_name: quickName.trim(), phone: quickPhone.trim() });
-      setGuests((prev) => [g, ...prev]);
-      setGuestId(String(g.id));
-      setShowQuick(false);
-      setQuickName("");
-      setQuickPhone("");
-    } catch (err) {
-      setError(messageForError(err, t));
-    }
-  }
-
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!reservation || !line) return;
     setError(null);
     const room = line.room ?? (roomId ? Number(roomId) : null);
     if (!room) return setError(t.frontDesk.checkInModal.roomRequired);
-    if (!guestId) return setError(t.frontDesk.checkInModal.guestRequired);
     setBusy(true);
     try {
+      // GUESTS-CLOSURE Decision 9 — the guest is resolved CENTRALLY on the server.
+      // Omit primary_guest to derive it from the reservation's guest snapshot
+      // (name/phone/national_id/…), which the check-in service resolves or creates
+      // as one canonical guest. Send an id only to OVERRIDE with an existing
+      // directory guest. (Standalone POST /guests/ is gone — it returns 405.)
       const stay = await checkIn({
         reservation: reservation.id,
         reservation_line: line.id,
         room,
-        primary_guest: Number(guestId),
+        primary_guest: guestId ? Number(guestId) : undefined,
         companions,
         check_in_notes: notes.trim(),
       });
@@ -1045,22 +1028,13 @@ function CheckInModal({
             <Select id="ci-room" value={roomId} placeholder={rooms.length ? t.frontDesk.checkInModal.selectRoom : t.frontDesk.checkInModal.noRooms} options={roomOptions} onChange={(e) => setRoomId(e.target.value)} />
           </FormField>
         )}
-        <FormField label={t.frontDesk.checkInModal.primaryGuest} htmlFor="ci-guest">
-          <Select id="ci-guest" value={guestId} placeholder={t.frontDesk.checkInModal.selectGuest} options={guestOptions} onChange={(e) => setGuestId(e.target.value)} />
+        <FormField
+          label={t.frontDesk.checkInModal.primaryGuest}
+          htmlFor="ci-guest"
+          hint={t.frontDesk.checkInModal.guestOptionalHint}
+        >
+          <Select id="ci-guest" value={guestId} placeholder={t.frontDesk.checkInModal.guestDefaultOption} options={guestOptions} onChange={(e) => setGuestId(e.target.value)} />
         </FormField>
-        {showQuick ? (
-          <div className="line-row" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); quickAdd(); } }}>
-            <FormField label={t.guests.form.fullName} htmlFor="ci-qname">
-              <Input id="ci-qname" value={quickName} onChange={(e) => setQuickName(e.target.value)} />
-            </FormField>
-            <FormField label={t.guests.form.phone} htmlFor="ci-qphone">
-              <Input id="ci-qphone" value={quickPhone} onChange={(e) => setQuickPhone(e.target.value)} />
-            </FormField>
-            <Button type="button" size="sm" onClick={quickAdd}>{t.common.save}</Button>
-          </div>
-        ) : (
-          <Button type="button" variant="ghost" size="sm" icon={Plus} onClick={() => setShowQuick(true)}>{t.guests.list.add}</Button>
-        )}
         <FormField label={t.frontDesk.checkInModal.companions} htmlFor="ci-comp">
           <Select
             id="ci-comp"

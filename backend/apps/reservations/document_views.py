@@ -61,11 +61,21 @@ from .serializers import (
 )
 
 # Permission classes for the ``reservation_documents`` RBAC section. ``view``
-# gates listing/streaming/minting, ``upload`` gates creating, ``replace`` gates
-# overwriting an existing document's file(s) — deliberately never bundled.
+# gates listing, ``upload`` gates creating, ``replace`` gates overwriting an
+# existing document's file(s) — deliberately never bundled.
 CanViewDocuments = HasHotelPermission("reservation_documents.view")
 CanUploadDocuments = HasHotelPermission("reservation_documents.upload")
 CanReplaceDocuments = HasHotelPermission("reservation_documents.replace")
+
+# Decision 8 (RV-SEC F-1): opening / downloading / STREAMING the ORIGINAL
+# identity-document IMAGE is strictly more sensitive than listing a masked
+# number, so the two image-serving paths — the signed-URL MINT and the
+# session/direct stream — require ``guests.view_sensitive_data`` IN ADDITION to
+# ``reservation_documents.view``. This reuses the EXISTING guests sensitive-data
+# permission (no new RBAC code) and is enforced SERVER-SIDE, so a caller who
+# only has ``reservation_documents.view`` cannot reconstruct the mint/stream URL
+# from a document ``id`` and retrieve the image bytes.
+CanViewSensitiveGuestData = HasHotelPermission("guests.view_sensitive_data")
 
 # Signed short-lived stream token. ``django.core.signing`` derives an HMAC key
 # from ``settings.SECRET_KEY`` (+ this salt), so the token is UNFORGEABLE by a
@@ -305,13 +315,20 @@ class ReservationDocumentReplaceView(APIView):
 class ReservationDocumentSignedUrlView(APIView):
     """Mint a short-lived signed URL for one document side (front|back).
 
-    Hotel-scoped and behind ``reservation_documents.view``. Returns the absolute
-    URL of the stream endpoint carrying a ``?token=`` bound to
-    ``(doc, side, hotel)`` and valid for :data:`STREAM_TOKEN_MAX_AGE` seconds.
+    Hotel-scoped. Because minting a token is the ONLY way to obtain a
+    tokenised, no-header stream URL for the ORIGINAL image, this endpoint
+    requires ``guests.view_sensitive_data`` IN ADDITION to
+    ``reservation_documents.view`` (Decision 8 / RV-SEC F-1). A caller who holds
+    only ``reservation_documents.view`` is rejected (403) here, so the image
+    bytes cannot be reached by reconstructing this URL from a document ``id``.
+    Returns the absolute URL of the stream endpoint carrying a ``?token=`` bound
+    to ``(doc, side, hotel)`` and valid for :data:`STREAM_TOKEN_MAX_AGE` seconds.
     """
 
     def get_permissions(self):
-        return [CanViewDocuments()]
+        # Both permissions are required (AND). The classes raise PermissionDenied
+        # rather than returning False, so a caller missing EITHER code gets 403.
+        return [CanViewDocuments(), CanViewSensitiveGuestData()]
 
     def get(self, request: Request, doc_id: int, side: str) -> Response:
         side_field = _SIDE_FIELDS.get(side)
@@ -341,13 +358,19 @@ class ReservationDocumentStreamView(APIView):
     """Stream the raw bytes of one document side (front|back).
 
     Authorization accepts EITHER:
-      (a) an authenticated, active caller holding ``reservation_documents.view``
-          in a hotel context that MATCHES the document's hotel, OR
+      (a) an authenticated, active caller holding BOTH
+          ``reservation_documents.view`` AND ``guests.view_sensitive_data``
+          (Decision 8 / RV-SEC F-1) in a hotel context that MATCHES the
+          document's hotel, OR
       (b) a valid, unexpired signed ``token`` bound to this exact
           ``(doc, side, hotel)``.
 
-    A mismatched/expired/forged token is rejected (403). There is no public or
-    static path to these bytes — this view is the only reader.
+    A mismatched/expired/forged token is rejected (403). The token can only be
+    obtained from :class:`ReservationDocumentSignedUrlView`, which itself now
+    requires ``guests.view_sensitive_data`` — so neither the direct session
+    stream nor a self-minted token exposes the image to a caller lacking that
+    sensitive permission. There is no public or static path to these bytes —
+    this view is the only reader.
     """
 
     # Opt out of the global "authenticated" default so the token path works for
@@ -404,6 +427,12 @@ class ReservationDocumentStreamView(APIView):
         context = resolve_hotel_context(request, required=True)
         hotel = context.hotel
         if not has_hotel_permission(user, hotel, "reservation_documents.view"):
+            raise PermissionDenied()
+        # Decision 8 (RV-SEC F-1): the ORIGINAL image is sensitive PII, so the
+        # direct/session stream ALSO requires ``guests.view_sensitive_data`` on
+        # top of ``reservation_documents.view``. Without it the bytes are
+        # unreachable server-side (403), not merely hidden in the UI.
+        if not has_hotel_permission(user, hotel, "guests.view_sensitive_data"):
             raise PermissionDenied()
         # Tenant isolation: another hotel's document 404s here.
         return get_object_or_404(ReservationDocument, pk=doc_id, hotel=hotel)
