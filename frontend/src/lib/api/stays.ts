@@ -63,7 +63,13 @@ export interface CheckInBody {
   reservation: number;
   reservation_line?: number | null;
   room?: number | null;
-  primary_guest: number;
+  /**
+   * Guests central identity (W3): OPTIONAL. Omit it to let the server derive the
+   * primary guest from the reservation — its linked guest, else ONE canonical
+   * guest resolved/created centrally from the reservation's guest snapshot. Pass
+   * an id only to OVERRIDE with an existing directory guest.
+   */
+  primary_guest?: number | null;
   companions?: number[];
   check_in_notes?: string;
 }

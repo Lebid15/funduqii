@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import {
   Ban,
@@ -9,7 +9,6 @@ import {
   ShieldCheck,
   Star,
   Trash2,
-  User,
   Users,
 } from "lucide-react";
 
@@ -19,7 +18,6 @@ import {
   Button,
   Card,
   ConfirmDialog,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -32,8 +30,8 @@ import {
   Switch,
   Textarea,
   useToast,
-  type Column,
 } from "@/components/ui";
+import { GuestCard } from "./GuestCard";
 import {
   blockGuest,
   deleteGuest,
@@ -61,7 +59,9 @@ function useCan() {
 }
 
 export function GuestsPanel() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
+  const { notify } = useToast();
+  const can = useCan();
   const [rows, setRows] = useState<GuestDirectoryRow[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -71,6 +71,11 @@ export function GuestsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [blockTarget, setBlockTarget] = useState<GuestDirectoryRow | null>(null);
+  // The one guest whose inline VIP/ban action is in flight — disables that card's
+  // mutating buttons so a slow request cannot be double-fired.
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,71 +104,58 @@ export function GuestsPanel() {
   function applySearch(event: FormEvent) {
     event.preventDefault();
     setPage(1);
+    // The term is forwarded verbatim to the directory endpoint, which does the
+    // matching server-side (name / phone / national_id — an EXACT national_id
+    // match is supported). The client never interprets it.
     setQuery(search);
   }
 
-  const columns: Column<GuestDirectoryRow>[] = [
-    {
-      key: "full_name",
-      header: t.guests.list.name,
-      render: (r) => (
-        <span className="cluster" style={{ gap: "0.35rem" }}>
-          {r.full_name}
-          {r.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-          {r.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
-          {!r.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
-        </span>
-      ),
-    },
-    { key: "phone", header: t.guests.list.phone, render: (r) => r.phone || "—" },
-    { key: "nationality", header: t.guests.list.nationality, render: (r) => r.nationality || "—" },
-    {
-      key: "residency",
-      header: t.guests.directory.residency,
-      render: (r) =>
-        r.is_resident ? (
-          <Badge tone="success">
-            {t.guests.directory.resident}{r.current_room_number ? ` · ${r.current_room_number}` : ""}
-          </Badge>
-        ) : (
-          <span className="muted">{t.guests.directory.notResident}</span>
-        ),
-    },
-    {
-      key: "stays",
-      header: t.guests.directory.stays,
-      render: (r) => (
-        <span>
-          {r.stays_count} · {r.nights_total} {t.frontDesk.current.nights}{" "}
-          <Badge tone={r.is_repeat ? "info" : "neutral"}>
-            {r.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
-          </Badge>
-        </span>
-      ),
-    },
-    {
-      key: "last_stay",
-      header: t.guests.directory.lastStay,
-      render: (r) => (r.last_stay_date ? formatDate(r.last_stay_date, locale) : "—"),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => (
-        <Button variant="secondary" size="sm" icon={User} onClick={() => setProfileId(r.id)}>
-          {t.guests.directory.openProfile}
-        </Button>
-      ),
-    },
-  ];
+  const openProfile = (g: GuestDirectoryRow) => {
+    setProfileEditing(false);
+    setProfileId(g.id);
+  };
+  const openEdit = (g: GuestDirectoryRow) => {
+    setProfileEditing(true);
+    setProfileId(g.id);
+  };
+
+  async function toggleVip(g: GuestDirectoryRow) {
+    setBusyId(g.id);
+    try {
+      await setGuestVip(g.id, !g.is_vip);
+      notify(t.guests.saved);
+      await load();
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleBlock(g: GuestDirectoryRow) {
+    // Blocking needs a mandatory reason (BlockGuestModal); unblocking is one step.
+    if (!g.is_blocked) {
+      setBlockTarget(g);
+      return;
+    }
+    setBusyId(g.id);
+    try {
+      await unblockGuest(g.id);
+      notify(t.guests.block.unblocked);
+      await load();
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <>
       <Card>
         <form onSubmit={applySearch}>
           <FilterBar>
-            <FormField label={t.common.search} htmlFor="guest-search">
+            <FormField label={t.common.search} htmlFor="guest-search" hint={t.guests.list.searchHint}>
               <Input id="guest-search" value={search} placeholder={t.guests.list.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
             </FormField>
             <div className="filter-bar__actions cluster">
@@ -186,7 +178,25 @@ export function GuestsPanel() {
           />
         ) : (
           <>
-            <DataTable caption={t.guests.title} columns={columns} rows={rows} rowKey={(r) => r.id} />
+            <div className="guest-grid" role="list" aria-label={t.guests.title}>
+              {rows.map((g) => (
+                <div role="listitem" key={g.id}>
+                  <GuestCard
+                    guest={g}
+                    can={can}
+                    busy={busyId === g.id}
+                    onOpenProfile={openProfile}
+                    onEdit={openEdit}
+                    onToggleVip={toggleVip}
+                    onBlock={handleBlock}
+                    /* TODO(W6b): pass onStays / onReservations / onDocuments /
+                       onChangeLog once the dedicated sub-modals land. GuestCard
+                       renders each of those buttons only when its callback is
+                       supplied, so W6b wires them here without touching the card. */
+                  />
+                </div>
+              ))}
+            </div>
             <Pagination
               page={page}
               totalPages={totalPages}
@@ -203,8 +213,28 @@ export function GuestsPanel() {
 
       <GuestProfileModal
         guestId={profileId}
-        onClose={() => setProfileId(null)}
+        startEditing={profileEditing}
+        onClose={() => { setProfileId(null); setProfileEditing(false); }}
         onChanged={load}
+      />
+
+      <BlockGuestModal
+        open={blockTarget !== null}
+        onClose={() => setBlockTarget(null)}
+        onConfirm={async (reason) => {
+          if (!blockTarget) return;
+          setBusyId(blockTarget.id);
+          try {
+            await blockGuest(blockTarget.id, reason);
+            notify(t.guests.block.blockedToast);
+            setBlockTarget(null);
+            await load();
+          } catch (err) {
+            notify(messageForError(err, t), "error");
+          } finally {
+            setBusyId(null);
+          }
+        }}
       />
     </>
   );
@@ -216,10 +246,14 @@ export function GuestsPanel() {
 
 function GuestProfileModal({
   guestId,
+  startEditing = false,
   onClose,
   onChanged,
 }: {
   guestId: number | null;
+  /** When true, open straight into the edit form once the profile has loaded
+   * (the GuestCard "edit" shortcut). Applied once per open. */
+  startEditing?: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -232,6 +266,9 @@ function GuestProfileModal({
   const [editing, setEditing] = useState(false);
   const [blocking, setBlocking] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Ensures the startEditing shortcut fires exactly once per open (never re-opens
+  // the edit form after a save-triggered reload).
+  const didAutoEdit = useRef(false);
   const open = guestId !== null;
 
   const reload = useCallback(() => {
@@ -247,8 +284,18 @@ function GuestProfileModal({
     setEditing(false);
     setBlocking(false);
     setDeleting(false);
+    didAutoEdit.current = false;
     reload();
   }, [reload]);
+
+  // Apply the startEditing shortcut once the profile has loaded (the edit form
+  // needs the full guest object). Guarded so a later reload never re-opens it.
+  useEffect(() => {
+    if (startEditing && profile && !didAutoEdit.current) {
+      didAutoEdit.current = true;
+      setEditing(true);
+    }
+  }, [startEditing, profile]);
 
   async function toggleVip() {
     if (!profile) return;

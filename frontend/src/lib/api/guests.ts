@@ -70,12 +70,10 @@ export type GuestWriteBody = Partial<
   >
 >;
 
-export function createGuest(body: GuestWriteBody): Promise<Guest> {
-  return hotelJson<Guest>("/guests", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
+/* GUESTS-CLOSURE Decision 9 — standalone guest creation was removed: a guest is
+ * now resolved/created CENTRALLY by the reservation + check-in flows from the
+ * booking's guest snapshot. `POST /guests/` is `405 Method Not Allowed`, so no
+ * `createGuest` client exists. `GuestWriteBody` remains for `updateGuest`. */
 
 export function updateGuest(id: number, body: GuestWriteBody): Promise<Guest> {
   return hotelJson<Guest>(`/guests/${id}`, {

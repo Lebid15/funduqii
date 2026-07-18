@@ -5694,3 +5694,194 @@ a {
 .settings-fieldset > legend {
   padding: 0;
 }
+
+/* --- Guests directory cards (GUESTS-CLOSURE U-17) --------------------------- *
+ * A guest IDENTITY card mirroring the central .res-card / .room-op-card pattern:
+ * a calm surface with a status accent bar and quietly-divided regions. The grid
+ * flows in the document's inline direction, so RTL is automatic; auto-fill +
+ * minmax(min(100%, …)) keeps every column able to shrink so long text wraps
+ * INSIDE the card instead of forcing horizontal scroll at any width. */
+.guest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+/* The listitem wrapper fills its grid cell so the card inside stretches to the
+ * row's height (equal-height cards). */
+.guest-grid > [role="listitem"] {
+  display: flex;
+  min-width: 0;
+}
+
+.guest-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  gap: var(--card-section-gap);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--guest-accent, var(--color-border-strong));
+  border-radius: var(--radius-xl);
+  padding: var(--card-pad);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.guest-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.guest-card--in_house {
+  --guest-accent: var(--color-success);
+}
+.guest-card--past {
+  --guest-accent: var(--color-border-strong);
+}
+.guest-card--blocked {
+  --guest-accent: var(--color-danger);
+}
+.guest-card--inactive {
+  --guest-accent: var(--color-fg-muted);
+}
+
+/* 1) Header — status badges (row 1) then the focal name (row 2, opens profile). */
+.guest-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-inline-gap);
+}
+.guest-card__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+.guest-card__idrow {
+  display: flex;
+  align-items: center;
+  gap: var(--card-inline-gap);
+}
+.guest-card__open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-1);
+  margin: calc(-1 * var(--space-1));
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* Explicit focus ring on the focal name button — matches the house pattern for
+ * interactive controls (WCAG 2.4.7) so the affordance never relies on the colour
+ * shift alone. */
+.guest-card__open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.guest-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-active);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+.guest-card__name {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+  transition: color var(--transition-fast);
+}
+.guest-card__open:hover .guest-card__name,
+.guest-card__open:focus-visible .guest-card__name {
+  color: var(--color-primary-active);
+}
+
+/* 2 + 3) Fact rows — labelled mini-fields framed by subtle top/bottom dividers. */
+.guest-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--color-border);
+}
+.guest-card__facts + .guest-card__facts {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+.guest-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.guest-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.guest-card__fact dt .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.guest-card__fact dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+.guest-card__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* 4) Upcoming hint — a single quiet line, only when a reservation is supplied. */
+.guest-card__upcoming {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.guest-card__upcoming .icon {
+  flex: none;
+}
+
+/* 5) Actions — the primary CTA + a wrapping icon bar. The row starts at a
+ * consistent baseline (block-start auto) so cards of differing content still
+ * align their action rows. */
+.guest-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--card-action-gap);
+  margin-block-start: auto;
+  padding-block-start: var(--space-1);
+}
+.guest-card__iconbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-inline-start: auto;
+}
