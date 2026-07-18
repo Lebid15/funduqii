@@ -195,12 +195,23 @@ def unblock_guest(guest, *, note: str = "", user=None) -> Guest:
 
 def guest_has_operational_traces(guest) -> bool:
     """True when ANY operational history references the guest — stays (any
-    role), folios, or lost & found. Such a profile is never hard-deleted."""
+    role), folios, lost & found, reservations (upcoming or historical), a
+    reservation-occupant link, or a block-log entry. Such a profile is never
+    hard-deleted; it is deactivated so its history (and its identity, for the
+    block guard) is preserved (Decision 7)."""
     if guest.stay_links.exists() or guest.primary_stays.exists():
         return True
     if guest.folios.exists():
         return True
     if guest.lost_found_items.exists():
+        return True
+    # A guest carrying a reservation (as primary guest or a named occupant) — an
+    # upcoming booking included — keeps history and must not hard-delete.
+    if guest.reservations.exists() or guest.reservation_occupancies.exists():
+        return True
+    # A block-log entry is security history; the guest FK is PROTECTed, so a hard
+    # delete would raise anyway — deactivate instead.
+    if guest.block_logs.exists():
         return True
     return False
 

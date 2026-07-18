@@ -648,6 +648,22 @@ class BlockReasonRequired(FunduqiiAPIException):
     default_code = "block_reason_required"
 
 
+class GuestIdentityConflict(FunduqiiAPIException):
+    """A guest identity key (national id, typed document number, or active phone)
+    collides with an EXISTING guest in the same hotel. The central identity
+    layer refuses the write rather than silently merging, overwriting, or
+    creating a duplicate identity.
+
+    It carries NO sensitive identity value — never the id/document/phone itself,
+    only the neutral ``default_code`` — so a 409 body cannot leak one guest's
+    identifiers to a caller acting on another guest. The specific field may be
+    surfaced as a non-sensitive ``details.field`` marker by the caller."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This identity already belongs to another guest in this hotel."
+    default_code = "guest_identity_conflict"
+
+
 # --- Housekeeping (final closure round) ---------------------------------------
 
 

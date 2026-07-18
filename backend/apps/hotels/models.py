@@ -77,6 +77,12 @@ class HotelSettings(models.Model):
     # listed here.
     accepted_currencies = models.JSONField(default=list, blank=True)
     timezone = models.CharField(max_length=64, default="UTC")
+    # Default country (ISO-3166-1 alpha-2, uppercase) used to canonicalize LOCAL
+    # guest phone numbers into E.164 (central guest-identity closure). Blank means
+    # "no default" — a local number then keeps its country-less digit key and an
+    # international (+/00) number is always self-describing. Editable through the
+    # existing localization settings section only.
+    default_phone_country = models.CharField(max_length=2, blank=True, default="")
 
     # Daily closing (Phase 12 final closure): the hotel's ONE stored operational
     # date. It is decoupled from the wall clock — the day advances ONLY when the
