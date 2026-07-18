@@ -12,8 +12,14 @@ from __future__ import annotations
 
 import re
 
+from django.urls import reverse
+
 from rest_framework import serializers
 from rest_framework.exceptions import ErrorDetail
+
+from apps.notifications.models import ActivityEvent
+from apps.reservations.models import Reservation, ReservationDocument
+from apps.stays.models import Stay, StayStatus
 
 from .models import DocumentType, Guest
 from .normalize import PhoneNormalizationError, canonical_phone, normalize_id
@@ -197,3 +203,220 @@ class GuestUnblockSerializer(serializers.Serializer):
 
 class GuestVipSerializer(serializers.Serializer):
     vip = serializers.BooleanField()
+
+
+# --------------------------------------------------------------------------- #
+# GAP-1 read-only profile sub-resources (paginated)                           #
+# EXEC-GUESTS-CLOSURE-01 / W3b — Decision 11. Every one of these is READ-ONLY  #
+# and paginated by the common ``DefaultPagination``; hotel scoping + the       #
+# other-hotel 404 are enforced by the views, and the sensitive fields reuse    #
+# the SAME masking gate as the rest of the guests section (fail-closed).       #
+# --------------------------------------------------------------------------- #
+
+
+def _select_primary_folio(folios):
+    """Pick the folio to surface for a stay row — mirrors
+    ``GuestProfileView._folio_of``: an OPEN folio wins, then the highest id.
+
+    ``folios`` is an ALREADY-PREFETCHED iterable, so this never issues a query
+    per row (the view prefetches ``folios``).
+    """
+    ordered = sorted(folios, key=lambda f: (f.status != "open", -f.id))
+    return ordered[0] if ordered else None
+
+
+class GuestStayHistorySerializer(serializers.ModelSerializer):
+    """One row of a guest's stay history (read-only, newest-first by the view).
+
+    Only OPERATIONAL view-links are exposed (stay / reservation / folio
+    identifiers). No monetary value is returned here — folio *money* stays gated
+    behind ``finance.view`` elsewhere and is deliberately out of this read wave.
+    """
+
+    stay_id = serializers.IntegerField(source="id", read_only=True)
+    check_in_date = serializers.DateField(
+        source="planned_check_in_date", read_only=True
+    )
+    check_out_date = serializers.DateField(
+        source="planned_check_out_date", read_only=True
+    )
+    nights = serializers.IntegerField(read_only=True)
+    is_checked_out = serializers.SerializerMethodField()
+    room_number = serializers.CharField(source="room.number", read_only=True)
+    room_type_name = serializers.CharField(
+        source="room.room_type.name", read_only=True
+    )
+    reservation_number = serializers.SerializerMethodField()
+    folio = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Stay
+        fields = [
+            "stay_id",
+            "status",
+            "is_checked_out",
+            "check_in_date",
+            "check_out_date",
+            "actual_check_out_at",
+            "nights",
+            "room_number",
+            "room_type_name",
+            "reservation_id",
+            "reservation_number",
+            "folio",
+        ]
+        read_only_fields = fields
+
+    def get_is_checked_out(self, obj) -> bool:
+        return obj.status == StayStatus.CHECKED_OUT
+
+    def get_reservation_number(self, obj):
+        return obj.reservation.reservation_number if obj.reservation_id else None
+
+    def get_folio(self, obj):
+        folio = _select_primary_folio(list(obj.folios.all()))
+        if folio is None:
+            return None
+        # Identifiers only — a view-link, never money.
+        return {
+            "id": folio.id,
+            "folio_number": folio.folio_number,
+            "status": folio.status,
+        }
+
+
+class GuestReservationHistorySerializer(serializers.ModelSerializer):
+    """One row of a guest's reservation history (bookings the guest holds as the
+    primary guest). Read-only; no snapshot PII beyond the identifiers/dates."""
+
+    class Meta:
+        model = Reservation
+        fields = [
+            "id",
+            "reservation_number",
+            "status",
+            "source",
+            "booking_kind",
+            "check_in_date",
+            "check_out_date",
+        ]
+        read_only_fields = fields
+
+
+class GuestDocumentSerializer(serializers.ModelSerializer):
+    """A guest identity document — resolved from the EXISTING
+    ``ReservationDocument`` mechanism (see ``GuestDocumentsView``).
+
+    The ``number`` is masked exactly like every other guests document number
+    (``guests.view_sensitive_data``, fail-closed). The image bytes are NEVER
+    embedded: ``front_url`` / ``back_url`` point at the EXISTING signed-URL mint
+    endpoint (``reservations:reservation-document-signed-url``), which is itself
+    behind ``reservation_documents.view`` and returns a short-lived, token-bound
+    stream URL. No new signed-URL / file service is introduced here.
+    """
+
+    has_front = serializers.SerializerMethodField()
+    has_back = serializers.SerializerMethodField()
+    front_url = serializers.SerializerMethodField()
+    back_url = serializers.SerializerMethodField()
+    # The reused reservation-document mechanism does NOT capture a document
+    # expiry date, so this is always ``null``. Kept in the contract for a stable
+    # frontend shape; see the handoff report (owner decision to add an expiry
+    # field belongs to a future write-path wave, not this read-only one).
+    expiry_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReservationDocument
+        fields = [
+            "id",
+            "reservation",
+            "occupant",
+            "doc_type",
+            "number",
+            "has_front",
+            "has_back",
+            "front_url",
+            "back_url",
+            "expiry_date",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_has_front(self, obj) -> bool:
+        return bool(obj.front_file)
+
+    def get_has_back(self, obj) -> bool:
+        return bool(obj.back_file)
+
+    def _mint_url(self, obj, side: str, has_side: bool):
+        if not has_side:
+            return None
+        path = reverse(
+            "reservations:reservation-document-signed-url",
+            kwargs={"doc_id": obj.id, "side": side},
+        )
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request is not None else path
+
+    def get_front_url(self, obj):
+        return self._mint_url(obj, "front", bool(obj.front_file))
+
+    def get_back_url(self, obj):
+        return self._mint_url(obj, "back", bool(obj.back_file))
+
+    def get_expiry_date(self, obj):
+        return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        # Fail CLOSED: mask the identity number without a request context OR
+        # without ``guests.view_sensitive_data`` (same rule as the reservation
+        # document read serializer and the guest profile).
+        if request is None or not can_view_sensitive(request):
+            data["number"] = mask_document(instance.number)
+        return data
+
+
+# Guest audit events whose ``message`` carries security-gated content: the block
+# reason (``guest.blocked``) and the unblock note (``guest.unblocked``) live in
+# the same block/unblock security history as ``Guest.block_reason``. Their
+# message stays hidden unless the caller holds ``guests.block`` — mirrors the
+# profile's ``block_reason`` gating, fail-closed. Every OTHER event keeps its
+# message (identity values there are already masked at record time).
+_BLOCK_GATED_EVENT_TYPES = ("guest.blocked", "guest.unblocked")
+
+
+class GuestChangeLogSerializer(serializers.ModelSerializer):
+    """One row of a guest's change-log / audit history, read from the existing
+    activity store (``ActivityEvent``). Read-only."""
+
+    actor = serializers.SerializerMethodField()
+    message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ActivityEvent
+        fields = [
+            "id",
+            "event_number",
+            "event_type",
+            "category",
+            "severity",
+            "title",
+            "message",
+            "actor",
+            "occurred_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor(self, obj):
+        return obj.actor.email if obj.actor_id else None
+
+    def get_message(self, obj):
+        if obj.event_type in _BLOCK_GATED_EVENT_TYPES and not self.context.get(
+            "can_see_block_reason"
+        ):
+            return None
+        return obj.message

@@ -1063,3 +1063,391 @@ class GuestUpdateHardeningTests(APITestCase):
         self.assertEqual(r.data["details"]["phone"][0].code, "invalid_phone")
         self.guest.refresh_from_db()
         self.assertEqual(self.guest.phone, "+905551110000")  # unchanged
+
+
+# --------------------------------------------------------------------------- #
+# GAP-1 read-only profile sub-resources (EXEC-GUESTS-CLOSURE-01, W3b)          #
+# stays / reservations / documents / change-log — paginated, hotel-scoped,    #
+# permission-scoped, masking fail-closed, block-reason gated.                 #
+# --------------------------------------------------------------------------- #
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+from apps.reservations.models import (
+    Reservation,
+    ReservationDocument,
+    ReservationOccupant,
+)
+
+
+def make_res(hotel, guest, *, number, status=ReservationStatus.CONFIRMED,
+             source="direct", ci=None, co=None):
+    """A reservation LINKED to ``guest`` as the primary guest (FK set)."""
+    ci = ci or TODAY
+    co = co or TODAY + timedelta(days=2)
+    return Reservation.objects.create(
+        hotel=hotel,
+        reservation_number=number,
+        status=status,
+        source=source,
+        booking_kind="future",
+        check_in_date=ci,
+        check_out_date=co,
+        primary_guest=guest,
+        primary_guest_name=guest.full_name,
+    )
+
+
+class GuestStaysEndpointTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.rtype, (self.r101, self.r102) = make_room_env(self.hotel)
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Stayer")
+        self.res = make_res(self.hotel, self.guest, number="RS1")
+        # Newest arrival last-created on purpose so ordering (not insertion) is
+        # what surfaces it first.
+        self.old = make_stay(
+            self.hotel, self.guest, self.r101,
+            ci=TODAY - timedelta(days=10), co=TODAY - timedelta(days=8),
+        )
+        self.recent = make_stay(
+            self.hotel, self.guest, self.r102, status=StayStatus.IN_HOUSE,
+            ci=TODAY, co=TODAY + timedelta(days=3), reservation=self.res,
+        )
+
+    def _url(self, guest=None):
+        return reverse("guests:guest-stays", args=[(guest or self.guest).id])
+
+    def test_permission_required(self):
+        staff = add_member(self.hotel, "no@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 403)
+        viewer = add_member(self.hotel, "yes@x.com", perms=["guests.view"])
+        self.client.force_authenticate(viewer)
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 200)
+
+    def test_tenant_isolation_other_hotel_guest_404(self):
+        other = make_hotel(slug="o")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(User.objects.get(email="om@x.com"))
+        # The other hotel's member cannot resolve THIS hotel's guest.
+        r = self.client.get(self._url(), **HDR(other))
+        self.assertEqual(r.status_code, 404)
+
+    def test_newest_first_and_fields(self):
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["count"], 2)
+        first = r.data["results"][0]
+        self.assertEqual(first["stay_id"], self.recent.id)  # newest first
+        self.assertEqual(first["status"], "in_house")
+        self.assertFalse(first["is_checked_out"])
+        self.assertEqual(first["room_number"], "102")
+        self.assertEqual(first["room_type_name"], "Standard")
+        self.assertEqual(first["nights"], 3)
+        self.assertEqual(first["reservation_number"], self.res.reservation_number)
+        second = r.data["results"][1]
+        self.assertEqual(second["stay_id"], self.old.id)
+        self.assertTrue(second["is_checked_out"])
+
+    def test_folio_link_when_present(self):
+        from apps.finance import services as fin
+
+        folio = fin.create_folio(self.hotel, stay=self.recent, guest=self.guest)
+        first = self.client.get(self._url(), **HDR(self.hotel)).data["results"][0]
+        self.assertEqual(first["folio"]["folio_number"], folio.folio_number)
+        self.assertEqual(first["folio"]["status"], "open")
+        # No monetary value leaks into a stay row (finance.view territory).
+        self.assertNotIn("balance", first["folio"])
+
+    def test_only_this_guests_stays(self):
+        other_guest = Guest.objects.create(hotel=self.hotel, full_name="Someone")
+        make_stay(self.hotel, other_guest, self.r101,
+                  ci=TODAY - timedelta(days=2), co=TODAY - timedelta(days=1))
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.data["count"], 2)  # unchanged
+
+    def test_pagination_is_real_not_first_page_only(self):
+        # A third stay -> with page_size=2 the last row must appear on page 2.
+        make_stay(self.hotel, self.guest, self.r101,
+                  ci=TODAY - timedelta(days=20), co=TODAY - timedelta(days=19))
+        p1 = self.client.get(self._url(), {"page_size": 2}, **HDR(self.hotel))
+        self.assertEqual(p1.data["count"], 3)
+        self.assertEqual(len(p1.data["results"]), 2)
+        self.assertIsNotNone(p1.data["next"])
+        p2 = self.client.get(
+            self._url(), {"page_size": 2, "page": 2}, **HDR(self.hotel)
+        )
+        self.assertEqual(len(p2.data["results"]), 1)
+        seen = {row["stay_id"] for row in p1.data["results"] + p2.data["results"]}
+        self.assertEqual(len(seen), 3)  # every stay reachable, none duplicated
+
+
+class GuestReservationsEndpointTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Booker")
+        self.past = make_res(
+            self.hotel, self.guest, number="RP",
+            ci=TODAY - timedelta(days=9), co=TODAY - timedelta(days=6),
+        )
+        self.future = make_res(
+            self.hotel, self.guest, number="RF", source="phone",
+            ci=TODAY + timedelta(days=5), co=TODAY + timedelta(days=8),
+        )
+
+    def _url(self, guest=None):
+        return reverse("guests:guest-reservations", args=[(guest or self.guest).id])
+
+    def test_permission_required(self):
+        staff = add_member(self.hotel, "no@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 403)
+
+    def test_tenant_isolation_other_hotel_guest_404(self):
+        other = make_hotel(slug="o")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(User.objects.get(email="om@x.com"))
+        self.assertEqual(self.client.get(self._url(), **HDR(other)).status_code, 404)
+
+    def test_history_fields_and_order(self):
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.data["count"], 2)
+        first = r.data["results"][0]  # newest arrival first
+        self.assertEqual(first["reservation_number"], "RF")
+        self.assertEqual(first["source"], "phone")
+        self.assertEqual(first["status"], "confirmed")
+        self.assertEqual(first["booking_kind"], "future")
+        self.assertEqual(first["check_in_date"], str(TODAY + timedelta(days=5)))
+        self.assertEqual(r.data["results"][1]["reservation_number"], "RP")
+
+    def test_only_reservations_where_guest_is_primary(self):
+        stranger = Guest.objects.create(hotel=self.hotel, full_name="Stranger")
+        make_res(self.hotel, stranger, number="RX")
+        self.assertEqual(
+            self.client.get(self._url(), **HDR(self.hotel)).data["count"], 2
+        )
+
+    def test_pagination_is_real(self):
+        make_res(self.hotel, self.guest, number="R3",
+                 ci=TODAY + timedelta(days=1), co=TODAY + timedelta(days=2))
+        p1 = self.client.get(self._url(), {"page_size": 2}, **HDR(self.hotel))
+        self.assertEqual(p1.data["count"], 3)
+        self.assertEqual(len(p1.data["results"]), 2)
+        p2 = self.client.get(
+            self._url(), {"page_size": 2, "page": 2}, **HDR(self.hotel)
+        )
+        self.assertEqual(len(p2.data["results"]), 1)
+
+
+class GuestDocumentsEndpointTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Doc Owner")
+        # (a) a whole-reservation / primary-guest document (occupant NULL).
+        self.res = make_res(self.hotel, self.guest, number="RD1")
+        self.primary_doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.res, occupant=None,
+            doc_type="passport", number="PP1234567",
+        )
+        # (b) a document attached to the guest AS a named occupant on another
+        # reservation (whose primary guest is someone else).
+        stranger = Guest.objects.create(hotel=self.hotel, full_name="Host")
+        self.other_res = make_res(self.hotel, stranger, number="RD2")
+        self.occupant = ReservationOccupant.objects.create(
+            hotel=self.hotel, reservation=self.other_res, guest=self.guest,
+            first_name="Doc", last_name="Owner",
+        )
+        self.occupant_doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.other_res, occupant=self.occupant,
+            doc_type="national_id", number="NID99",
+        )
+        # A document that is NOT this guest's (stranger's own primary doc).
+        self.noise_doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.other_res, occupant=None,
+            doc_type="visa", number="ZZZ",
+        )
+        self._files = []
+
+    def tearDown(self):
+        for field in self._files:
+            try:
+                field.delete(save=False)
+            except Exception:  # pragma: no cover - best-effort disk cleanup
+                pass
+
+    def _url(self, guest=None):
+        return reverse("guests:guest-documents", args=[(guest or self.guest).id])
+
+    def _member(self, email, perms):
+        m = add_member(self.hotel, email, perms=perms)
+        self.client.force_authenticate(m)
+        return m
+
+    def test_requires_both_guests_view_and_reservation_documents_view(self):
+        # guests.view alone is NOT enough — the reservation-document control is
+        # required in addition.
+        self._member("gv@x.com", ["guests.view"])
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 403)
+        # reservation_documents.view alone is not enough either.
+        self._member("rd@x.com", ["reservation_documents.view"])
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 403)
+        # Both together -> allowed.
+        self._member("both@x.com", ["guests.view", "reservation_documents.view"])
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 200)
+
+    def test_aggregates_primary_and_occupant_docs_excludes_others(self):
+        r = self.client.get(self._url(), **HDR(self.hotel))  # manager has all perms
+        self.assertEqual(r.status_code, 200)
+        ids = {row["id"] for row in r.data["results"]}
+        self.assertEqual(ids, {self.primary_doc.id, self.occupant_doc.id})
+        self.assertNotIn(self.noise_doc.id, ids)
+
+    def test_number_masked_without_sensitive_perm(self):
+        self._member("v@x.com", ["guests.view", "reservation_documents.view"])
+        rows = {row["id"]: row for row in
+                self.client.get(self._url(), **HDR(self.hotel)).data["results"]}
+        self.assertEqual(rows[self.primary_doc.id]["number"], "••••4567")
+        # Manager (holds guests.view_sensitive_data) sees the full number.
+        self.client.force_authenticate(self.manager)
+        rows = {row["id"]: row for row in
+                self.client.get(self._url(), **HDR(self.hotel)).data["results"]}
+        self.assertEqual(rows[self.primary_doc.id]["number"], "PP1234567")
+
+    def test_tenant_isolation_other_hotel_guest_404(self):
+        other = make_hotel(slug="o")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(User.objects.get(email="om@x.com"))
+        self.assertEqual(self.client.get(self._url(), **HDR(other)).status_code, 404)
+
+    def test_image_access_reuses_existing_signed_url_mint_endpoint(self):
+        doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.res, occupant=None,
+            doc_type="residence", number="IMG1",
+            front_file=SimpleUploadedFile(
+                "id.jpg", b"\xff\xd8\xff\xe0jpegbytes", content_type="image/jpeg"
+            ),
+        )
+        self._files.append(doc.front_file)
+        rows = {row["id"]: row for row in
+                self.client.get(self._url(), **HDR(self.hotel)).data["results"]}
+        row = rows[doc.id]
+        self.assertTrue(row["has_front"])
+        self.assertFalse(row["has_back"])
+        self.assertIsNone(row["back_url"])
+        # front_url points at the EXISTING reservation-document signed-URL mint
+        # endpoint (no new file service).
+        expected = reverse(
+            "reservations:reservation-document-signed-url",
+            kwargs={"doc_id": doc.id, "side": "front"},
+        )
+        self.assertIsNotNone(row["front_url"])
+        self.assertTrue(row["front_url"].endswith(expected))
+
+    def test_expiry_is_always_null(self):
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        for row in r.data["results"]:
+            self.assertIsNone(row["expiry_date"])
+
+    def test_pagination_is_real(self):
+        # There are already 2 of this guest's docs; add a third.
+        ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.res, occupant=None,
+            doc_type="visa", number="EXTRA",
+        )
+        p1 = self.client.get(self._url(), {"page_size": 2}, **HDR(self.hotel))
+        self.assertEqual(p1.data["count"], 3)
+        self.assertEqual(len(p1.data["results"]), 2)
+        p2 = self.client.get(
+            self._url(), {"page_size": 2, "page": 2}, **HDR(self.hotel)
+        )
+        self.assertEqual(len(p2.data["results"]), 1)
+
+
+class GuestChangeLogEndpointTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Logged")
+        from apps.guests.services import (
+            block_guest,
+            record_guest_created,
+            record_guest_updated,
+        )
+
+        record_guest_created(self.guest, user=self.manager)
+        record_guest_updated(
+            self.guest, old_values={"full_name": "Old", "phone": ""},
+            user=self.manager,
+        )
+        block_guest(self.guest, reason="stole the towels", user=self.manager)
+
+    def _url(self, guest=None):
+        return reverse("guests:guest-change-log", args=[(guest or self.guest).id])
+
+    def test_permission_required(self):
+        staff = add_member(self.hotel, "no@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 403)
+        viewer = add_member(self.hotel, "yes@x.com", perms=["guests.view"])
+        self.client.force_authenticate(viewer)
+        self.assertEqual(self.client.get(self._url(), **HDR(self.hotel)).status_code, 200)
+
+    def test_tenant_isolation_other_hotel_guest_404(self):
+        other = make_hotel(slug="o")
+        add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(User.objects.get(email="om@x.com"))
+        self.assertEqual(self.client.get(self._url(), **HDR(other)).status_code, 404)
+
+    def test_lists_guest_events_newest_first(self):
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.status_code, 200)
+        types = [row["event_type"] for row in r.data["results"]]
+        self.assertEqual(
+            set(types), {"guest.created", "guest.updated", "guest.blocked"}
+        )
+        # Newest first: the block (last recorded) leads.
+        self.assertEqual(r.data["results"][0]["event_type"], "guest.blocked")
+
+    def test_only_this_guests_events(self):
+        from apps.guests.services import record_guest_created
+
+        other_guest = Guest.objects.create(hotel=self.hotel, full_name="Another")
+        record_guest_created(other_guest, user=self.manager)
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.data["count"], 3)  # only self.guest's events
+
+    def test_block_reason_gated_behind_guests_block(self):
+        # A plain viewer (no guests.block) must NOT see the block reason.
+        viewer = add_member(self.hotel, "v@x.com", perms=["guests.view"])
+        self.client.force_authenticate(viewer)
+        rows = self.client.get(self._url(), **HDR(self.hotel)).data["results"]
+        blocked = next(row for row in rows if row["event_type"] == "guest.blocked")
+        self.assertIsNone(blocked["message"])
+        # A non-block event keeps its message for the same viewer.
+        updated = next(row for row in rows if row["event_type"] == "guest.updated")
+        self.assertIsNotNone(updated["message"])
+        # A block-permission holder sees the reason.
+        blocker = add_member(
+            self.hotel, "b@x.com", perms=["guests.view", "guests.block"]
+        )
+        self.client.force_authenticate(blocker)
+        rows = self.client.get(self._url(), **HDR(self.hotel)).data["results"]
+        blocked = next(row for row in rows if row["event_type"] == "guest.blocked")
+        self.assertEqual(blocked["message"], "stole the towels")
+
+    def test_pagination_is_real(self):
+        p1 = self.client.get(self._url(), {"page_size": 2}, **HDR(self.hotel))
+        self.assertEqual(p1.data["count"], 3)
+        self.assertEqual(len(p1.data["results"]), 2)
+        p2 = self.client.get(
+            self._url(), {"page_size": 2, "page": 2}, **HDR(self.hotel)
+        )
+        self.assertEqual(len(p2.data["results"]), 1)
