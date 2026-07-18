@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
+from django.urls import reverse
 from django.utils import timezone
 
 from rest_framework import serializers
@@ -147,13 +148,28 @@ class ReservationOccupantReadSerializer(serializers.ModelSerializer):
 class ReservationDocumentReadSerializer(serializers.ModelSerializer):
     """Metadata-only read representation of a reservation document.
 
-    The raw files are NEVER exposed here — only ``has_front`` / ``has_back``
-    booleans. Signed/streamed access to the bytes is a later pass. The document
-    ``number`` (an identity number) is masked like the guests document number.
+    The raw image bytes are NEVER embedded here — only ``has_front`` /
+    ``has_back`` existence flags plus ``front_url`` / ``back_url`` that point at
+    the EXISTING signed-URL mint endpoint (``reservation-document-signed-url``).
+    The document ``number`` (an identity number) is masked like the guests
+    document number.
+
+    SEC (Decision 8 / RV-SEC F-1): opening / downloading the ORIGINAL document
+    image is more sensitive than listing a masked number, so ``front_url`` /
+    ``back_url`` — the only path to the image mint — are returned ONLY when the
+    caller ALSO holds ``guests.view_sensitive_data`` (fail-closed when there is
+    no request context). Without it the URLs are ``null`` (never minted) and the
+    row carries only the type + masked number; the mint/stream endpoints reject
+    the reconstructed URL server-side regardless, so this merely keeps the UI
+    honest (no broken "view image" button), it is NOT the enforcement point.
+    ``has_front`` / ``has_back`` stay truthful existence flags but do not lead to
+    the image. This mirrors ``guests.serializers.GuestDocumentSerializer``.
     """
 
     has_front = serializers.SerializerMethodField()
     has_back = serializers.SerializerMethodField()
+    front_url = serializers.SerializerMethodField()
+    back_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ReservationDocument
@@ -165,6 +181,8 @@ class ReservationDocumentReadSerializer(serializers.ModelSerializer):
             "number",
             "has_front",
             "has_back",
+            "front_url",
+            "back_url",
             "created_at",
             "updated_at",
         ]
@@ -175,6 +193,26 @@ class ReservationDocumentReadSerializer(serializers.ModelSerializer):
 
     def get_has_back(self, obj) -> bool:
         return bool(obj.back_file)
+
+    def _mint_url(self, obj, side: str, has_side: bool):
+        if not has_side:
+            return None
+        request = self.context.get("request")
+        # Fail CLOSED: a missing request context or a caller without
+        # ``guests.view_sensitive_data`` never receives the image-mint URL.
+        if request is None or not can_view_sensitive(request):
+            return None
+        path = reverse(
+            "reservations:reservation-document-signed-url",
+            kwargs={"doc_id": obj.id, "side": side},
+        )
+        return request.build_absolute_uri(path)
+
+    def get_front_url(self, obj):
+        return self._mint_url(obj, "front", bool(obj.front_file))
+
+    def get_back_url(self, obj):
+        return self._mint_url(obj, "back", bool(obj.back_file))
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
