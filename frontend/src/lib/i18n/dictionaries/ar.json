@@ -1303,28 +1303,16 @@
     "directory": {
       "residency": "الإقامة",
       "resident": "مقيم الآن",
-      "notResident": "غير مقيم",
       "stays": "الإقامات",
       "lastStay": "آخر إقامة",
       "repeat": "متكرر",
       "firstTime": "جديد",
-      "openProfile": "فتح الملف",
       "empty": "لا نزلاء بعد",
       "emptyHint": "يظهر هنا كل نزيل له إقامة واحدة على الأقل — حالية أو سابقة."
     },
     "profile": {
-      "title": "ملف النزيل",
       "nights": "الليالي",
-      "firstStay": "أول إقامة",
-      "currentStay": "الإقامة الحالية",
-      "openFrontDesk": "فتح الاستقبال",
-      "openFolio": "فتح الفوليو",
-      "stayHistory": "سجل الإقامات",
-      "noStays": "لا إقامات مسجلة.",
-      "currentBadge": "حالية",
-      "records": "السجلات",
-      "upcomingHeading": "الحجوزات القادمة",
-      "needsReviewBody": "هذا النزيل محظور لكن لديه حجز قادم — يُرجى المراجعة قبل الوصول."
+      "currentStay": "الإقامة الحالية"
     },
     "vip": {
       "badge": "VIP",
@@ -1348,23 +1336,13 @@
       "deactivated": "عُطّل الملف فقط — السجل التاريخي محفوظ."
     },
     "needsReview": "بحاجة إلى مراجعة",
-    "tabs": {
-      "profile": "الملف",
-      "stays": "الإقامات",
-      "reservations": "الحجوزات",
-      "documents": "الوثائق",
-      "changeLog": "السجل"
-    },
     "card": {
-      "viewProfile": "عرض الملف",
       "viewStays": "عرض الإقامات",
       "viewReservations": "عرض الحجوزات",
       "viewDocuments": "عرض الوثائق",
       "viewHistory": "عرض السجل",
       "pastBadge": "نزيل سابق",
       "upcomingBadge": "حجز قادم",
-      "upcomingNext": "الوصول القادم",
-      "ariaProfile": "عرض ملف {name}",
       "ariaStays": "سجل إقامات {name}",
       "ariaReservations": "سجل حجوزات {name}",
       "ariaDocuments": "وثائق {name}",
@@ -1385,7 +1363,9 @@
       "reservation": "الحجز",
       "folio": "الفوليو",
       "checkedOut": "غادر",
-      "empty": "لا إقامات مسجلة."
+      "empty": "لا إقامات مسجلة.",
+      "viewFolio": "عرض الفوليو",
+      "viewFolioLabel": "عرض الفوليو {folio}"
     },
     "reservationsList": {
       "title": "الحجوزات",
@@ -1398,7 +1378,8 @@
       "empty": "لا حجوزات.",
       "groupUpcoming": "قادمة",
       "groupCurrent": "حالية",
-      "groupPast": "سابقة"
+      "groupPast": "سابقة",
+      "openReservation": "فتح الحجز {number}"
     },
     "documents": {
       "title": "الوثائق",
@@ -1425,10 +1406,6 @@
       "severityInfo": "معلومة",
       "severityWarning": "تحذير",
       "severityCritical": "حرج"
-    },
-    "upcoming": {
-      "title": "الحجوزات القادمة",
-      "empty": "لا حجوزات قادمة."
     },
     "errors": {
       "blocked": "هذا النزيل محظور في هذا الفندق — لا يمكن إتمام العملية.",

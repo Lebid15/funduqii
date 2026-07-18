@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Ban,
   BedDouble,
   CalendarRange,
@@ -13,11 +14,10 @@ import {
   Phone,
   ShieldCheck,
   Star,
-  User,
 } from "lucide-react";
 
-import { ActionIconButton, Badge, Button, Icon } from "@/components/ui";
-import type { GuestDirectoryRow, GuestReservationRow } from "@/lib/api/types";
+import { ActionIconButton, Badge, Icon } from "@/components/ui";
+import type { GuestDirectoryRow } from "@/lib/api/types";
 import { initials } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -37,8 +37,9 @@ import {
  *
  * Regions:
  *   (1) Header — a status-badge row (VIP / banned / in-house+room / has-upcoming /
- *       past / inactive) then the focal name (an accessible button that opens the
- *       central profile).
+ *       needs-review / past / inactive) then the focal name (a plain heading — the
+ *       comprehensive profile modal was removed, so the card IS the interface and
+ *       its action icons open each record sub-modal directly).
  *   (2) Identity facts — phone / nationality / document number. Phone + document
  *       are IDENTIFIERS: rendered verbatim (never localised digits) inside a
  *       `<bdi dir="ltr">` so an RTL layout can never reorder them. The document
@@ -48,36 +49,28 @@ import {
  *       at least one stay exists), and the last / current stay date. Counts use
  *       the locale numerals (`formatQuantity`); the date uses `formatDateOnly`
  *       (no UTC day-shift).
- *   (4) Upcoming hint — only when a forthcoming reservation is supplied.
- *   (5) Actions — few + permission-gated. "View profile" is the primary control;
- *       edit / VIP / ban are quick icon actions; the four history seams (stays /
- *       reservations / documents / change-log) render only when their callback is
- *       supplied, so W6b attaches its dedicated sub-modals without touching this
- *       card. Every icon action carries an aria-label that names the guest.
+ *   (4) Actions — few + permission-gated icon buttons that open each record
+ *       sub-modal DIRECTLY (no profile step): edit / stays / reservations /
+ *       documents / change-log / VIP / block. Each renders only when its callback
+ *       is supplied (AND, for documents, the permission passes). There is NO folio
+ *       icon on the card. Every icon action carries an aria-label that names the
+ *       guest, a translated tooltip, and the central focus/hover styling.
  */
 export interface GuestCardProps {
   guest: GuestDirectoryRow;
-  /**
-   * Optional forthcoming reservations for this guest. The directory list does not
-   * carry them, so this stays undefined in W6a; when a non-empty array is supplied
-   * (e.g. from the profile in W6b) the has-upcoming badge + hint render.
-   */
-  upcoming?: GuestReservationRow[];
   /** Cosmetic permission gate — every API re-checks server-side regardless. */
   can: (...codes: string[]) => boolean;
   /** Disables the card's mutating actions while one is in flight for this guest. */
   busy?: boolean;
-  /** Primary action — opens the central profile (the existing modal in W6a). */
-  onOpenProfile: (guest: GuestDirectoryRow) => void;
-  /** guests.update — opens the guest for editing. */
+  /** guests.update — opens the personal-data edit modal DIRECTLY (pencil). */
   onEdit?: (guest: GuestDirectoryRow) => void;
   /** guests.mark_vip — toggles the VIP marker. */
   onToggleVip?: (guest: GuestDirectoryRow) => void;
   /** guests.block — blocks, or unblocks when the guest is already blocked. */
   onBlock?: (guest: GuestDirectoryRow) => void;
-  /* --- W6b seams: dedicated sub-modals. A button renders ONLY when its callback
-   *     is supplied (AND, for documents, the permission passes), so the next wave
-   *     wires them in the panel without refactoring the card. --- */
+  /* --- Record sub-modals opened DIRECTLY from the card. A button renders ONLY
+   *     when its callback is supplied (AND, for documents, the permission passes),
+   *     so gating stays in the panel. --- */
   onStays?: (guest: GuestDirectoryRow) => void;
   onReservations?: (guest: GuestDirectoryRow) => void;
   onDocuments?: (guest: GuestDirectoryRow) => void;
@@ -86,10 +79,8 @@ export interface GuestCardProps {
 
 export function GuestCard({
   guest: g,
-  upcoming,
   can,
   busy = false,
-  onOpenProfile,
   onEdit,
   onToggleVip,
   onBlock,
@@ -101,8 +92,12 @@ export function GuestCard({
   const { t, locale } = useI18n();
   const c = t.guests.card;
 
-  const hasUpcoming = Array.isArray(upcoming) && upcoming.length > 0;
-  const nextUpcoming = hasUpcoming ? upcoming[0] : null;
+  // Short card indicators, straight from the directory row (backend-derived,
+  // never client-inferred): the guest holds an active forthcoming reservation,
+  // and/or the profile still needs staff review. Full details live in the
+  // reservations modal. Read defensively so a row without the flags is safe.
+  const hasUpcoming = g.has_upcoming === true;
+  const needsReview = g.needs_review === true;
   // The directory only lists guests with >= 1 real stay, so a non-resident row is
   // a PAST guest and its night total is meaningful. A resident's night total may
   // still be accruing, so it is shown but framed by the "in house" badge.
@@ -122,7 +117,8 @@ export function GuestCard({
 
   return (
     <article className={`guest-card guest-card--${accent}`} aria-label={g.full_name}>
-      {/* 1) Header — status badges (row 1) then the focal name (opens profile). */}
+      {/* 1) Header — status badges (row 1) then the focal name (a plain heading;
+          the card's action icons open every record sub-modal directly). */}
       <div className="guest-card__header">
         <div className="guest-card__status-row">
           {g.is_vip ? (
@@ -133,6 +129,11 @@ export function GuestCard({
           {g.is_blocked ? (
             <Badge tone="danger" variant="filled" icon={Ban}>
               {t.guests.block.badge}
+            </Badge>
+          ) : null}
+          {needsReview ? (
+            <Badge tone="warning" icon={AlertTriangle}>
+              {t.guests.needsReview}
             </Badge>
           ) : null}
           {g.is_resident ? (
@@ -151,17 +152,10 @@ export function GuestCard({
         </div>
 
         <div className="guest-card__idrow">
-          <button
-            type="button"
-            className="guest-card__open"
-            onClick={() => onOpenProfile(g)}
-            aria-label={withName(c.ariaProfile)}
-          >
-            <span className="guest-card__avatar" aria-hidden="true">
-              {initials(g.full_name)}
-            </span>
-            <span className="guest-card__name">{g.full_name}</span>
-          </button>
+          <span className="guest-card__avatar" aria-hidden="true">
+            {initials(g.full_name)}
+          </span>
+          <span className="guest-card__name">{g.full_name}</span>
         </div>
       </div>
 
@@ -219,24 +213,10 @@ export function GuestCard({
         </div>
       </dl>
 
-      {/* 4) Upcoming hint — only when a forthcoming reservation is supplied. */}
-      {nextUpcoming ? (
-        <p className="guest-card__upcoming">
-          <Icon icon={CalendarRange} size="sm" />
-          <span>
-            {c.upcomingNext}:{" "}
-            <bdi dir={IDENTIFIER_DIR}>{nextUpcoming.reservation_number}</bdi> ·{" "}
-            {formatDateOnly(nextUpcoming.check_in_date, locale)}
-          </span>
-        </p>
-      ) : null}
-
-      {/* 5) Actions — few + permission-gated. View profile is the primary CTA; the
-          icon bar carries edit / VIP / ban and the (W6b) history seams. */}
+      {/* 4) Actions — permission-gated icon bar. Each icon opens its record
+          sub-modal DIRECTLY (edit / stays / reservations / documents / change-log)
+          or fires an inline mutation (VIP / block). No folio icon lives here. */}
       <div className="guest-card__actions">
-        <Button variant="secondary" size="sm" icon={User} onClick={() => onOpenProfile(g)}>
-          {c.viewProfile}
-        </Button>
         <div className="guest-card__iconbar">
           {onStays ? (
             <ActionIconButton

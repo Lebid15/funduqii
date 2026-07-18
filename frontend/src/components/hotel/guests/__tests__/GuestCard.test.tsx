@@ -1,14 +1,17 @@
 import type { ComponentProps } from "react";
-import { screen, within } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GuestCard } from "../GuestCard";
-import { makeDirectoryRow, makeReservationRow, renderWithProviders } from "@/test-utils";
+import { makeDirectoryRow, renderWithProviders } from "@/test-utils";
 
 /**
- * GuestCard (MANDATE W7, list item 1). The card is a guest IDENTITY card: it
- * renders masked identity facts + stats + permission-gated actions and carries
- * NO operational stay controls. `can` is a prop, so no context mock is needed.
+ * GuestCard (R2-FE). The comprehensive profile modal was removed: the CARD is the
+ * guest interface, so it renders masked identity facts + stats + short
+ * backend-derived indicators + permission-gated icon actions that open each
+ * record sub-modal DIRECTLY. It carries NO "view profile" control and NO
+ * operational stay controls (incl. no folio icon). `can` is a prop, so no context
+ * mock is needed.
  */
 
 /** Allow every permission unless a test narrows it. */
@@ -18,13 +21,13 @@ const noop = vi.fn();
 
 function renderCard(
   props: Partial<ComponentProps<typeof GuestCard>> = {},
+  options?: { locale?: "en" | "ar" | "tr" },
 ) {
   const guest = props.guest ?? makeDirectoryRow();
   return renderWithProviders(
     <GuestCard
       guest={guest}
       can={props.can ?? allow}
-      onOpenProfile={props.onOpenProfile ?? noop}
       onEdit={props.onEdit ?? noop}
       onToggleVip={props.onToggleVip ?? noop}
       onBlock={props.onBlock ?? noop}
@@ -32,9 +35,9 @@ function renderCard(
       onReservations={props.onReservations}
       onDocuments={props.onDocuments}
       onChangeLog={props.onChangeLog}
-      upcoming={props.upcoming}
       busy={props.busy}
     />,
+    options,
   );
 }
 
@@ -99,12 +102,22 @@ describe("GuestCard — status badges", () => {
     expect(screen.getByText(/204/)).toBeInTheDocument();
   });
 
-  it("shows the has-upcoming badge + next-arrival hint when a forthcoming reservation is supplied", () => {
-    renderCard({
-      upcoming: [makeReservationRow({ reservation_number: "R00042", check_in_date: "2026-09-01" })],
-    });
+  it("shows the has-upcoming badge from the directory row flag (short info only)", () => {
+    renderCard({ guest: makeDirectoryRow({ has_upcoming: true }) });
     expect(screen.getByText("Upcoming")).toBeInTheDocument();
-    expect(screen.getByText("R00042")).toBeInTheDocument();
+  });
+
+  it("shows the needs-review badge from the directory row flag", () => {
+    renderCard({ guest: makeDirectoryRow({ needs_review: true }) });
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+  });
+
+  it("hides the upcoming + needs-review indicators when the row flags are false", () => {
+    renderCard({
+      guest: makeDirectoryRow({ has_upcoming: false, needs_review: false }),
+    });
+    expect(screen.queryByText("Upcoming")).not.toBeInTheDocument();
+    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
   });
 
   it("shows the past-guest badge for a non-resident with stay history", () => {
@@ -147,7 +160,6 @@ describe("GuestCard — permission gating", () => {
       <GuestCard
         guest={makeDirectoryRow({ full_name: "Ali Hassan" })}
         can={(...codes: string[]) => codes.includes("reservation_documents.view")}
-        onOpenProfile={noop}
         onDocuments={onDocuments}
       />,
     );
@@ -173,32 +185,88 @@ describe("GuestCard — scope guard", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("gives every icon action an accessible name that includes the guest name", () => {
+  it("has NO general folio icon on the card", () => {
+    renderCard({
+      guest: makeDirectoryRow({ is_resident: true, current_room_number: "204" }),
+      onStays: vi.fn(),
+      onReservations: vi.fn(),
+      onDocuments: vi.fn(),
+      onChangeLog: vi.fn(),
+    });
+    expect(
+      screen.queryByRole("button", { name: /folio|invoice/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("exposes NO 'view profile' control even when the record seams are present", () => {
+    renderCard({
+      guest: makeDirectoryRow({ full_name: "Ali Hassan" }),
+      onStays: vi.fn(),
+      onReservations: vi.fn(),
+      onDocuments: vi.fn(),
+      onChangeLog: vi.fn(),
+    });
+    expect(
+      screen.queryByRole("button", { name: /view profile|open profile/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the guest name as a plain heading, never an actionable control", () => {
+    // With every permission denied and no record seams supplied, the card has no
+    // buttons at all — proving the name itself no longer opens anything.
+    renderCard({
+      guest: makeDirectoryRow({ full_name: "Ali Hassan" }),
+      can: () => false,
+    });
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByText("Ali Hassan")).toBeInTheDocument();
+  });
+
+  it("gives every icon action a translated tooltip + an aria-label naming the guest", () => {
     renderCard({
       guest: makeDirectoryRow({ full_name: "Ali Hassan" }),
       onStays: vi.fn(),
     });
-    // The primary name button + the icon actions all name the guest.
-    expect(
-      screen.getByRole("button", { name: "View profile — Ali Hassan" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Stay history — Ali Hassan" }),
-    ).toBeInTheDocument();
+    const stays = screen.getByRole("button", { name: "Stay history — Ali Hassan" });
+    // A native <button> (keyboard-focusable) with a visible tooltip (title).
+    expect(stays.tagName).toBe("BUTTON");
+    expect(stays).toHaveAttribute("title", "View stays");
     expect(
       screen.getByRole("button", { name: "Edit — Ali Hassan" }),
-    ).toBeInTheDocument();
+    ).toHaveAttribute("title", "Edit");
+  });
+
+  it("keeps identifiers LTR even under an RTL locale", () => {
+    const { container } = renderCard(
+      { guest: makeDirectoryRow({ phone: "0555••••56" }) },
+      { locale: "ar" },
+    );
+    const ltr = Array.from(container.querySelectorAll('bdi[dir="ltr"]')).map(
+      (n) => n.textContent,
+    );
+    expect(ltr).toContain("0555••••56");
   });
 });
 
 describe("GuestCard — actions fire", () => {
-  it("invokes onOpenProfile from the focal name button", async () => {
-    const onOpenProfile = vi.fn();
+  it("invokes onEdit from the pencil icon (opens the edit modal directly)", () => {
+    const onEdit = vi.fn();
     const guest = makeDirectoryRow({ full_name: "Ali Hassan" });
-    renderCard({ guest, onOpenProfile });
-    const btn = screen.getByRole("button", { name: "View profile — Ali Hassan" });
-    within(btn).getByText("Ali Hassan");
-    btn.click();
-    expect(onOpenProfile).toHaveBeenCalledWith(guest);
+    renderCard({ guest, onEdit });
+    screen.getByRole("button", { name: "Edit — Ali Hassan" }).click();
+    expect(onEdit).toHaveBeenCalledWith(guest);
+  });
+
+  it("invokes onStays / onReservations from their icons", () => {
+    const onStays = vi.fn();
+    const onReservations = vi.fn();
+    const guest = makeDirectoryRow({ full_name: "Ali Hassan" });
+    renderCard({ guest, onStays, onReservations });
+    screen.getByRole("button", { name: "Stay history — Ali Hassan" }).click();
+    screen
+      .getByRole("button", { name: "Reservation history — Ali Hassan" })
+      .click();
+    expect(onStays).toHaveBeenCalledWith(guest);
+    expect(onReservations).toHaveBeenCalledWith(guest);
   });
 });

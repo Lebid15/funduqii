@@ -957,6 +957,14 @@ export interface GuestDirectoryRow {
   is_repeat: boolean;
   is_resident: boolean;
   current_room_number: string | null;
+  /** GUESTS-CLOSURE central identity — true when the guest holds an active
+   * forthcoming reservation. Backend-derived (never client-inferred). Surfaced as
+   * a SHORT card badge only; the full details live in the reservations modal. */
+  has_upcoming: boolean;
+  /** GUESTS-CLOSURE central identity — true when the profile still needs staff
+   * review (e.g. a blocked guest who holds an upcoming reservation). Backend-
+   * derived; a short card indicator only. */
+  needs_review: boolean;
 }
 
 /** GET /guests/<id>/profile — one stay-history row (read-only). */

@@ -1303,28 +1303,16 @@
     "directory": {
       "residency": "Konaklama",
       "resident": "Şu an konaklıyor",
-      "notResident": "Konaklamıyor",
       "stays": "Konaklamalar",
       "lastStay": "Son konaklama",
       "repeat": "Tekrarlayan",
       "firstTime": "Yeni",
-      "openProfile": "Profili aç",
       "empty": "Henüz misafir yok",
       "emptyHint": "En az bir konaklaması olan her misafir — mevcut veya geçmiş — burada görünür."
     },
     "profile": {
-      "title": "Misafir profili",
       "nights": "Geceler",
-      "firstStay": "İlk konaklama",
-      "currentStay": "Mevcut konaklama",
-      "openFrontDesk": "Ön büroyu aç",
-      "openFolio": "Folyoyu aç",
-      "stayHistory": "Konaklama geçmişi",
-      "noStays": "Kayıtlı konaklama yok.",
-      "currentBadge": "Mevcut",
-      "records": "Kayıtlar",
-      "upcomingHeading": "Yaklaşan rezervasyonlar",
-      "needsReviewBody": "Bu misafir engelli ancak yaklaşan bir rezervasyonu var — gelmeden önce lütfen inceleyin."
+      "currentStay": "Mevcut konaklama"
     },
     "vip": {
       "badge": "VIP",
@@ -1348,23 +1336,13 @@
       "deactivated": "Profil yalnızca devre dışı bırakıldı — geçmiş korunur."
     },
     "needsReview": "İnceleme gerekli",
-    "tabs": {
-      "profile": "Profil",
-      "stays": "Konaklamalar",
-      "reservations": "Rezervasyonlar",
-      "documents": "Belgeler",
-      "changeLog": "Geçmiş"
-    },
     "card": {
-      "viewProfile": "Profili görüntüle",
       "viewStays": "Konaklamaları görüntüle",
       "viewReservations": "Rezervasyonları görüntüle",
       "viewDocuments": "Belgeleri görüntüle",
       "viewHistory": "Geçmişi görüntüle",
       "pastBadge": "Eski misafir",
       "upcomingBadge": "Yaklaşan",
-      "upcomingNext": "Sonraki geliş",
-      "ariaProfile": "Profili görüntüle — {name}",
       "ariaStays": "Konaklama geçmişi — {name}",
       "ariaReservations": "Rezervasyon geçmişi — {name}",
       "ariaDocuments": "Belgeler — {name}",
@@ -1385,7 +1363,9 @@
       "reservation": "Rezervasyon",
       "folio": "Folyo",
       "checkedOut": "Çıkış yaptı",
-      "empty": "Kayıtlı konaklama yok."
+      "empty": "Kayıtlı konaklama yok.",
+      "viewFolio": "Folyoyu görüntüle",
+      "viewFolioLabel": "Folyoyu görüntüle {folio}"
     },
     "reservationsList": {
       "title": "Rezervasyonlar",
@@ -1398,7 +1378,8 @@
       "empty": "Rezervasyon yok.",
       "groupUpcoming": "Yaklaşan",
       "groupCurrent": "Mevcut",
-      "groupPast": "Geçmiş"
+      "groupPast": "Geçmiş",
+      "openReservation": "Rezervasyonu aç {number}"
     },
     "documents": {
       "title": "Belgeler",
@@ -1425,10 +1406,6 @@
       "severityInfo": "Bilgi",
       "severityWarning": "Uyarı",
       "severityCritical": "Kritik"
-    },
-    "upcoming": {
-      "title": "Yaklaşan rezervasyonlar",
-      "empty": "Yaklaşan rezervasyon yok."
     },
     "errors": {
       "blocked": "Bu misafir bu otelde engelli — işlem yapılamaz.",

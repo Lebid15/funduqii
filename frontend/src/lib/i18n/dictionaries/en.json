@@ -1303,28 +1303,16 @@
     "directory": {
       "residency": "Residency",
       "resident": "In house",
-      "notResident": "Not staying",
       "stays": "Stays",
       "lastStay": "Last stay",
       "repeat": "Repeat",
       "firstTime": "New",
-      "openProfile": "Open profile",
       "empty": "No guests yet",
       "emptyHint": "Every guest with at least one stay — current or past — appears here."
     },
     "profile": {
-      "title": "Guest profile",
       "nights": "Nights",
-      "firstStay": "First stay",
-      "currentStay": "Current stay",
-      "openFrontDesk": "Open front desk",
-      "openFolio": "Open folio",
-      "stayHistory": "Stay history",
-      "noStays": "No stays recorded.",
-      "currentBadge": "Current",
-      "records": "Records",
-      "upcomingHeading": "Upcoming reservations",
-      "needsReviewBody": "This guest is blocked but has an upcoming reservation — please review before arrival."
+      "currentStay": "Current stay"
     },
     "vip": {
       "badge": "VIP",
@@ -1348,23 +1336,13 @@
       "deactivated": "Profile deactivated only — history is preserved."
     },
     "needsReview": "Needs review",
-    "tabs": {
-      "profile": "Profile",
-      "stays": "Stays",
-      "reservations": "Reservations",
-      "documents": "Documents",
-      "changeLog": "History"
-    },
     "card": {
-      "viewProfile": "View profile",
       "viewStays": "View stays",
       "viewReservations": "View reservations",
       "viewDocuments": "View documents",
       "viewHistory": "View history",
       "pastBadge": "Past guest",
       "upcomingBadge": "Upcoming",
-      "upcomingNext": "Next arrival",
-      "ariaProfile": "View profile — {name}",
       "ariaStays": "Stay history — {name}",
       "ariaReservations": "Reservation history — {name}",
       "ariaDocuments": "Documents — {name}",
@@ -1385,7 +1363,9 @@
       "reservation": "Reservation",
       "folio": "Folio",
       "checkedOut": "Checked out",
-      "empty": "No stays recorded."
+      "empty": "No stays recorded.",
+      "viewFolio": "View folio",
+      "viewFolioLabel": "View folio {folio}"
     },
     "reservationsList": {
       "title": "Reservations",
@@ -1398,7 +1378,8 @@
       "empty": "No reservations.",
       "groupUpcoming": "Upcoming",
       "groupCurrent": "Current",
-      "groupPast": "Past"
+      "groupPast": "Past",
+      "openReservation": "Open reservation {number}"
     },
     "documents": {
       "title": "Documents",
@@ -1425,10 +1406,6 @@
       "severityInfo": "Info",
       "severityWarning": "Warning",
       "severityCritical": "Critical"
-    },
-    "upcoming": {
-      "title": "Upcoming reservations",
-      "empty": "No upcoming reservations."
     },
     "errors": {
       "blocked": "This guest is blocked in this hotel — the operation cannot proceed.",

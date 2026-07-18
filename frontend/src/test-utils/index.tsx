@@ -81,6 +81,8 @@ export function makeDirectoryRow(
     is_repeat: true,
     is_resident: false,
     current_room_number: null,
+    has_upcoming: false,
+    needs_review: false,
     ...overrides,
   };
 }

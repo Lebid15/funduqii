@@ -54,6 +54,8 @@ vi.mock("@/lib/api/guests", () => ({
 import {
   getGuestProfile,
   listGuestDirectory,
+  listGuestReservations,
+  listGuestStays,
   updateGuest,
 } from "@/lib/api/guests";
 import type { PaginatedResponse } from "@/lib/api/types";
@@ -114,6 +116,69 @@ describe("GuestsPanel — search", () => {
           .mock.calls.some(([params]) => params?.search === "Ali"),
       ).toBe(true),
     );
+  });
+});
+
+describe("GuestsPanel — no comprehensive profile", () => {
+  it("renders no 'view profile' control and no aggregated profile modal", async () => {
+    access.set(["guests.update", "stays.view", "reservations.view"]);
+    renderWithProviders(<GuestsPanel />);
+    await screen.findByText("Ali Hassan");
+    expect(
+      screen.queryByRole("button", { name: /view profile|open profile/i }),
+    ).not.toBeInTheDocument();
+    // The removed profile modal titled its surface "Guest profile".
+    expect(screen.queryByText("Guest profile")).not.toBeInTheDocument();
+    // getGuestProfile is only fetched lazily when the edit form opens — not on load.
+    expect(getGuestProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe("GuestsPanel — card icons open sub-modals directly", () => {
+  it("opens the stays history modal from the bed icon", async () => {
+    access.set(["stays.view"]);
+    vi.mocked(listGuestStays).mockResolvedValue(page([]));
+    renderWithProviders(<GuestsPanel />);
+    const btn = await screen.findByRole("button", {
+      name: "Stay history — Ali Hassan",
+    });
+    fireEvent.click(btn);
+    expect(await screen.findByText("Stays · Ali Hassan")).toBeInTheDocument();
+    await waitFor(() => expect(listGuestStays).toHaveBeenCalled());
+  });
+
+  it("opens the reservations history modal from the calendar icon", async () => {
+    access.set(["reservations.view"]);
+    vi.mocked(listGuestReservations).mockResolvedValue(page([]));
+    renderWithProviders(<GuestsPanel />);
+    const btn = await screen.findByRole("button", {
+      name: "Reservation history — Ali Hassan",
+    });
+    fireEvent.click(btn);
+    expect(
+      await screen.findByText("Reservations · Ali Hassan"),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(listGuestReservations).toHaveBeenCalled());
+  });
+
+  it("opens the personal-data edit modal from the pencil icon", async () => {
+    access.set(["guests.update"]);
+    vi.mocked(getGuestProfile).mockResolvedValue(
+      makeProfile({ id: 7, full_name: "Ali Hassan" }),
+    );
+    renderWithProviders(<GuestsPanel />);
+    const editBtn = await screen.findByRole("button", {
+      name: "Edit — Ali Hassan",
+    });
+    fireEvent.click(editBtn);
+    // The personal-data edit form opens once the record loads (its stable field).
+    await screen.findByLabelText("Full name");
+    expect(
+      screen.getByRole("heading", { name: "Edit guest" }),
+    ).toBeInTheDocument();
+    // Personal-data form only — no reservations/stays/folio/documents/change-log.
+    expect(screen.queryByText("Stay history")).not.toBeInTheDocument();
+    expect(getGuestProfile).toHaveBeenCalledWith(7);
   });
 });
 

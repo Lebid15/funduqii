@@ -23,6 +23,7 @@ import {
   Button,
   EmptyState,
   ErrorState,
+  Icon,
   LoadingState,
   Modal,
   Pagination,
@@ -271,13 +272,30 @@ export function GuestStaysHistoryModal({
                 {row.reservation_number && can("reservations.view") ? (
                   <Link
                     className="inline-link"
-                    href={`/hotel/reservations?action=find&q=${row.reservation_number}`}
+                    href={`/hotel/reservations?action=find&q=${encodeURIComponent(row.reservation_number)}`}
+                    aria-label={t.guests.reservationsList.openReservation.replace(
+                      "{number}",
+                      row.reservation_number,
+                    )}
                   >
                     <bdi dir={IDENTIFIER_DIR}>{row.reservation_number}</bdi>
                   </Link>
                 ) : null}
+                {/* View the REAL linked folio: shown ONLY when a folio is linked to
+                    this stay AND the viewer holds finance.view. It reuses the
+                    existing finance folios route (no duplicate financial summary);
+                    with no folio (or no permission) there is NO button at all. */}
                 {row.folio && can("finance.view") ? (
-                  <Link className="inline-link" href="/hotel/finance?tab=folios">
+                  <Link
+                    className="inline-link"
+                    href="/hotel/finance?tab=folios"
+                    aria-label={s.viewFolioLabel.replace(
+                      "{folio}",
+                      row.folio.folio_number,
+                    )}
+                  >
+                    <Icon icon={FileText} size="sm" />
+                    {s.viewFolio}{" "}
                     <bdi dir={IDENTIFIER_DIR}>{row.folio.folio_number}</bdi>
                   </Link>
                 ) : null}
@@ -322,6 +340,7 @@ export function GuestReservationsHistoryModal({
   onClose,
 }: GuestRecordModalProps) {
   const { t, locale } = useI18n();
+  const can = useCan();
   const r = t.guests.reservationsList;
   const list = useGuestSubList<GuestReservationRow>(
     open,
@@ -340,10 +359,28 @@ export function GuestReservationsHistoryModal({
     <li key={row.id} className="mini-list__row">
       <span className="stack-tight">
         <span>
+          {/* Open the ACTUAL reservation in the reservations section — reusing the
+              existing cross-section deep-link (same as the rooms board), so its
+              own detail view, permissions and print apply. No duplicate here. */}
           <strong>
-            <bdi dir={IDENTIFIER_DIR}>
-              {formatIdentifier(row.reservation_number)}
-            </bdi>
+            {can("reservations.view") ? (
+              <Link
+                className="inline-link"
+                href={`/hotel/reservations?action=find&q=${encodeURIComponent(row.reservation_number)}`}
+                aria-label={r.openReservation.replace(
+                  "{number}",
+                  row.reservation_number,
+                )}
+              >
+                <bdi dir={IDENTIFIER_DIR}>
+                  {formatIdentifier(row.reservation_number)}
+                </bdi>
+              </Link>
+            ) : (
+              <bdi dir={IDENTIFIER_DIR}>
+                {formatIdentifier(row.reservation_number)}
+              </bdi>
+            )}
           </strong>
         </span>
         <span className="muted small">
@@ -453,7 +490,12 @@ export function GuestDocumentsModal({
         >
           <ul className="mini-list">
             {list.rows.map((row) => {
-              const canOpen = row.has_front || row.has_back;
+              // The backend returns front_url/back_url ONLY to a viewer holding
+              // guests.view_sensitive_data; without it they are null. So the
+              // "view image" action appears ONLY when a URL is actually present —
+              // otherwise the row shows type + masked number with NO dead button
+              // (the client never tries to reconstruct the image URL).
+              const canOpen = row.front_url != null || row.back_url != null;
               return (
                 <li key={row.id} className="mini-list__row">
                   <span className="stack-tight">

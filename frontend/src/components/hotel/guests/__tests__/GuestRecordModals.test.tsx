@@ -39,16 +39,19 @@ vi.mock("@/lib/api/guests", () => ({
 
 import {
   listGuestDocuments,
+  listGuestReservations,
   listGuestStays,
 } from "@/lib/api/guests";
 import type { PaginatedResponse } from "@/lib/api/types";
 import {
   GuestDocumentsModal,
+  GuestReservationsHistoryModal,
   GuestStaysHistoryModal,
 } from "../GuestRecordModals";
 import {
   apiError,
   makeDocumentRow,
+  makeReservationRow,
   makeStayRow,
   renderWithProviders,
 } from "@/test-utils";
@@ -184,5 +187,172 @@ describe("GuestDocumentsModal — reservation_documents.view gate", () => {
 
     expect(await screen.findByText("••••5678")).toBeInTheDocument();
     expect(listGuestDocuments).toHaveBeenCalledWith(7, { page: 1, page_size: 10 });
+  });
+});
+
+describe("GuestDocumentsModal — image gating on URL presence", () => {
+  it("hides the view-image action when front_url/back_url are absent", async () => {
+    access.set(["reservation_documents.view"]);
+    vi.mocked(listGuestDocuments).mockResolvedValue(
+      envelope(
+        [
+          makeDocumentRow({
+            number: "••••5678",
+            has_front: true,
+            front_url: null,
+            back_url: null,
+          }),
+        ],
+        1,
+      ),
+    );
+
+    renderWithProviders(
+      <GuestDocumentsModal open guestId={7} guestName="Ali" onClose={vi.fn()} />,
+    );
+
+    // Type + masked number render, but there is NO dead "view image" button.
+    expect(await screen.findByText("••••5678")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "View" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the view-image action only when a signed URL is present", async () => {
+    access.set(["reservation_documents.view"]);
+    vi.mocked(listGuestDocuments).mockResolvedValue(
+      envelope(
+        [
+          makeDocumentRow({
+            number: "1234",
+            has_front: true,
+            front_url: "/api/hotel/reservations/documents/1/front",
+          }),
+        ],
+        1,
+      ),
+    );
+
+    renderWithProviders(
+      <GuestDocumentsModal open guestId={7} guestName="Ali" onClose={vi.fn()} />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "View" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("GuestReservationsHistoryModal — opens the existing reservation", () => {
+  it("links each reservation to the existing reservations section (no duplicate detail view)", async () => {
+    access.set(["reservations.view"]);
+    vi.mocked(listGuestReservations).mockResolvedValue(
+      envelope([makeReservationRow({ id: 3, reservation_number: "R00042" })], 1),
+    );
+
+    renderWithProviders(
+      <GuestReservationsHistoryModal
+        open
+        guestId={7}
+        guestName="Ali"
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Navigation (not a duplicate view): a link into the reservations section
+    // deep-linked to this exact reservation, reusing that route + its detail.
+    const link = await screen.findByRole("link", {
+      name: "Open reservation R00042",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "/hotel/reservations?action=find&q=R00042",
+    );
+  });
+
+  it("shows the number as plain text (no link) without reservations.view", async () => {
+    access.set([]); // no reservations.view
+    vi.mocked(listGuestReservations).mockResolvedValue(
+      envelope([makeReservationRow({ reservation_number: "R00042" })], 1),
+    );
+
+    renderWithProviders(
+      <GuestReservationsHistoryModal
+        open
+        guestId={7}
+        guestName="Ali"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("R00042")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /open reservation/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("GuestStaysHistoryModal — linked folio action", () => {
+  it("shows 'View folio' with finance.view AND a linked folio, pointing at the folio route", async () => {
+    access.set(["finance.view"]);
+    vi.mocked(listGuestStays).mockResolvedValue(
+      envelope(
+        [
+          makeStayRow({
+            room_number: "R201",
+            folio: { id: 5, folio_number: "F00007", status: "open" },
+          }),
+        ],
+        1,
+      ),
+    );
+
+    renderWithProviders(
+      <GuestStaysHistoryModal open guestId={7} guestName="Ali" onClose={vi.fn()} />,
+    );
+
+    const link = await screen.findByRole("link", { name: "View folio F00007" });
+    expect(link).toHaveAttribute("href", "/hotel/finance?tab=folios");
+    expect(within(link).getByText("View folio")).toBeInTheDocument();
+  });
+
+  it("hides 'View folio' without finance.view", async () => {
+    access.set([]); // no finance.view
+    vi.mocked(listGuestStays).mockResolvedValue(
+      envelope(
+        [
+          makeStayRow({
+            room_number: "R201",
+            folio: { id: 5, folio_number: "F00007", status: "open" },
+          }),
+        ],
+        1,
+      ),
+    );
+
+    renderWithProviders(
+      <GuestStaysHistoryModal open guestId={7} guestName="Ali" onClose={vi.fn()} />,
+    );
+
+    await screen.findByText("R201");
+    expect(
+      screen.queryByRole("link", { name: /view folio/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no folio action when the stay has no linked folio", async () => {
+    access.set(["finance.view"]);
+    vi.mocked(listGuestStays).mockResolvedValue(
+      envelope([makeStayRow({ room_number: "R201", folio: null })], 1),
+    );
+
+    renderWithProviders(
+      <GuestStaysHistoryModal open guestId={7} guestName="Ali" onClose={vi.fn()} />,
+    );
+
+    await screen.findByText("R201");
+    expect(
+      screen.queryByRole("link", { name: /view folio/i }),
+    ).not.toBeInTheDocument();
   });
 });

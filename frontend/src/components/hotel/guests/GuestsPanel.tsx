@@ -1,27 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import Link from "next/link";
-import {
-  Ban,
-  BedDouble,
-  CalendarRange,
-  DoorOpen,
-  FileText,
-  History,
-  Pencil,
-  ShieldCheck,
-  Star,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Users } from "lucide-react";
 
 import {
   Alert,
-  Badge,
   Button,
   Card,
-  ConfirmDialog,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -38,7 +23,6 @@ import {
 import { GuestCard } from "./GuestCard";
 import {
   blockGuest,
-  deleteGuest,
   getGuestProfile,
   listGuestDirectory,
   setGuestVip,
@@ -48,18 +32,7 @@ import {
 } from "@/lib/api/guests";
 import { messageForError } from "@/lib/api/errors";
 import type { Guest, GuestDirectoryRow, GuestProfile } from "@/lib/api/types";
-import {
-  formatDate,
-  reservationStatusLabel,
-  reservationStatusTone,
-} from "@/lib/format";
-import {
-  IDENTIFIER_DIR,
-  formatDateOnly,
-  formatIdentifier,
-  formatQuantity,
-  isMaskedValue,
-} from "./guestFormat";
+import { isMaskedValue } from "./guestFormat";
 import {
   GuestChangeLogModal,
   GuestDocumentsModal,
@@ -97,8 +70,10 @@ export function GuestsPanel() {
   const [showInactive, setShowInactive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [profileEditing, setProfileEditing] = useState(false);
+  // The guest whose personal-data edit modal is open (opened DIRECTLY by the card
+  // pencil — there is no comprehensive profile step). The full personal record is
+  // fetched lazily by GuestEditModal from its id.
+  const [editId, setEditId] = useState<number | null>(null);
   const [blockTarget, setBlockTarget] = useState<GuestDirectoryRow | null>(null);
   // The one guest whose inline VIP/ban action is in flight — disables that card's
   // mutating buttons so a slow request cannot be double-fired.
@@ -153,14 +128,7 @@ export function GuestsPanel() {
     setQuery(search);
   }
 
-  const openProfile = (g: GuestDirectoryRow) => {
-    setProfileEditing(false);
-    setProfileId(g.id);
-  };
-  const openEdit = (g: GuestDirectoryRow) => {
-    setProfileEditing(true);
-    setProfileId(g.id);
-  };
+  const openEdit = (g: GuestDirectoryRow) => setEditId(g.id);
 
   async function toggleVip(g: GuestDirectoryRow) {
     setBusyId(g.id);
@@ -228,12 +196,11 @@ export function GuestsPanel() {
                     guest={g}
                     can={can}
                     busy={busyId === g.id}
-                    onOpenProfile={openProfile}
                     onEdit={openEdit}
                     onToggleVip={toggleVip}
                     onBlock={handleBlock}
-                    /* W6b — the four dedicated record sub-modals. Each button
-                       renders only when its callback is supplied (and, for
+                    /* The four record sub-modals open DIRECTLY from the card. Each
+                       button renders only when its callback is supplied (and, for
                        documents, GuestCard additionally gates on
                        reservation_documents.view), so gating happens here. */
                     onStays={can("stays.view") ? openStays : undefined}
@@ -262,15 +229,10 @@ export function GuestsPanel() {
         )
       ) : null}
 
-      <GuestProfileModal
-        guestId={profileId}
-        startEditing={profileEditing}
-        onClose={() => { setProfileId(null); setProfileEditing(false); }}
-        onChanged={load}
-        onOpenStays={openStays}
-        onOpenReservations={openReservations}
-        onOpenDocuments={openDocuments}
-        onOpenChangeLog={openChangeLog}
+      <GuestEditModal
+        guestId={editId}
+        onClose={() => setEditId(null)}
+        onSaved={() => { setEditId(null); notify(t.guests.saved); load(); }}
       />
 
       <BlockGuestModal
@@ -324,375 +286,100 @@ export function GuestsPanel() {
 }
 
 // --------------------------------------------------------------------------- //
-// Guest profile modal (read-only history + permission-gated actions)          //
+// Edit-modal loader (fetches the guest's personal record, opens the form)      //
 // --------------------------------------------------------------------------- //
 
-function GuestProfileModal({
+/**
+ * Opens the PERSONAL-DATA edit form for a guest, fetched lazily by id. The
+ * comprehensive profile modal was removed (owner decision: the card IS the guest
+ * interface), so the card pencil now opens this form DIRECTLY. It fetches the
+ * guest's full personal record (`getGuestProfile` already carries every editable
+ * field) purely to SEED the form — it renders NO reservations / stays / folio /
+ * documents / change-log. A masked document number is never echoed back on save
+ * (the form omits it — see GuestModal).
+ */
+function GuestEditModal({
   guestId,
-  startEditing = false,
   onClose,
-  onChanged,
-  onOpenStays,
-  onOpenReservations,
-  onOpenDocuments,
-  onOpenChangeLog,
+  onSaved,
 }: {
   guestId: number | null;
-  /** When true, open straight into the edit form once the profile has loaded
-   * (the GuestCard "edit" shortcut). Applied once per open. */
-  startEditing?: boolean;
   onClose: () => void;
-  onChanged: () => void;
-  /** Open the matching record sub-modal for this guest (panel-owned state). */
-  onOpenStays: (g: GuestRef) => void;
-  onOpenReservations: (g: GuestRef) => void;
-  onOpenDocuments: (g: GuestRef) => void;
-  onOpenChangeLog: (g: GuestRef) => void;
+  onSaved: () => void;
 }) {
-  const { t, locale } = useI18n();
-  const { notify } = useToast();
-  const can = useCan();
-  const [profile, setProfile] = useState<GuestProfile | null>(null);
+  const { t } = useI18n();
+  const [guest, setGuest] = useState<GuestProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [blocking, setBlocking] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  // Ensures the startEditing shortcut fires exactly once per open (never re-opens
-  // the edit form after a save-triggered reload).
-  const didAutoEdit = useRef(false);
   const open = guestId !== null;
 
-  const reload = useCallback(() => {
+  useEffect(() => {
+    setGuest(null);
+    setError(null);
     if (guestId === null) return;
+    let cancelled = false;
     getGuestProfile(guestId)
-      .then((p) => { setProfile(p); setError(null); })
-      .catch((err) => setError(messageForError(err, t)));
+      .then((p) => {
+        if (!cancelled) setGuest(p);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(messageForError(err, t));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [guestId, t]);
 
-  useEffect(() => {
-    setProfile(null);
-    setError(null);
-    setEditing(false);
-    setBlocking(false);
-    setDeleting(false);
-    didAutoEdit.current = false;
-    reload();
-  }, [reload]);
+  if (!open) return null;
 
-  // Apply the startEditing shortcut once the profile has loaded (the edit form
-  // needs the full guest object). Guarded so a later reload never re-opens it.
-  useEffect(() => {
-    if (startEditing && profile && !didAutoEdit.current) {
-      didAutoEdit.current = true;
-      setEditing(true);
-    }
-  }, [startEditing, profile]);
-
-  async function toggleVip() {
-    if (!profile) return;
-    setBusy(true);
-    try {
-      await setGuestVip(profile.id, !profile.is_vip);
-      notify(t.guests.saved);
-      reload();
-      onChanged();
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-    } finally {
-      setBusy(false);
-    }
+  // Once the personal record has loaded, hand off to the shared edit form (which
+  // owns its own Modal). Until then — or on a load error — show a light framing
+  // Modal so the interaction always has an anchored, dismissible surface.
+  if (guest) {
+    return (
+      <GuestModal
+        open
+        guest={{
+          id: guest.id,
+          full_name: guest.full_name,
+          phone: guest.phone,
+          email: guest.email,
+          nationality: guest.nationality,
+          document_type: guest.document_type,
+          document_number: guest.document_number,
+          date_of_birth: guest.date_of_birth,
+          gender: guest.gender,
+          address: guest.address,
+          notes: guest.notes,
+          is_active: guest.is_active,
+          is_vip: guest.is_vip,
+          is_blocked: guest.is_blocked,
+          created_at: guest.created_at,
+          updated_at: guest.updated_at,
+        }}
+        onClose={onClose}
+        onSaved={onSaved}
+      />
+    );
   }
-
-  async function doUnblock() {
-    if (!profile) return;
-    setBusy(true);
-    try {
-      await unblockGuest(profile.id);
-      notify(t.guests.block.unblocked);
-      reload();
-      onChanged();
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function confirmDelete() {
-    if (!profile) return;
-    setBusy(true);
-    try {
-      const res = await deleteGuest(profile.id);
-      notify(
-        res.result === "deleted"
-          ? t.guests.deleteResult.deleted
-          : t.guests.deleteResult.deactivated,
-      );
-      setDeleting(false);
-      onChanged();
-      if (res.result === "deleted") onClose();
-      else reload();
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-      setDeleting(false);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const p = profile;
 
   return (
-    <>
-      <Modal
-        open={open}
-        onClose={onClose}
-        title={p ? p.full_name : t.guests.profile.title}
-        closeLabel={t.common.close}
-        footer={<Button variant="secondary" onClick={onClose}>{t.common.close}</Button>}
-      >
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        {!p && !error ? <LoadingState label={t.common.loading} /> : null}
-        {p ? (
-          <div className="stack">
-            <div className="cluster">
-              {p.is_resident ? (
-                <Badge tone="success">{t.guests.directory.resident}{p.current_room_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{p.current_room_number}</bdi></> : ""}</Badge>
-              ) : (
-                <Badge tone="neutral">{t.guests.directory.notResident}</Badge>
-              )}
-              <Badge tone={p.is_repeat ? "info" : "neutral"}>
-                {p.is_repeat ? t.guests.directory.repeat : t.guests.directory.firstTime}
-              </Badge>
-              {p.is_vip ? <Badge tone="vip"><Star size={12} aria-hidden /> {t.guests.vip.badge}</Badge> : null}
-              {p.is_blocked ? <Badge tone="danger">{t.guests.block.badge}</Badge> : null}
-              {!p.is_active ? <Badge tone="neutral">{t.guests.inactive}</Badge> : null}
-            </div>
-
-            {p.is_blocked ? (
-              <Alert tone="error">
-                {t.guests.block.activeNotice}
-                {p.block_reason ? ` — ${p.block_reason}` : ""}
-                {p.blocked_by ? ` (${p.blocked_by}${p.blocked_at ? ` · ${formatDate(p.blocked_at, locale)}` : ""})` : ""}
-              </Alert>
-            ) : null}
-
-            {/* U-15 — staff-review banner (e.g. a blocked guest who still has an
-                upcoming reservation). Backend-derived; never client-inferred. */}
-            {p.needs_review ? (
-              <Alert tone="warning">
-                <strong>{t.guests.needsReview}</strong> — {t.guests.profile.needsReviewBody}
-              </Alert>
-            ) : null}
-
-            <div className="cluster">
-              {can("guests.update") ? (
-                <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(true)} disabled={busy}>
-                  {t.common.edit}
-                </Button>
-              ) : null}
-              {can("guests.mark_vip") ? (
-                <Button variant="ghost" size="sm" icon={Star} onClick={toggleVip} disabled={busy}>
-                  {p.is_vip ? t.guests.vip.unmark : t.guests.vip.mark}
-                </Button>
-              ) : null}
-              {can("guests.block") ? (
-                p.is_blocked ? (
-                  <Button variant="ghost" size="sm" icon={ShieldCheck} onClick={doUnblock} disabled={busy}>
-                    {t.guests.block.unblock}
-                  </Button>
-                ) : (
-                  <Button variant="ghost" size="sm" icon={Ban} onClick={() => setBlocking(true)} disabled={busy}>
-                    {t.guests.block.block}
-                  </Button>
-                )
-              ) : null}
-              {can("guests.delete") ? (
-                <Button variant="danger" size="sm" icon={Trash2} onClick={() => setDeleting(true)} disabled={busy}>
-                  {t.common.delete}
-                </Button>
-              ) : null}
-            </div>
-
-            <dl className="detail-grid">
-              <div><dt>{t.guests.form.phone}</dt><dd><bdi dir={IDENTIFIER_DIR}>{formatIdentifier(p.phone)}</bdi></dd></div>
-              <div><dt>{t.guests.form.email}</dt><dd>{p.email || "—"}</dd></div>
-              <div><dt>{t.guests.form.nationality}</dt><dd>{p.nationality || "—"}</dd></div>
-              <div><dt>{t.guests.form.documentType}</dt><dd>{p.document_type ? t.guests.documentTypes[p.document_type] : "—"}</dd></div>
-              {/* Identifier — verbatim + LTR; a server-masked value stays masked. */}
-              <div><dt>{t.guests.form.documentNumber}</dt><dd><bdi dir={IDENTIFIER_DIR}>{formatIdentifier(p.document_number)}</bdi></dd></div>
-              {/* DOB is masked ("•") without guests.view_sensitive_data — formatDateOnly
-                  passes a non-date mask through unchanged (never "Invalid Date"). */}
-              <div><dt>{t.guests.form.dateOfBirth}</dt><dd>{formatDateOnly(p.date_of_birth, locale)}</dd></div>
-            </dl>
-
-            <dl className="detail-grid">
-              <div><dt>{t.guests.directory.stays}</dt><dd>{formatQuantity(p.stays_count, locale)}</dd></div>
-              <div><dt>{t.guests.profile.nights}</dt><dd>{formatQuantity(p.nights_total, locale)}</dd></div>
-              <div><dt>{t.guests.profile.firstStay}</dt><dd>{formatDateOnly(p.first_stay_date, locale)}</dd></div>
-              <div><dt>{t.guests.directory.lastStay}</dt><dd>{formatDateOnly(p.last_stay_date, locale)}</dd></div>
-            </dl>
-
-            {/* U-15 — records: open the four paginated record sub-modals.
-                Permission-gated (documents needs reservation_documents.view). */}
-            <div>
-              <h3>{t.guests.profile.records}</h3>
-              <div className="cluster">
-                {can("stays.view") ? (
-                  <Button variant="secondary" size="sm" icon={BedDouble} onClick={() => onOpenStays(p)}>
-                    {t.guests.tabs.stays}
-                  </Button>
-                ) : null}
-                {can("reservations.view") ? (
-                  <Button variant="secondary" size="sm" icon={CalendarRange} onClick={() => onOpenReservations(p)}>
-                    {t.guests.tabs.reservations}
-                  </Button>
-                ) : null}
-                {can("reservation_documents.view") ? (
-                  <Button variant="secondary" size="sm" icon={FileText} onClick={() => onOpenDocuments(p)}>
-                    {t.guests.tabs.documents}
-                  </Button>
-                ) : null}
-                <Button variant="secondary" size="sm" icon={History} onClick={() => onOpenChangeLog(p)}>
-                  {t.guests.tabs.changeLog}
-                </Button>
-              </div>
-            </div>
-
-            {p.current ? (
-              <Alert tone="info">
-                <span className="cluster" style={{ gap: "0.5rem" }}>
-                  <DoorOpen size={14} aria-hidden />
-                  {t.guests.profile.currentStay}: <bdi dir={IDENTIFIER_DIR}>{p.current.room_number}</bdi>
-                  {p.current.reservation_number ? <>{" · "}<bdi dir={IDENTIFIER_DIR}>{p.current.reservation_number}</bdi></> : ""}
-                  {can("stays.view") ? (
-                    <Link className="inline-link" href="/hotel/front-desk?tab=current">{t.guests.profile.openFrontDesk}</Link>
-                  ) : null}
-                  {p.current.folio_number && can("finance.view") ? (
-                    <Link className="inline-link" href="/hotel/finance?tab=folios">{t.guests.profile.openFolio} (<bdi dir={IDENTIFIER_DIR}>{p.current.folio_number}</bdi>)</Link>
-                  ) : null}
-                </span>
-              </Alert>
-            ) : null}
-
-            {/* U-15 — the guest's forthcoming reservations (backend-provided
-                summary rows). Reservation numbers render LTR; dates never shift. */}
-            <div>
-              <h3>{t.guests.profile.upcomingHeading}</h3>
-              {p.upcoming_reservations.length === 0 ? (
-                <p className="muted">{t.guests.upcoming.empty}</p>
-              ) : (
-                <ul className="mini-list">
-                  {p.upcoming_reservations.map((r) => (
-                    <li key={r.id} className="mini-list__row">
-                      <span>
-                        <bdi dir={IDENTIFIER_DIR}>{formatIdentifier(r.reservation_number)}</bdi>
-                        <span className="muted"> · {formatDateOnly(r.check_in_date, locale)} → {formatDateOnly(r.check_out_date, locale)}</span>
-                      </span>
-                      <Badge tone={reservationStatusTone(r.status)}>{reservationStatusLabel(r.status, t)}</Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {p.notes ? (
-              <div>
-                <h3>{t.guests.form.notes}</h3>
-                <p>{p.notes}</p>
-              </div>
-            ) : null}
-
-            <div>
-              <h3>{t.guests.profile.stayHistory}</h3>
-              {p.stays.length === 0 ? (
-                <p className="muted">{t.guests.profile.noStays}</p>
-              ) : (
-                <ul className="mini-list">
-                  {p.stays.map((s) => (
-                    <li key={s.stay_id} className="mini-list__row">
-                      <span>
-                        <bdi dir={IDENTIFIER_DIR}>{s.room_number}</bdi> · {s.room_type_name} · {formatDateOnly(s.check_in_date, locale)} → {formatDateOnly(s.check_out_date, locale)} · {formatQuantity(s.nights, locale)} {t.frontDesk.current.nights}
-                        {s.is_current ? <> <Badge tone="success">{t.guests.profile.currentBadge}</Badge></> : null}
-                        {s.status === "cancelled" ? <> <Badge tone="neutral">{t.frontDesk.status.cancelled}</Badge></> : null}
-                      </span>
-                      <span className="cluster" style={{ gap: "0.5rem" }}>
-                        {s.reservation_number && can("reservations.view") ? (
-                          <Link className="inline-link" href={`/hotel/reservations?action=find&q=${s.reservation_number}`}><bdi dir={IDENTIFIER_DIR}>{s.reservation_number}</bdi></Link>
-                        ) : null}
-                        {s.folio_number && can("finance.view") ? (
-                          <Link className="inline-link" href="/hotel/finance?tab=folios"><bdi dir={IDENTIFIER_DIR}>{s.folio_number}</bdi></Link>
-                        ) : null}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-
-      {p ? (
-        <GuestModal
-          open={editing}
-          guest={{
-            id: p.id,
-            full_name: p.full_name,
-            phone: p.phone,
-            email: p.email,
-            nationality: p.nationality,
-            document_type: p.document_type,
-            document_number: p.document_number,
-            date_of_birth: p.date_of_birth,
-            gender: p.gender,
-            address: p.address,
-            notes: p.notes,
-            is_active: p.is_active,
-            is_vip: p.is_vip,
-            is_blocked: p.is_blocked,
-            created_at: p.created_at,
-            updated_at: p.updated_at,
-          }}
-          onClose={() => setEditing(false)}
-          onSaved={() => { setEditing(false); notify(t.guests.saved); reload(); onChanged(); }}
-        />
-      ) : null}
-
-      <BlockGuestModal
-        open={blocking}
-        onClose={() => setBlocking(false)}
-        onConfirm={async (reason) => {
-          if (!p) return;
-          setBusy(true);
-          try {
-            await blockGuest(p.id, reason);
-            notify(t.guests.block.blockedToast);
-            setBlocking(false);
-            reload();
-            onChanged();
-          } catch (err) {
-            notify(messageForError(err, t), "error");
-          } finally {
-            setBusy(false);
-          }
-        }}
-      />
-
-      <ConfirmDialog
-        open={deleting}
-        title={t.guests.deleteTitle}
-        body={t.guests.deleteBody}
-        confirmLabel={t.common.delete}
-        cancelLabel={t.common.cancel}
-        closeLabel={t.common.close}
-        tone="danger"
-        busy={busy}
-        onConfirm={confirmDelete}
-        onClose={() => setDeleting(false)}
-      />
-    </>
+    <Modal
+      open
+      onClose={onClose}
+      title={t.guests.form.editTitle}
+      closeLabel={t.common.close}
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          {t.common.close}
+        </Button>
+      }
+    >
+      {error ? (
+        <Alert tone="error">{error}</Alert>
+      ) : (
+        <LoadingState label={t.common.loading} />
+      )}
+    </Modal>
   );
 }
 
