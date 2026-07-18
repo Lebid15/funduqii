@@ -64,6 +64,21 @@ def record_guest_created(guest, *, user=None):
     )
 
 
+def record_guest_reactivated(guest, *, user=None):
+    """Log that a previously-deactivated profile was reused and reactivated by
+    the central identity resolution service (GUESTS central identity). The
+    reactivation itself is written by that service; this only records the audit
+    event so the history shows WHY the profile came back to life."""
+    _record(
+        guest,
+        event_type="guest.reactivated",
+        severity="info",
+        title=f"Guest profile reactivated: {guest.full_name}",
+        message="reused by central identity resolution",
+        user=user,
+    )
+
+
 def record_guest_updated(guest, *, old_values, user=None):
     """Log a profile edit. Old/new values are included for the sensitive
     identity fields — except document numbers, which are logged MASKED."""
