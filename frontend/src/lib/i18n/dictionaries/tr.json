@@ -1031,7 +1031,11 @@
         "lookupConflict": "Bu kimlik ve telefon iki farklı misafire ait — hiçbir şey içe aktarılmadı. Devam etmeden önce kimlik ve telefonu kontrol edin.",
         "lookupOverwriteTitle": "Bu misafirin bilgileri içe aktarılsın mı?",
         "lookupOverwriteBody": "Bu, girdiğiniz bilgilerin yerine kayıtlı misafirin bilgilerini koyar.",
-        "lookupOverwriteConfirm": "İçe aktar ve değiştir"
+        "lookupOverwriteConfirm": "İçe aktar ve değiştir",
+        "lookupAnnounceNone": "Eşleşen misafir bulunamadı — yeni bir misafir oluşturulacak.",
+        "lookupAnnounceSingle": "Bir eşleşen misafir bulundu.",
+        "lookupAnnounceMultiple": "{count} eşleşen misafir bulundu.",
+        "lookupUseAria": "Bu misafiri kullan — {name}"
       },
       "companions": {
         "title": "Refakatçiler",
@@ -1317,7 +1321,10 @@
       "openFolio": "Folyoyu aç",
       "stayHistory": "Konaklama geçmişi",
       "noStays": "Kayıtlı konaklama yok.",
-      "currentBadge": "Mevcut"
+      "currentBadge": "Mevcut",
+      "records": "Kayıtlar",
+      "upcomingHeading": "Yaklaşan rezervasyonlar",
+      "needsReviewBody": "Bu misafir engelli ancak yaklaşan bir rezervasyonu var — gelmeden önce lütfen inceleyin."
     },
     "vip": {
       "badge": "VIP",
@@ -1388,7 +1395,10 @@
       "kind": "Tür",
       "checkIn": "Giriş",
       "checkOut": "Çıkış",
-      "empty": "Rezervasyon yok."
+      "empty": "Rezervasyon yok.",
+      "groupUpcoming": "Yaklaşan",
+      "groupCurrent": "Mevcut",
+      "groupPast": "Geçmiş"
     },
     "documents": {
       "title": "Belgeler",
@@ -1401,6 +1411,7 @@
       "expiry": "Son geçerlilik",
       "added": "Eklendi",
       "empty": "Belge yok.",
+      "view": "Görüntüle",
       "permissionHint": "Belgeleri görüntüleme izniniz yok."
     },
     "changeLog": {

@@ -1031,7 +1031,11 @@
         "lookupConflict": "This ID and phone belong to two different guests — nothing was imported. Check the ID and phone before continuing.",
         "lookupOverwriteTitle": "Import this guest's data?",
         "lookupOverwriteBody": "This replaces the details you already entered with the registered guest's data.",
-        "lookupOverwriteConfirm": "Import and replace"
+        "lookupOverwriteConfirm": "Import and replace",
+        "lookupAnnounceNone": "No matching guest found — a new guest will be created.",
+        "lookupAnnounceSingle": "One matching guest found.",
+        "lookupAnnounceMultiple": "{count} matching guests found.",
+        "lookupUseAria": "Use this guest — {name}"
       },
       "companions": {
         "title": "Companions",
@@ -1317,7 +1321,10 @@
       "openFolio": "Open folio",
       "stayHistory": "Stay history",
       "noStays": "No stays recorded.",
-      "currentBadge": "Current"
+      "currentBadge": "Current",
+      "records": "Records",
+      "upcomingHeading": "Upcoming reservations",
+      "needsReviewBody": "This guest is blocked but has an upcoming reservation — please review before arrival."
     },
     "vip": {
       "badge": "VIP",
@@ -1388,7 +1395,10 @@
       "kind": "Type",
       "checkIn": "Check-in",
       "checkOut": "Check-out",
-      "empty": "No reservations."
+      "empty": "No reservations.",
+      "groupUpcoming": "Upcoming",
+      "groupCurrent": "Current",
+      "groupPast": "Past"
     },
     "documents": {
       "title": "Documents",
@@ -1401,6 +1411,7 @@
       "expiry": "Expiry",
       "added": "Added",
       "empty": "No documents.",
+      "view": "View",
       "permissionHint": "You do not have permission to view documents."
     },
     "changeLog": {

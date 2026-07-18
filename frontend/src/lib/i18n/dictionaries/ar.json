@@ -1031,7 +1031,11 @@
         "lookupConflict": "رقم الهوية والهاتف يعودان لنزيلين مختلفين — لم يُستورَد شيء. تحقّق من الهوية والهاتف قبل المتابعة.",
         "lookupOverwriteTitle": "استيراد بيانات هذا النزيل؟",
         "lookupOverwriteBody": "سيحلّ هذا محل البيانات التي أدخلتها ببيانات النزيل المسجَّل.",
-        "lookupOverwriteConfirm": "استيراد واستبدال"
+        "lookupOverwriteConfirm": "استيراد واستبدال",
+        "lookupAnnounceNone": "لا يوجد نزيل مطابق — سيُنشأ نزيل جديد.",
+        "lookupAnnounceSingle": "تم العثور على نزيل مطابق واحد.",
+        "lookupAnnounceMultiple": "تم العثور على {count} نزلاء مطابقين.",
+        "lookupUseAria": "استخدام هذا النزيل — {name}"
       },
       "companions": {
         "title": "المرافقون",
@@ -1317,7 +1321,10 @@
       "openFolio": "فتح الفوليو",
       "stayHistory": "سجل الإقامات",
       "noStays": "لا إقامات مسجلة.",
-      "currentBadge": "حالية"
+      "currentBadge": "حالية",
+      "records": "السجلات",
+      "upcomingHeading": "الحجوزات القادمة",
+      "needsReviewBody": "هذا النزيل محظور لكن لديه حجز قادم — يُرجى المراجعة قبل الوصول."
     },
     "vip": {
       "badge": "VIP",
@@ -1388,7 +1395,10 @@
       "kind": "النوع",
       "checkIn": "الدخول",
       "checkOut": "المغادرة",
-      "empty": "لا حجوزات."
+      "empty": "لا حجوزات.",
+      "groupUpcoming": "قادمة",
+      "groupCurrent": "حالية",
+      "groupPast": "سابقة"
     },
     "documents": {
       "title": "الوثائق",
@@ -1401,6 +1411,7 @@
       "expiry": "الانتهاء",
       "added": "أُضيفت",
       "empty": "لا وثائق.",
+      "view": "عرض",
       "permissionHint": "لا تملك صلاحية عرض الوثائق."
     },
     "changeLog": {

@@ -4,7 +4,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link";
 import {
   Ban,
+  BedDouble,
+  CalendarRange,
   DoorOpen,
+  FileText,
+  History,
   Pencil,
   ShieldCheck,
   Star,
@@ -44,12 +48,35 @@ import {
 } from "@/lib/api/guests";
 import { messageForError } from "@/lib/api/errors";
 import type { Guest, GuestDirectoryRow, GuestProfile } from "@/lib/api/types";
-import { formatDate } from "@/lib/format";
-import { isMaskedValue } from "./guestFormat";
+import {
+  formatDate,
+  reservationStatusLabel,
+  reservationStatusTone,
+} from "@/lib/format";
+import {
+  IDENTIFIER_DIR,
+  formatDateOnly,
+  formatIdentifier,
+  formatQuantity,
+  isMaskedValue,
+} from "./guestFormat";
+import {
+  GuestChangeLogModal,
+  GuestDocumentsModal,
+  GuestReservationsHistoryModal,
+  GuestStaysHistoryModal,
+} from "./GuestRecordModals";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 const PAGE_SIZE = 25;
+
+/** Which read-only record sub-modal is open for a guest. */
+type RecordKind = "stays" | "reservations" | "documents" | "changeLog";
+
+/** The minimal identity a record opener needs (satisfied by both a directory row
+ * and a full profile). */
+type GuestRef = { id: number; full_name: string };
 
 /** Cosmetic permission gate — every API re-checks server-side regardless. */
 function useCan() {
@@ -76,6 +103,22 @@ export function GuestsPanel() {
   // The one guest whose inline VIP/ban action is in flight — disables that card's
   // mutating buttons so a slow request cannot be double-fired.
   const [busyId, setBusyId] = useState<number | null>(null);
+  // The record sub-modal currently open (stays / reservations / documents /
+  // change-log) for a specific guest. Opened from a GuestCard icon OR a profile
+  // button; each sub-modal renders only for its own kind.
+  const [record, setRecord] = useState<{
+    kind: RecordKind;
+    id: number;
+    name: string;
+  } | null>(null);
+
+  const openRecord = (kind: RecordKind) => (g: GuestRef) =>
+    setRecord({ kind, id: g.id, name: g.full_name });
+  const openStays = openRecord("stays");
+  const openReservations = openRecord("reservations");
+  const openDocuments = openRecord("documents");
+  const openChangeLog = openRecord("changeLog");
+  const closeRecord = () => setRecord(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -189,10 +232,18 @@ export function GuestsPanel() {
                     onEdit={openEdit}
                     onToggleVip={toggleVip}
                     onBlock={handleBlock}
-                    /* TODO(W6b): pass onStays / onReservations / onDocuments /
-                       onChangeLog once the dedicated sub-modals land. GuestCard
-                       renders each of those buttons only when its callback is
-                       supplied, so W6b wires them here without touching the card. */
+                    /* W6b — the four dedicated record sub-modals. Each button
+                       renders only when its callback is supplied (and, for
+                       documents, GuestCard additionally gates on
+                       reservation_documents.view), so gating happens here. */
+                    onStays={can("stays.view") ? openStays : undefined}
+                    onReservations={
+                      can("reservations.view") ? openReservations : undefined
+                    }
+                    onDocuments={
+                      can("reservation_documents.view") ? openDocuments : undefined
+                    }
+                    onChangeLog={openChangeLog}
                   />
                 </div>
               ))}
@@ -216,6 +267,10 @@ export function GuestsPanel() {
         startEditing={profileEditing}
         onClose={() => { setProfileId(null); setProfileEditing(false); }}
         onChanged={load}
+        onOpenStays={openStays}
+        onOpenReservations={openReservations}
+        onOpenDocuments={openDocuments}
+        onOpenChangeLog={openChangeLog}
       />
 
       <BlockGuestModal
@@ -236,6 +291,34 @@ export function GuestsPanel() {
           }
         }}
       />
+
+      {/* W6b — the four read-only record sub-modals. Each opens only for its own
+          kind; the guest id/name come from whichever card or profile button fired
+          it. All four re-check RBAC server-side (documents also client-gates). */}
+      <GuestStaysHistoryModal
+        open={record?.kind === "stays"}
+        guestId={record?.kind === "stays" ? record.id : null}
+        guestName={record?.name ?? ""}
+        onClose={closeRecord}
+      />
+      <GuestReservationsHistoryModal
+        open={record?.kind === "reservations"}
+        guestId={record?.kind === "reservations" ? record.id : null}
+        guestName={record?.name ?? ""}
+        onClose={closeRecord}
+      />
+      <GuestDocumentsModal
+        open={record?.kind === "documents"}
+        guestId={record?.kind === "documents" ? record.id : null}
+        guestName={record?.name ?? ""}
+        onClose={closeRecord}
+      />
+      <GuestChangeLogModal
+        open={record?.kind === "changeLog"}
+        guestId={record?.kind === "changeLog" ? record.id : null}
+        guestName={record?.name ?? ""}
+        onClose={closeRecord}
+      />
     </>
   );
 }
@@ -249,6 +332,10 @@ function GuestProfileModal({
   startEditing = false,
   onClose,
   onChanged,
+  onOpenStays,
+  onOpenReservations,
+  onOpenDocuments,
+  onOpenChangeLog,
 }: {
   guestId: number | null;
   /** When true, open straight into the edit form once the profile has loaded
@@ -256,6 +343,11 @@ function GuestProfileModal({
   startEditing?: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** Open the matching record sub-modal for this guest (panel-owned state). */
+  onOpenStays: (g: GuestRef) => void;
+  onOpenReservations: (g: GuestRef) => void;
+  onOpenDocuments: (g: GuestRef) => void;
+  onOpenChangeLog: (g: GuestRef) => void;
 }) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
@@ -386,6 +478,14 @@ function GuestProfileModal({
               </Alert>
             ) : null}
 
+            {/* U-15 — staff-review banner (e.g. a blocked guest who still has an
+                upcoming reservation). Backend-derived; never client-inferred. */}
+            {p.needs_review ? (
+              <Alert tone="warning">
+                <strong>{t.guests.needsReview}</strong> — {t.guests.profile.needsReviewBody}
+              </Alert>
+            ) : null}
+
             <div className="cluster">
               {can("guests.update") ? (
                 <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(true)} disabled={busy}>
@@ -416,20 +516,49 @@ function GuestProfileModal({
             </div>
 
             <dl className="detail-grid">
-              <div><dt>{t.guests.form.phone}</dt><dd>{p.phone || "—"}</dd></div>
+              <div><dt>{t.guests.form.phone}</dt><dd><bdi dir={IDENTIFIER_DIR}>{formatIdentifier(p.phone)}</bdi></dd></div>
               <div><dt>{t.guests.form.email}</dt><dd>{p.email || "—"}</dd></div>
               <div><dt>{t.guests.form.nationality}</dt><dd>{p.nationality || "—"}</dd></div>
               <div><dt>{t.guests.form.documentType}</dt><dd>{p.document_type ? t.guests.documentTypes[p.document_type] : "—"}</dd></div>
-              <div><dt>{t.guests.form.documentNumber}</dt><dd>{p.document_number || "—"}</dd></div>
-              <div><dt>{t.guests.form.dateOfBirth}</dt><dd>{p.date_of_birth ? formatDate(p.date_of_birth, locale) : "—"}</dd></div>
+              {/* Identifier — verbatim + LTR; a server-masked value stays masked. */}
+              <div><dt>{t.guests.form.documentNumber}</dt><dd><bdi dir={IDENTIFIER_DIR}>{formatIdentifier(p.document_number)}</bdi></dd></div>
+              {/* DOB is masked ("•") without guests.view_sensitive_data — formatDateOnly
+                  passes a non-date mask through unchanged (never "Invalid Date"). */}
+              <div><dt>{t.guests.form.dateOfBirth}</dt><dd>{formatDateOnly(p.date_of_birth, locale)}</dd></div>
             </dl>
 
             <dl className="detail-grid">
-              <div><dt>{t.guests.directory.stays}</dt><dd>{p.stays_count}</dd></div>
-              <div><dt>{t.guests.profile.nights}</dt><dd>{p.nights_total}</dd></div>
-              <div><dt>{t.guests.profile.firstStay}</dt><dd>{p.first_stay_date ? formatDate(p.first_stay_date, locale) : "—"}</dd></div>
-              <div><dt>{t.guests.directory.lastStay}</dt><dd>{p.last_stay_date ? formatDate(p.last_stay_date, locale) : "—"}</dd></div>
+              <div><dt>{t.guests.directory.stays}</dt><dd>{formatQuantity(p.stays_count, locale)}</dd></div>
+              <div><dt>{t.guests.profile.nights}</dt><dd>{formatQuantity(p.nights_total, locale)}</dd></div>
+              <div><dt>{t.guests.profile.firstStay}</dt><dd>{formatDateOnly(p.first_stay_date, locale)}</dd></div>
+              <div><dt>{t.guests.directory.lastStay}</dt><dd>{formatDateOnly(p.last_stay_date, locale)}</dd></div>
             </dl>
+
+            {/* U-15 — records: open the four paginated record sub-modals.
+                Permission-gated (documents needs reservation_documents.view). */}
+            <div>
+              <h3>{t.guests.profile.records}</h3>
+              <div className="cluster">
+                {can("stays.view") ? (
+                  <Button variant="secondary" size="sm" icon={BedDouble} onClick={() => onOpenStays(p)}>
+                    {t.guests.tabs.stays}
+                  </Button>
+                ) : null}
+                {can("reservations.view") ? (
+                  <Button variant="secondary" size="sm" icon={CalendarRange} onClick={() => onOpenReservations(p)}>
+                    {t.guests.tabs.reservations}
+                  </Button>
+                ) : null}
+                {can("reservation_documents.view") ? (
+                  <Button variant="secondary" size="sm" icon={FileText} onClick={() => onOpenDocuments(p)}>
+                    {t.guests.tabs.documents}
+                  </Button>
+                ) : null}
+                <Button variant="secondary" size="sm" icon={History} onClick={() => onOpenChangeLog(p)}>
+                  {t.guests.tabs.changeLog}
+                </Button>
+              </div>
+            </div>
 
             {p.current ? (
               <Alert tone="info">
@@ -447,15 +576,36 @@ function GuestProfileModal({
               </Alert>
             ) : null}
 
+            {/* U-15 — the guest's forthcoming reservations (backend-provided
+                summary rows). Reservation numbers render LTR; dates never shift. */}
+            <div>
+              <h3>{t.guests.profile.upcomingHeading}</h3>
+              {p.upcoming_reservations.length === 0 ? (
+                <p className="muted">{t.guests.upcoming.empty}</p>
+              ) : (
+                <ul className="mini-list">
+                  {p.upcoming_reservations.map((r) => (
+                    <li key={r.id} className="mini-list__row">
+                      <span>
+                        <bdi dir={IDENTIFIER_DIR}>{formatIdentifier(r.reservation_number)}</bdi>
+                        <span className="muted"> · {formatDateOnly(r.check_in_date, locale)} → {formatDateOnly(r.check_out_date, locale)}</span>
+                      </span>
+                      <Badge tone={reservationStatusTone(r.status)}>{reservationStatusLabel(r.status, t)}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
             {p.notes ? (
               <div>
-                <h4>{t.guests.form.notes}</h4>
+                <h3>{t.guests.form.notes}</h3>
                 <p>{p.notes}</p>
               </div>
             ) : null}
 
             <div>
-              <h4>{t.guests.profile.stayHistory}</h4>
+              <h3>{t.guests.profile.stayHistory}</h3>
               {p.stays.length === 0 ? (
                 <p className="muted">{t.guests.profile.noStays}</p>
               ) : (
@@ -463,7 +613,7 @@ function GuestProfileModal({
                   {p.stays.map((s) => (
                     <li key={s.stay_id} className="mini-list__row">
                       <span>
-                        {s.room_number} · {s.room_type_name} · {formatDate(s.check_in_date, locale)} → {formatDate(s.check_out_date, locale)} · {s.nights} {t.frontDesk.current.nights}
+                        {s.room_number} · {s.room_type_name} · {formatDateOnly(s.check_in_date, locale)} → {formatDateOnly(s.check_out_date, locale)} · {formatQuantity(s.nights, locale)} {t.frontDesk.current.nights}
                         {s.is_current ? <> <Badge tone="success">{t.guests.profile.currentBadge}</Badge></> : null}
                         {s.status === "cancelled" ? <> <Badge tone="neutral">{t.frontDesk.status.cancelled}</Badge></> : null}
                       </span>
