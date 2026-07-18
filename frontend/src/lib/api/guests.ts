@@ -91,12 +91,18 @@ export function deleteGuest(id: number): Promise<GuestDeleteResult> {
  * `search` is forwarded verbatim as the `search` query param; the backend does
  * the matching (an EXACT `national_id` match is supported server-side, and the
  * document search is gated behind guests.view_sensitive_data). The client never
- * interprets the term. */
+ * interprets the term.
+ *
+ * `signal` is OPTIONAL and backward-compatible: when supplied (only the live
+ * directory search does) it is forwarded to `fetch`, so the caller can abort a
+ * superseded in-flight request under a debounced live search. */
 export function listGuestDirectory(
   params?: GuestListParams,
+  signal?: AbortSignal,
 ): Promise<PaginatedResponse<GuestDirectoryRow>> {
   return hotelJson<PaginatedResponse<GuestDirectoryRow>>(
     `/guests/directory${toQuery(params)}`,
+    signal ? { signal } : {},
   );
 }
 

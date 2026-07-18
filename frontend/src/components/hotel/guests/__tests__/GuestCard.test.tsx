@@ -183,7 +183,7 @@ describe("GuestCard — new / repeat guest status (top badge, not a stat)", () =
 });
 
 describe("GuestCard — current unit clarity", () => {
-  it("shows the resident's unit as '<type> <number>' plus a translated floor", () => {
+  it("shows the resident's unit as '<type> <number>' plus a translated floor (number fallback)", () => {
     const { container } = renderCard({
       guest: makeDirectoryRow({
         is_resident: true,
@@ -192,7 +192,9 @@ describe("GuestCard — current unit clarity", () => {
         current_unit: makeCurrentUnit({
           room_number: "512",
           room_type_name: "Deluxe Suite",
-          floor_name: "3",
+          // No hotel-given floor NAME → the translated "Floor {n}" fallback.
+          floor_name: "",
+          floor_number: "3",
         }),
       }),
     });
@@ -219,7 +221,9 @@ describe("GuestCard — current unit clarity", () => {
           current_unit: makeCurrentUnit({
             room_number: "512",
             room_type_name: "سويت",
-            floor_name: "2",
+            // Number fallback → the translated "الطابق {n}" wrapper.
+            floor_name: "",
+            floor_number: "2",
           }),
         }),
       },
@@ -329,6 +333,122 @@ describe("GuestCard — current unit clarity", () => {
     expect(screen.queryByText("In-house")).not.toBeInTheDocument();
     expect(screen.queryByText(/^Floor/)).not.toBeInTheDocument();
     expect(screen.queryByText(/current units$/)).not.toBeInTheDocument();
+  });
+});
+
+describe("GuestCard — floor label (no duplication)", () => {
+  it("shows a hotel-given floor NAME verbatim, never doubling 'الطابق'", () => {
+    // The stored floor_name ALREADY reads "الطابق 1"; the card must not prepend the
+    // translated "الطابق {floor}" wrapper on top of it.
+    const { container } = renderCard(
+      {
+        guest: makeDirectoryRow({
+          is_resident: true,
+          current_units_count: 1,
+          current_unit: makeCurrentUnit({ floor_name: "الطابق 1", floor_number: "1" }),
+        }),
+      },
+      { locale: "ar" },
+    );
+    const floorBadge = container.querySelector(".guest-card__floor");
+    expect(floorBadge).not.toBeNull();
+    // The name is rendered exactly ONCE, as-is.
+    expect(screen.getAllByText("الطابق 1")).toHaveLength(1);
+    // The duplicated form must NEVER appear anywhere in the card.
+    expect(container.textContent ?? "").not.toContain("الطابق الطابق");
+  });
+
+  it("shows a non-numeric floor NAME (e.g. 'الأرضي') verbatim with no prefix", () => {
+    const { container } = renderCard(
+      {
+        guest: makeDirectoryRow({
+          is_resident: true,
+          current_units_count: 1,
+          current_unit: makeCurrentUnit({ floor_name: "الأرضي", floor_number: "0" }),
+        }),
+      },
+      { locale: "ar" },
+    );
+    const floorBadge = container.querySelector(".guest-card__floor");
+    expect(floorBadge).toHaveTextContent("الأرضي");
+    // The floor_name wins over floor_number — the number is NOT shown alongside it.
+    expect(floorBadge?.textContent ?? "").not.toContain("الطابق");
+    expect(floorBadge?.textContent ?? "").not.toContain("0");
+  });
+
+  it("falls back to the translated 'Floor {n}' label when there is no floor NAME", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ floor_name: "", floor_number: "2" }),
+      }),
+    });
+    const floorBadge = container.querySelector(".guest-card__floor");
+    expect(floorBadge).toHaveTextContent("Floor 2");
+    // The numeric fallback stays an LTR-isolated identifier.
+    expect(floorBadge?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("2");
+  });
+
+  it("renders NO floor chip when neither a name nor a number is present", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ floor_name: "", floor_number: null }),
+      }),
+    });
+    expect(container.querySelector(".guest-card__floor")).toBeNull();
+  });
+
+  it("shows a floor ICON next to the floor text", () => {
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ floor_name: "Ground" }),
+      }),
+    });
+    const floorBadge = container.querySelector(".guest-card__floor");
+    // The lucide floor icon renders as an <svg> inside the chip.
+    expect(floorBadge?.querySelector("svg")).not.toBeNull();
+    expect(floorBadge).toHaveTextContent("Ground");
+  });
+
+  it("clamps a long floor name to a single-line titled span (card never breaks)", () => {
+    const longFloor = "North Tower Executive Mezzanine Level";
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ floor_name: longFloor }),
+      }),
+    });
+    const nameEl = container.querySelector(".guest-card__floor-name");
+    // The full value is exposed via a native title tooltip; the text is only
+    // visually clipped (CSS ellipsis), never truncated in the DOM.
+    expect(nameEl).toHaveAttribute("title", longFloor);
+    expect(nameEl?.textContent).toBe(longFloor);
+  });
+
+  it("keeps a numeric floor name as an auto-direction <bdi> (no forced dir)", () => {
+    // A bare "3" floor name is shown verbatim — not wrapped in the translated
+    // label — inside an auto-direction <bdi> so it can never be misordered.
+    const { container } = renderCard({
+      guest: makeDirectoryRow({
+        is_resident: true,
+        current_units_count: 1,
+        current_unit: makeCurrentUnit({ floor_name: "3", floor_number: "9" }),
+      }),
+    });
+    const nameEl = container.querySelector(".guest-card__floor-name");
+    expect(nameEl?.tagName.toLowerCase()).toBe("bdi");
+    expect(nameEl?.getAttribute("dir")).toBeNull();
+    expect(nameEl?.textContent).toBe("3");
+    // The unrelated floor_number is ignored while a name exists.
+    expect(container.querySelector(".guest-card__floor")?.textContent).not.toContain(
+      "Floor",
+    );
   });
 });
 

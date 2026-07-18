@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Ban,
   BedDouble,
+  Building2,
   CalendarRange,
   CreditCard,
   DoorOpen,
@@ -117,9 +118,16 @@ export function GuestCard({
   // The compact current-unit summary. `current_unit` is populated by the backend
   // ONLY for exactly one in-house unit; two-plus units surface as a count.
   const unit = g.current_unit;
-  const floorLabel = unit ? unit.floor_name || unit.floor_number || "" : "";
-  // The translated floor label is split around its `{floor}` placeholder so ONLY
-  // the value is direction-isolated (LTR) while the label itself stays translated.
+  // FLOOR — shown exactly ONCE, never duplicating the word "floor". The hotel's
+  // own floor NAME (which may already read "الطابق 1" / "الأرضي" / "3") is shown
+  // VERBATIM with NO translated prefix; only the numeric `floor_number` fallback
+  // gets the translated "Floor {n}" wrapper. Empty on both → no floor chip.
+  const floorName = unit?.floor_name?.trim() ?? "";
+  const floorNumber = unit?.floor_number?.trim() ?? "";
+  const hasFloorName = floorName !== "";
+  const hasFloorNumber = floorNumber !== "";
+  // The translated fallback is split around its `{floor}` placeholder so ONLY the
+  // numeric value is direction-isolated (LTR) while the label stays translated.
   const floorPlaceholder = "{floor}";
   const floorSplitAt = c.floor.indexOf(floorPlaceholder);
   const floorBefore = floorSplitAt === -1 ? c.floor : c.floor.slice(0, floorSplitAt);
@@ -177,10 +185,32 @@ export function GuestCard({
                 </bdi>{" "}
                 <bdi dir={IDENTIFIER_DIR}>{unit.room_number}</bdi>
               </Badge>
-              {floorLabel ? (
-                <Badge className="guest-card__floor" tone="neutral" variant="outline">
+              {hasFloorName ? (
+                // The hotel already named the floor — show it AS-IS behind a floor
+                // icon, with NO translated prefix (so "الطابق 1" never becomes
+                // "الطابق الطابق 1"). Auto-direction <bdi> keeps a free-text name
+                // correct under RTL; a long name is clamped with a full-value title.
+                <Badge
+                  className="guest-card__floor"
+                  tone="neutral"
+                  variant="outline"
+                  icon={Building2}
+                >
+                  <bdi className="guest-card__floor-name" title={floorName}>
+                    {floorName}
+                  </bdi>
+                </Badge>
+              ) : hasFloorNumber ? (
+                // No hotel-given name — fall back to the TRANSLATED "Floor {n}"
+                // label with the LTR-isolated number behind the same floor icon.
+                <Badge
+                  className="guest-card__floor"
+                  tone="neutral"
+                  variant="outline"
+                  icon={Building2}
+                >
                   {floorBefore}
-                  <bdi dir={IDENTIFIER_DIR}>{floorLabel}</bdi>
+                  <bdi dir={IDENTIFIER_DIR}>{floorNumber}</bdi>
                   {floorAfter}
                 </Badge>
               ) : null}

@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { Users } from "lucide-react";
 
 import {
@@ -44,6 +50,21 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 
 const PAGE_SIZE = 25;
 
+/** Live-search debounce: results refetch this long after the last keystroke, so
+ * a fast typist never fires a request per character. */
+const SEARCH_DEBOUNCE_MS = 350;
+
+/** True when a rejection is a fetch AbortError (a superseded live-search request
+ * we deliberately cancelled). Such a rejection must be SWALLOWED — never shown as
+ * an error state — because a newer request is already in flight. */
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "AbortError"
+  );
+}
+
 /** Which read-only record sub-modal is open for a guest. */
 type RecordKind = "stays" | "reservations" | "documents" | "changeLog";
 
@@ -70,6 +91,13 @@ export function GuestsPanel() {
   const [showInactive, setShowInactive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true after the FIRST settled (successful) directory load. It draws the
+  // line between the INITIAL load — which owns the full-screen LoadingState /
+  // ErrorState — and every later BACKGROUND fetch (live search, filter toggle,
+  // page change, post-mutation refresh), which keeps the current view mounted and
+  // only shows the subtle inline cue. So a fast typist never sees a full-loader
+  // flicker and a transient refetch error never wipes good results.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   // The guest whose personal-data edit modal is open (opened DIRECTLY by the card
   // pencil — there is no comprehensive profile step). The full personal record is
   // fetched lazily by GuestEditModal from its id.
@@ -95,32 +123,117 @@ export function GuestsPanel() {
   const openChangeLog = openRecord("changeLog");
   const closeRecord = () => setRecord(null);
 
+  // The in-flight directory request. A new load (typed search, filter toggle,
+  // page change, post-mutation refresh) ABORTS the previous one so a stale
+  // response can never overwrite a newer one, and the loading flag is owned only
+  // by the latest request.
+  const requestRef = useRef<AbortController | null>(null);
+  // Ref mirror of `hasLoadedOnce`, read INSIDE the async catch so the initial-vs-
+  // background decision is never made from a stale closure value.
+  const loadedOnceRef = useRef(false);
+  // Guards the terminal `setLoading(false)` against a just-unmounted panel (a
+  // React 18 no-op today, but explicit and future-proof).
+  const mountedRef = useRef(true);
+
   const load = useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const data = await listGuestDirectory({
-        page,
-        search: query || undefined,
-        is_active: showInactive ? undefined : "true",
-      });
-      setRows(data.results);
-      setCount(data.count);
+      const data = await listGuestDirectory(
+        {
+          page,
+          search: query || undefined,
+          is_active: showInactive ? undefined : "true",
+        },
+        controller.signal,
+      );
+      // Stale-response guard: only the LATEST request may write rows/count.
+      if (requestRef.current === controller) {
+        setRows(data.results);
+        setCount(data.count);
+        // First settled load: from here on a failure is a BACKGROUND error and
+        // the full-screen loader/error are reserved for the initial load only.
+        loadedOnceRef.current = true;
+        setHasLoadedOnce(true);
+      }
     } catch (err) {
-      setError(messageForError(err, t));
+      // A deliberately cancelled (superseded) request is not an error.
+      if (isAbortError(err)) return;
+      if (requestRef.current !== controller) return;
+      const message = messageForError(err, t);
+      if (loadedOnceRef.current) {
+        // BACKGROUND refetch failure — rows are already on screen. Surface it
+        // NON-BLOCKINGLY via a toast and keep the current cards mounted; never
+        // swap the visible list for the full-screen ErrorState mid-typing.
+        notify(message, "error");
+      } else {
+        // INITIAL load failure (nothing shown yet) — the full ErrorState + retry.
+        setError(message);
+      }
     } finally {
-      setLoading(false);
+      // Only the newest request clears the loading flag, so an aborted older
+      // request can never flip the spinner off under the request that replaced it;
+      // the mounted guard skips the no-op write after the panel has unmounted.
+      if (mountedRef.current && requestRef.current === controller) {
+        setLoading(false);
+      }
     }
-  }, [page, query, showInactive, t]);
+  }, [page, query, showInactive, t, notify]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     load();
+    return () => requestRef.current?.abort();
   }, [load]);
+
+  // LIVE SEARCH — debounce the applied term. When the input differs from the
+  // applied `query`, wait out the debounce then apply it AND reset to page 1
+  // (clearing the box drops back to the full list the same way). `showInactive`
+  // is untouched here, so the current filter is preserved across searches. Enter
+  // (applySearch) short-circuits this by applying the term synchronously.
+  useEffect(() => {
+    if (search === query) return;
+    const id = setTimeout(() => {
+      setPage(1);
+      setQuery(search);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [search, query]);
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
 
+  // Full-screen loader / error are reserved for the INITIAL load (before the
+  // first successful settle) — gated on `hasLoadedOnce`, NOT on `rows.length`, so
+  // a zero-result search after a first load keeps the EmptyState (never the full
+  // loader) and every later fetch keeps the current view + the subtle inline cue.
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+
+  // FIX C (WCAG 4.1.3) — content of the stable polite live region. Announce the
+  // SETTLED result state only: blank while a fetch is in flight (the "searching…"
+  // busy cue owns that) and blank before the first successful load, so the text
+  // changes exactly once per settled, debounced search — never per keystroke.
+  const resultsAnnouncement =
+    !loading && hasLoadedOnce
+      ? count === 0
+        ? t.guests.list.noResults
+        : t.guests.list.resultsCount.replace("{count}", String(count))
+      : "";
+
   function applySearch(event: FormEvent) {
     event.preventDefault();
+    // Enter is an OPTIONAL shortcut that applies the current term immediately
+    // (the debounced effect otherwise applies it on its own).
     setPage(1);
     // The term is forwarded verbatim to the directory endpoint, which does the
     // matching server-side (name / phone / national_id — an EXACT national_id
@@ -176,57 +289,91 @@ export function GuestsPanel() {
         </form>
       </Card>
 
-      {loading ? <LoadingState label={t.common.loading} /> : null}
-      {!loading && error ? (
-        <ErrorState title={t.states.errorTitle} message={error} retryLabel={t.common.retry} onRetry={load} />
+      {/* FIX C — STABLE polite live region: mounted for the panel's whole life
+          (even during the initial load / error), so assistive tech announces the
+          settled result count by a TEXT CHANGE, never by mounting-with-content.
+          It stays blank while a fetch is in flight and updates once the debounced
+          search settles. */}
+      <div
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="guest-results-announce"
+      >
+        {resultsAnnouncement}
+      </div>
+
+      {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+      {showInitialError ? (
+        <ErrorState title={t.states.errorTitle} message={error ?? ""} retryLabel={t.common.retry} onRetry={load} />
       ) : null}
-      {!loading && !error ? (
-        rows.length === 0 ? (
-          <EmptyState
-            title={t.guests.directory.empty}
-            hint={t.guests.directory.emptyHint}
-            icon={Users}
-          />
-        ) : (
-          <>
-            <div className="guest-grid" role="list" aria-label={t.guests.title}>
-              {rows.map((g) => (
-                <div role="listitem" key={g.id}>
-                  <GuestCard
-                    guest={g}
-                    can={can}
-                    busy={busyId === g.id}
-                    onEdit={openEdit}
-                    onToggleVip={toggleVip}
-                    onBlock={handleBlock}
-                    /* The four record sub-modals open DIRECTLY from the card. Each
-                       button renders only when its callback is supplied (and, for
-                       documents, GuestCard additionally gates on
-                       reservation_documents.view), so gating happens here. */
-                    onStays={can("stays.view") ? openStays : undefined}
-                    onReservations={
-                      can("reservations.view") ? openReservations : undefined
-                    }
-                    onDocuments={
-                      can("reservation_documents.view") ? openDocuments : undefined
-                    }
-                    onChangeLog={openChangeLog}
-                  />
-                </div>
-              ))}
-            </div>
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPageChange={setPage}
-              labels={{
-                previous: t.pagination.previous,
-                next: t.pagination.next,
-                status: t.pagination.page.replace("{page}", String(page)).replace("{total}", String(totalPages)),
-              }}
+      {!showInitialLoading && !showInitialError ? (
+        <div className="guest-results">
+          {/* FIX D — the background-refetch cue lives in an ALWAYS-present status
+              row with a reserved height, so its show/hide never reflows the grid
+              or EmptyState below it (no vertical jump on live search). role=status
+              keeps it a polite busy region for the in-flight state. */}
+          <div className="guest-results__status" role="status" aria-live="polite">
+            {backgroundRefreshing ? (
+              <span className="guest-results__searching">
+                <span className="spinner" aria-hidden="true" />
+                <span>{t.guests.list.searching}</span>
+              </span>
+            ) : null}
+          </div>
+
+          {rows.length === 0 ? (
+            <EmptyState
+              title={t.guests.directory.empty}
+              hint={t.guests.directory.emptyHint}
+              icon={Users}
             />
-          </>
-        )
+          ) : (
+            <>
+              <div
+                className="guest-grid"
+                role="list"
+                aria-label={t.guests.title}
+                aria-busy={backgroundRefreshing}
+              >
+                {rows.map((g) => (
+                  <div role="listitem" key={g.id}>
+                    <GuestCard
+                      guest={g}
+                      can={can}
+                      busy={busyId === g.id}
+                      onEdit={openEdit}
+                      onToggleVip={toggleVip}
+                      onBlock={handleBlock}
+                      /* The four record sub-modals open DIRECTLY from the card. Each
+                         button renders only when its callback is supplied (and, for
+                         documents, GuestCard additionally gates on
+                         reservation_documents.view), so gating happens here. */
+                      onStays={can("stays.view") ? openStays : undefined}
+                      onReservations={
+                        can("reservations.view") ? openReservations : undefined
+                      }
+                      onDocuments={
+                        can("reservation_documents.view") ? openDocuments : undefined
+                      }
+                      onChangeLog={openChangeLog}
+                    />
+                  </div>
+                ))}
+              </div>
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                labels={{
+                  previous: t.pagination.previous,
+                  next: t.pagination.next,
+                  status: t.pagination.page.replace("{page}", String(page)).replace("{total}", String(totalPages)),
+                }}
+              />
+            </>
+          )}
+        </div>
       ) : null}
 
       <GuestEditModal
