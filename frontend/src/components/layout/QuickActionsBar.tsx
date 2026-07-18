@@ -7,7 +7,6 @@ import {
   LogIn,
   LogOut,
   Receipt,
-  UserPlus,
   UtensilsCrossed,
   Wallet,
   Wrench,
@@ -46,7 +45,6 @@ const ACTIONS: QuickAction[] = [
   },
   { key: "checkIn", href: "/hotel/front-desk?tab=arrivals", icon: LogIn, access: ["stays.view"] },
   { key: "checkOut", href: "/hotel/front-desk?tab=departures", icon: LogOut, access: ["stays.view"] },
-  { key: "addGuest", href: "/hotel/guests?action=new", icon: UserPlus, access: ["guests.view"] },
   {
     key: "recordPayment",
     href: "/hotel/finance?tab=folios",

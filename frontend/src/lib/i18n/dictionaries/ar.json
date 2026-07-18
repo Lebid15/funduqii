@@ -1339,9 +1339,76 @@
       "deleted": "حُذف الملف نهائيًا (لا سجل تاريخي له).",
       "deactivated": "عُطّل الملف فقط — السجل التاريخي محفوظ."
     },
+    "needsReview": "بحاجة إلى مراجعة",
+    "tabs": {
+      "profile": "الملف",
+      "stays": "الإقامات",
+      "reservations": "الحجوزات",
+      "documents": "الوثائق",
+      "changeLog": "السجل"
+    },
+    "card": {
+      "viewProfile": "عرض الملف",
+      "viewStays": "عرض الإقامات",
+      "viewDocuments": "عرض الوثائق",
+      "viewHistory": "عرض السجل"
+    },
+    "staysList": {
+      "title": "الإقامات",
+      "room": "الغرفة",
+      "roomType": "نوع الغرفة",
+      "checkIn": "الدخول",
+      "checkOut": "المغادرة",
+      "nights": "الليالي",
+      "reservation": "الحجز",
+      "folio": "الفوليو",
+      "checkedOut": "غادر",
+      "empty": "لا إقامات مسجلة."
+    },
+    "reservationsList": {
+      "title": "الحجوزات",
+      "number": "الحجز",
+      "status": "الحالة",
+      "source": "المصدر",
+      "kind": "النوع",
+      "checkIn": "الدخول",
+      "checkOut": "المغادرة",
+      "empty": "لا حجوزات."
+    },
+    "documents": {
+      "title": "الوثائق",
+      "type": "النوع",
+      "number": "الرقم",
+      "front": "الوجه",
+      "back": "الظهر",
+      "viewFront": "عرض الوجه",
+      "viewBack": "عرض الظهر",
+      "expiry": "الانتهاء",
+      "added": "أُضيفت",
+      "empty": "لا وثائق.",
+      "permissionHint": "لا تملك صلاحية عرض الوثائق."
+    },
+    "changeLog": {
+      "title": "السجل",
+      "event": "الحدث",
+      "category": "الفئة",
+      "severity": "الخطورة",
+      "actor": "بواسطة",
+      "occurredAt": "التاريخ",
+      "empty": "لا سجل بعد.",
+      "severityInfo": "معلومة",
+      "severityWarning": "تحذير",
+      "severityCritical": "حرج"
+    },
+    "upcoming": {
+      "title": "الحجوزات القادمة",
+      "empty": "لا حجوزات قادمة."
+    },
     "errors": {
       "blocked": "هذا النزيل محظور في هذا الفندق — لا يمكن إتمام العملية.",
-      "blockReasonRequired": "سبب الحظر إلزامي."
+      "blockReasonRequired": "سبب الحظر إلزامي.",
+      "identityConflict": "هذه الهوية تطابق نزيلًا آخر — يرجى حل التعارض قبل المتابعة.",
+      "invalidPhone": "أدخل رقم الهاتف مع رمز الدولة."
     }
   },
   "frontDesk": {
@@ -3622,7 +3689,6 @@
     "newReservation": "حجز جديد",
     "checkIn": "دخول نزيل",
     "checkOut": "مغادرة نزيل",
-    "addGuest": "إضافة نزيل",
     "guestFolio": "فوليو النزيل",
     "recordPayment": "تسجيل دفعة",
     "addExpense": "إضافة مصروف",

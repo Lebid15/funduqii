@@ -6,15 +6,12 @@ import {
   Ban,
   DoorOpen,
   Pencil,
-  Plus,
   ShieldCheck,
   Star,
   Trash2,
   User,
   Users,
 } from "lucide-react";
-
-import { useQuickAction } from "@/lib/useQuickAction";
 
 import {
   Alert,
@@ -39,7 +36,6 @@ import {
 } from "@/components/ui";
 import {
   blockGuest,
-  createGuest,
   deleteGuest,
   getGuestProfile,
   listGuestDirectory,
@@ -51,6 +47,7 @@ import {
 import { messageForError } from "@/lib/api/errors";
 import type { Guest, GuestDirectoryRow, GuestProfile } from "@/lib/api/types";
 import { formatDate } from "@/lib/format";
+import { isMaskedValue } from "./guestFormat";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -65,8 +62,6 @@ function useCan() {
 
 export function GuestsPanel() {
   const { t, locale } = useI18n();
-  const { notify } = useToast();
-  const can = useCan();
   const [rows, setRows] = useState<GuestDirectoryRow[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -75,9 +70,6 @@ export function GuestsPanel() {
   const [showInactive, setShowInactive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  // Topbar quick action: ?action=new opens the EXISTING guest modal once.
-  useQuickAction("new", () => setCreating(true));
   const [profileId, setProfileId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -176,9 +168,6 @@ export function GuestsPanel() {
             </FormField>
             <div className="filter-bar__actions cluster">
               <Switch id="guest-inactive" label={t.guests.list.showInactive} checked={showInactive} onChange={(v) => { setPage(1); setShowInactive(v); }} />
-              {can("guests.create") ? (
-                <Button icon={Plus} onClick={() => setCreating(true)}>{t.guests.list.add}</Button>
-              ) : null}
             </div>
           </FilterBar>
         </form>
@@ -212,7 +201,6 @@ export function GuestsPanel() {
         )
       ) : null}
 
-      <GuestModal open={creating} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); notify(t.guests.saved); setPage(1); load(); }} />
       <GuestProfileModal
         guestId={profileId}
         onClose={() => setProfileId(null)}
@@ -449,29 +437,31 @@ function GuestProfileModal({
         ) : null}
       </Modal>
 
-      <GuestModal
-        open={editing}
-        guest={p ? {
-          id: p.id,
-          full_name: p.full_name,
-          phone: p.phone,
-          email: p.email,
-          nationality: p.nationality,
-          document_type: p.document_type,
-          document_number: p.document_number,
-          date_of_birth: p.date_of_birth,
-          gender: p.gender,
-          address: p.address,
-          notes: p.notes,
-          is_active: p.is_active,
-          is_vip: p.is_vip,
-          is_blocked: p.is_blocked,
-          created_at: p.created_at,
-          updated_at: p.updated_at,
-        } : undefined}
-        onClose={() => setEditing(false)}
-        onSaved={() => { setEditing(false); notify(t.guests.saved); reload(); onChanged(); }}
-      />
+      {p ? (
+        <GuestModal
+          open={editing}
+          guest={{
+            id: p.id,
+            full_name: p.full_name,
+            phone: p.phone,
+            email: p.email,
+            nationality: p.nationality,
+            document_type: p.document_type,
+            document_number: p.document_number,
+            date_of_birth: p.date_of_birth,
+            gender: p.gender,
+            address: p.address,
+            notes: p.notes,
+            is_active: p.is_active,
+            is_vip: p.is_vip,
+            is_blocked: p.is_blocked,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+          }}
+          onClose={() => setEditing(false)}
+          onSaved={() => { setEditing(false); notify(t.guests.saved); reload(); onChanged(); }}
+        />
+      ) : null}
 
       <BlockGuestModal
         open={blocking}
@@ -574,7 +564,9 @@ function GuestModal({
   onSaved,
 }: {
   open: boolean;
-  guest?: Guest;
+  /** Edit-only (GUESTS-CLOSURE Decision 9): standalone guest creation was
+   * removed — a profile is always supplied. */
+  guest: Guest;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -583,22 +575,22 @@ function GuestModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A masked document number must never round-trip back into the profile.
-  const maskedDoc = Boolean(guest?.document_number?.includes("•"));
+  const maskedDoc = isMaskedValue(guest.document_number);
 
   useEffect(() => {
     if (!open) return;
     setForm({
-      full_name: guest?.full_name ?? "",
-      phone: guest?.phone ?? "",
-      email: guest?.email ?? "",
-      nationality: guest?.nationality ?? "",
-      document_type: guest?.document_type ?? "",
-      document_number: maskedDoc ? "" : guest?.document_number ?? "",
-      date_of_birth: guest?.date_of_birth ?? null,
-      gender: guest?.gender ?? "",
-      address: guest?.address ?? "",
-      notes: guest?.notes ?? "",
-      is_active: guest?.is_active ?? true,
+      full_name: guest.full_name,
+      phone: guest.phone,
+      email: guest.email,
+      nationality: guest.nationality,
+      document_type: guest.document_type,
+      document_number: maskedDoc ? "" : guest.document_number,
+      date_of_birth: guest.date_of_birth,
+      gender: guest.gender,
+      address: guest.address,
+      notes: guest.notes,
+      is_active: guest.is_active,
     });
     setError(null);
   }, [open, guest, maskedDoc]);
@@ -623,8 +615,7 @@ function GuestModal({
     }
     setBusy(true);
     try {
-      if (guest) await updateGuest(guest.id, body);
-      else await createGuest(body);
+      await updateGuest(guest.id, body);
       onSaved();
     } catch (err) {
       setError(messageForError(err, t));
@@ -646,7 +637,7 @@ function GuestModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={guest ? t.guests.form.editTitle : t.guests.form.createTitle}
+      title={t.guests.form.editTitle}
       closeLabel={t.common.close}
       footer={
         <>
@@ -677,7 +668,7 @@ function GuestModal({
             <Input
               id="g-docnum"
               value={form.document_number ?? ""}
-              placeholder={maskedDoc ? guest?.document_number ?? "" : undefined}
+              placeholder={maskedDoc ? guest.document_number : undefined}
               onChange={(e) => set("document_number", e.target.value)}
             />
           </FormField>

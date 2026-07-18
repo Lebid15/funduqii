@@ -5,10 +5,14 @@
 import { hotelJson } from "./hotelFetch";
 import type {
   Guest,
+  GuestChangeLogRow,
   GuestDeleteResult,
   GuestDirectoryRow,
+  GuestDocumentRow,
   GuestLookupResult,
   GuestProfile,
+  GuestReservationRow,
+  GuestStayRow,
   PaginatedResponse,
 } from "./types";
 
@@ -27,6 +31,12 @@ function toQuery(params?: object): string {
 export interface GuestListParams {
   search?: string;
   is_active?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** Plain pagination params for the central-identity sub-lists. */
+export interface GuestPageParams {
   page?: number;
   page_size?: number;
 }
@@ -79,7 +89,11 @@ export function deleteGuest(id: number): Promise<GuestDeleteResult> {
   return hotelJson<GuestDeleteResult>(`/guests/${id}`, { method: "DELETE" });
 }
 
-/** The guests-SECTION list: only guests with >= 1 real stay + derived stats. */
+/** The guests-SECTION list: only guests with >= 1 real stay + derived stats.
+ * `search` is forwarded verbatim as the `search` query param; the backend does
+ * the matching (an EXACT `national_id` match is supported server-side, and the
+ * document search is gated behind guests.view_sensitive_data). The client never
+ * interprets the term. */
 export function listGuestDirectory(
   params?: GuestListParams,
 ): Promise<PaginatedResponse<GuestDirectoryRow>> {
@@ -88,9 +102,55 @@ export function listGuestDirectory(
   );
 }
 
-/** The central read-only guest profile (stats + stay history + links). */
+/** The central read-only guest profile (stats + stay history + links + the
+ * GUESTS-CLOSURE `needs_review` flag and `upcoming_reservations`). */
 export function getGuestProfile(id: number): Promise<GuestProfile> {
   return hotelJson<GuestProfile>(`/guests/${id}/profile`);
+}
+
+/* --- GUESTS-CLOSURE central-identity paginated sub-lists -------------------- *
+ * Each returns a DRF PageNumberPagination envelope. RBAC is re-checked
+ * server-side (documents additionally require reservation_documents.view). */
+
+/** GET guests/<pk>/stays/ — the guest's stays across the hotel (paginated). */
+export function listGuestStays(
+  id: number,
+  params?: GuestPageParams,
+): Promise<PaginatedResponse<GuestStayRow>> {
+  return hotelJson<PaginatedResponse<GuestStayRow>>(
+    `/guests/${id}/stays${toQuery(params)}`,
+  );
+}
+
+/** GET guests/<pk>/reservations/ — the guest's reservations (paginated). */
+export function listGuestReservations(
+  id: number,
+  params?: GuestPageParams,
+): Promise<PaginatedResponse<GuestReservationRow>> {
+  return hotelJson<PaginatedResponse<GuestReservationRow>>(
+    `/guests/${id}/reservations${toQuery(params)}`,
+  );
+}
+
+/** GET guests/<pk>/documents/ — the guest's uploaded documents (paginated).
+ * Requires guests.view AND reservation_documents.view. */
+export function listGuestDocuments(
+  id: number,
+  params?: GuestPageParams,
+): Promise<PaginatedResponse<GuestDocumentRow>> {
+  return hotelJson<PaginatedResponse<GuestDocumentRow>>(
+    `/guests/${id}/documents${toQuery(params)}`,
+  );
+}
+
+/** GET guests/<pk>/change-log/ — the guest's change-event history (paginated). */
+export function listGuestChangeLog(
+  id: number,
+  params?: GuestPageParams,
+): Promise<PaginatedResponse<GuestChangeLogRow>> {
+  return hotelJson<PaginatedResponse<GuestChangeLogRow>>(
+    `/guests/${id}/change-log${toQuery(params)}`,
+  );
 }
 
 export function setGuestVip(id: number, vip: boolean): Promise<Guest> {

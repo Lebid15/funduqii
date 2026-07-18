@@ -1339,9 +1339,76 @@
       "deleted": "Profil kalıcı olarak silindi (geçmişi yok).",
       "deactivated": "Profil yalnızca devre dışı bırakıldı — geçmiş korunur."
     },
+    "needsReview": "İnceleme gerekli",
+    "tabs": {
+      "profile": "Profil",
+      "stays": "Konaklamalar",
+      "reservations": "Rezervasyonlar",
+      "documents": "Belgeler",
+      "changeLog": "Geçmiş"
+    },
+    "card": {
+      "viewProfile": "Profili görüntüle",
+      "viewStays": "Konaklamaları görüntüle",
+      "viewDocuments": "Belgeleri görüntüle",
+      "viewHistory": "Geçmişi görüntüle"
+    },
+    "staysList": {
+      "title": "Konaklamalar",
+      "room": "Oda",
+      "roomType": "Oda türü",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "nights": "Geceler",
+      "reservation": "Rezervasyon",
+      "folio": "Folyo",
+      "checkedOut": "Çıkış yaptı",
+      "empty": "Kayıtlı konaklama yok."
+    },
+    "reservationsList": {
+      "title": "Rezervasyonlar",
+      "number": "Rezervasyon",
+      "status": "Durum",
+      "source": "Kaynak",
+      "kind": "Tür",
+      "checkIn": "Giriş",
+      "checkOut": "Çıkış",
+      "empty": "Rezervasyon yok."
+    },
+    "documents": {
+      "title": "Belgeler",
+      "type": "Tür",
+      "number": "Numara",
+      "front": "Ön",
+      "back": "Arka",
+      "viewFront": "Ön yüzü gör",
+      "viewBack": "Arka yüzü gör",
+      "expiry": "Son geçerlilik",
+      "added": "Eklendi",
+      "empty": "Belge yok.",
+      "permissionHint": "Belgeleri görüntüleme izniniz yok."
+    },
+    "changeLog": {
+      "title": "Geçmiş",
+      "event": "Olay",
+      "category": "Kategori",
+      "severity": "Önem",
+      "actor": "Yapan",
+      "occurredAt": "Tarih",
+      "empty": "Henüz geçmiş yok.",
+      "severityInfo": "Bilgi",
+      "severityWarning": "Uyarı",
+      "severityCritical": "Kritik"
+    },
+    "upcoming": {
+      "title": "Yaklaşan rezervasyonlar",
+      "empty": "Yaklaşan rezervasyon yok."
+    },
     "errors": {
       "blocked": "Bu misafir bu otelde engelli — işlem yapılamaz.",
-      "blockReasonRequired": "Engelleme sebebi zorunludur."
+      "blockReasonRequired": "Engelleme sebebi zorunludur.",
+      "identityConflict": "Bu kimlik farklı bir misafirle eşleşiyor — devam etmeden önce çakışmayı çözün.",
+      "invalidPhone": "Telefon numarasını ülke koduyla girin."
     }
   },
   "frontDesk": {
@@ -3622,7 +3689,6 @@
     "newReservation": "Yeni Rezervasyon",
     "checkIn": "Giriş Yap",
     "checkOut": "Çıkış Yap",
-    "addGuest": "Misafir Ekle",
     "guestFolio": "Misafir Folyosu",
     "recordPayment": "Ödeme Kaydet",
     "addExpense": "Gider Ekle",

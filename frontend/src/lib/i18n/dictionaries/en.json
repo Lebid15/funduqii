@@ -1339,9 +1339,76 @@
       "deleted": "Profile permanently deleted (no history).",
       "deactivated": "Profile deactivated only — history is preserved."
     },
+    "needsReview": "Needs review",
+    "tabs": {
+      "profile": "Profile",
+      "stays": "Stays",
+      "reservations": "Reservations",
+      "documents": "Documents",
+      "changeLog": "History"
+    },
+    "card": {
+      "viewProfile": "View profile",
+      "viewStays": "View stays",
+      "viewDocuments": "View documents",
+      "viewHistory": "View history"
+    },
+    "staysList": {
+      "title": "Stays",
+      "room": "Room",
+      "roomType": "Room type",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "nights": "Nights",
+      "reservation": "Reservation",
+      "folio": "Folio",
+      "checkedOut": "Checked out",
+      "empty": "No stays recorded."
+    },
+    "reservationsList": {
+      "title": "Reservations",
+      "number": "Reservation",
+      "status": "Status",
+      "source": "Source",
+      "kind": "Type",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "empty": "No reservations."
+    },
+    "documents": {
+      "title": "Documents",
+      "type": "Type",
+      "number": "Number",
+      "front": "Front",
+      "back": "Back",
+      "viewFront": "View front",
+      "viewBack": "View back",
+      "expiry": "Expiry",
+      "added": "Added",
+      "empty": "No documents.",
+      "permissionHint": "You do not have permission to view documents."
+    },
+    "changeLog": {
+      "title": "History",
+      "event": "Event",
+      "category": "Category",
+      "severity": "Severity",
+      "actor": "By",
+      "occurredAt": "When",
+      "empty": "No history yet.",
+      "severityInfo": "Info",
+      "severityWarning": "Warning",
+      "severityCritical": "Critical"
+    },
+    "upcoming": {
+      "title": "Upcoming reservations",
+      "empty": "No upcoming reservations."
+    },
     "errors": {
       "blocked": "This guest is blocked in this hotel — the operation cannot proceed.",
-      "blockReasonRequired": "A block reason is required."
+      "blockReasonRequired": "A block reason is required.",
+      "identityConflict": "This identity matches a different guest — please resolve the conflict before continuing.",
+      "invalidPhone": "Enter the phone number with the country code."
     }
   },
   "frontDesk": {
@@ -3622,7 +3689,6 @@
     "newReservation": "New Reservation",
     "checkIn": "Check In",
     "checkOut": "Check Out",
-    "addGuest": "Add Guest",
     "guestFolio": "Guest Folio",
     "recordPayment": "Record Payment",
     "addExpense": "Add Expense",

@@ -1000,10 +1000,88 @@ export interface GuestProfile extends GuestDirectoryRow {
     folio_status: string | null;
   } | null;
   stays: GuestProfileStay[];
+  /** GUESTS-CLOSURE central identity — true when this profile still needs staff
+   * review (e.g. an unresolved identity signal). Backend-derived. */
+  needs_review: boolean;
+  /** GUESTS-CLOSURE — the guest's forthcoming reservations (summary rows). Shape
+   * mirrors GuestReservationRow. */
+  upcoming_reservations: GuestReservationRow[];
   created_at: string;
   updated_at: string;
   created_by: string | null;
   updated_by: string | null;
+}
+
+/* --- GUESTS-CLOSURE central-identity paginated sub-resources ---------------- *
+ * Additive rows for the four paginated guest sub-lists the UI wave (W6) renders.
+ * All four are DRF PageNumberPagination envelopes (`PaginatedResponse<Row>`). */
+
+/** GET guests/<pk>/stays/ — one paginated stay row (central identity view). */
+export interface GuestStayRow {
+  stay_id: number;
+  status: StayStatus;
+  is_checked_out: boolean;
+  check_in_date: string;
+  check_out_date: string;
+  actual_check_out_at: string | null;
+  nights: number;
+  room_number: string;
+  room_type_name: string;
+  reservation_id: number | null;
+  reservation_number: string | null;
+  /** The stay's folio subset, or null when no folio exists. */
+  folio: {
+    id: number;
+    folio_number: string;
+    status: FolioStatus;
+  } | null;
+}
+
+/** GET guests/<pk>/reservations/ — one paginated reservation summary row. */
+export interface GuestReservationRow {
+  id: number;
+  reservation_number: string;
+  status: ReservationStatus;
+  source: ReservationSource;
+  booking_kind: BookingKind;
+  check_in_date: string;
+  check_out_date: string;
+}
+
+/** GET guests/<pk>/documents/ — one paginated document row. Behind BOTH
+ * guests.view AND reservation_documents.view. `number` is masked (bullet
+ * characters) unless the viewer holds guests.view_sensitive_data — treat it as
+ * display-only (see `isMaskedValue`). `front_url`/`back_url` point at the
+ * existing reservation signed-url mint and are null when no file is stored. */
+export interface GuestDocumentRow {
+  id: number;
+  reservation: number;
+  occupant: number | null;
+  doc_type: ReservationDocumentType;
+  number: string;
+  has_front: boolean;
+  has_back: boolean;
+  front_url: string | null;
+  back_url: string | null;
+  expiry_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET guests/<pk>/change-log/ — one paginated change-event row. `message` is
+ * null unless the viewer holds guests.block (block-event detail is gated).
+ * `event_type` / `category` / `severity` are stable backend strings. */
+export interface GuestChangeLogRow {
+  id: number;
+  event_number: string;
+  event_type: string;
+  category: string;
+  severity: string;
+  title: string;
+  message: string | null;
+  actor: string | null;
+  occurred_at: string;
+  created_at: string;
 }
 
 export type StayStatus = "in_house" | "checked_out" | "cancelled";
