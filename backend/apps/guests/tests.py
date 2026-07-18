@@ -415,6 +415,121 @@ class GuestDirectoryTests(APITestCase):
         self.assertFalse(row["has_upcoming"])
         self.assertFalse(row["needs_review"])  # blocked but no upcoming
 
+    # --- Current-unit summary (R4 card: "<type> <number> — <floor>") -------- #
+
+    def test_resident_current_unit_type_number_floor(self):
+        # A resident in a room -> the row carries a compact current-unit summary
+        # the card renders as "<unit type> <number> — <floor>". The unit type is
+        # the FREE-TEXT RoomType.name (no kind enum exists), plus stable handles.
+        g = Guest.objects.create(hotel=self.hotel, full_name="Unit Guest")
+        make_stay(self.hotel, g, self.r101, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        row = self._directory().data["results"][0]
+        self.assertTrue(row["is_resident"])
+        self.assertEqual(row["current_room_number"], "101")  # unchanged legacy field
+        self.assertEqual(row["current_units_count"], 1)
+        unit = row["current_unit"]
+        self.assertIsNotNone(unit)
+        self.assertEqual(unit["room_number"], "101")
+        self.assertEqual(unit["room_type_name"], "Standard")  # free text
+        self.assertEqual(unit["floor_name"], "G")             # Floor.name label
+        self.assertEqual(unit["floor_number"], "0")           # Floor.number code
+        # Owner minimal-scope rule: EXACTLY these four keys and no others.
+        self.assertEqual(
+            set(unit.keys()),
+            {"room_number", "room_type_name", "floor_name", "floor_number"},
+        )
+
+    def test_resident_suite_unit_reports_type_number_floor(self):
+        # A resident in a DIFFERENT registered unit type (a suite) -> the summary
+        # reflects that unit's own free-text RoomType.name plus number and floor.
+        floor = self.r101.floor
+        suite_type = RoomType.objects.create(
+            hotel=self.hotel, name="Royal Suite", code="SUITE",
+            base_capacity=2, max_capacity=4, bed_type="suite",
+        )
+        suite_room = Room.objects.create(
+            hotel=self.hotel, floor=floor, room_type=suite_type, number="301",
+        )
+        g = Guest.objects.create(hotel=self.hotel, full_name="Suite Guest")
+        make_stay(self.hotel, g, suite_room, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        unit = self._directory().data["results"][0]["current_unit"]
+        self.assertEqual(unit["room_type_name"], "Royal Suite")  # unit type
+        self.assertEqual(unit["room_number"], "301")             # unit number
+        self.assertEqual(unit["floor_name"], "G")                # floor label
+        self.assertEqual(unit["floor_number"], "0")              # floor code
+        # Still exactly the four minimal keys (no bed_type / code leakage).
+        self.assertEqual(
+            set(unit.keys()),
+            {"room_number", "room_type_name", "floor_name", "floor_number"},
+        )
+
+    def test_non_resident_has_no_current_unit(self):
+        # A guest with only a PAST stay is not a resident: the card shows nothing.
+        g = Guest.objects.create(hotel=self.hotel, full_name="Departed Guest")
+        make_stay(self.hotel, g, self.r101,
+                  ci=TODAY - timedelta(days=5), co=TODAY - timedelta(days=2))
+        row = self._directory().data["results"][0]
+        self.assertFalse(row["is_resident"])
+        self.assertEqual(row["current_units_count"], 0)
+        self.assertIsNone(row["current_unit"])
+
+    def test_multiple_current_units_reports_count_not_single_summary(self):
+        # A guest occupying TWO current units at once -> count == 2 and the
+        # single-unit summary is withheld (the card shows "N current units").
+        g = Guest.objects.create(hotel=self.hotel, full_name="Multi Unit Guest")
+        make_stay(self.hotel, g, self.r101, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        make_stay(self.hotel, g, self.r102, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        row = self._directory().data["results"][0]
+        self.assertTrue(row["is_resident"])
+        self.assertEqual(row["current_units_count"], 2)
+        self.assertIsNone(row["current_unit"])
+
+    def test_current_unit_hotel_isolation(self):
+        # An other-hotel resident never leaks into this hotel's directory.
+        other = make_hotel(slug="o2")
+        _, (oroom, _unused) = make_room_env(other)
+        og = Guest.objects.create(hotel=other, full_name="Foreign Resident")
+        make_stay(other, og, oroom, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        self.assertEqual(self._directory().data["count"], 0)
+
+    def test_current_unit_no_n_plus_one(self):
+        # The current-unit (room/room_type/floor) expansion must NOT add a query
+        # per resident: a page with several residents issues the SAME number of
+        # queries as a page with one (everything prefetched in batched passes).
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        g1 = Guest.objects.create(hotel=self.hotel, full_name="Res One")
+        make_stay(self.hotel, g1, self.r101, status=StayStatus.IN_HOUSE,
+                  ci=TODAY, co=TODAY + timedelta(days=2))
+        with CaptureQueriesContext(connection) as one:
+            r_one = self._directory()
+        self.assertEqual(r_one.data["count"], 1)
+        baseline = len(one.captured_queries)
+
+        # Add more residents in fresh rooms under the SAME floor/type (reusing
+        # them avoids the per-hotel unique room_type code / floor churn).
+        floor = self.r101.floor
+        for n in ("201", "202", "203"):
+            room = Room.objects.create(
+                hotel=self.hotel, floor=floor, room_type=self.rtype, number=n,
+            )
+            gi = Guest.objects.create(hotel=self.hotel, full_name=f"Res {n}")
+            make_stay(self.hotel, gi, room, status=StayStatus.IN_HOUSE,
+                      ci=TODAY, co=TODAY + timedelta(days=2))
+        with CaptureQueriesContext(connection) as many:
+            r_many = self._directory()
+        self.assertEqual(r_many.data["count"], 4)
+        self.assertEqual(len(many.captured_queries), baseline)  # constant -> no N+1
+        for row in r_many.data["results"]:
+            self.assertEqual(row["current_units_count"], 1)
+            self.assertIsNotNone(row["current_unit"])
+
 
 class GuestProfileTests(APITestCase):
     def setUp(self):
@@ -460,6 +575,12 @@ class GuestProfileTests(APITestCase):
         self.assertTrue(newest["is_current"])
         self.assertEqual(newest["folio_status"], "open")
         self.assertEqual(r.data["document_number"], "P987654321")  # manager
+        # The shared current-unit summary rides along on the profile too (one
+        # in-house unit -> populated summary for r102).
+        self.assertEqual(r.data["current_units_count"], 1)
+        self.assertEqual(r.data["current_unit"]["room_number"], "102")
+        self.assertEqual(r.data["current_unit"]["room_type_name"], "Standard")
+        self.assertEqual(r.data["current_unit"]["floor_name"], "G")
 
     def test_profile_is_read_only(self):
         url = reverse("guests:guest-profile", args=[self.guest.id])

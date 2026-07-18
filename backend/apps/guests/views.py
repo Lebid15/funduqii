@@ -79,13 +79,60 @@ def _real_stays(guest):
     ]
 
 
+def _current_unit_summary(stay) -> dict:
+    """A compact CURRENT-UNIT descriptor for one in-house stay's room.
+
+    The card renders ``<unit type> <unit number> — <floor>`` (e.g.
+    "الغرفة 101 — الطابق الأرضي"). This repo has NO unit-KIND choices enum
+    (room/suite/wing/chalet): the registered unit type is the FREE-TEXT
+    ``RoomType.name``, returned AS-IS (``room_type_name``). The floor label is
+    ``Floor.name`` with ``Floor.number`` as a fallback code.
+
+    Owner minimal-scope rule: return ONLY the four fields the card consumes and
+    NO other stay/room details —
+
+    * ``room_number`` — ``Room.number`` (the unit number).
+    * ``room_type_name`` — ``RoomType.name`` free text (the registered type).
+    * ``floor_name`` — ``Floor.name`` (the floor label).
+    * ``floor_number`` — ``Floor.number`` or ``None`` (fallback for the label).
+
+    ``room``/``floor``/``room_type`` are read off the PREFETCHED objects (see the
+    directory and profile prefetch chains ``stay_links__stay__room__room_type`` /
+    ``...__floor``) — no per-row query. ``Room.floor`` / ``Room.room_type`` are
+    non-null FKs, so both are always present.
+    """
+    room = stay.room
+    room_type = room.room_type
+    floor = room.floor
+    return {
+        "room_number": room.number,
+        # FREE TEXT — no unit-kind enum exists (see docstring / owner decision).
+        "room_type_name": room_type.name,
+        "floor_name": floor.name,
+        "floor_number": floor.number or None,
+    }
+
+
 def _stats(stays: list) -> dict:
-    """Derived stats — never stored: counts, nights, first/last, residency."""
+    """Derived stats — never stored: counts, nights, first/last, residency.
+
+    ``current_units_count`` = the number of DISTINCT current (in-house) units the
+    guest occupies right now (0 for a non-resident). ``current_unit`` carries the
+    single-unit summary ONLY when the guest occupies exactly one current unit; for
+    zero or for more than one it is ``None`` (the card shows the count instead).
+    """
     count = len(stays)
     nights = sum(s.nights for s in stays)
     in_house = [s for s in stays if s.status == "in_house"]
     ordered = sorted(stays, key=lambda s: (s.planned_check_in_date, s.id))
     current = in_house[0] if in_house else None
+    # Distinct current units — DB guarantees one in-house stay per room, so this
+    # equals the count of in-house stays, but counting distinct room ids is
+    # robust regardless.
+    current_units_count = len({s.room_id for s in in_house})
+    current_unit = (
+        _current_unit_summary(current) if current_units_count == 1 else None
+    )
     return {
         "stays_count": count,
         "nights_total": nights,
@@ -94,6 +141,8 @@ def _stats(stays: list) -> dict:
         "is_repeat": count > 1,
         "is_resident": current is not None,
         "current_room_number": current.room.number if current else None,
+        "current_units_count": current_units_count,
+        "current_unit": current_unit,
     }
 
 
@@ -193,7 +242,14 @@ class GuestDirectoryView(generics.ListAPIView):
                 has_upcoming=Exists(upcoming),
             )
             .filter(real_stay_count__gte=1)
-            .prefetch_related("stay_links__stay__room")
+            # Prefetch the whole current-unit chain in ONE batched pass per level
+            # (room -> room_type / floor) so ``_current_unit_summary`` reads them
+            # off the cache with no per-row query (N+1). The deep FK paths also
+            # cover the shallower ``stay_links__stay__room`` used by the stats.
+            .prefetch_related(
+                "stay_links__stay__room__room_type",
+                "stay_links__stay__room__floor",
+            )
         )
         params = self.request.query_params
         is_active = params.get("is_active")
@@ -293,6 +349,10 @@ class GuestProfileView(APIView):
         guest = generics.get_object_or_404(
             Guest.objects.filter(hotel=request.hotel).prefetch_related(
                 "stay_links__stay__room__room_type",
+                # ``_stats`` -> ``_current_unit_summary`` reads ``room.floor`` for
+                # the shared ``current_unit`` summary; prefetch it here too so the
+                # profile stays N+1-free.
+                "stay_links__stay__room__floor",
                 "stay_links__stay__reservation",
                 "stay_links__stay__folios",
                 "reservations",
