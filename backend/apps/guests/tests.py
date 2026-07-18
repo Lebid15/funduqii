@@ -363,6 +363,58 @@ class GuestDirectoryTests(APITestCase):
         row = self._directory().data["results"][0]
         self.assertEqual(row["document_number"], "P123456789")
 
+    def _future_res(self, guest, *, number, status=None, ci=None, co=None):
+        from apps.reservations.models import Reservation
+        return Reservation.objects.create(
+            hotel=self.hotel, reservation_number=number,
+            status=status or ReservationStatus.CONFIRMED, booking_kind="future",
+            check_in_date=ci or (TODAY + timedelta(days=2)),
+            check_out_date=co or (TODAY + timedelta(days=4)),
+            primary_guest=guest, primary_guest_name=guest.full_name,
+        )
+
+    def test_has_upcoming_and_needs_review_flags(self):
+        # Card support: ``has_upcoming`` (a future/active booking as primary guest)
+        # and ``needs_review`` (is_blocked AND has_upcoming) — same rule as the
+        # profile, computed on the directory queryset (Exists annotation, no N+1).
+        from apps.guests.services import block_guest
+
+        g = Guest.objects.create(hotel=self.hotel, full_name="Card Guest")
+        make_stay(self.hotel, g, self.r101)  # so it appears in the directory
+        row = self._directory().data["results"][0]
+        self.assertFalse(row["has_upcoming"])
+        self.assertFalse(row["needs_review"])
+        # A future ACTIVE booking as primary guest -> has_upcoming.
+        self._future_res(g, number="RUP1")
+        row = self._directory().data["results"][0]
+        self.assertTrue(row["has_upcoming"])
+        self.assertFalse(row["needs_review"])  # not blocked yet
+        # Block -> needs_review true (blocked AND holds an upcoming booking).
+        block_guest(g, reason="pending dispute", user=self.manager)
+        row = self._directory().data["results"][0]
+        self.assertTrue(row["has_upcoming"])
+        self.assertTrue(row["needs_review"])
+
+    def test_departed_or_cancelled_booking_is_not_upcoming(self):
+        from apps.guests.services import block_guest
+
+        g = Guest.objects.create(hotel=self.hotel, full_name="Past Res Guest")
+        make_stay(self.hotel, g, self.r101)
+        # A departed booking (check-out before business date) is NOT upcoming.
+        self._future_res(
+            g, number="RPAST1",
+            ci=TODAY - timedelta(days=5), co=TODAY - timedelta(days=2),
+        )
+        # A cancelled future booking is NOT active -> not upcoming.
+        self._future_res(
+            g, number="RCXL1", status=ReservationStatus.CANCELLED,
+            ci=TODAY + timedelta(days=3), co=TODAY + timedelta(days=6),
+        )
+        block_guest(g, reason="old issue", user=self.manager)
+        row = self._directory().data["results"][0]
+        self.assertFalse(row["has_upcoming"])
+        self.assertFalse(row["needs_review"])  # blocked but no upcoming
+
 
 class GuestProfileTests(APITestCase):
     def setUp(self):
@@ -1405,6 +1457,64 @@ class GuestDocumentsEndpointTests(APITestCase):
         )
         self.assertIsNotNone(row["front_url"])
         self.assertTrue(row["front_url"].endswith(expected))
+
+    def test_image_urls_absent_without_view_sensitive_data(self):
+        # SEC (document image needs sensitive permission): a viewer holding
+        # guests.view + reservation_documents.view but NOT guests.view_sensitive_data
+        # may LIST the document (type + MASKED number) but the image-mint URLs are
+        # absent (null) — the original image is unreachable server-side, not merely
+        # hidden in the UI.
+        doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.res, occupant=None,
+            doc_type="residence", number="IMGSEC",
+            front_file=SimpleUploadedFile(
+                "id.jpg", b"\xff\xd8\xff\xe0jpegbytes", content_type="image/jpeg"
+            ),
+            back_file=SimpleUploadedFile(
+                "id2.jpg", b"\xff\xd8\xff\xe0jpegbytes2", content_type="image/jpeg"
+            ),
+        )
+        self._files.append(doc.front_file)
+        self._files.append(doc.back_file)
+        self._member("nosens@x.com", ["guests.view", "reservation_documents.view"])
+        rows = {row["id"]: row for row in
+                self.client.get(self._url(), **HDR(self.hotel)).data["results"]}
+        row = rows[doc.id]
+        # Existence flags stay truthful, but neither image URL is minted.
+        self.assertTrue(row["has_front"])
+        self.assertTrue(row["has_back"])
+        self.assertIsNone(row["front_url"])
+        self.assertIsNone(row["back_url"])
+        # Only the type + masked number is exposed.
+        self.assertEqual(row["number"], "••••GSEC")
+
+    def test_image_urls_present_only_with_all_three_permissions(self):
+        # WITH guests.view + reservation_documents.view + guests.view_sensitive_data
+        # the image mint is returned. Proven with an EXPLICIT three-permission member
+        # (not the all-powerful manager) so the gate is the permission, not the role.
+        doc = ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=self.res, occupant=None,
+            doc_type="residence", number="IMGALL",
+            front_file=SimpleUploadedFile(
+                "id.jpg", b"\xff\xd8\xff\xe0jpegbytes", content_type="image/jpeg"
+            ),
+        )
+        self._files.append(doc.front_file)
+        self._member(
+            "allsens@x.com",
+            ["guests.view", "reservation_documents.view", "guests.view_sensitive_data"],
+        )
+        rows = {row["id"]: row for row in
+                self.client.get(self._url(), **HDR(self.hotel)).data["results"]}
+        row = rows[doc.id]
+        self.assertIsNotNone(row["front_url"])
+        expected = reverse(
+            "reservations:reservation-document-signed-url",
+            kwargs={"doc_id": doc.id, "side": "front"},
+        )
+        self.assertTrue(row["front_url"].endswith(expected))
+        # The full number is visible too (same sensitive gate).
+        self.assertEqual(row["number"], "IMGALL")
 
     def test_expiry_is_always_null(self):
         r = self.client.get(self._url(), **HDR(self.hotel))

@@ -488,6 +488,28 @@ class ReservationKeyAlreadyUsed(FunduqiiAPIException):
     default_code = "reservation_key_already_used"
 
 
+# --- Public site booking (the ban is indistinguishable) ----------------------
+
+
+class BookingCannotBeCompleted(FunduqiiAPIException):
+    """The PUBLIC booking path's ONE generic, non-differentiating failure.
+
+    A public VISITOR is never told WHY a booking could not be completed when the
+    reason is sensitive — above all when the submitted identity matches a BLOCKED
+    guest. The internal hotel-panel paths keep raising the specific
+    :class:`GuestBlocked` (409, reason visible to authorized staff); the public
+    boundary translates that (and any other ban-derived refusal) into this
+    generic code so a banned identity is shape/status-indistinguishable from any
+    other booking that simply could not be completed. Its 409 status matches the
+    public site's other generic booking failure (``no_availability``), so neither
+    the status nor the code discloses that a ban — or the guest — exists. Carries
+    NO reason and NO identifier."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This booking could not be completed. Please contact the hotel."
+    default_code = "booking_cannot_be_completed"
+
+
 # --- Guests, check-in & check-out (Phase 7) --------------------------------
 
 

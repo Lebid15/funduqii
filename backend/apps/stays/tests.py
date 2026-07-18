@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User
+from apps.common.exceptions import GuestBlocked
 from apps.guests.models import Guest
 from apps.rbac.services import grant_permission
 from apps.reservations.models import Reservation, ReservationRoomLine, ReservationStatus
@@ -1411,6 +1412,151 @@ class ImmediateCheckInRegressionTests(APITestCase):
         self.assertEqual(Stay.objects.count(), before["stay"])
         self.assertEqual(Folio.objects.count(), before["folio"])
         self.assertEqual(Payment.objects.count(), before["payment"])
+
+
+class CompanionBanFingerprintTests(APITestCase):
+    """MANDATE R1-BE item 3 — the companion (occupant) promotion path resolves
+    through the SAME central identity service and the SAME ban fingerprint as the
+    primary guest: normalized national_id + normalized passport (the occupant
+    snapshot carries no phone field, so the canonical-phone dimension is
+    unavailable for companions — a documented gap). A banned companion is refused
+    (national_id or passport, format-variant included), no fresh Guest is minted to
+    bypass a ban, and an identity conflict is a 409 with no side effects.
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(self.hotel, "cb@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.room = make_room(self.hotel, self.rtype)
+
+    def _stay(self):
+        res = Reservation.objects.create(
+            hotel=self.hotel, reservation_number="RCB1",
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=D1, check_out_date=D2, primary_guest_name="Host",
+        )
+        stay = Stay.objects.create(
+            hotel=self.hotel, reservation=res, room=self.room,
+            primary_guest=make_guest(self.hotel, "Host"),
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=D1, planned_check_out_date=D2,
+            actual_check_in_at=timezone.now(),
+        )
+        return res, stay
+
+    def _occupant(self, res, **kw):
+        from apps.reservations.models import ReservationOccupant
+
+        return ReservationOccupant.objects.create(
+            hotel=self.hotel, reservation=res, **kw
+        )
+
+    def _passport_doc(self, res, occupant, number):
+        from apps.reservations.models import ReservationDocument
+
+        return ReservationDocument.objects.create(
+            hotel=self.hotel, reservation=res, occupant=occupant,
+            doc_type="passport", number=number,
+        )
+
+    def _promote(self, res, stay):
+        from django.db import transaction
+
+        from apps.stays.services import promote_reservation_occupants
+
+        # Mirror production: promotion runs inside the check-in atomic, so a raise
+        # rolls the whole compose back (no partial StayGuest / Guest).
+        with transaction.atomic():
+            return promote_reservation_occupants(res, stay, user=self.user)
+
+    def _companion_count(self, stay):
+        return StayGuest.objects.filter(stay=stay, role="companion").count()
+
+    def test_companion_banned_by_national_id_format_variance(self):
+        Guest.objects.create(
+            hotel=self.hotel, full_name="Bad", national_id="1234-5678",
+            is_blocked=True,
+        )
+        res, stay = self._stay()
+        # Same normalized national id, DIFFERENT raw format.
+        self._occupant(res, first_name="Comp", national_id="12345678")
+        before = Guest.objects.filter(hotel=self.hotel).count()
+        with self.assertRaises(GuestBlocked):
+            self._promote(res, stay)
+        # No fresh guest minted to bypass the ban; no companion attached.
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), before)
+        self.assertEqual(self._companion_count(stay), 0)
+
+    def test_companion_banned_by_passport_document_format_variance(self):
+        from apps.guests.models import DocumentType
+
+        Guest.objects.create(
+            hotel=self.hotel, full_name="Bad Passport",
+            document_type=DocumentType.PASSPORT, document_number="AB-123456",
+            is_blocked=True,
+        )
+        res, stay = self._stay()
+        occ = self._occupant(res, first_name="Comp")  # no national id
+        # Passport captured as a linked document, DIFFERENT raw format.
+        self._passport_doc(res, occ, "ab 123456")
+        before = Guest.objects.filter(hotel=self.hotel).count()
+        with self.assertRaises(GuestBlocked):
+            self._promote(res, stay)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), before)
+        self.assertEqual(self._companion_count(stay), 0)
+
+    def test_companion_identity_conflict_is_409_no_side_effects(self):
+        from apps.common.exceptions import GuestIdentityConflict
+        from apps.guests.models import DocumentType
+
+        # national id -> guest A, passport -> guest B (two different guests).
+        Guest.objects.create(hotel=self.hotel, full_name="A", national_id="NIDA111")
+        Guest.objects.create(
+            hotel=self.hotel, full_name="B",
+            document_type=DocumentType.PASSPORT, document_number="PPB222",
+        )
+        res, stay = self._stay()
+        occ = self._occupant(res, first_name="Comp", national_id="NIDA111")
+        self._passport_doc(res, occ, "PPB222")
+        before = Guest.objects.filter(hotel=self.hotel).count()
+        with self.assertRaises(GuestIdentityConflict) as ctx:
+            self._promote(res, stay)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.default_code, "guest_identity_conflict")
+        # No auto-merge, no companion created, no fresh guest.
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), before)
+        self.assertEqual(self._companion_count(stay), 0)
+
+    def test_companion_reused_by_normalized_passport_no_duplicate(self):
+        # Proves the passport now participates in RESOLUTION (not only the ban): a
+        # non-banned companion whose passport normalizes to an existing guest's
+        # reuses that guest instead of minting a duplicate.
+        from apps.guests.models import DocumentType
+
+        existing = Guest.objects.create(
+            hotel=self.hotel, full_name="Existing",
+            document_type=DocumentType.PASSPORT, document_number="ZX-9988",
+        )
+        res, stay = self._stay()
+        occ = self._occupant(res, first_name="Comp")
+        self._passport_doc(res, occ, "zx 9988")
+        before = Guest.objects.filter(hotel=self.hotel).count()
+        created = self._promote(res, stay)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel).count(), before)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].guest_id, existing.id)
+
+    def test_occupant_snapshot_carries_no_phone_field(self):
+        # Documents WHY there is no companion-ban-by-phone test: the occupant
+        # snapshot model has no phone field (and no linked phone), so the canonical
+        # phone dimension of the ban fingerprint is unavailable for companions. The
+        # phone dimension itself is covered for the PRIMARY guest in
+        # apps.guests.tests_identity (test_ban_blocks_by_phone_format_variance).
+        from apps.reservations.models import ReservationOccupant
+
+        field_names = {f.name for f in ReservationOccupant._meta.get_fields()}
+        self.assertNotIn("phone", field_names)
 
 
 class RoomChargePostingTests(APITestCase):

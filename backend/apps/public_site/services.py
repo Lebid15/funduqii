@@ -32,6 +32,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.common.exceptions import BookingCannotBeCompleted, GuestBlocked
 from apps.hotels.models import HotelMedia, HotelSettings, MediaKind
 from apps.reservations.availability import AvailabilityService
 from apps.reservations.models import (
@@ -238,10 +239,16 @@ def create_public_booking(
     NEVER creates or links a central guest (the guest is created / linked later at
     operational confirm or at check-in). The ban check still runs through the identity
     service (on the canonical phone / document / national id) and refuses a blocked
-    visitor WITHOUT exposing the reason. An identity CONFLICT (e.g. a national id and
-    a phone that point at two different existing guests) is deliberately NOT surfaced
-    here: it is an INTERNAL concern raised only on the authenticated check-in /
-    operational path — a visitor is never shown a 409 for a duplicate the hotel owns.
+    visitor WITHOUT exposing the reason: the internal ``GuestBlocked`` (409,
+    ``guest_blocked``) is caught at this public boundary and translated into the
+    generic ``BookingCannotBeCompleted`` (409, ``booking_cannot_be_completed``) so the
+    response never discloses that a ban — or the guest — exists and is
+    status/shape-indistinguishable from any other booking that could not be completed
+    (the internal hotel-panel paths keep the visible ``guest_blocked``). An identity
+    CONFLICT (e.g. a national id and a phone that point at two different existing
+    guests) is deliberately NOT surfaced here: it is an INTERNAL concern raised only on
+    the authenticated check-in / operational path — a visitor is never shown a 409 for
+    a duplicate the hotel owns.
 
     ``idempotency_key`` (Decision 3) is an EXPLICIT client-supplied token — the
     frontend generates one random, unguessable UUID per submission and reuses it on
@@ -297,15 +304,30 @@ def create_public_booking(
     # keeps this a pure snapshot (no central guest created) while still ban-checking
     # the identity; the client ``idempotency_key`` collapses a genuine retry onto the
     # ORIGINAL reservation, and a reused key with a different payload becomes a 409.
-    reservation = create_reservation(
-        hotel,
-        lines=[{"room_type": room_type, "quantity": rooms_count}],
-        status=status,
-        user=None,
-        allow_create=False,
-        idempotency_key=creation_key,
-        **fields,
-    )
+    #
+    # SEC (public-booking ban is INDISTINGUISHABLE): the identity ban check inside
+    # the engine raises the internal-facing :class:`GuestBlocked` (409,
+    # ``guest_blocked``, reason visible to authorized staff). A public VISITOR must
+    # never be told that a ban — or the guest — exists, so at the public boundary we
+    # translate it into the ONE generic :class:`BookingCannotBeCompleted` (409,
+    # ``booking_cannot_be_completed``), which is status/shape-indistinguishable from
+    # the public site's other generic booking failure (``no_availability``). The
+    # translation happens BEFORE any token/reservation persists — the enclosing
+    # atomic rolls back the (never-committed) reservation, so a refused booking
+    # leaves nothing behind. The internal reservation-create / check-in paths are
+    # untouched and keep raising the visible ``guest_blocked``.
+    try:
+        reservation = create_reservation(
+            hotel,
+            lines=[{"room_type": room_type, "quantity": rooms_count}],
+            status=status,
+            user=None,
+            allow_create=False,
+            idempotency_key=creation_key,
+            **fields,
+        )
+    except GuestBlocked:
+        raise BookingCannotBeCompleted()
     # A retry (same key + same payload) returns the EXISTING booking — no second
     # reservation, no guest, no token reset. Its plaintext token cannot be recovered
     # (only the hash is stored), so a replay returns an EMPTY token; the visitor keeps

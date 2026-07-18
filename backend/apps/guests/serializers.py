@@ -313,6 +313,16 @@ class GuestDocumentSerializer(serializers.ModelSerializer):
     endpoint (``reservations:reservation-document-signed-url``), which is itself
     behind ``reservation_documents.view`` and returns a short-lived, token-bound
     stream URL. No new signed-URL / file service is introduced here.
+
+    SEC (document image needs sensitive permission): opening / downloading /
+    streaming the ORIGINAL document image is more sensitive than listing a masked
+    number, so ``front_url`` / ``back_url`` — the only path to the image mint — are
+    returned ONLY when the caller ALSO holds ``guests.view_sensitive_data`` (on top
+    of the endpoint's ``guests.view`` + ``reservation_documents.view``). Without it
+    the URLs are ``null`` (never minted) and the row carries only the type + masked
+    number. This is enforced server-side (the URL is absent from the response), not
+    by hiding a frontend button; ``has_front`` / ``has_back`` remain truthful
+    existence flags but do not lead to the image.
     """
 
     has_front = serializers.SerializerMethodField()
@@ -352,12 +362,19 @@ class GuestDocumentSerializer(serializers.ModelSerializer):
     def _mint_url(self, obj, side: str, has_side: bool):
         if not has_side:
             return None
+        request = self.context.get("request")
+        # SEC (document image needs sensitive permission): the image mint is
+        # returned only to a caller holding ``guests.view_sensitive_data``.
+        # Fail CLOSED — a missing request context is never authorized. Without
+        # the permission the URL is absent (null); the image bytes are unreachable
+        # server-side, not merely hidden in the UI.
+        if request is None or not can_view_sensitive(request):
+            return None
         path = reverse(
             "reservations:reservation-document-signed-url",
             kwargs={"doc_id": obj.id, "side": side},
         )
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request is not None else path
+        return request.build_absolute_uri(path)
 
     def get_front_url(self, obj):
         return self._mint_url(obj, "front", bool(obj.front_file))

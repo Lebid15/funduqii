@@ -15,7 +15,7 @@ Final closure additions:
 """
 from __future__ import annotations
 
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -167,13 +167,30 @@ class GuestDirectoryView(generics.ListAPIView):
         return [CanView()]
 
     def get_queryset(self):
+        from apps.reservations.models import BLOCKING_STATUSES
+        from apps.shifts.services import get_business_date
+
+        # Card support: ``has_upcoming`` = the guest holds a future/active booking as
+        # PRIMARY guest — an ACTIVE (blocking) reservation whose window has not yet
+        # departed (check-out on/after the hotel business date). Computed once via an
+        # ``Exists()`` subquery on the directory queryset (no per-row query / N+1),
+        # mirroring the profile's ``upcoming_reservations`` definition exactly so the
+        # card badge and the profile can never disagree.
+        business_date = get_business_date(self.request.hotel)
+        upcoming = Reservation.objects.filter(
+            hotel=self.request.hotel,
+            primary_guest_id=OuterRef("pk"),
+            status__in=BLOCKING_STATUSES,
+            check_out_date__gte=business_date,
+        )
         qs = (
             Guest.objects.filter(hotel=self.request.hotel)
             .annotate(
                 real_stay_count=Count(
                     "stay_links",
                     filter=Q(stay_links__stay__status__in=REAL_STAY_STATUSES),
-                )
+                ),
+                has_upcoming=Exists(upcoming),
             )
             .filter(real_stay_count__gte=1)
             .prefetch_related("stay_links__stay__room")
@@ -196,6 +213,10 @@ class GuestDirectoryView(generics.ListAPIView):
         rows = []
         for guest in page:
             stats = _stats(_real_stays(guest))
+            # ``needs_review`` = blocked AND still holds a future/active booking — a
+            # human must reconcile the block with the pending arrival. Same rule as
+            # the profile's ``needs_review`` (is_blocked AND upcoming).
+            needs_review = guest.is_blocked and guest.has_upcoming
             rows.append(
                 {
                     "id": guest.id,
@@ -211,6 +232,8 @@ class GuestDirectoryView(generics.ListAPIView):
                     "is_active": guest.is_active,
                     "is_vip": guest.is_vip,
                     "is_blocked": guest.is_blocked,
+                    "has_upcoming": guest.has_upcoming,
+                    "needs_review": needs_review,
                     **stats,
                 }
             )

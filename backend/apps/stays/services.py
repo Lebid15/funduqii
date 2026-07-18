@@ -883,24 +883,57 @@ def _compose_occupant_name(occupant) -> str:
     return name or (occupant.first_name or "").strip() or "Companion"
 
 
+def _occupant_passport(occupant) -> str:
+    """The occupant's PASSPORT document number, if one was captured for it.
+
+    The :class:`~apps.reservations.models.ReservationOccupant` snapshot has no
+    passport field of its own, but a passport may have been captured against the
+    occupant as a linked :class:`~apps.reservations.models.ReservationDocument`
+    (``doc_type='passport'``). That number IS a ban / identity key (Decision 4),
+    so it is folded into the companion's fingerprint exactly like the primary
+    guest's passport. Only a PASSPORT document contributes — a national-id / visa /
+    'other' document is never treated as a passport. Iterates the (prefetched)
+    ``documents`` relation in Python so a prefetch is not defeated by ``.filter()``;
+    returns ``""`` when no passport document is present.
+    """
+    from apps.reservations.models import ReservationDocumentType
+
+    for doc in occupant.documents.all():
+        if doc.doc_type == ReservationDocumentType.PASSPORT and (doc.number or "").strip():
+            return doc.number.strip()
+    return ""
+
+
 def _guest_from_occupant(hotel, occupant, *, user=None):
     """Resolve or create a hotel-scoped ``Guest`` for an occupant with no guest link,
     through the ONE central identity service (Guests central identity — W3).
 
-    The service reuses an existing guest by the NORMALIZED national id (a differently
-    formatted id reuses the same row instead of creating a duplicate that would trip
-    the per-hotel unique constraint and roll the whole check-in back), reactivates +
-    audits an inactive match, ban-checks + conflict-checks the identity, refetches a
-    concurrency race winner, and otherwise creates a lightweight guest — all
-    deterministically, so the promotion stays idempotent. The occupant snapshot
-    carries no phone / passport document, so only the national id + the name / profile
-    fields form the identity; the generic document is deliberately NOT promoted to a
-    passport (which could trip the per-hotel document uniqueness constraint).
+    The service reuses an existing guest by the NORMALIZED national id / passport (a
+    differently formatted id or passport reuses the same row instead of creating a
+    duplicate that would trip the per-hotel unique constraint and roll the whole
+    check-in back), reactivates + audits an inactive match, ban-checks + conflict-checks
+    the identity, refetches a concurrency race winner, and otherwise creates a
+    lightweight guest — all deterministically, so the promotion stays idempotent.
+
+    SEC (companion ban via full fingerprint): the companion is resolved through the
+    SAME service and the SAME ban fingerprint as the primary guest — normalized
+    national id + normalized passport + canonical phone (name never contributes).
+    The occupant snapshot carries a ``national_id`` field directly and its passport
+    via a linked passport ``ReservationDocument`` (see :func:`_occupant_passport`);
+    both are folded in so ``ensure_identity_not_banned`` checks the fullest identity
+    available and format variance (spacing / punctuation / non-Latin digits) can never
+    slip a banned companion through. The occupant model has NO phone field (and no
+    linked phone), so the canonical-phone dimension of the fingerprint is unavailable
+    for companions — a documented gap (owner-note) until the occupant capture form
+    stores a companion phone. An identity CONFLICT (e.g. national id → guest A while
+    the passport → guest B) raises :class:`GuestIdentityConflict` (409) inside the
+    caller's atomic, so NO companion is created and there are no side effects.
     """
     from apps.guests.identity import resolve_or_create_guest
 
     identity = {
         "national_id": (occupant.national_id or "").strip(),
+        "passport": _occupant_passport(occupant),
         "full_name": _compose_occupant_name(occupant),
         "first_name": (occupant.first_name or ""),
         "last_name": (occupant.last_name or ""),
@@ -933,7 +966,9 @@ def promote_reservation_occupants(reservation, stay, *, user=None) -> list:
         StayGuest.objects.filter(stay=stay).values_list("guest_id", flat=True)
     )
     created = []
-    for occupant in reservation.occupants.all():
+    # ``documents`` is prefetched so ``_guest_from_occupant`` can read the linked
+    # passport (its identity/ban key) from the cache — no per-occupant query.
+    for occupant in reservation.occupants.prefetch_related("documents"):
         guest = occupant.guest or _guest_from_occupant(
             stay.hotel, occupant, user=user
         )

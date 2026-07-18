@@ -650,7 +650,14 @@ class PublicCentralIdentityTests(APITestCase, PublicMixin):
         # Exactly ONE reservation exists — the retry did not create a second.
         self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
 
-    def test_public_booking_ban_checked_without_reason_leak(self):
+    def test_public_banned_booking_is_generic_and_indistinguishable(self):
+        # SEC (public-booking ban is INDISTINGUISHABLE): a public booking refused
+        # because the identity matches a BLOCKED guest must NOT reveal that a ban,
+        # the guest, or a reason exists. The internal ``guest_blocked`` (409) is
+        # translated at the public boundary into the generic
+        # ``booking_cannot_be_completed`` (409) — the SAME status as the public
+        # site's other generic booking failure (``no_availability``), so neither
+        # status nor code discloses the ban.
         from apps.guests.models import Guest
         from apps.guests.services import block_guest
 
@@ -660,12 +667,72 @@ class PublicCentralIdentityTests(APITestCase, PublicMixin):
         block_guest(blocked, reason="fraud", user=None)
         r = self.book("pci", self.room_type, guest_phone="+905550000000")
         self.assertEqual(r.status_code, 409)
-        self.assertEqual(r.data["code"], "guest_blocked")
-        self.assertNotIn("fraud", str(r.data))
-        # The refused booking created nothing.
-        self.assertEqual(
-            Reservation.objects.filter(hotel=self.hotel).count(), 0
+        self.assertEqual(r.data["code"], "booking_cannot_be_completed")
+        self.assertNotEqual(r.data["code"], "guest_blocked")
+        # Nothing about a ban / the guest / the reason leaks anywhere in the body.
+        blob = str(r.data).lower()
+        for forbidden in ("fraud", "guest_blocked", "blocked", "banned"):
+            self.assertNotIn(forbidden, blob, forbidden)
+        # The refused booking created nothing (the enclosing atomic rolled back).
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 0)
+        self.assertEqual(Guest.objects.filter(hotel=self.hotel, is_blocked=False).count(), 0)
+
+    def test_generic_public_failure_shares_status_with_no_availability(self):
+        # Indistinguishability check: a banned booking and an ordinary
+        # no-availability booking BOTH return HTTP 409, so the ban cannot be told
+        # apart from a generic failure by status. The codes differ, but neither
+        # code names a ban.
+        from apps.guests.models import Guest
+        from apps.guests.services import block_guest
+
+        blocked = Guest.objects.create(
+            hotel=self.hotel, full_name="Banned2", phone="+905550000001"
         )
+        block_guest(blocked, reason="fraud", user=None)
+        banned = self.book("pci", self.room_type, guest_phone="+905550000001")
+        # Exhaust inventory (2 rooms) with a clean guest, then overbook -> 409.
+        self.book("pci", self.room_type, rooms_count=2, guest_phone="+905550000009")
+        no_avail = self.book("pci", self.room_type, guest_phone="+905550000008")
+        self.assertEqual(banned.status_code, 409)
+        self.assertEqual(no_avail.status_code, 409)
+        self.assertEqual(banned.status_code, no_avail.status_code)
+        self.assertEqual(banned.data["code"], "booking_cannot_be_completed")
+        self.assertEqual(no_avail.data["code"], "no_availability")
+
+    def test_internal_reservation_path_still_raises_guest_blocked(self):
+        # The internal hotel-panel path (authenticated create/check-in) for the
+        # SAME banned identity keeps raising the specific ``guest_blocked`` (409) so
+        # authorized staff can see the block (and its reason on the guest profile).
+        # Only the PUBLIC boundary is genericized.
+        import datetime
+
+        from apps.common.exceptions import GuestBlocked
+        from apps.guests.models import Guest
+        from apps.guests.services import block_guest
+        from apps.reservations.models import BookingKind, ReservationStatus
+        from apps.reservations.services import create_reservation
+
+        blocked = Guest.objects.create(
+            hotel=self.hotel, full_name="Banned", phone="+905550000000"
+        )
+        block_guest(blocked, reason="fraud", user=None)
+        check_in = timezone.localdate() + datetime.timedelta(days=7)
+        with self.assertRaises(GuestBlocked) as ctx:
+            create_reservation(
+                self.hotel,
+                lines=[{"room_type": self.room_type, "quantity": 1}],
+                status=ReservationStatus.CONFIRMED,
+                user=None,
+                allow_create=True,
+                primary_guest_name="Banned",
+                primary_guest_phone="+905550000000",
+                adults=1,
+                children=0,
+                check_in_date=check_in,
+                check_out_date=check_in + datetime.timedelta(days=2),
+                booking_kind=BookingKind.FUTURE,
+            )
+        self.assertEqual(ctx.exception.default_code, "guest_blocked")
 
 
 # --------------------------------------------------------------------------- #
