@@ -1175,6 +1175,95 @@ class PriorityOrderingTests(APITestCase, OperationsMixin):
         ).latest("id")
         self.assertIn("urgent", event.message)
 
+    def test_priority_tie_break_is_deterministic(self):
+        # Regression: after moving HK to the shared helper the within-priority
+        # tie-break stays deterministic. Same priority across separate rooms,
+        # identical requested_at -> the order falls through to the final -id
+        # (newest first / strictly descending id).
+        for i in range(3):
+            room = make_room(self.hotel, number=f"31{i}", status=RoomStatus.DIRTY)
+            self.create_hk(room=room.id, priority="high")
+        HousekeepingTask.objects.filter(hotel=self.hotel, priority="high").update(
+            requested_at=timezone.now()
+        )
+        base = reverse("operations:housekeeping-list")
+        rows = self.client.get(
+            base + "?ordering=priority&priority=high", **HDR(self.hotel)
+        ).data["results"]
+        returned = [r["id"] for r in rows]
+        self.assertEqual(returned, sorted(returned, reverse=True))
+        self.assertGreaterEqual(len(returned), 3)
+
+
+class MaintenancePriorityOrderingTests(APITestCase, OperationsMixin):
+    """Maintenance list must sort priority by SEVERITY (urgent → high → normal
+    → low), matching housekeeping, not the raw CharField (which is alphabetical:
+    high < low < normal < urgent)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+
+    def _seed(self, priorities):
+        """One maintenance request per priority; return {priority: id}. Seeded
+        in a scrambled order so id order differs from severity order."""
+        ids = {}
+        for prio in priorities:
+            resp = self.create_mt(priority=prio, title=f"Fix {prio}")
+            self.assertEqual(resp.status_code, 201)
+            ids[prio] = resp.data["id"]
+        return ids
+
+    def test_priority_ordering_by_severity(self):
+        ids = self._seed(["low", "urgent", "normal", "high"])
+        base = reverse("operations:maintenance-list")
+        rows = self.client.get(
+            base + "?ordering=priority", **HDR(self.hotel)
+        ).data["results"]
+        self.assertEqual(
+            [r["priority"] for r in rows], ["urgent", "high", "normal", "low"]
+        )
+        self.assertEqual(
+            [r["id"] for r in rows],
+            [ids["urgent"], ids["high"], ids["normal"], ids["low"]],
+        )
+
+    def test_priority_ordering_reversed(self):
+        ids = self._seed(["low", "urgent", "normal", "high"])
+        base = reverse("operations:maintenance-list")
+        rows = self.client.get(
+            base + "?ordering=-priority", **HDR(self.hotel)
+        ).data["results"]
+        self.assertEqual(
+            [r["priority"] for r in rows], ["low", "normal", "high", "urgent"]
+        )
+        self.assertEqual(
+            [r["id"] for r in rows],
+            [ids["low"], ids["normal"], ids["high"], ids["urgent"]],
+        )
+
+    def test_priority_tie_break_is_deterministic(self):
+        # Four requests, SAME priority, identical reported_at -> the order falls
+        # through to the final -id tie-break (newest first / descending id).
+        ids = [
+            self.create_mt(priority="high", title=f"Fix {i}").data["id"]
+            for i in range(4)
+        ]
+        MaintenanceRequest.objects.filter(hotel=self.hotel).update(
+            reported_at=timezone.now()
+        )
+        base = reverse("operations:maintenance-list")
+        asc = self.client.get(
+            base + "?ordering=priority", **HDR(self.hotel)
+        ).data["results"]
+        self.assertEqual([r["id"] for r in asc], sorted(ids, reverse=True))
+        # -priority keeps the SAME within-priority tie-break.
+        desc = self.client.get(
+            base + "?ordering=-priority", **HDR(self.hotel)
+        ).data["results"]
+        self.assertEqual([r["id"] for r in desc], sorted(ids, reverse=True))
+
 
 class ArrivalsNotReadyTests(APITestCase, OperationsMixin):
     def setUp(self):

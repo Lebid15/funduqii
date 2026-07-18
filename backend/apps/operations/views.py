@@ -148,21 +148,10 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
             )
         ordering = p.get("ordering")
         if ordering in ("priority", "-priority"):
-            # Severity order, never the raw CharField (alphabetical puts
-            # high < low). urgent → high → normal → low.
-            from django.db.models import Case, IntegerField, Value, When
-
-            rank = Case(
-                *[
-                    When(priority=value, then=Value(rank))
-                    for value, rank in services.PRIORITY_RANK.items()
-                ],
-                default=Value(9),
-                output_field=IntegerField(),
-            )
-            qs = qs.annotate(priority_rank=rank).order_by(
-                "priority_rank" if ordering == "priority" else "-priority_rank",
-                "-requested_at",
+            # Shared severity ordering (urgent → high → normal → low), never the
+            # raw CharField. Tie-break: newest first then -id (deterministic).
+            qs = services.order_by_priority_rank(
+                qs, ordering=ordering, time_field="requested_at"
             )
         elif ordering in (
             "requested_at", "-requested_at", "task_number", "-task_number",
@@ -387,9 +376,15 @@ class MaintenanceListCreateView(generics.ListCreateAPIView):
                 | qs.filter(room__number__icontains=p["search"])
             )
         ordering = p.get("ordering")
-        if ordering in (
+        if ordering in ("priority", "-priority"):
+            # Same shared severity ordering as housekeeping (urgent → high →
+            # normal → low), never the raw CharField (alphabetical would give
+            # high < low < normal < urgent). Tie-break: newest first then -id.
+            qs = services.order_by_priority_rank(
+                qs, ordering=ordering, time_field="reported_at"
+            )
+        elif ordering in (
             "reported_at", "-reported_at", "request_number", "-request_number",
-            "priority", "-priority",
         ):
             qs = qs.order_by(ordering)
         return qs.distinct()

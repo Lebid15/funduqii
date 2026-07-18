@@ -94,6 +94,36 @@ PRIORITY_RANK = {
 }
 
 
+def order_by_priority_rank(qs, *, ordering: str, time_field: str):
+    """Order an operations queryset by LOGICAL priority severity.
+
+    The single sort used by BOTH the housekeeping and maintenance lists so the
+    two can never diverge. Priority is ranked by :data:`PRIORITY_RANK`
+    (urgent → high → normal → low), never by the raw ``priority`` CharField
+    (alphabetical would give high < low < normal < urgent).
+
+    ``ordering`` is ``"priority"`` (most urgent first) or ``"-priority"``
+    (reverse). Ties break on the newest record first (``-<time_field>``) then
+    ``-id`` for a fully deterministic order, matching each model's default
+    ``Meta.ordering``. ``time_field`` is the list's own timestamp column
+    (``requested_at`` for housekeeping, ``reported_at`` for maintenance).
+    """
+    from django.db.models import Case, IntegerField, Value, When
+
+    rank = Case(
+        *[
+            When(priority=value, then=Value(severity))
+            for value, severity in PRIORITY_RANK.items()
+        ],
+        default=Value(9),
+        output_field=IntegerField(),
+    )
+    rank_order = "priority_rank" if ordering == "priority" else "-priority_rank"
+    return qs.annotate(priority_rank=rank).order_by(
+        rank_order, f"-{time_field}", "-id"
+    )
+
+
 def _hk_record(task, *, event_type, severity, title, message, user=None):
     """Activity entry for a housekeeping task (lazy import, one shape)."""
     from apps.notifications.services import record_activity
