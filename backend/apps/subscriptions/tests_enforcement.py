@@ -289,7 +289,7 @@ class PublicBookingEnforcementTests(APITestCase):
                 "rooms_count": 1,
                 "adults": 2,
                 "guest_name": "Visitor",
-                "guest_phone": "+90 555",
+                "guest_phone": "+90 555 111 22 33",
                 "accept_terms": True,
             },
             format="json",
