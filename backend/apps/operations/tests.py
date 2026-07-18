@@ -1092,6 +1092,11 @@ class InspectionPolicyTests(APITestCase, OperationsMixin):
     def test_inspect_requires_permission(self):
         _enable_inspection(self.hotel)
         task = self.create_hk().data
+        # Take the room through a real cleaning cycle (start -> cleaning) before
+        # completion so approval can release it: WP1's fail-closed guard refuses
+        # to release a still-DIRTY room even on the inspection-approval path
+        # (this test only exercises the inspect *permission*, not that edge).
+        self.act("housekeeping", task["id"], "status", {"status": "in_progress"})
         self.act("housekeeping", task["id"], "complete", {})
         staff = add_member(
             self.hotel, "s@x.com",

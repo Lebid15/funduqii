@@ -218,6 +218,27 @@ class RoomBlockedByMaintenance(FunduqiiAPIException):
     default_code = "room_blocked_by_maintenance"
 
 
+class RoomNotReleasable(FunduqiiAPIException):
+    """Central fail-closed release guard (WP1): a room becomes ``available``
+    ONLY as the result of a correct operational release cycle (cleaning
+    completion / inspection approval / maintenance close). Every direct or
+    external attempt to set ``available`` is refused here — no permission
+    (including ``rooms.status_update``) bypasses it.
+
+    ``details.reason`` is a single NEUTRAL marker — one of ``maintenance_block``,
+    ``active_housekeeping``, ``room_dirty`` or ``operational_block`` — so the
+    refusal never leaks internal operational detail (which request, which task).
+    Distinct from :class:`RoomBlockedByMaintenance`, which stays the maintenance-
+    specific 409 already asserted on existing operations paths."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This room cannot be made available directly; it must complete its "
+        "operational release cycle first."
+    )
+    default_code = "room_not_releasable"
+
+
 class ClaimantRequired(FunduqiiAPIException):
     status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     default_detail = "A claimant name (or linked guest) is required."

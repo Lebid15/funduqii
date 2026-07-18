@@ -182,7 +182,16 @@ class Command(BaseCommand):
             )
             # change_room_status early-returns when the status + note already
             # match, so repeated runs write no duplicate status logs.
-            if status != "available" or room.status != "available":
+            if status == "available":
+                # Seed-data path: WP1's central release guard refuses a DIRECT
+                # release to `available` (it must come from an operational
+                # release cycle). Seed the status straight on the model instead
+                # of the guarded cycle. Idempotent — only writes when needed.
+                if room.status != "available":
+                    Room.objects.filter(pk=room.pk).update(
+                        status="available", status_note=note or ""
+                    )
+            else:
                 change_room_status(
                     room, status, note=note, user=manager, notify=False
                 )

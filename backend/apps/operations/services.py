@@ -31,9 +31,10 @@ from apps.common.exceptions import (
     InvalidOperationStatusTransition,
     OperationNotEditable,
     RoomBlockedByMaintenance,
+    RoomNotReleasable,
 )
 from apps.rooms.models import Room, RoomStatus
-from apps.rooms.services import change_room_status
+from apps.rooms.services import RoomReleaseCycle, change_room_status
 from apps.tenancy.models import HotelMembership
 
 from .models import (
@@ -191,12 +192,66 @@ def room_has_blocking_maintenance(room: Room, *, exclude_id=None) -> bool:
     return qs.exists()
 
 
+def _room_has_active_housekeeping(room: Room) -> bool:
+    """True while the room's cleaning cycle is not finished — an ACTIVE task
+    exists (pending / assigned / in_progress / awaiting_inspection). The task
+    being resolved by the current release path is completed BEFORE this check,
+    so it never counts against its own release."""
+    return HousekeepingTask.objects.filter(
+        room=room, status__in=ACTIVE_HK_STATUSES
+    ).exists()
+
+
 def _ensure_room_releasable(room: Room, *, exclude_request_id=None) -> None:
-    """Guard for any attempt to mark a room `available` from operations."""
+    """Guard for any attempt to mark a room `available` from operations.
+
+    Ordering matters: the maintenance guards run FIRST and keep raising the
+    maintenance-specific ``RoomBlockedByMaintenance`` (backward-compat with the
+    409s already asserted). The NEW generic conditions (dirty room / active
+    cleaning task) raise ``RoomNotReleasable`` with a neutral ``details.reason``.
+    """
     if room.status in BLOCKED_ROOM_STATUSES and exclude_request_id is None:
         raise RoomBlockedByMaintenance({"room": room.id, "status": room.status})
     if room_has_blocking_maintenance(room, exclude_id=exclude_request_id):
         raise RoomBlockedByMaintenance({"room": room.id, "reason": "open_request"})
+    if room.status == RoomStatus.DIRTY:
+        raise RoomNotReleasable({"reason": "room_dirty"})
+    if _room_has_active_housekeeping(room):
+        raise RoomNotReleasable({"reason": "active_housekeeping"})
+
+
+def _lock_room(room_id):
+    """Row-lock the room for a read-then-write status transition (``SELECT ...
+    FOR UPDATE``). Must run inside a transaction; a no-op on SQLite (dev/tests).
+    Returns the locked instance, or ``None`` when the record has no room."""
+    if room_id is None:
+        return None
+    return Room.objects.select_for_update().get(pk=room_id)
+
+
+def _release_room(
+    room: Room,
+    *,
+    user,
+    note: str,
+    cycle_source: RoomReleaseCycle,
+    exclude_request_id=None,
+) -> None:
+    """The ONE operations path to ``available`` — releasability is re-checked
+    HERE and only then does the rooms controlled path run with the internal
+    ``cycle_source`` marker. Every release funnels through this helper, so a
+    future path cannot reach ``change_room_status(..., AVAILABLE)`` without the
+    checks (bypass is prevented by construction). ``room`` must already be
+    row-locked by the caller."""
+    _ensure_room_releasable(room, exclude_request_id=exclude_request_id)
+    if room.status != RoomStatus.AVAILABLE:
+        change_room_status(
+            room,
+            RoomStatus.AVAILABLE,
+            note=note,
+            user=user,
+            cycle_source=cycle_source,
+        )
 
 
 # --- Housekeeping ---------------------------------------------------------------
@@ -216,7 +271,11 @@ def _hk_log(task, previous, new, user, note=""):
 def _hk_start(task: HousekeepingTask, user) -> None:
     """Side effects of moving a task to in_progress."""
     task.started_at = task.started_at or timezone.now()
-    room = task.room
+    # Row-lock the room for this read-then-write status transition (runs inside
+    # the caller's atomic block) so start-cleaning cannot race a concurrent
+    # maintenance block (AVAILABLE -> MAINTENANCE) on the same room. Status
+    # logic is unchanged.
+    room = _lock_room(task.room_id)
     if room is not None and room.status in CLEANABLE_ROOM_STATUSES:
         change_room_status(
             room,
@@ -456,19 +515,20 @@ def complete_housekeeping_task(
     task.completed_at = timezone.now()
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
+    # Row-lock the room for the read-then-write status transition. The task is
+    # already COMPLETED above, so it never counts against its own release.
+    room = _lock_room(task.room_id)
     if room is not None:
         if mark_room_available:
-            # Never override maintenance/out_of_service/archived, and never
-            # release a room an open maintenance request still blocks.
-            _ensure_room_releasable(room)
-            if room.status != RoomStatus.AVAILABLE:
-                change_room_status(
-                    room,
-                    RoomStatus.AVAILABLE,
-                    note=f"Housekeeping {task.task_number} completed",
-                    user=user,
-                )
+            # ONE release helper: never override a hard block or an open
+            # blocking request, and never release a dirty room or one that
+            # still has another active cleaning task.
+            _release_room(
+                room,
+                user=user,
+                note=f"Housekeeping {task.task_number} completed",
+                cycle_source=RoomReleaseCycle.HOUSEKEEPING_RELEASE,
+            )
         elif room.status == RoomStatus.CLEANING:
             # Task done but the room was not released — back to dirty so it
             # stays visibly not-ready (explicit release only).
@@ -507,7 +567,8 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
     task.cancellation_reason = reason.strip()
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
+    # Row-lock the room for the read-then-write status transition.
+    room = _lock_room(task.room_id)
     if room is not None and room.status == RoomStatus.CLEANING:
         # The task that (likely) put the room into `cleaning` is gone; the
         # room goes back to dirty rather than staying in a stale state.
@@ -537,22 +598,23 @@ def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> Houseke
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
         )
-    room = task.room
-    if room is not None:
-        # Same guard as an explicit release: never override maintenance /
-        # out_of_service / archived or an open blocking request.
-        _ensure_room_releasable(room)
+    # Row-lock the room for the read-then-write release.
+    room = _lock_room(task.room_id)
     previous = task.status
+    # Complete the task BEFORE the releasability check so this (awaiting-
+    # inspection = ACTIVE) task never counts against its own release. If the
+    # check then refuses (e.g. maintenance appeared), the whole atomic block
+    # rolls the completion back and the task stays awaiting inspection.
     task.status = HousekeepingStatus.COMPLETED
     task.completed_at = timezone.now()
     task.updated_by = _actor(user)
     task.save()
-    if room is not None and room.status != RoomStatus.AVAILABLE:
-        change_room_status(
+    if room is not None:
+        _release_room(
             room,
-            RoomStatus.AVAILABLE,
-            note=f"Housekeeping {task.task_number} inspection approved",
             user=user,
+            note=f"Housekeeping {task.task_number} inspection approved",
+            cycle_source=RoomReleaseCycle.HOUSEKEEPING_RELEASE,
         )
     _hk_log(task, previous, HousekeepingStatus.COMPLETED, user, note or "inspection approved")
     _hk_record(
@@ -581,7 +643,8 @@ def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> Housekeep
     task.status = HousekeepingStatus.IN_PROGRESS
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
+    # Row-lock the room for the read-then-write status transition.
+    room = _lock_room(task.room_id)
     if room is not None and room.status in (
         RoomStatus.CLEANING,
         RoomStatus.AVAILABLE,
@@ -620,9 +683,8 @@ def _mt_log(request, previous, new, user, note=""):
 
 def _apply_room_block(request: MaintenanceRequest, user) -> None:
     """Move the room into the request's block status (maintenance/oos)."""
-    room = request.room
     if (
-        room is None
+        request.room_id is None
         or not request.affects_room_availability
         or request.room_block_status == RoomBlockStatus.NONE
     ):
@@ -632,6 +694,8 @@ def _apply_room_block(request: MaintenanceRequest, user) -> None:
         if request.room_block_status == RoomBlockStatus.MAINTENANCE
         else RoomStatus.OUT_OF_SERVICE
     )
+    # Row-lock the room for the read-then-write block transition.
+    room = _lock_room(request.room_id)
     if room.status in (target, RoomStatus.ARCHIVED):
         return
     change_room_status(
@@ -820,23 +884,26 @@ def close_maintenance_request(
     request.closed_at = timezone.now()
     request.updated_by = _actor(user)
     request.save()
-    room = request.room
+    # Row-lock the room for the read-then-write transition.
+    room = _lock_room(request.room_id)
     if room is not None and room_next_status != "keep":
         if room.status == RoomStatus.ARCHIVED:
             raise InvalidOperationStatusTransition({"reason": "room_archived"})
+        note_txt = f"Maintenance {request.request_number} closed"[:255]
         if room_next_status == "available":
-            # Another open blocking request keeps the room out of inventory.
-            _ensure_room_releasable(room, exclude_request_id=request.id)
-            target = RoomStatus.AVAILABLE
-        else:
-            target = RoomStatus.DIRTY
-        if room.status != target:
-            change_room_status(
+            # Release through the ONE helper: another open blocking request — or
+            # a dirty / still-being-cleaned room — keeps it out of inventory.
+            # The maintenance-close cycle is the only one authorized to clear
+            # this request's own maintenance/out-of-service block.
+            _release_room(
                 room,
-                target,
-                note=f"Maintenance {request.request_number} closed"[:255],
                 user=user,
+                note=note_txt,
+                cycle_source=RoomReleaseCycle.MAINTENANCE_CLOSE,
+                exclude_request_id=request.id,
             )
+        elif room.status != RoomStatus.DIRTY:
+            change_room_status(room, RoomStatus.DIRTY, note=note_txt, user=user)
     _mt_log(request, previous, MaintenanceStatus.CLOSED, user, note)
     from apps.notifications.services import record_activity
 
@@ -870,7 +937,8 @@ def cancel_maintenance_request(
     request.save()
     # If THIS request blocked the room and nothing else still blocks it, the
     # room drops to dirty (never straight to available — it needs inspection).
-    room = request.room
+    # Row-lock the room for the read-then-write transition.
+    room = _lock_room(request.room_id)
     if (
         room is not None
         and request.affects_room_availability

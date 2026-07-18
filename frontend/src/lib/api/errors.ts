@@ -241,6 +241,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.notEditable;
     case "room_blocked_by_maintenance":
       return t.operations.errors.roomBlocked;
+    case "room_not_releasable":
+      return t.operations.errors.roomNotReleasable;
     case "claimant_required":
       return t.operations.errors.claimantRequired;
     case "disposal_reason_required":

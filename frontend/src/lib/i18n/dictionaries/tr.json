@@ -2442,7 +2442,8 @@
       "claimantRequired": "Teslim alan adı (veya bağlı misafir) gereklidir.",
       "disposalReasonRequired": "Eşyayı imha etmek için neden gereklidir.",
       "duplicateActive": "Bu odanın zaten aktif bir temizlik görevi var — önce tamamlayın veya iptal edin.",
-      "inspectionReasonRequired": "Denetim ret nedeni zorunludur."
+      "inspectionReasonRequired": "Denetim ret nedeni zorunludur.",
+      "roomNotReleasable": "Bu oda doğrudan müsait yapılamaz — önce operasyonel serbest bırakma döngüsünü tamamlamalı (temizlik bitip denetlenerek veya engelleyen bakım kapatılarak)."
     }
   },
   "staff": {
