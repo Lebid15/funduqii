@@ -18,7 +18,7 @@ Room-status rules enforced here:
 """
 from __future__ import annotations
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.common.exceptions import (
@@ -314,22 +314,37 @@ def create_housekeeping_task(
             return None
         raise DuplicateActiveTask({"room": room.id})
     actor = _actor(user)
-    task = HousekeepingTask.objects.create(
-        hotel=hotel,
-        task_number=next_number(hotel, "housekeeping"),
-        room=room,
-        stay=stay,
-        task_type=task_type,
-        status=(
-            HousekeepingStatus.ASSIGNED if assigned_to else HousekeepingStatus.PENDING
-        ),
-        priority=priority,
-        assigned_to=assigned_to,
-        notes=notes or "",
-        internal_notes=internal_notes or "",
-        created_by=actor,
-        updated_by=actor,
-    )
+    # DB-backed backstop: the partial-unique constraint
+    # ``uniq_active_housekeeping_task_per_room`` (migration 0003) is the last
+    # line of defence if a concurrent active task slips past the
+    # select_for_update() + exists() guard above (e.g. a race the row lock did
+    # not serialize). The INSERT runs inside a savepoint so a violation rolls
+    # back only the failed INSERT (and its sequence bump) and surfaces as a
+    # clean 409 — never a raw 500 — while automatic callers still skip.
+    try:
+        with transaction.atomic():
+            task = HousekeepingTask.objects.create(
+                hotel=hotel,
+                task_number=next_number(hotel, "housekeeping"),
+                room=room,
+                stay=stay,
+                task_type=task_type,
+                status=(
+                    HousekeepingStatus.ASSIGNED
+                    if assigned_to
+                    else HousekeepingStatus.PENDING
+                ),
+                priority=priority,
+                assigned_to=assigned_to,
+                notes=notes or "",
+                internal_notes=internal_notes or "",
+                created_by=actor,
+                updated_by=actor,
+            )
+    except IntegrityError:
+        if on_active == "skip":
+            return None
+        raise DuplicateActiveTask({"room": room.id})
     _hk_log(task, "", task.status, user)
     # Phase 14: activity + notifications (lazy import).
     from apps.notifications.services import record_activity

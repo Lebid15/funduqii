@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -150,6 +151,27 @@ class HousekeepingTask(models.Model):
             models.UniqueConstraint(
                 fields=["hotel", "task_number"],
                 name="unique_housekeeping_task_number_per_hotel",
+            ),
+            # Final closure (WP2): at most ONE ACTIVE cleaning task per
+            # (hotel, room). ACTIVE = pending / assigned / in_progress /
+            # awaiting_inspection (mirrors services.ACTIVE_HK_STATUSES).
+            # completed / cancelled are excluded so a room can start a fresh
+            # cycle once its task closes. Scoped to room IS NOT NULL so a
+            # historical task whose room was later deleted (SET_NULL) is never
+            # constrained. Implemented as a partial UNIQUE index — portable on
+            # SQLite (dev/tests) and PostgreSQL (production, authoritative).
+            models.UniqueConstraint(
+                fields=["hotel", "room"],
+                condition=Q(
+                    status__in=[
+                        HousekeepingStatus.PENDING,
+                        HousekeepingStatus.ASSIGNED,
+                        HousekeepingStatus.IN_PROGRESS,
+                        HousekeepingStatus.AWAITING_INSPECTION,
+                    ]
+                )
+                & Q(room__isnull=False),
+                name="uniq_active_housekeeping_task_per_room",
             ),
         ]
         indexes = [
