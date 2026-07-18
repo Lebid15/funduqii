@@ -291,7 +291,7 @@ class GuestDirectoryTests(APITestCase):
 
     def test_reservation_without_stay_does_not_count(self):
         Guest.objects.create(hotel=self.hotel, full_name="Cancelled Booker")
-        make_reservation(self.hotel, self.rtype, phone="+90111", number="X")
+        make_reservation(self.hotel, self.rtype, phone="+905559990000", number="X")
         self.assertEqual(self._directory().data["count"], 0)
 
     def test_past_stay_listed_as_new_with_stats(self):
@@ -370,10 +370,10 @@ class GuestProfileTests(APITestCase):
         self.client.force_authenticate(self.manager)
         self.rtype, (self.r101, self.r102) = make_room_env(self.hotel)
         self.guest = Guest.objects.create(
-            hotel=self.hotel, full_name="Profile Guest", phone="+90555",
+            hotel=self.hotel, full_name="Profile Guest", phone="+905550005555",
             document_type="passport", document_number="P987654321",
         )
-        self.res = make_reservation(self.hotel, self.rtype, phone="+90555", number="R")
+        self.res = make_reservation(self.hotel, self.rtype, phone="+905550005555", number="R")
         make_stay(self.hotel, self.guest, self.r101,
                   ci=TODAY - timedelta(days=10), co=TODAY - timedelta(days=8))
         self.current = make_stay(
@@ -589,7 +589,7 @@ class GuestBlockEffectTests(APITestCase):
         self.client.force_authenticate(self.manager)
         self.rtype, (self.r101, self.r102) = make_room_env(self.hotel)
         self.guest = Guest.objects.create(
-            hotel=self.hotel, full_name="Blocked Person", phone="+90777",
+            hotel=self.hotel, full_name="Blocked Person", phone="+905551112233",
             document_type="passport", document_number="BB999",
         )
         from apps.guests.services import block_guest
@@ -598,18 +598,18 @@ class GuestBlockEffectTests(APITestCase):
 
     def test_reservation_by_matching_phone_refused(self):
         with self.assertRaises(GuestBlocked):
-            make_reservation(self.hotel, self.rtype, phone="+90777", number="X")
+            make_reservation(self.hotel, self.rtype, phone="+905551112233", number="X")
 
     def test_reservation_by_matching_document_refused(self):
         with self.assertRaises(GuestBlocked):
             make_reservation(self.hotel, self.rtype, doc="BB999", number="X")
 
     def test_unrelated_snapshot_books_fine(self):
-        res = make_reservation(self.hotel, self.rtype, phone="+90111", number="X")
+        res = make_reservation(self.hotel, self.rtype, phone="+905559990000", number="X")
         self.assertEqual(res.status, ReservationStatus.CONFIRMED)
 
     def test_check_in_of_blocked_guest_refused_without_reason_leak(self):
-        res = make_reservation(self.hotel, self.rtype, phone="+90111", number="X")
+        res = make_reservation(self.hotel, self.rtype, phone="+905559990000", number="X")
         line = res.lines.first()
         r = self.client.post(
             reverse("stays:stay-check-in"),
@@ -622,7 +622,7 @@ class GuestBlockEffectTests(APITestCase):
         self.assertNotIn("fraud", str(r.data))
 
     def test_blocked_companion_refused(self):
-        res = make_reservation(self.hotel, self.rtype, phone="+90111", number="X")
+        res = make_reservation(self.hotel, self.rtype, phone="+905559990000", number="X")
         line = res.lines.first()
         clean = Guest.objects.create(hotel=self.hotel, full_name="Clean Guest")
         r = self.client.post(
@@ -639,7 +639,7 @@ class GuestBlockEffectTests(APITestCase):
         from apps.guests.services import unblock_guest
 
         unblock_guest(self.guest, user=self.manager)
-        res = make_reservation(self.hotel, self.rtype, phone="+90777", number="X")
+        res = make_reservation(self.hotel, self.rtype, phone="+905551112233", number="X")
         line = res.lines.first()
         r = self.client.post(
             reverse("stays:stay-check-in"),
@@ -652,7 +652,7 @@ class GuestBlockEffectTests(APITestCase):
     def test_other_hotel_same_phone_not_blocked(self):
         other = make_hotel(slug="o")
         otype, _rooms = make_room_env(other)
-        res = make_reservation(other, otype, phone="+90777", number="X")
+        res = make_reservation(other, otype, phone="+905551112233", number="X")
         self.assertEqual(res.status, ReservationStatus.CONFIRMED)
 
 

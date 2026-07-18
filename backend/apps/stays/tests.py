@@ -4895,3 +4895,104 @@ class CheckoutErrorSanitizationTests(APITestCase):
         # Finance viewer: original detail preserved, NOT sanitized.
         self.assertIsNone(getattr(ctx2.exception, "_sanitized_details", None))
         self.assertIn("balance", ctx2.exception.detail)
+
+
+# --------------------------------------------------------------------------- #
+# Guests central identity (W3) — check-in derives / links the primary guest     #
+# --------------------------------------------------------------------------- #
+
+
+class CheckInDeriveGuestTests(APITestCase):
+    """Check-in-from-reservation makes ``primary_guest`` OPTIONAL and DERIVES it —
+    the reservation's linked guest, else one resolved / created from the snapshot
+    through the identity service — strictly AFTER the arrival + H2 guards, so a
+    rejected check-in never creates a guest."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "cd@x.com", kind=MembershipType.MANAGER)
+        self.rtype = make_type(self.hotel)
+        self.room = make_room(self.hotel, self.rtype)
+
+    def _count(self):
+        return Guest.objects.filter(hotel=self.hotel).count()
+
+    def test_check_in_without_primary_guest_creates_from_snapshot(self):
+        from apps.stays.services import CheckInService
+
+        res, line = make_reservation(self.hotel, self.rtype, room=self.room)
+        # Snapshot-only reservation (no guest FK), like a public booking.
+        Reservation.objects.filter(pk=res.pk).update(
+            primary_guest=None, primary_guest_national_id="DERIVE01"
+        )
+        res.refresh_from_db()
+        before = self._count()
+        stay = CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=self.room,
+            user=self.manager,
+        )
+        self.assertEqual(self._count(), before + 1)
+        self.assertIsNotNone(stay.primary_guest_id)
+        self.assertEqual(stay.primary_guest.national_id_normalized, "DERIVE01")
+        self.assertTrue(
+            StayGuest.objects.filter(
+                stay=stay, guest=stay.primary_guest, role="primary"
+            ).exists()
+        )
+
+    def test_check_in_without_primary_guest_reuses_reservation_link(self):
+        from apps.stays.services import CheckInService
+
+        guest = make_guest(self.hotel, name="Linked")
+        res, line = make_reservation(self.hotel, self.rtype, room=self.room)
+        Reservation.objects.filter(pk=res.pk).update(primary_guest=guest)
+        res.refresh_from_db()
+        before = self._count()
+        stay = CheckInService.execute(
+            self.hotel, reservation=res, reservation_line=line, room=self.room,
+            user=self.manager,
+        )
+        self.assertEqual(self._count(), before)  # no new guest
+        self.assertEqual(stay.primary_guest_id, guest.id)
+
+    def test_expired_window_rejected_before_guest_is_created(self):
+        from apps.common.exceptions import StayWindowExpired
+        from apps.stays.services import CheckInService
+
+        # A fully-elapsed window (check_out <= business date) is refused by the H2
+        # guard, which runs BEFORE the guest derivation -> no guest is ever created.
+        res, line = make_reservation(
+            self.hotel, self.rtype, room=self.room,
+            ci=D1 - timedelta(days=5), co=D1 - timedelta(days=3),
+        )
+        Reservation.objects.filter(pk=res.pk).update(
+            primary_guest=None, primary_guest_national_id="NOGUEST1"
+        )
+        res.refresh_from_db()
+        before = self._count()
+        with self.assertRaises(StayWindowExpired):
+            CheckInService.execute(
+                self.hotel, reservation=res, reservation_line=line, room=self.room,
+                user=self.manager,
+            )
+        self.assertEqual(self._count(), before)  # rejected check-in created no guest
+
+    def test_check_in_derives_blocked_reservation_guest_is_refused(self):
+        from apps.common.exceptions import GuestBlocked
+        from apps.guests.services import block_guest
+        from apps.stays.services import CheckInService
+
+        guest = make_guest(self.hotel, name="Banned")
+        block_guest(guest, reason="fraud", user=self.manager)
+        res, line = make_reservation(self.hotel, self.rtype, room=self.room)
+        Reservation.objects.filter(pk=res.pk).update(primary_guest=guest)
+        res.refresh_from_db()
+        # A newly-banned linked guest is refused server-side at check-in (Decision 8).
+        with self.assertRaises(GuestBlocked):
+            CheckInService.execute(
+                self.hotel, reservation=res, reservation_line=line, room=self.room,
+                user=self.manager,
+            )
+        self.assertFalse(
+            Stay.objects.filter(hotel=self.hotel, reservation=res).exists()
+        )

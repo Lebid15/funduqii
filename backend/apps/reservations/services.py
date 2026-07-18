@@ -488,6 +488,50 @@ def _line_snapshot_for_write(line, *, prior_line, hotel, user):
     return explicit_m, default_currency
 
 
+def build_reservation_identity(source, *, guest_id=None) -> dict:
+    """Build the central guest-identity mapping (input to
+    :func:`apps.guests.identity.resolve_or_create_guest`) from a reservation's
+    primary-guest SNAPSHOT.
+
+    ``source`` is either the create-time ``fields`` dict or a ``Reservation``
+    instance, so the SAME snapshot→identity mapping is used by
+    :func:`create_reservation` (booking) and ``CheckInService`` (check-in derive).
+    Only the ban-and-identity keys — national id, PASSPORT document number, and the
+    raw phone (canonicalized strictly inside the service) — plus the profile fields
+    are forwarded. A driving-license / 'other' document is deliberately NOT treated
+    as a passport (Decision 4). ``guest_id`` (an explicit reuse target) is added
+    only when provided.
+    """
+    get = (
+        source.get
+        if isinstance(source, dict)
+        else (lambda key: getattr(source, key, None))
+    )
+    doc_type = (get("primary_guest_document_type") or "").strip()
+    doc_number = (get("primary_guest_document_number") or "").strip()
+    identity = {
+        "national_id": (get("primary_guest_national_id") or ""),
+        # Only a PASSPORT document number is an identity / ban key (Decision 4);
+        # ``DocumentType.PASSPORT`` == "passport".
+        "passport": doc_number if doc_type == "passport" else "",
+        "phone": (get("primary_guest_phone") or ""),
+        "full_name": (get("primary_guest_name") or ""),
+        "first_name": (get("primary_guest_first_name") or ""),
+        "last_name": (get("primary_guest_last_name") or ""),
+        "father_name": (get("primary_guest_father_name") or ""),
+        "mother_name": (get("primary_guest_mother_name") or ""),
+        # ``Guest.nationality`` is max_length=80 while the snapshot allows 100 —
+        # truncate to the Guest column width so a create can never overflow on
+        # PostgreSQL (mirrors the previous _create_primary_guest behaviour).
+        "nationality": (get("primary_guest_nationality") or "")[:80],
+        "email": (get("primary_guest_email") or ""),
+        "date_of_birth": get("primary_guest_date_of_birth"),
+    }
+    if guest_id is not None:
+        identity["guest_id"] = guest_id
+    return identity
+
+
 @transaction.atomic
 def create_reservation(
     hotel,
@@ -500,6 +544,7 @@ def create_reservation(
     idempotency_key=None,
     operation="reservation",
     idempotency_extra=None,
+    allow_create=True,
     **fields,
 ) -> Reservation:
     """Create a reservation with its room lines after an availability check.
@@ -529,6 +574,16 @@ def create_reservation(
     ``primary_guest`` (a ``Guest``) in ``fields`` links the reservation to the
     central directory and freezes a faithful structured snapshot from it. The
     call stays backward compatible: callers that pass neither still work.
+
+    ``allow_create`` (Guests central identity — W3, Decision 15) governs how the
+    primary guest is turned into a central ``Guest``:
+
+    * ``True`` (default; authenticated console / wizard / instant paths) — the
+      identity service reuses/creates + LINKS one canonical guest and runs the ban
+      check on the normalized identity.
+    * ``False`` (public website, Decision 10) — the ban check still runs, but NO
+      central guest is created and none is linked: the reservation stays a pure
+      snapshot and is linked later at operational confirm / check-in.
     """
     check_in = fields["check_in_date"]
     check_out = fields["check_out_date"]
@@ -575,22 +630,6 @@ def create_reservation(
             replay._idempotent_replay = True
             return replay
 
-    # Guests final closure: a guest blocked in THIS hotel gets no new
-    # bookings. Reservations hold snapshots (no guest FK), so the guard
-    # matches by exact document/phone — a fresh Guest row for the same
-    # person cannot sidestep the block. Applies to every flow that creates
-    # a reservation (console, wizard, instant, public site).
-    from apps.common.exceptions import GuestBlocked
-    from apps.guests.services import find_blocked_guest_matching
-
-    blocked = find_blocked_guest_matching(
-        hotel,
-        phone=fields.get("primary_guest_phone", ""),
-        document_number=fields.get("primary_guest_document_number", ""),
-    )
-    if blocked is not None:
-        raise GuestBlocked({"guest": blocked.id})
-
     # Backend-authoritative capacity: total persons (1 primary + adult
     # companions + children) must fit the selected rooms' max_capacity.
     _enforce_capacity(lines, fields, occupants)
@@ -615,6 +654,37 @@ def create_reservation(
         AvailabilityService.ensure_can_book(
             hotel, _book_payload(lines), check_in, check_out
         )
+
+    # Guests central identity (W3 integration, Decision 15). Turn the primary guest
+    # into ONE canonical central Guest through the SINGLE identity service, AFTER the
+    # idempotent-replay early return above (a replay creates NO new guest) and AFTER
+    # the validation guards, BEFORE the reservation row is written. The service runs
+    # the ban check on the NORMALIZED identity (national id + passport + canonical
+    # phone) for EVERY case — an explicit linked guest (passed as ``guest_id``) or a
+    # pure snapshot — closing the fresh-guest bypass the old raw
+    # ``find_blocked_guest_matching`` left open. A GuestBlocked /
+    # GuestIdentityConflict / invalid-phone raises INSIDE this atomic and rolls the
+    # WHOLE reservation back with no side effects; a guest it creates is rolled back
+    # too if a later step fails (same atomic). The creation fingerprint above stays
+    # on the SNAPSHOT (never the guest PK), so idempotency is unchanged.
+    from apps.guests.identity import resolve_or_create_guest
+
+    explicit_guest = fields.get("primary_guest")
+    resolved_guest = resolve_or_create_guest(
+        hotel,
+        identity=build_reservation_identity(
+            fields,
+            guest_id=explicit_guest.id if explicit_guest is not None else None,
+        ),
+        user=user,
+        allow_create=allow_create,
+    )
+    # Link the central guest on the authenticated paths (allow_create=True). A public
+    # submission (Decision 10, allow_create=False) never CREATES a guest and stays a
+    # pure snapshot — it is linked later at operational confirm / check-in; the ban
+    # check above still ran for it.
+    if allow_create and resolved_guest is not None:
+        fields["primary_guest"] = resolved_guest
 
     actor = _actor(user)
     # Round 3 §7.3 + S6 remediation — pin the PRE-RESERVED number by consuming the

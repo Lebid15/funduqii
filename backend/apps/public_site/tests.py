@@ -350,8 +350,14 @@ class PublicBookingTests(APITestCase, PublicMixin):
         )
 
     def test_tokens_unique_and_long(self):
-        t1 = self.book("bookme", self.room_type).data["manage_token"]
-        t2 = self.book("bookme", self.room_type).data["manage_token"]
+        # Guests central identity (W3): two DISTINCT bookings (different guest phone
+        # -> different deterministic idempotency key) get their own unique tokens.
+        t1 = self.book(
+            "bookme", self.room_type, guest_phone="+90 555 111"
+        ).data["manage_token"]
+        t2 = self.book(
+            "bookme", self.room_type, guest_phone="+90 555 222"
+        ).data["manage_token"]
         self.assertNotEqual(t1, t2)
         self.assertGreaterEqual(len(t1), 32)
 
@@ -387,7 +393,9 @@ class ManageBookingTests(APITestCase, PublicMixin):
         self.assertEqual(self.manage(token="wrong-token").status_code, 404)
 
     def test_another_bookings_token_404(self):
-        other = self.book("manage", self.room_type)
+        # A genuinely DIFFERENT booking (different guest phone -> different
+        # deterministic idempotency key, so it is not collapsed onto setUp's).
+        other = self.book("manage", self.room_type, guest_phone="+90 555 999")
         self.assertEqual(
             self.manage(
                 reference=other.data["reference"],
@@ -579,4 +587,61 @@ class RegressionTests(APITestCase):
         self.client.force_authenticate()
         self.assertEqual(
             self.client.get(reverse("public_site:hotel-list")).status_code, 200
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Guests central identity (W3) — public submission (Decision 10)                #
+# --------------------------------------------------------------------------- #
+
+
+class PublicCentralIdentityTests(APITestCase, PublicMixin):
+    """A public booking passes ``allow_create=False`` down to create_reservation:
+    NO central guest is created (pure snapshot, linked later), the identity is
+    ban-checked WITHOUT leaking the reason, and a deterministic idempotency key
+    collapses duplicate submissions onto the ORIGINAL booking."""
+
+    def setUp(self):
+        self.hotel, self.settings_obj, self.room_type = make_public_hotel("pci")
+
+    def _guest_count(self):
+        from apps.guests.models import Guest
+
+        return Guest.objects.filter(hotel=self.hotel).count()
+
+    def test_public_booking_creates_no_central_guest_and_stays_pending(self):
+        before = self._guest_count()
+        r = self.book("pci", self.room_type)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self._guest_count(), before)  # no guest created
+        reservation = Reservation.objects.get(
+            reservation_number=r.data["reference"]
+        )
+        self.assertIsNone(reservation.primary_guest_id)  # snapshot only
+        self.assertEqual(reservation.status, ReservationStatus.HELD)  # stays pending
+
+    def test_duplicate_submission_is_idempotent(self):
+        first = self.book("pci", self.room_type)
+        second = self.book("pci", self.room_type)  # byte-identical payload
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(first.data["reference"], second.data["reference"])
+        # Exactly ONE reservation exists — the duplicate did not create a second.
+        self.assertEqual(Reservation.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_public_booking_ban_checked_without_reason_leak(self):
+        from apps.guests.models import Guest
+        from apps.guests.services import block_guest
+
+        blocked = Guest.objects.create(
+            hotel=self.hotel, full_name="Banned", phone="+905550000000"
+        )
+        block_guest(blocked, reason="fraud", user=None)
+        r = self.book("pci", self.room_type, guest_phone="+905550000000")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["code"], "guest_blocked")
+        self.assertNotIn("fraud", str(r.data))
+        # The refused booking created nothing.
+        self.assertEqual(
+            Reservation.objects.filter(hotel=self.hotel).count(), 0
         )

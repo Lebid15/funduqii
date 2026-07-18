@@ -182,7 +182,7 @@ class CheckInService:
         reservation,
         reservation_line=None,
         room=None,
-        primary_guest,
+        primary_guest=None,
         companions=(),
         check_in_notes="",
         user=None,
@@ -218,6 +218,28 @@ class CheckInService:
                     "business_date": str(business_date),
                 }
             )
+
+        # Guests central identity (W3, Decision 15): when the caller did not pass a
+        # primary guest (e.g. a public booking that carries only a snapshot with no
+        # guest FK yet), DERIVE it now — deliberately AFTER the arrival-date guard and
+        # the H2 expired-window guard above, so a rejected check-in NEVER creates a
+        # guest. Prefer the reservation's already-linked guest; otherwise resolve /
+        # create ONE canonical central guest from the reservation snapshot through the
+        # SINGLE identity service (ban + conflict + concurrency handled there — any of
+        # them raises inside this atomic and rolls the whole check-in back).
+        if primary_guest is None:
+            if reservation.primary_guest_id is not None:
+                primary_guest = reservation.primary_guest
+            else:
+                from apps.guests.identity import resolve_or_create_guest
+                from apps.reservations.services import build_reservation_identity
+
+                primary_guest = resolve_or_create_guest(
+                    hotel,
+                    identity=build_reservation_identity(reservation),
+                    user=user,
+                    allow_create=True,
+                )
 
         if reservation_line is not None:
             if reservation_line.reservation_id != reservation.id:
@@ -862,42 +884,33 @@ def _compose_occupant_name(occupant) -> str:
 
 
 def _guest_from_occupant(hotel, occupant, *, user=None):
-    """Get-or-create a hotel-scoped ``Guest`` for an occupant with no guest link.
+    """Resolve or create a hotel-scoped ``Guest`` for an occupant with no guest link,
+    through the ONE central identity service (Guests central identity — W3).
 
-    Reuses an existing guest by NORMALIZED national ID — the same key the partial
-    per-hotel national-id unique constraint uses (see
-    ``orchestration._resolve_existing_primary_guest``) —
-    so a differently-formatted national ID reuses the existing guest instead of
-    creating a duplicate that would then trip the constraint and roll the whole
-    check-in back; the promotion stays idempotent. Otherwise a lightweight Guest
-    is created from the occupant's structured snapshot. The generic
-    ``document_type``/``document_number`` are deliberately NOT copied — that would
-    risk tripping the per-hotel document uniqueness constraint and roll back.
+    The service reuses an existing guest by the NORMALIZED national id (a differently
+    formatted id reuses the same row instead of creating a duplicate that would trip
+    the per-hotel unique constraint and roll the whole check-in back), reactivates +
+    audits an inactive match, ban-checks + conflict-checks the identity, refetches a
+    concurrency race winner, and otherwise creates a lightweight guest — all
+    deterministically, so the promotion stays idempotent. The occupant snapshot
+    carries no phone / passport document, so only the national id + the name / profile
+    fields form the identity; the generic document is deliberately NOT promoted to a
+    passport (which could trip the per-hotel document uniqueness constraint).
     """
-    from apps.guests.models import Guest
-    from apps.guests.normalize import normalize_id
+    from apps.guests.identity import resolve_or_create_guest
 
-    national_id = (occupant.national_id or "").strip()
-    national_id_normalized = normalize_id(national_id)
-    if national_id_normalized:
-        existing = Guest.objects.filter(
-            hotel=hotel, national_id_normalized=national_id_normalized
-        ).first()
-        if existing is not None:
-            return existing
-    actor = user if getattr(user, "is_authenticated", False) else None
-    return Guest.objects.create(
-        hotel=hotel,
-        full_name=_compose_occupant_name(occupant),
-        first_name=(occupant.first_name or ""),
-        last_name=(occupant.last_name or ""),
-        father_name=(occupant.father_name or ""),
-        mother_name=(occupant.mother_name or ""),
-        national_id=national_id,
-        nationality=(occupant.nationality or "")[:80],
-        date_of_birth=occupant.date_of_birth,
-        created_by=actor,
-        updated_by=actor,
+    identity = {
+        "national_id": (occupant.national_id or "").strip(),
+        "full_name": _compose_occupant_name(occupant),
+        "first_name": (occupant.first_name or ""),
+        "last_name": (occupant.last_name or ""),
+        "father_name": (occupant.father_name or ""),
+        "mother_name": (occupant.mother_name or ""),
+        "nationality": (occupant.nationality or "")[:80],
+        "date_of_birth": occupant.date_of_birth,
+    }
+    return resolve_or_create_guest(
+        hotel, identity=identity, user=user, allow_create=True
     )
 
 
