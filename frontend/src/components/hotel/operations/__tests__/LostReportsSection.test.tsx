@@ -74,12 +74,44 @@ import {
   unmatchLostReport,
 } from "@/lib/api/operations";
 import { listGuests } from "@/lib/api/guests";
-import type { LostReportListItem, PaginatedResponse } from "@/lib/api/types";
+import type {
+  LostReportListItem,
+  MatchedFoundItemSummary,
+  PaginatedResponse,
+} from "@/lib/api/types";
+import { lostReportStatusTone } from "@/lib/format";
 import { LostReportsSection } from "../LostReportsSection";
 import { apiError, makeLfItem, renderWithProviders } from "@/test-utils";
 
 function page<T>(results: T[], count = results.length): PaginatedResponse<T> {
   return { count, next: null, previous: null, results };
+}
+
+/** A matched-found-item summary (defaults: a NORMAL, non-sensitive match). Pass
+ * `requires_strong_claim_proof: true` to drive the sensitive handover path. */
+function matchedSummary(
+  overrides: Partial<MatchedFoundItemSummary> = {},
+): MatchedFoundItemSummary {
+  return {
+    item_number: "LF00009",
+    title: "Silver phone",
+    category: "electronics",
+    requires_strong_claim_proof: false,
+    ...overrides,
+  };
+}
+
+/** A report already in the `matched` state, carrying a matched-item summary. */
+function matchedReport(
+  summary: Partial<MatchedFoundItemSummary> = {},
+  report: Partial<LostReportListItem> = {},
+): LostReportListItem {
+  return makeLrReport({
+    status: "matched",
+    matched_found_item: 9,
+    matched_found_item_summary: matchedSummary(summary),
+    ...report,
+  });
 }
 
 function makeLrReport(overrides: Partial<LostReportListItem> = {}): LostReportListItem {
@@ -122,6 +154,14 @@ function render() {
 /** Open the state-computed "More" menu for the (single) card on screen. */
 function openMenu() {
   fireEvent.click(screen.getByRole("button", { name: "More" }));
+}
+
+/** Render one matched report and open its handover dialog. */
+async function openHandover(report: LostReportListItem) {
+  reports([report]);
+  render();
+  fireEvent.click(await screen.findByRole("button", { name: "Hand over" }));
+  return screen.findByRole("dialog");
 }
 
 beforeEach(() => {
@@ -206,13 +246,7 @@ describe("LostReportsSection — primary action + menu per state", () => {
   });
 
   it("matched: primary Hand over plus an Unmatch menu item, and the matched summary", async () => {
-    reports([
-      makeLrReport({
-        status: "matched",
-        matched_found_item: 9,
-        matched_found_item_summary: { item_number: "LF00009", title: "Silver phone" },
-      }),
-    ]);
+    reports([matchedReport()]);
     render();
     expect(await screen.findByRole("button", { name: "Hand over" })).toBeInTheDocument();
     expect(screen.getByText("LF00009")).toBeInTheDocument();
@@ -334,38 +368,8 @@ describe("LostReportsSection — the manual MATCH flow", () => {
 });
 
 describe("LostReportsSection — handover / unmatch / close / cancel", () => {
-  it("hands over the matched item", async () => {
-    reports([
-      makeLrReport({
-        status: "matched",
-        matched_found_item: 9,
-        matched_found_item_summary: { item_number: "LF00009", title: "Silver phone" },
-      }),
-    ]);
-    render();
-    fireEvent.click(await screen.findByRole("button", { name: "Hand over" }));
-    const dialog = await screen.findByRole("dialog");
-
-    fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
-      target: { value: "Sara Owner" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
-    await waitFor(() =>
-      expect(handoverLostReport).toHaveBeenCalledWith(
-        1,
-        expect.objectContaining({ recipient_name: "Sara Owner" }),
-      ),
-    );
-  });
-
   it("requires a reason then unmatches", async () => {
-    reports([
-      makeLrReport({
-        status: "matched",
-        matched_found_item: 9,
-        matched_found_item_summary: { item_number: "LF00009", title: "Silver phone" },
-      }),
-    ]);
+    reports([matchedReport()]);
     render();
     await screen.findByText("Blue backpack");
     openMenu();
@@ -430,5 +434,124 @@ describe("LostReportsSection — a11y focus restore", () => {
     await waitFor(() => expect(setLostReportStatus).toHaveBeenCalledWith(1, "searching"));
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toHaveClass("op-results");
+  });
+});
+
+describe("LostReportsSection — handover contract (conditional proof + recipient)", () => {
+  it("renders NO proof section for a NORMAL matched item", async () => {
+    const dialog = await openHandover(matchedReport({ requires_strong_claim_proof: false }));
+    expect(within(dialog).queryByLabelText("Proof of ownership")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Proof reference")).not.toBeInTheDocument();
+  });
+
+  it("renders the proof section for a SENSITIVE matched item", async () => {
+    const dialog = await openHandover(
+      matchedReport({ requires_strong_claim_proof: true, category: "money" }),
+    );
+    expect(within(dialog).getByLabelText("Proof of ownership")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Proof reference")).toBeInTheDocument();
+  });
+
+  it("sensitivity follows the MATCHED item, not the report's own category", async () => {
+    // Report category is a sensitive-looking "documents", but the matched item is
+    // NORMAL — no proof section must appear.
+    const dialog = await openHandover(
+      matchedReport({ requires_strong_claim_proof: false }, { category: "documents" }),
+    );
+    expect(within(dialog).queryByLabelText("Proof reference")).not.toBeInTheDocument();
+  });
+
+  it("blocks a name-only normal handover with recipientContactRequired", async () => {
+    const dialog = await openHandover(matchedReport());
+    fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
+      target: { value: "Sara Owner" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
+    expect(
+      await within(dialog).findByText("Enter the recipient's phone or link a known guest."),
+    ).toBeInTheDocument();
+    expect(handoverLostReport).not.toHaveBeenCalled();
+  });
+
+  it("submits a normal handover once a phone is provided (no proof fields sent)", async () => {
+    const dialog = await openHandover(matchedReport());
+    fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
+      target: { value: "Sara Owner" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Recipient phone"), {
+      target: { value: "0555123456" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
+    await waitFor(() =>
+      expect(handoverLostReport).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          recipient_name: "Sara Owner",
+          recipient_phone: "0555123456",
+        }),
+      ),
+    );
+    const body = vi.mocked(handoverLostReport).mock.calls[0][1];
+    expect(body).not.toHaveProperty("claim_proof_type");
+    expect(body).not.toHaveProperty("claim_proof_reference");
+  });
+
+  it("submits a name-only handover when the report is linked to a guest", async () => {
+    const dialog = await openHandover(
+      matchedReport({}, { guest: 5, guest_name: "Ali Guest" }),
+    );
+    // The linked-guest hint is shown; a phone is not required.
+    expect(within(dialog).getByText(/Linked guest/)).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
+      target: { value: "Ali Guest" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
+    await waitFor(() => expect(handoverLostReport).toHaveBeenCalledTimes(1));
+  });
+
+  it("requires proof for a sensitive matched item, then submits with it", async () => {
+    const dialog = await openHandover(
+      matchedReport({ requires_strong_claim_proof: true, category: "money" }),
+    );
+    fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
+      target: { value: "Sara Owner" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Recipient phone"), {
+      target: { value: "0555123456" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
+    expect(
+      await within(dialog).findByText("Choose a proof type and enter its reference."),
+    ).toBeInTheDocument();
+    expect(handoverLostReport).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText("Proof reference"), {
+      target: { value: "ID-1234" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hand over" }));
+    await waitFor(() =>
+      expect(handoverLostReport).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          claim_proof_type: "identity_last4",
+          claim_proof_reference: "ID-1234",
+        }),
+      ),
+    );
+  });
+});
+
+describe("lostReportStatusTone — six distinct tones (owner decision 3)", () => {
+  it("maps each status to its decided tone", () => {
+    expect(lostReportStatusTone("open")).toBe("info");
+    expect(lostReportStatusTone("searching")).toBe("warning");
+    expect(lostReportStatusTone("matched")).toBe("primary");
+    expect(lostReportStatusTone("returned")).toBe("success");
+    expect(lostReportStatusTone("closed_unfound")).toBe("neutral");
+    expect(lostReportStatusTone("cancelled")).toBe("danger");
+  });
+
+  it("gives open and closed_unfound visually distinct tones", () => {
+    expect(lostReportStatusTone("open")).not.toBe(lostReportStatusTone("closed_unfound"));
   });
 });

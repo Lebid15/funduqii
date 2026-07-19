@@ -158,11 +158,15 @@ describe("LostFoundTab — handover (normal category) requires name + phone-or-g
     ).toBeInTheDocument();
     expect(returnLostFoundItem).not.toHaveBeenCalled();
 
-    // Name only (no phone, no linked guest) → still blocked.
+    // Name only (no phone, no linked guest) → blocked with the contact-required
+    // message (unified with the LR handover contract).
     fireEvent.change(within(dialog).getByLabelText("Recipient name"), {
       target: { value: "Ali Owner" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Return" }));
+    expect(
+      await within(dialog).findByText("Enter the recipient's phone or link a known guest."),
+    ).toBeInTheDocument();
     expect(returnLostFoundItem).not.toHaveBeenCalled();
 
     // Name + phone → accepted (no proof fields for a non-sensitive item).

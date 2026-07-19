@@ -851,7 +851,8 @@ function HandOverModal({
     // NORMAL: recipient name is always required; a phone is required unless the
     // item is tied to a linked guest (phone-OR-linked-guest).
     if (!name.trim()) return setError(t.operations.errors.claimantRequired);
-    if (!phone.trim() && !hasLinkedGuest) return setError(t.operations.errors.claimantRequired);
+    if (!phone.trim() && !hasLinkedGuest)
+      return setError(t.operations.errors.recipientContactRequired);
     if (sensitive && (!proofType || !proofReference.trim())) {
       return setError(lf.proofRequired);
     }

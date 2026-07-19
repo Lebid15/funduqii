@@ -399,7 +399,10 @@ export function LostReportsSection({
       label: lr.stats.open,
       value: stats.open,
       icon: FileSearch,
-      tone: "neutral",
+      // Tile tone MIRRORS lostReportStatusTone("open") = "info" (owner decision 3
+      // counter→card thread). SmartStatTone excludes `vip`, so the value is set
+      // explicitly rather than derived from the BadgeTone-returning helper.
+      tone: "info",
       active: status === "open",
       onFilter: () => applyStatusFilter("open"),
     },
@@ -408,7 +411,8 @@ export function LostReportsSection({
       label: lr.stats.searching,
       value: stats.searching,
       icon: Search,
-      tone: "info",
+      // Mirrors lostReportStatusTone("searching") = "warning".
+      tone: "warning",
       active: status === "searching",
       onFilter: () => applyStatusFilter("searching"),
     },
@@ -417,7 +421,8 @@ export function LostReportsSection({
       label: lr.stats.matched,
       value: stats.matched,
       icon: Link2,
-      tone: "warning",
+      // Mirrors lostReportStatusTone("matched") = "primary".
+      tone: "primary",
       active: status === "matched",
       onFilter: () => applyStatusFilter("matched"),
     },
@@ -997,11 +1002,15 @@ function CandidatePickerModal({
 }
 
 /**
- * Hand over the matched item to its owner. A recipient name is required; the
- * proof-of-ownership fields are always offered (a hint notes that SENSITIVE
- * matched items require them). The backend enforces the proof rule against the
- * matched item's category and rejects a missing proof with 422
- * `claim_proof_required`, surfaced here as a translated error.
+ * Hand over the matched item to its owner — the SAME contract as the found-item
+ * HandOverModal. A recipient name is always required; a recipient phone is
+ * required UNLESS the report is linked to a known guest. Sensitivity comes from
+ * the MATCHED item (`matched_found_item_summary.requires_strong_claim_proof`),
+ * NOT the report's own category: for a sensitive match the proof fields are
+ * shown and required, for a normal match there is no proof section at all. The
+ * backend re-enforces every rule (422 `claimant_required` /
+ * `recipient_contact_required` / `claim_proof_required`), surfaced here as a
+ * translated error.
  */
 function LrHandoverModal({
   report,
@@ -1023,6 +1032,12 @@ function LrHandoverModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Sensitivity is the MATCHED item's flag, never the report's own category. A
+  // report linked to a known guest makes the recipient phone optional (mirrors
+  // the found-item HandOverModal's `hasLinkedGuest`).
+  const sensitive = report?.matched_found_item_summary?.requires_strong_claim_proof === true;
+  const hasLinkedGuest = report?.guest != null;
+
   useEffect(() => {
     if (report) {
       setName("");
@@ -1037,7 +1052,14 @@ function LrHandoverModal({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!report) return;
+    // Recipient name is always required; a phone is required unless the report
+    // is tied to a linked guest; sensitive matches additionally need proof.
     if (!name.trim()) return setError(t.operations.errors.claimantRequired);
+    if (!phone.trim() && !hasLinkedGuest)
+      return setError(t.operations.errors.recipientContactRequired);
+    if (sensitive && (!proofType || !proofReference.trim())) {
+      return setError(lf.proofRequired);
+    }
     setBusy(true);
     setError(null);
     try {
@@ -1045,9 +1067,9 @@ function LrHandoverModal({
         recipient_name: name.trim(),
         recipient_phone: phone.trim(),
         note: note.trim(),
-        // Proof is optional client-side; sent only when provided. The backend
-        // enforces it for sensitive matched items (claim_proof_required 422).
-        ...(proofReference.trim()
+        // Proof travels ONLY for a sensitive match; the backend re-checks the
+        // matched item's own flag (claim_proof_required 422).
+        ...(sensitive
           ? { claim_proof_type: proofType, claim_proof_reference: proofReference.trim() }
           : {}),
       });
@@ -1081,6 +1103,12 @@ function LrHandoverModal({
       <form id="lr-handover-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
         <p className="muted">{lr.handoverHint}</p>
+        {hasLinkedGuest ? (
+          <Alert tone="info">
+            {lf.linkedGuest}
+            {report?.guest_name ? `: ${report.guest_name}` : ""}
+          </Alert>
+        ) : null}
         <div className="form-grid">
           <FormField label={lr.recipientName} htmlFor="lr-ho-name">
             <Input id="lr-ho-name" value={name} onChange={(e) => setName(e.target.value)} />
@@ -1089,27 +1117,35 @@ function LrHandoverModal({
             <Input id="lr-ho-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
           </FormField>
         </div>
-        <Alert tone="info">{lr.sensitiveHint}</Alert>
-        <div className="form-grid">
-          <FormField label={lr.proofType} htmlFor="lr-ho-prooftype">
-            <Select
-              id="lr-ho-prooftype"
-              value={proofType}
-              options={proofOptions}
-              onChange={(e) => setProofType(e.target.value as LostFoundClaimProofType)}
-            />
-          </FormField>
-          <FormField label={lr.proofReference} htmlFor="lr-ho-proofref">
-            <Input
-              id="lr-ho-proofref"
-              value={proofReference}
-              onChange={(e) => setProofReference(e.target.value)}
-            />
-          </FormField>
-        </div>
+        {/* Faint contact rule (mirrors the found HandOverModal): phone-or-guest. */}
+        <p className="muted small">{lf.handoverContactHint}</p>
         <FormField label={lr.note} htmlFor="lr-ho-note">
           <Input id="lr-ho-note" value={note} onChange={(e) => setNote(e.target.value)} />
         </FormField>
+        {/* Proof section ONLY for a sensitive MATCHED item — mirrors the
+            found-item HandOverModal (warning tone + required proof). */}
+        {sensitive ? (
+          <>
+            <Alert tone="warning">{lf.sensitiveHint}</Alert>
+            <div className="form-grid">
+              <FormField label={lf.proofTypeLabel} htmlFor="lr-ho-prooftype">
+                <Select
+                  id="lr-ho-prooftype"
+                  value={proofType}
+                  options={proofOptions}
+                  onChange={(e) => setProofType(e.target.value as LostFoundClaimProofType)}
+                />
+              </FormField>
+              <FormField label={lf.proofReference} htmlFor="lr-ho-proofref">
+                <Input
+                  id="lr-ho-proofref"
+                  value={proofReference}
+                  onChange={(e) => setProofReference(e.target.value)}
+                />
+              </FormField>
+            </div>
+          </>
+        ) : null}
       </form>
     </Modal>
   );

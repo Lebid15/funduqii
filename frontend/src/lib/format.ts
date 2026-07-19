@@ -309,17 +309,17 @@ export function lostFoundStatusTone(status: LostFoundStatus): BadgeTone {
 export function lostReportStatusTone(status: LostReportStatus): BadgeTone {
   switch (status) {
     case "open":
-      return "neutral";
-    case "searching":
       return "info";
-    case "matched":
+    case "searching":
       return "warning";
+    case "matched":
+      return "primary";
     case "returned":
       return "success";
-    case "cancelled":
-      return "danger";
     case "closed_unfound":
       return "neutral";
+    case "cancelled":
+      return "danger";
     default:
       return "neutral";
   }

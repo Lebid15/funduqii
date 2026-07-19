@@ -2205,12 +2205,16 @@ export type LostReportStatus =
   | "closed_unfound"
   | "cancelled";
 
-/** Compact summary of the found item a report is matched to. Deliberately just
- * the number + title — the found item's own sensitive phone / proof fields are
- * never surfaced through a lost-report payload. */
+/** Compact summary of the found item a report is matched to. Carries the number,
+ * title, category and a `requires_strong_claim_proof` flag so the handover flow
+ * can gate the proof fields on the MATCHED ITEM's sensitivity. The found item's
+ * own sensitive phone / proof reference are still never surfaced through a
+ * lost-report payload. */
 export interface MatchedFoundItemSummary {
   item_number: string;
   title: string;
+  category: LostFoundCategory;
+  requires_strong_claim_proof: boolean;
 }
 
 export interface LostReportListItem {
