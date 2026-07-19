@@ -1792,3 +1792,206 @@ class RoomEffectiveFeaturesTests(APITestCase):
         room = Room.objects.get(hotel=self.hotel, number="150")
         self.assertEqual(room.feature_additions, [])
         self.assertEqual(room.feature_exclusions, [])
+
+
+# --- Compact room OPTIONS feed (operations-tab dropdowns, decision 16) --------
+
+
+class RoomOptionsTests(APITestCase):
+    """GET /rooms/options/ — COMPACT, hotel-scoped, server-side searchable,
+    paginated (DefaultPagination) options feed for the operations-tab dropdowns.
+
+    Fixes the silent >100-rooms drop (the dropdowns pulled ``rooms/?page_size=100``)
+    WITHOUT an unbounded all-rooms response. This is ADDITIVE — the room list
+    endpoint is unaffected (asserted below).
+    """
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "mgr@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.ground = make_floor(self.hotel, name="Ground", number="0")
+        self.first = make_floor(self.hotel, name="First", number="1", sort_order=2)
+        self.std = make_type(self.hotel, code="STD", name="Standard")
+        self.deluxe = make_type(self.hotel, code="DLX", name="Deluxe")
+
+    def _url(self):
+        return reverse("rooms:room-options")
+
+    def _get(self, params=None, hotel=None):
+        return self.client.get(self._url(), params or {}, **HDR(hotel or self.hotel))
+
+    # --- permission ---------------------------------------------------------
+
+    def test_requires_rooms_view_permission(self):
+        staff = add_member(self.hotel, "np@x.com", perms=["reservations.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self._get().status_code, 403)
+
+    def test_staff_with_rooms_view_allowed(self):
+        staff = add_member(self.hotel, "v@x.com", perms=["rooms.view"])
+        self.client.force_authenticate(staff)
+        self.assertEqual(self._get().status_code, 200)
+
+    def test_unauthenticated_denied(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self._get().status_code, 401)
+
+    # --- server-side search -------------------------------------------------
+
+    def test_search_by_number(self):
+        make_room(self.hotel, self.ground, self.std, "101")
+        make_room(self.hotel, self.ground, self.std, "202")
+        rows = self._get({"search": "101"}).data["results"]
+        self.assertEqual([r["number"] for r in rows], ["101"])
+
+    def test_search_by_room_type_name(self):
+        make_room(self.hotel, self.ground, self.std, "101")  # Standard
+        make_room(self.hotel, self.first, self.deluxe, "301")  # Deluxe
+        rows = self._get({"search": "delux"}).data["results"]
+        self.assertEqual({r["number"] for r in rows}, {"301"})
+        self.assertEqual(rows[0]["room_type_name"], "Deluxe")
+
+    def test_search_by_floor_name(self):
+        make_room(self.hotel, self.ground, self.std, "101")  # Ground
+        make_room(self.hotel, self.first, self.std, "201")  # First
+        rows = self._get({"search": "first"}).data["results"]
+        self.assertEqual({r["number"] for r in rows}, {"201"})
+        self.assertEqual(rows[0]["floor_name"], "First")
+
+    def test_search_is_hotel_scoped(self):
+        make_room(self.hotel, self.ground, self.std, "101")
+        other = make_hotel(slug="other")
+        of = make_floor(other, name="OtherGround")
+        ot = make_type(other, code="OSTD", name="OtherStandard")
+        make_room(other, of, ot, "101")  # same number, different hotel
+        # A plain listing never leaks the other hotel's room...
+        self.assertEqual(self._get().data["count"], 1)
+        self.assertEqual(
+            {r["number"] for r in self._get().data["results"]}, {"101"}
+        )
+        # ...and neither does a search that WOULD match it by type/floor name.
+        self.assertEqual(self._get({"search": "OtherStandard"}).data["count"], 0)
+        self.assertEqual(self._get({"search": "OtherGround"}).data["count"], 0)
+
+    def test_other_hotel_rooms_never_appear(self):
+        make_room(self.hotel, self.ground, self.std, "101")
+        other = make_hotel(slug="other2")
+        of = make_floor(other)
+        ot = make_type(other, code="OT")
+        make_room(other, of, ot, "900")
+        numbers = {r["number"] for r in self._get().data["results"]}
+        self.assertNotIn("900", numbers)
+
+    # --- pagination / >100 rooms are NOT dropped ----------------------------
+
+    def test_pagination_envelope_and_default_page_size(self):
+        for i in range(30):
+            make_room(self.hotel, self.ground, self.std, str(100 + i))
+        data = self._get().data
+        self.assertEqual(data["count"], 30)
+        self.assertEqual(len(data["results"]), 25)  # DefaultPagination.page_size
+        self.assertIsNotNone(data["next"])  # page 2 reachable
+
+    def test_over_100_rooms_are_not_dropped(self):
+        # The exact bug this endpoint fixes: page_size=100 silently dropped every
+        # room past the first 100. Seed 105 rooms, walk EVERY page, and prove the
+        # union equals all 105 — the later rooms ARE reachable via pagination.
+        seeded = {str(100 + i) for i in range(105)}
+        for number in sorted(seeded):
+            make_room(self.hotel, self.ground, self.std, number)
+        collected = []
+        page = 1
+        while True:
+            data = self._get({"page": page}).data
+            self.assertEqual(data["count"], 105)
+            collected.extend(r["number"] for r in data["results"])
+            if not data["next"]:
+                break
+            page += 1
+            self.assertLessEqual(page, 20)  # guard against an infinite loop
+        self.assertEqual(len(collected), 105)  # no duplicates, none dropped
+        self.assertEqual(set(collected), seeded)  # every room reachable
+        # The rooms AFTER the first 100 are present (the precise regression).
+        self.assertTrue({"201", "202", "203", "204"}.issubset(set(collected)))
+
+    def test_page_size_is_capped_not_unbounded(self):
+        for i in range(105):
+            make_room(self.hotel, self.ground, self.std, str(100 + i))
+        # Even if a client asks for far more, DefaultPagination caps at 100 —
+        # proving this is NOT an unbounded all-rooms endpoint (decision 16).
+        data = self._get({"page_size": 500}).data
+        self.assertEqual(len(data["results"]), 100)
+        self.assertEqual(data["count"], 105)
+        self.assertIsNotNone(data["next"])
+
+    # --- compact payload ----------------------------------------------------
+
+    def test_payload_is_compact_only_four_fields(self):
+        make_room(
+            self.hotel, self.first, self.deluxe, "301", display_name="Sea view"
+        )
+        row = self._get().data["results"][0]
+        self.assertEqual(
+            set(row.keys()), {"id", "number", "floor_name", "room_type_name"}
+        )
+        self.assertEqual(row["number"], "301")
+        self.assertEqual(row["floor_name"], "First")
+        self.assertEqual(row["room_type_name"], "Deluxe")
+        # None of the heavy room-detail fields leak into the dropdown payload.
+        for heavy in (
+            "status",
+            "effective_features",
+            "feature_additions",
+            "display_name",
+            "is_active",
+            "created_at",
+        ):
+            self.assertNotIn(heavy, row)
+
+    # --- archived default ---------------------------------------------------
+
+    def test_archived_rooms_excluded_by_default(self):
+        make_room(self.hotel, self.ground, self.std, "101")
+        make_room(self.hotel, self.ground, self.std, "102", status="archived")
+        self.assertEqual(self._get().data["count"], 1)
+        self.assertEqual(
+            {r["number"] for r in self._get().data["results"]}, {"101"}
+        )
+
+    # --- N+1 ----------------------------------------------------------------
+
+    def test_no_n_plus_one_query_count_constant(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        # ONE room on the page, warm up, capture the baseline query count.
+        make_room(self.hotel, self.ground, self.std, "100")
+        self._get()  # warm any one-time setup
+        with CaptureQueriesContext(connection) as ctx:
+            resp1 = self._get()
+        self.assertEqual(len(resp1.data["results"]), 1)
+        baseline = len(ctx.captured_queries)
+
+        # Grow to several rooms across DIFFERENT floors and types (a naive
+        # serializer would issue a per-row query for floor_name/room_type_name);
+        # select_related keeps the count flat regardless of N.
+        make_room(self.hotel, self.first, self.deluxe, "101")
+        make_room(self.hotel, self.ground, self.deluxe, "102")
+        make_room(self.hotel, self.first, self.std, "103")
+        with self.assertNumQueries(baseline):
+            resp4 = self._get()
+        self.assertEqual(len(resp4.data["results"]), 4)
+
+    # --- the existing room list endpoint is unchanged -----------------------
+
+    def test_existing_room_list_endpoint_unchanged(self):
+        # Sanity: the additive options route does not disturb the room list — it
+        # still returns the full RoomSerializer shape (heavy fields options drops).
+        make_room(self.hotel, self.ground, self.std, "101")
+        row = self.client.get(
+            reverse("rooms:room-list"), **HDR(self.hotel)
+        ).data["results"][0]
+        self.assertIn("status", row)
+        self.assertIn("effective_features", row)
+        self.assertIn("room_type_code", row)

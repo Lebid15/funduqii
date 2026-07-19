@@ -5894,3 +5894,297 @@ a {
   gap: var(--card-action-gap);
   margin-inline-start: auto;
 }
+
+/* --- Operations — three-tab card UI (WP10) ---------------------------------
+ * A calm, card-based console for cleaning / maintenance / lost & found. The
+ * card mirrors the reservation card (status accent bar + quietly-divided
+ * regions), exposes ONE primary action and folds the rest into an accessible
+ * "More" menu. Token-only; no new colours. */
+.op-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+}
+/* Shared type bar atop the Lost-&-Found tab: the segmented record-kind toggle
+ * (found ↔ lost report — the TYPE FILTER) on one side, the two primary register
+ * buttons on the other. Token-only; wraps gracefully on narrow widths. */
+.op-typebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+}
+.op-typebar__toggle {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+.op-typebar__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* Candidate picker (the Match flow) — a compact, scrollable list of eligible
+ * found items, each a row with its identity plus a Select action. */
+.op-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 22rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.op-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.op-candidate__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+.op-candidate__title {
+  font-weight: var(--font-weight-medium);
+}
+.op-candidate__meta {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
+.op-tabpanel:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-lg);
+}
+/* The results area — a stable column holding the reserved status row (the
+ * background-refetch cue) above the card grid OR the empty state. Mirrors the
+ * guest-results family. It is ALSO the programmatic focus anchor after a card
+ * action re-renders the list: a11y M1 — if the acting control unmounted, focus
+ * lands here (labelled by the section) instead of falling to <body>. */
+.op-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.op-results:focus {
+  outline: none;
+}
+.op-results:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-lg);
+}
+/* The background-refetch cue lives in this ALWAYS-present row with a reserved
+ * min-height, so showing/hiding it never pushes the grid / empty state down
+ * (no vertical jump on filter/page change). */
+.op-results__status {
+  display: flex;
+  align-items: center;
+  min-height: 1.5rem;
+}
+/* Subtle inline "updating…" cue shown during a BACKGROUND refetch (filter/page
+ * change or a post-action reload). The cards / empty state stay mounted, so the
+ * full-screen loader never flickers after the first load. */
+.op-results__searching {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
+.op-results__searching .spinner {
+  width: 1rem;
+  height: 1rem;
+  border-width: 2px;
+}
+.op-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+.op-grid > [role="listitem"] {
+  display: flex;
+  min-width: 0;
+}
+.op-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  gap: var(--card-section-gap);
+  background: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-inline-start: 4px solid var(--op-accent, var(--color-border-strong));
+  border-radius: var(--radius-xl);
+  padding: var(--card-pad);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.op-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .op-card {
+    transition: none;
+  }
+  .op-card:hover {
+    transform: none;
+  }
+}
+.op-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-inline-gap);
+}
+.op-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-badge-gap);
+}
+.op-card__idrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--card-inline-gap);
+}
+.op-card__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-fg);
+  letter-spacing: var(--tracking-tight);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.op-card__number {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg-muted);
+  white-space: nowrap;
+  flex: none;
+}
+.op-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--color-border);
+}
+.op-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.op-card__fact dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.op-card__fact dt .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.op-card__fact dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+}
+.op-card__note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.op-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--card-action-gap);
+  margin-block-start: auto;
+  padding-block-start: var(--space-1);
+}
+.op-card__actions .op-card__primary {
+  flex: 1 1 auto;
+}
+/* Accessible "More" menu (menu-button pattern). The open container is lifted
+ * above later grid siblings so the popover is never clipped by a neighbour. */
+.op-menu {
+  position: relative;
+  flex: none;
+}
+.op-menu--open {
+  z-index: var(--z-overlay);
+}
+.op-menu__panel {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--space-1));
+  min-width: 13rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.op-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg);
+  text-align: start;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.op-menu__item:hover,
+.op-menu__item:focus-visible {
+  background: var(--color-surface-sunken);
+  outline: none;
+}
+.op-menu__item--danger {
+  color: var(--color-danger);
+}
+.op-menu__item .icon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.op-menu__item--danger .icon {
+  color: var(--color-danger);
+}

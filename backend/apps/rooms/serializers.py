@@ -285,6 +285,27 @@ class RoomSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class RoomOptionSerializer(serializers.ModelSerializer):
+    """COMPACT, read-only room representation for the operations tabs'
+    async-select dropdowns (decision 16).
+
+    Returns ONLY the fields a dropdown needs — ``id`` (the value),
+    ``number`` (the label) plus the resolved ``floor_name`` / ``room_type_name``
+    for a two-line option — and deliberately NONE of the heavy room detail
+    (status, notes, features, capacities, timestamps). ``floor_name`` and
+    ``room_type_name`` resolve from ``select_related`` joins done in the view, so
+    they add no per-row query (no N+1).
+    """
+
+    floor_name = serializers.CharField(source="floor.name", read_only=True)
+    room_type_name = serializers.CharField(source="room_type.name", read_only=True)
+
+    class Meta:
+        model = Room
+        fields = ["id", "number", "floor_name", "room_type_name"]
+        read_only_fields = fields
+
+
 class RoomWriteSerializer(serializers.ModelSerializer):
     # Write-only, CREATE-only: the initial operational status of the new room.
     # A room is never created as archived, and maintenance/out_of_service still

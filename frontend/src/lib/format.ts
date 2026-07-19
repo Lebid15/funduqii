@@ -10,6 +10,7 @@ import type {
   HousekeepingStatus,
   InvoiceStatus,
   LostFoundStatus,
+  LostReportStatus,
   MaintenanceStatus,
   OperationPriority,
   PostingStatus,
@@ -299,6 +300,25 @@ export function lostFoundStatusTone(status: LostFoundStatus): BadgeTone {
     case "returned":
       return "success";
     case "disposed":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function lostReportStatusTone(status: LostReportStatus): BadgeTone {
+  switch (status) {
+    case "open":
+      return "info";
+    case "searching":
+      return "warning";
+    case "matched":
+      return "primary";
+    case "returned":
+      return "success";
+    case "closed_unfound":
+      return "neutral";
+    case "cancelled":
       return "danger";
     default:
       return "neutral";

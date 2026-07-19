@@ -218,16 +218,127 @@ class RoomBlockedByMaintenance(FunduqiiAPIException):
     default_code = "room_blocked_by_maintenance"
 
 
+class RoomNotReleasable(FunduqiiAPIException):
+    """Central fail-closed release guard (WP1): a room becomes ``available``
+    ONLY as the result of a correct operational release cycle (cleaning
+    completion / inspection approval / maintenance close). Every direct or
+    external attempt to set ``available`` is refused here — no permission
+    (including ``rooms.status_update``) bypasses it.
+
+    ``details.reason`` is a single NEUTRAL marker — one of ``maintenance_block``,
+    ``active_housekeeping``, ``room_dirty`` or ``operational_block`` — so the
+    refusal never leaks internal operational detail (which request, which task).
+    Distinct from :class:`RoomBlockedByMaintenance`, which stays the maintenance-
+    specific 409 already asserted on existing operations paths."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This room cannot be made available directly; it must complete its "
+        "operational release cycle first."
+    )
+    default_code = "room_not_releasable"
+
+
 class ClaimantRequired(FunduqiiAPIException):
     status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     default_detail = "A claimant name (or linked guest) is required."
     default_code = "claimant_required"
 
 
+class ClaimProofRequired(FunduqiiAPIException):
+    """WP7 — a SENSITIVE lost-and-found item (money / jewelry / documents) may
+    only be handed over with stronger proof: a recipient name, a phone OR a
+    linked guest, and a ``claim_proof_type`` + ``claim_proof_reference``. It is
+    also raised when ``identity_last4`` carries more than four characters (a
+    privacy guard against storing a full id/passport/card number).
+
+    ``details.reason`` is a NEUTRAL marker — one of ``recipient_name_required``,
+    ``phone_or_guest_required``, ``proof_type_required``,
+    ``proof_reference_required`` or ``identity_last4_too_long`` — and NEVER
+    carries the proof value itself, so the 422 body cannot leak the reference."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = (
+        "This sensitive item requires proof of ownership before it can be "
+        "handed over: a recipient name, a phone or a linked guest, and a proof "
+        "type with its reference."
+    )
+    default_code = "claim_proof_required"
+
+
+class RecipientContactRequired(FunduqiiAPIException):
+    """Every handover (return) — for EVERY category, sensitive or normal —
+    must record HOW to reach the recipient: a phone OR a linked known guest.
+    Raised on a NORMAL-category return/handover when the recipient name is
+    present but BOTH a phone and a linked guest are missing (the sensitive
+    categories already enforce this via :class:`ClaimProofRequired`). It carries
+    NO value — never the (absent) phone, the recipient name, or any guest data —
+    so the 422 body cannot leak contact information.
+
+    Distinct from :class:`ClaimantRequired` (missing recipient NAME): this one
+    fires only once a name is present but no reachable contact is."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = "Enter the recipient's phone or link a known guest."
+    default_code = "recipient_contact_required"
+
+
 class DisposalReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A reason is required to dispose of this item."
     default_code = "disposal_reason_required"
+
+
+# --- Lost report ↔ found item matching (LOST-REPORT cycle) -------------------
+
+
+class FoundItemNotMatchable(FunduqiiAPIException):
+    """A lost report may only be matched to a found item that is still holdable —
+    matchable = NOT in {returned, disposed, closed}. A found/stored/claimed item
+    is matchable; an already-returned / disposed / closed item is not (there is
+    nothing left to hand over). ``details.status`` is the neutral current status
+    marker — it never leaks the item's sensitive claimant/proof data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item can no longer be matched to a lost report."
+    default_code = "found_item_not_matchable"
+
+
+class FoundItemAlreadyMatched(FunduqiiAPIException):
+    """A found item can be ACTIVELY matched by at most ONE lost report. Raised
+    when a second report tries to claim an item that another matched report
+    already holds — including the concurrent-insert race translated from the DB
+    partial-unique ``uniq_matched_found_item_active_report``. Carries only the
+    neutral ``details.item`` id, never the other report's data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item is already matched to another lost report."
+    default_code = "found_item_already_matched"
+
+
+class FoundItemActivelyMatched(FunduqiiAPIException):
+    """A found item that is ACTIVELY matched by a lost report (report
+    status == ``matched``) may NOT be independently disposed / returned /
+    claimed through the standalone lost-&-found actions — that would leave the
+    report dangling as ``matched`` to a gone item and risk a handover to the
+    wrong party. The item must be released first via the report's ``unmatch``
+    (which requires a documented reason) or handed over through the atomic
+    ``hand_over_matched_report`` path. ``details.reason`` is a neutral marker
+    (``actively_matched``); it never leaks the matching report's data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item is actively matched to a lost report; unmatch it first."
+    default_code = "found_item_actively_matched"
+
+
+class LostReportReasonRequired(FunduqiiAPIException):
+    """A lost-report action that must carry a reason was called without one.
+    ``details.reason`` is a NEUTRAL marker of WHICH action needs it — one of
+    ``unmatch`` or ``close_unfound`` — never the (absent) reason value itself."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required for this lost-report action."
+    default_code = "lost_report_reason_required"
 
 
 # --- Staff & permissions management (Phase 11) ------------------------------

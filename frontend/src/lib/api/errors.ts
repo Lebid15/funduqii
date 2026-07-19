@@ -241,14 +241,28 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.notEditable;
     case "room_blocked_by_maintenance":
       return t.operations.errors.roomBlocked;
+    case "room_not_releasable":
+      return t.operations.errors.roomNotReleasable;
     case "claimant_required":
       return t.operations.errors.claimantRequired;
+    case "claim_proof_required":
+      return t.operations.errors.claimProofRequired;
+    case "recipient_contact_required":
+      return t.operations.errors.recipientContactRequired;
     case "disposal_reason_required":
       return t.operations.errors.disposalReasonRequired;
     case "duplicate_active_task":
       return t.operations.errors.duplicateActive;
     case "inspection_reason_required":
       return t.operations.errors.inspectionReasonRequired;
+    case "found_item_not_matchable":
+      return t.operations.errors.foundItemNotMatchable;
+    case "found_item_already_matched":
+      return t.operations.errors.foundItemAlreadyMatched;
+    case "found_item_actively_matched":
+      return t.operations.errors.foundItemActivelyMatched;
+    case "lost_report_reason_required":
+      return t.operations.errors.lostReportReasonRequired;
     case "email_already_registered":
       return t.staff.errors.emailExists;
     case "membership_already_exists":

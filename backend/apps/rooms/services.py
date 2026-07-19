@@ -6,6 +6,8 @@ lightweight per-room status history (not a general audit log).
 """
 from __future__ import annotations
 
+import enum
+
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -15,6 +17,7 @@ from apps.common.exceptions import (
     CrossTenantReference,
     DuplicateRoomNumber,
     ResourceInUse,
+    RoomNotReleasable,
     StatusNoteRequired,
 )
 
@@ -30,23 +33,96 @@ from .models import (
 #: Hard cap on rooms created in a single bulk request (all-or-nothing batch).
 MAX_BULK_ROOMS = 100
 
+#: Room statuses that a release cycle must never silently override to
+#: ``available``. ``archived`` is never releasable by ANY cycle; a
+#: ``maintenance`` / ``out_of_service`` block is cleared ONLY by the authorized
+#: maintenance-close cycle.
+HARD_BLOCKED_ROOM_STATUSES = (
+    RoomStatus.MAINTENANCE,
+    RoomStatus.OUT_OF_SERVICE,
+    RoomStatus.ARCHIVED,
+)
+
+
+class RoomReleaseCycle(enum.Enum):
+    """Internal, NON-FORGEABLE marker naming which authorized operational cycle
+    is releasing a room to ``available``.
+
+    It is a Python ``Enum`` member — never a serializer field, never read from
+    ``request.data``, and impossible to construct from a JSON body. A client can
+    at most send a string; :func:`change_room_status` only trusts an actual
+    ``RoomReleaseCycle`` instance, so the direct ``POST /rooms/{id}/status`` path
+    (and every external caller) can never set ``available``.
+
+    * ``HOUSEKEEPING_RELEASE`` — cleaning completion / inspection approval. Never
+      overrides a hard block (maintenance/out-of-service/archived).
+    * ``MAINTENANCE_CLOSE`` — closing a maintenance request that chose to release
+      the room. The ONLY cycle allowed to clear a maintenance/out-of-service
+      block (archived stays non-releasable even here).
+    """
+
+    HOUSEKEEPING_RELEASE = "housekeeping_release"
+    MAINTENANCE_CLOSE = "maintenance_close"
+
+
+def _release_refusal_reason(current_status: str) -> str:
+    """Neutral, non-leaking ``details.reason`` for a direct/external release
+    refusal — derived ONLY from what the rooms app can see (never operational
+    internals like open requests or active tasks)."""
+    if current_status in HARD_BLOCKED_ROOM_STATUSES:
+        return "maintenance_block"
+    if current_status == RoomStatus.DIRTY:
+        return "room_dirty"
+    return "operational_block"
+
 
 @transaction.atomic
 def change_room_status(
-    room: Room, new_status: str, *, note: str, user, notify: bool = True
+    room: Room,
+    new_status: str,
+    *,
+    note: str,
+    user,
+    notify: bool = True,
+    cycle_source: "RoomReleaseCycle | None" = None,
 ) -> Room:
     """Move a room to ``new_status``, validating and logging the change.
 
     ``notify`` defaults to ``True`` (existing single-room callers unchanged).
     When ``False`` the RoomStatusLog is still written, the status is still set
     and the note requirement is still validated — only the notification
-    fan-out is muted (used by bulk create for maintenance/out_of_service rows)."""
+    fan-out is muted (used by bulk create for maintenance/out_of_service rows).
+
+    ``cycle_source`` is the WP1 fail-closed release guard. A room may transition
+    INTO ``available`` ONLY when an authorized internal :class:`RoomReleaseCycle`
+    member is supplied. It is keyword-only, defaults to ``None`` and is NEVER
+    exposed by any serializer or read from request data — so the direct
+    ``POST /rooms/{id}/status`` path and every external caller (which never pass
+    it) can never release a room. Even a valid cycle cannot clear a hard block
+    except the maintenance-close cycle for a maintenance/out-of-service room.
+    Non-``available`` transitions are unaffected."""
     if new_status in NOTE_REQUIRED_STATUSES and not (note or "").strip():
         raise StatusNoteRequired({"status": new_status})
 
     previous = room.status
     if previous == new_status and (note or "") == room.status_note:
         return room
+
+    # WP1 central release guard: only an authorized internal cycle may move a
+    # room from a non-available state INTO ``available`` (a no-op available →
+    # available is not a "becoming available" and is left alone).
+    if new_status == RoomStatus.AVAILABLE and previous != RoomStatus.AVAILABLE:
+        if not isinstance(cycle_source, RoomReleaseCycle):
+            # Direct / external / any client path — refuse. The reason is mapped
+            # from only what rooms can see, without leaking ops internals.
+            raise RoomNotReleasable({"reason": _release_refusal_reason(previous)})
+        # Archived is never releasable; a maintenance/out-of-service block is
+        # cleared ONLY by the maintenance-close cycle.
+        if previous == RoomStatus.ARCHIVED or (
+            previous in (RoomStatus.MAINTENANCE, RoomStatus.OUT_OF_SERVICE)
+            and cycle_source is not RoomReleaseCycle.MAINTENANCE_CLOSE
+        ):
+            raise RoomNotReleasable({"reason": "maintenance_block"})
 
     actor = user if getattr(user, "is_authenticated", False) else None
     RoomStatusLog.objects.create(

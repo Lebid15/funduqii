@@ -12,6 +12,7 @@ import type {
   RoomBulkCreateResponse,
   RoomBulkRow,
   RoomOperationalBoard,
+  RoomOption,
   RoomStatus,
   RoomType,
 } from "./types";
@@ -120,6 +121,26 @@ export function listRooms(
   params?: RoomListParams,
 ): Promise<PaginatedResponse<Room>> {
   return hotelJson<PaginatedResponse<Room>>(`/rooms${toQuery(params)}`);
+}
+
+export interface RoomOptionsParams {
+  /** Server-side match on room number OR room-type name OR floor name. */
+  search?: string;
+  page?: number;
+}
+
+/** COMPACT, read-only, server-side-searchable room OPTIONS feed for the
+ * operations-tab async-select dropdowns (`GET /rooms/options/`). Returns a
+ * standard DRF paginated envelope (page_size 25, max 100) so page 2+ is
+ * reachable and NO room is dropped — the replacement for the operations
+ * dropdowns' old `listRooms({ page_size: 100 })` usage (which silently dropped
+ * every room past the first 100). Archived rooms are excluded. */
+export function listRoomOptions(
+  params?: RoomOptionsParams,
+): Promise<PaginatedResponse<RoomOption>> {
+  return hotelJson<PaginatedResponse<RoomOption>>(
+    `/rooms/options${toQuery(params)}`,
+  );
 }
 
 export interface RoomWriteBody {

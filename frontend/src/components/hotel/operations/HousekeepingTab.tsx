@@ -1,7 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Brush, ClipboardCheck, Pencil, Play, Plus, UserCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  BedDouble,
+  Brush,
+  CheckCircle2,
+  ClipboardCheck,
+  Clock,
+  Layers,
+  PackageSearch,
+  PauseCircle,
+  Play,
+  Plus,
+  PlaneLanding,
+  SlidersHorizontal,
+  Tag,
+  Timer,
+  UserCheck,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 
 import { useQuickAction } from "@/lib/useQuickAction";
 
@@ -10,7 +28,6 @@ import {
   Badge,
   Button,
   Card,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -22,36 +39,46 @@ import {
   SectionHeader,
   Select,
   Switch,
+  Textarea,
   useToast,
-  type Column,
 } from "@/components/ui";
 import {
   approveInspection,
   assignHousekeepingTask,
   cancelHousekeepingTask,
+  comeBackLaterHousekeepingTask,
   completeHousekeepingTask,
   createHousekeepingTask,
+  listArrivalsNotReady,
   listHousekeepingTasks,
   rejectInspection,
   setHousekeepingStatus,
   updateHousekeepingTask,
   type HousekeepingCreateBody,
 } from "@/lib/api/operations";
-import { listRooms } from "@/lib/api/rooms";
-import { listStaff } from "@/lib/api/staff";
 import { listCurrentResidents } from "@/lib/api/stays";
 import { messageForError } from "@/lib/api/errors";
 import type {
+  HousekeepingServiceOutcome,
   HousekeepingTaskListItem,
   HousekeepingTaskType,
   OperationPriority,
-  Room,
   Stay,
 } from "@/lib/api/types";
-import { formatDateTime, housekeepingStatusTone, operationPriorityTone } from "@/lib/format";
+import {
+  formatDate,
+  formatDateTime,
+  housekeepingStatusTone,
+  operationPriorityTone,
+} from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { useCurrentUser } from "@/lib/session/CurrentUserContext";
-import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import { OperationCard, type OperationMenuItem } from "./OperationCard";
+import { RoomOptionSelect } from "./RoomOptionSelect";
+import { StatCards, type OperationStat } from "./StatCards";
+import { AssignModal, formatDuration, useCan } from "./operationsShared";
+import { CreateRequestModal } from "./MaintenanceTab";
+import { CreateItemModal } from "./LostFoundTab";
 
 const PAGE_SIZE = 25;
 const TASK_TYPES: HousekeepingTaskType[] = [
@@ -70,27 +97,45 @@ const STATUSES = [
   "cancelled",
 ] as const;
 const PRIORITIES: OperationPriority[] = ["low", "normal", "high", "urgent"];
+const SERVICE_OUTCOMES: HousekeepingServiceOutcome[] = [
+  "cleaned",
+  "guest_refused",
+  "do_not_disturb",
+  "no_access",
+];
 
-/** Cosmetic permission gate — every API re-checks server-side regardless. */
-function useCan() {
-  const access = useHotelAccess();
-  return (...codes: string[]) =>
-    access === null || (!access.loading && access.can(...codes));
+interface HkStats {
+  needsCleaning: number | null;
+  inCleaning: number | null;
+  awaitingInspection: number | null;
+  upcomingArrival: number | null;
+}
+
+/** A room preselected for a cross-tab create action (defect / found item). */
+interface PresetRoom {
+  id: number;
+  label: string;
 }
 
 export function HousekeepingTab() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { notify } = useToast();
   const can = useCan();
+  const hk = t.operations.hk;
 
   const [rows, setRows] = useState<HousekeepingTaskListItem[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
   const [count, setCount] = useState(0);
+  const [stats, setStats] = useState<HkStats>({
+    needsCleaning: null,
+    inCleaning: null,
+    awaitingInspection: null,
+    upcomingArrival: null,
+  });
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
   const [taskType, setTaskType] = useState("");
   const [priority, setPriority] = useState("");
-  const [room, setRoom] = useState("");
+  const [roomId, setRoomId] = useState<number | null>(null);
   const [date, setDate] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
   const [ordering, setOrdering] = useState("");
@@ -98,12 +143,19 @@ export function HousekeepingTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true after the FIRST settled load — the initial load owns the full
+  // LoadingState / ErrorState, later fetches keep the cards mounted (a11y M1).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [quickRoom, setQuickRoom] = useState(0);
-  // Quick action: ?action=new opens the EXISTING task modal once — with an
-  // optional preselected room (operational board deep-link).
   useQuickAction("new", (params) => {
     setQuickRoom(Number(params.get("room")) || 0);
     setCreateOpen(true);
@@ -113,49 +165,90 @@ export function HousekeepingTab() {
   const [assignTask, setAssignTask] = useState<HousekeepingTaskListItem | null>(null);
   const [rejectTask, setRejectTask] = useState<HousekeepingTaskListItem | null>(null);
   const [priorityTask, setPriorityTask] = useState<HousekeepingTaskListItem | null>(null);
+  const [comeBackTask, setComeBackTask] = useState<HousekeepingTaskListItem | null>(null);
+  const [defectRoom, setDefectRoom] = useState<PresetRoom | null>(null);
+  const [foundRoom, setFoundRoom] = useState<PresetRoom | null>(null);
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
-      const [tasks, roomList] = await Promise.all([
+      const [tasks, pending, inProgress, awaiting, arrivals] = await Promise.all([
         listHousekeepingTasks({
           page,
           search: query || undefined,
           status: status || undefined,
           task_type: taskType || undefined,
           priority: priority || undefined,
-          room: room ? Number(room) : undefined,
+          room: roomId ?? undefined,
           date: date || undefined,
           mine: mineOnly ? "true" : undefined,
           ordering: ordering || undefined,
         }),
-        listRooms({ page_size: 100 }),
+        listHousekeepingTasks({ status: "pending", page: 1 }),
+        listHousekeepingTasks({ status: "in_progress", page: 1 }),
+        listHousekeepingTasks({ status: "awaiting_inspection", page: 1 }),
+        listArrivalsNotReady(),
       ]);
+      if (seqRef.current !== seq) return;
       setRows(tasks.results);
       setCount(tasks.count);
-      setRooms(roomList.results);
+      setStats({
+        needsCleaning: pending.count,
+        inCleaning: inProgress.count,
+        awaitingInspection: awaiting.count,
+        upcomingArrival: arrivals.length,
+      });
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure — keep the cards, non-blocking toast; the full
+      // ErrorState + retry is reserved for the initial load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, taskType, priority, room, date, mineOnly, ordering, t]);
+  }, [page, query, status, taskType, priority, roomId, date, mineOnly, ordering, t, notify]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function run(
-    id: number,
-    action: () => Promise<unknown>,
-    successMessage: string,
-  ) {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // a11y M1 — after an ACTION-triggered reload settles, restore focus to the
+  // stable results anchor if the acting control unmounted (focus fell to <body>
+  // or a now-detached node). Keyed on `rows` (a fresh array on every successful
+  // load) so it fires reliably even when React coalesces the loading toggle.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
+  }, [load]);
+
+  async function run(id: number, action: () => Promise<unknown>, successMessage: string) {
     setBusyId(id);
     try {
       await action();
       notify(successMessage);
-      await load();
+      await reloadAfterAction();
     } catch (err) {
       notify(messageForError(err, t), "error");
     } finally {
@@ -163,9 +256,12 @@ export function HousekeepingTab() {
     }
   }
 
-  const hk = t.operations.hk;
+  function applyStatusFilter(next: string) {
+    setPage(1);
+    setStatus((current) => (current === next ? "" : next));
+  }
+
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
-  const roomOptions = rooms.map((r) => ({ value: String(r.id), label: r.number }));
   const statusOptions = STATUSES.map((s) => ({ value: s, label: hk.status[s] }));
   const typeOptions = TASK_TYPES.map((v) => ({ value: v, label: hk.types[v] }));
   const priorityOptions = PRIORITIES.map((p) => ({
@@ -173,120 +269,63 @@ export function HousekeepingTab() {
     label: t.operations.priority[p],
   }));
 
-  const columns: Column<HousekeepingTaskListItem>[] = [
-    { key: "task_number", header: hk.taskNumber },
-    { key: "room_number", header: hk.room, render: (r) => r.room_number || "—" },
-    { key: "task_type", header: hk.typeLabel, render: (r) => hk.types[r.task_type] },
+  const statCards: OperationStat[] = [
     {
-      key: "priority",
-      header: t.operations.priorityLabel,
-      render: (r) => (
-        <Badge tone={operationPriorityTone(r.priority)}>
-          {t.operations.priority[r.priority]}
-        </Badge>
-      ),
+      key: "needsCleaning",
+      label: hk.stats.needsCleaning,
+      value: stats.needsCleaning,
+      icon: Brush,
+      tone: "warning",
+      active: status === "pending",
+      onFilter: () => applyStatusFilter("pending"),
     },
     {
-      key: "status",
-      header: t.common.status,
-      render: (r) => (
-        <Badge tone={housekeepingStatusTone(r.status)}>{hk.status[r.status]}</Badge>
-      ),
+      key: "inCleaning",
+      label: hk.stats.inCleaning,
+      value: stats.inCleaning,
+      icon: Timer,
+      tone: "primary",
+      active: status === "in_progress",
+      onFilter: () => applyStatusFilter("in_progress"),
     },
     {
-      key: "assigned_to_name",
-      header: hk.assignee,
-      render: (r) => r.assigned_to_name || hk.unassigned,
+      key: "awaitingInspection",
+      label: hk.stats.awaitingInspection,
+      value: stats.awaitingInspection,
+      icon: ClipboardCheck,
+      tone: "info",
+      active: status === "awaiting_inspection",
+      onFilter: () => applyStatusFilter("awaiting_inspection"),
     },
     {
-      key: "requested_at",
-      header: hk.requestedAt,
-      render: (r) => formatDateTime(r.requested_at, locale),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => {
-        if (r.status === "awaiting_inspection") {
-          if (!can("housekeeping.inspect")) return <span className="muted small">—</span>;
-          return (
-            <div className="table__actions">
-              <Button
-                size="sm"
-                icon={ClipboardCheck}
-                loading={busyId === r.id}
-                onClick={() =>
-                  run(r.id, () => approveInspection(r.id), t.operations.saved)
-                }
-              >
-                {hk.approveInspection}
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => setRejectTask(r)}>
-                {hk.rejectInspection}
-              </Button>
-            </div>
-          );
-        }
-        const active = ["pending", "assigned", "in_progress"].includes(r.status);
-        if (!active) return <span className="muted small">—</span>;
-        return (
-          <div className="table__actions">
-            {can("housekeeping.assign") ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={UserCheck}
-                onClick={() => setAssignTask(r)}
-              >
-                {r.assigned_to ? hk.reassign : hk.assignTitle}
-              </Button>
-            ) : null}
-            {can("housekeeping.update") ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={Pencil}
-                onClick={() => setPriorityTask(r)}
-              >
-                {hk.editPriority}
-              </Button>
-            ) : null}
-            {r.status !== "in_progress" && can("housekeeping.status_update") ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={Play}
-                loading={busyId === r.id}
-                onClick={() =>
-                  run(
-                    r.id,
-                    () => setHousekeepingStatus(r.id, "in_progress"),
-                    hk.startedMsg,
-                  )
-                }
-              >
-                {hk.start}
-              </Button>
-            ) : null}
-            {r.status === "in_progress" && can("housekeeping.status_update") ? (
-              <Button size="sm" onClick={() => setCompleteTask(r)}>
-                {hk.complete}
-              </Button>
-            ) : null}
-            {can("housekeeping.cancel") ? (
-              <Button size="sm" variant="danger" onClick={() => setCancelTask(r)}>
-                {t.common.cancel}
-              </Button>
-            ) : null}
-          </div>
-        );
-      },
+      key: "upcomingArrival",
+      label: hk.stats.upcomingArrival,
+      value: stats.upcomingArrival,
+      icon: PlaneLanding,
+      tone: stats.upcomingArrival && stats.upcomingArrival > 0 ? "danger" : "neutral",
     },
   ];
 
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+  const resultsAnnouncement =
+    !loading && hasLoadedOnce
+      ? count === 0
+        ? t.operations.noResults
+        : t.operations.resultsCount.replace("{count}", String(count))
+      : "";
+
+  // Cross-tab openers — extract the room context the create modals need.
+  const openDefect = (row: HousekeepingTaskListItem) =>
+    setDefectRoom({ id: row.room as number, label: row.room_number });
+  const openFound = (row: HousekeepingTaskListItem) =>
+    setFoundRoom({ id: row.room as number, label: row.room_number });
+
   return (
     <>
+      <StatCards stats={statCards} loading={loading} ariaLabel={hk.title} />
+
       <Card>
         <SectionHeader
           title={hk.title}
@@ -326,18 +365,6 @@ export function HousekeepingTab() {
                 }}
               />
             </FormField>
-            <FormField label={hk.typeFilter} htmlFor="hk-type">
-              <Select
-                id="hk-type"
-                value={taskType}
-                placeholder={t.common.all}
-                options={typeOptions}
-                onChange={(e) => {
-                  setPage(1);
-                  setTaskType(e.target.value);
-                }}
-              />
-            </FormField>
             <FormField label={t.operations.priorityLabel} htmlFor="hk-priority">
               <Select
                 id="hk-priority"
@@ -350,18 +377,32 @@ export function HousekeepingTab() {
                 }}
               />
             </FormField>
-            <FormField label={hk.room} htmlFor="hk-room">
+            <FormField label={hk.typeFilter} htmlFor="hk-type">
               <Select
-                id="hk-room"
-                value={room}
+                id="hk-type"
+                value={taskType}
                 placeholder={t.common.all}
-                options={roomOptions}
+                options={typeOptions}
                 onChange={(e) => {
                   setPage(1);
-                  setRoom(e.target.value);
+                  setTaskType(e.target.value);
                 }}
               />
             </FormField>
+            <RoomOptionSelect
+              id="hk-room"
+              label={hk.room}
+              value={roomId}
+              placeholder={t.common.all}
+              searchPlaceholder={t.operations.roomSearchPlaceholder}
+              loadMoreLabel={t.operations.loadMore}
+              loadingLabel={t.common.loading}
+              emptyLabel={t.operations.roomsEmpty}
+              onChange={(next) => {
+                setPage(1);
+                setRoomId(next);
+              }}
+            />
             <FormField label={hk.dateFilter} htmlFor="hk-date">
               <Input
                 id="hk-date"
@@ -396,53 +437,101 @@ export function HousekeepingTab() {
             />
           </FilterBar>
         </form>
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
+
+        {/* STABLE polite live region — always mounted; announces the settled
+            result count by a text change (a11y M1). */}
+        <div
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="hk-results-announce"
+        >
+          {resultsAnnouncement}
+        </div>
+
+        {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+        {showInitialError ? (
           <ErrorState
             title={t.states.errorTitle}
-            message={error}
+            message={error ?? ""}
             retryLabel={t.common.retry}
             onRetry={load}
           />
         ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={hk.empty} hint={hk.emptyHint} icon={Brush} />
-          ) : (
-            <>
-              <DataTable
-                caption={hk.title}
-                columns={columns}
-                rows={rows}
-                rowKey={(r) => r.id}
-              />
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                labels={{
-                  previous: t.pagination.previous,
-                  next: t.pagination.next,
-                  status: t.pagination.page
-                    .replace("{page}", String(page))
-                    .replace("{total}", String(totalPages)),
-                }}
-              />
-            </>
-          )
+        {!showInitialLoading && !showInitialError ? (
+          <div
+            className="op-results"
+            ref={resultsRef}
+            tabIndex={-1}
+            aria-label={hk.title}
+          >
+            <div className="op-results__status" role="status" aria-live="polite">
+              {backgroundRefreshing ? (
+                <span className="op-results__searching">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>{t.operations.updating}</span>
+                </span>
+              ) : null}
+            </div>
+            {rows.length === 0 ? (
+              <EmptyState title={hk.empty} hint={hk.emptyHint} icon={Brush} />
+            ) : (
+              <>
+                <div
+                  className="op-grid"
+                  role="list"
+                  aria-label={hk.title}
+                  aria-busy={backgroundRefreshing}
+                >
+                  {rows.map((row) => (
+                    <div role="listitem" key={row.id}>
+                      <HkCard
+                        row={row}
+                        can={can}
+                        busyId={busyId}
+                        run={run}
+                        onAssign={setAssignTask}
+                        onComplete={setCompleteTask}
+                        onCancel={setCancelTask}
+                        onReject={setRejectTask}
+                        onEditPriority={setPriorityTask}
+                        onComeBack={setComeBackTask}
+                        onReportDefect={openDefect}
+                        onRegisterFound={openFound}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page
+                      .replace("{page}", String(page))
+                      .replace("{total}", String(totalPages)),
+                  }}
+                />
+              </>
+            )}
+          </div>
         ) : null}
       </Card>
 
       <CreateTaskModal
         open={createOpen}
-        rooms={rooms}
         initialRoom={quickRoom}
-        onClose={() => { setCreateOpen(false); setQuickRoom(0); }}
+        onClose={() => {
+          setCreateOpen(false);
+          setQuickRoom(0);
+        }}
         onSaved={() => {
           setCreateOpen(false);
           setQuickRoom(0);
           notify(hk.created);
-          load();
+          reloadAfterAction();
         }}
       />
       <CompleteModal
@@ -451,7 +540,16 @@ export function HousekeepingTab() {
         onDone={() => {
           setCompleteTask(null);
           notify(hk.completedMsg);
-          load();
+          reloadAfterAction();
+        }}
+      />
+      <ComeBackLaterModal
+        task={comeBackTask}
+        onClose={() => setComeBackTask(null)}
+        onDone={() => {
+          setComeBackTask(null);
+          notify(hk.comeBackLaterMsg);
+          reloadAfterAction();
         }}
       />
       <CancelModal
@@ -460,16 +558,27 @@ export function HousekeepingTab() {
         onDone={() => {
           setCancelTask(null);
           notify(hk.cancelledMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <AssignModal
-        task={assignTask}
+        open={assignTask !== null}
+        labels={{
+          title: hk.assignTitle,
+          staffMember: hk.assignTo,
+          assignToMe: hk.assignMe,
+          unassign: hk.unassign,
+          unassigned: hk.unassigned,
+        }}
+        currentAssignee={assignTask?.assigned_to ?? null}
+        allowUnassign={Boolean(assignTask?.assigned_to)}
         onClose={() => setAssignTask(null)}
-        onDone={(unassigned) => {
+        onAssign={async (userId) => {
+          if (!assignTask) return;
+          await assignHousekeepingTask(assignTask.id, userId);
           setAssignTask(null);
-          notify(unassigned ? t.operations.saved : hk.assignedMsg);
-          load();
+          notify(userId === null ? t.operations.saved : hk.assignedMsg);
+          reloadAfterAction();
         }}
       />
       <RejectInspectionModal
@@ -478,7 +587,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setRejectTask(null);
           notify(t.operations.saved);
-          load();
+          reloadAfterAction();
         }}
       />
       <PriorityModal
@@ -487,23 +596,261 @@ export function HousekeepingTab() {
         onDone={() => {
           setPriorityTask(null);
           notify(t.operations.saved);
-          load();
+          reloadAfterAction();
+        }}
+      />
+      <CreateRequestModal
+        open={defectRoom !== null}
+        presetRoom={defectRoom?.id}
+        presetRoomLabel={defectRoom?.label}
+        onClose={() => setDefectRoom(null)}
+        onSaved={() => {
+          setDefectRoom(null);
+          notify(t.operations.mt.created);
+          reloadAfterAction();
+        }}
+      />
+      <CreateItemModal
+        open={foundRoom !== null}
+        presetRoom={foundRoom?.id}
+        presetRoomLabel={foundRoom?.label}
+        onClose={() => setFoundRoom(null)}
+        onSaved={() => {
+          setFoundRoom(null);
+          notify(t.operations.lf.created);
+          reloadAfterAction();
         }}
       />
     </>
   );
 }
 
+/**
+ * One cleaning task as a card. Presentational + props-driven: all permission and
+ * action wiring lives in the parent (passed as callbacks), and the parent's
+ * async `run` handles the reload + focus restoration. Extracted from an inline
+ * render function into a real component so the a11y-M1 ref plumbing in the parent
+ * is never traced as a "ref access during render" (mirrors the GuestCard shape).
+ */
+function HkCard({
+  row,
+  can,
+  busyId,
+  run,
+  onAssign,
+  onComplete,
+  onCancel,
+  onReject,
+  onEditPriority,
+  onComeBack,
+  onReportDefect,
+  onRegisterFound,
+}: {
+  row: HousekeepingTaskListItem;
+  can: (...codes: string[]) => boolean;
+  busyId: number | null;
+  run: (id: number, action: () => Promise<unknown>, successMessage: string) => void;
+  onAssign: (row: HousekeepingTaskListItem) => void;
+  onComplete: (row: HousekeepingTaskListItem) => void;
+  onCancel: (row: HousekeepingTaskListItem) => void;
+  onReject: (row: HousekeepingTaskListItem) => void;
+  onEditPriority: (row: HousekeepingTaskListItem) => void;
+  onComeBack: (row: HousekeepingTaskListItem) => void;
+  onReportDefect: (row: HousekeepingTaskListItem) => void;
+  onRegisterFound: (row: HousekeepingTaskListItem) => void;
+}) {
+  const { t, locale } = useI18n();
+  const hk = t.operations.hk;
+
+  const active = ["pending", "assigned", "in_progress"].includes(row.status);
+  const canStart = can("housekeeping.status_update");
+  const canAssign = can("housekeeping.assign");
+
+  // ONE primary action, computed from state + permission (§4).
+  let primary: React.ComponentProps<typeof OperationCard>["primary"] = null;
+  let primaryKind = "";
+  if (row.status === "pending" || row.status === "assigned") {
+    if (!row.assigned_to && canAssign) {
+      primaryKind = "assign";
+      primary = { label: hk.assign, icon: UserCheck, onClick: () => onAssign(row) };
+    } else if (canStart) {
+      primaryKind = "start";
+      primary = {
+        label: hk.start,
+        icon: Play,
+        loading: busyId === row.id,
+        onClick: () =>
+          run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
+      };
+    } else if (canAssign) {
+      primaryKind = "assign";
+      primary = { label: hk.reassign, icon: UserCheck, onClick: () => onAssign(row) };
+    }
+  } else if (row.status === "in_progress" && canStart) {
+    primaryKind = "complete";
+    primary = {
+      label: hk.complete,
+      icon: CheckCircle2,
+      onClick: () => onComplete(row),
+    };
+  } else if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
+    primaryKind = "approve";
+    primary = {
+      label: hk.approveInspection,
+      icon: ClipboardCheck,
+      loading: busyId === row.id,
+      onClick: () => run(row.id, () => approveInspection(row.id), t.operations.saved),
+    };
+  }
+
+  const menu: OperationMenuItem[] = [];
+  if ((row.status === "pending" || row.status === "assigned") && canStart && primaryKind !== "start") {
+    menu.push({
+      key: "start",
+      label: hk.start,
+      icon: Play,
+      onSelect: () =>
+        run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
+    });
+  }
+  if (active && canAssign && primaryKind !== "assign") {
+    menu.push({
+      key: "assign",
+      label: row.assigned_to ? hk.reassign : hk.assign,
+      icon: UserCheck,
+      onSelect: () => onAssign(row),
+    });
+  }
+  if (row.status === "in_progress" && canStart) {
+    menu.push({
+      key: "comeBack",
+      label: hk.comeBackLater,
+      icon: PauseCircle,
+      onSelect: () => onComeBack(row),
+    });
+  }
+  if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
+    menu.push({
+      key: "reject",
+      label: hk.rejectInspection,
+      icon: XCircle,
+      danger: true,
+      onSelect: () => onReject(row),
+    });
+  }
+  if (active && can("housekeeping.update")) {
+    menu.push({
+      key: "priority",
+      label: hk.editPriority,
+      icon: SlidersHorizontal,
+      onSelect: () => onEditPriority(row),
+    });
+  }
+  if (active && row.room !== null && can("maintenance.create")) {
+    menu.push({
+      key: "defect",
+      label: hk.reportDefect,
+      icon: Wrench,
+      onSelect: () => onReportDefect(row),
+    });
+  }
+  if (active && row.room !== null && can("lost_found.create")) {
+    menu.push({
+      key: "found",
+      label: hk.registerFound,
+      icon: PackageSearch,
+      onSelect: () => onRegisterFound(row),
+    });
+  }
+  if (active && can("housekeeping.cancel")) {
+    menu.push({
+      key: "cancel",
+      label: t.common.cancel,
+      icon: XCircle,
+      danger: true,
+      onSelect: () => onCancel(row),
+    });
+  }
+
+  const duration = formatDuration(row.started_at, row.completed_at, locale);
+
+  return (
+    <OperationCard
+      accent={operationPriorityTone(row.priority)}
+      number={row.task_number}
+      title={<bdi dir="ltr">{row.room_number || "—"}</bdi>}
+      ariaLabel={`${hk.title} ${row.task_number}`}
+      moreLabel={t.operations.moreActions}
+      badges={
+        <>
+          <Badge tone={housekeepingStatusTone(row.status)} variant="filled">
+            {hk.status[row.status]}
+          </Badge>
+          <Badge tone={operationPriorityTone(row.priority)}>
+            {t.operations.priority[row.priority]}
+          </Badge>
+          {row.is_occupied ? (
+            <Badge tone="info" icon={BedDouble}>
+              {hk.occupied}
+            </Badge>
+          ) : null}
+          {row.upcoming_arrival.has_upcoming ? (
+            <Badge tone="warning" variant="outline" icon={PlaneLanding}>
+              {row.upcoming_arrival.arrival_date
+                ? `${hk.arrivalSoon} · ${formatDate(row.upcoming_arrival.arrival_date, locale)}`
+                : hk.arrivalSoon}
+            </Badge>
+          ) : null}
+          {row.status === "completed" && row.service_outcome ? (
+            <Badge tone="neutral">{hk.serviceOutcome[row.service_outcome]}</Badge>
+          ) : null}
+        </>
+      }
+      facts={[
+        { key: "type", label: hk.typeLabel, value: hk.types[row.task_type], icon: Brush },
+        { key: "unit", label: hk.unitType, value: row.room_type_name || "—", icon: Tag },
+        {
+          key: "floor",
+          label: hk.floor,
+          value: row.floor_name || row.floor_number || "—",
+          icon: Layers,
+        },
+        {
+          key: "assignee",
+          label: hk.assignee,
+          value: row.assigned_to_name || hk.unassigned,
+          icon: UserCheck,
+        },
+        {
+          key: "requested",
+          label: hk.requestedAt,
+          value: formatDateTime(row.requested_at, locale),
+          icon: Clock,
+        },
+        ...(row.started_at
+          ? [
+              {
+                key: "duration",
+                label: hk.duration,
+                value: duration ?? "—",
+                icon: Timer,
+              },
+            ]
+          : []),
+      ]}
+      primary={primary}
+      menu={menu}
+    />
+  );
+}
+
 function CreateTaskModal({
   open,
-  rooms,
   initialRoom = 0,
   onClose,
   onSaved,
 }: {
   open: boolean;
-  rooms: Room[];
-  /** Optional preselected room (operational board deep-link). */
   initialRoom?: number;
   onClose: () => void;
   onSaved: () => void;
@@ -517,7 +864,12 @@ function CreateTaskModal({
 
   useEffect(() => {
     if (open) {
-      setForm({ room: initialRoom || 0, task_type: "daily_cleaning", priority: "normal", notes: "" });
+      setForm({
+        room: initialRoom || 0,
+        task_type: "daily_cleaning",
+        priority: "normal",
+        notes: "",
+      });
       setError(null);
       listCurrentResidents()
         .then((res) => setStays(res.results))
@@ -540,7 +892,6 @@ function CreateTaskModal({
     }
   }
 
-  const roomOptions = rooms.map((r) => ({ value: String(r.id), label: r.number }));
   const stayOptions = stays.map((s) => ({
     value: String(s.id),
     label: `${s.room_number} — ${s.primary_guest_name}`,
@@ -570,16 +921,18 @@ function CreateTaskModal({
     >
       <form id="hk-create-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
+        <RoomOptionSelect
+          id="hkc-room"
+          label={hk.room}
+          value={form.room || null}
+          placeholder={hk.roomRequired}
+          searchPlaceholder={t.operations.roomSearchPlaceholder}
+          loadMoreLabel={t.operations.loadMore}
+          loadingLabel={t.common.loading}
+          emptyLabel={t.operations.roomsEmpty}
+          onChange={(next) => setForm((p) => ({ ...p, room: next ?? 0 }))}
+        />
         <div className="form-grid">
-          <FormField label={hk.room} htmlFor="hkc-room">
-            <Select
-              id="hkc-room"
-              value={form.room ? String(form.room) : ""}
-              placeholder={hk.roomRequired}
-              options={roomOptions}
-              onChange={(e) => setForm((p) => ({ ...p, room: Number(e.target.value) }))}
-            />
-          </FormField>
           <FormField label={hk.stay} htmlFor="hkc-stay">
             <Select
               id="hkc-stay"
@@ -630,6 +983,12 @@ function CreateTaskModal({
   );
 }
 
+/**
+ * Completion is state-aware (§4). An OCCUPIED room records a mandatory service
+ * result and NEVER offers "mark available"; a VACANT (checkout) room's normal
+ * completion may release it through the server guard — there is no free
+ * mark-available control anywhere.
+ */
 function CompleteModal({
   task,
   onClose,
@@ -641,6 +1000,8 @@ function CompleteModal({
 }) {
   const { t } = useI18n();
   const hk = t.operations.hk;
+  const occupied = task?.is_occupied ?? false;
+  const [outcome, setOutcome] = useState<HousekeepingServiceOutcome>("cleaned");
   const [markAvailable, setMarkAvailable] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -648,6 +1009,7 @@ function CompleteModal({
 
   useEffect(() => {
     if (task) {
+      setOutcome("cleaned");
       setMarkAvailable(false);
       setNote("");
       setError(null);
@@ -660,7 +1022,11 @@ function CompleteModal({
     setBusy(true);
     setError(null);
     try {
-      await completeHousekeepingTask(task.id, markAvailable, note);
+      if (occupied) {
+        await completeHousekeepingTask(task.id, false, note, outcome);
+      } else {
+        await completeHousekeepingTask(task.id, markAvailable, note);
+      }
       onDone();
     } catch (err) {
       setError(messageForError(err, t));
@@ -668,6 +1034,15 @@ function CompleteModal({
       setBusy(false);
     }
   }
+
+  const outcomeOptions = SERVICE_OUTCOMES.map((o) => ({
+    value: o,
+    label: hk.serviceOutcome[o],
+  }));
+  const afterOptions = [
+    { value: "keep", label: hk.afterCompleteKeep },
+    { value: "available", label: hk.afterCompleteAvailable },
+  ];
 
   return (
     <Modal
@@ -688,16 +1063,106 @@ function CompleteModal({
     >
       <form id="hk-complete-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
-        <p className="muted">{hk.completeHint}</p>
-        <Switch
-          id="hk-mark-available"
-          checked={markAvailable}
-          onChange={setMarkAvailable}
-          label={markAvailable ? hk.markAvailable : hk.keepDirty}
-        />
+        {occupied ? (
+          <>
+            <Alert tone="info">{hk.completeOccupiedHint}</Alert>
+            <FormField label={hk.serviceOutcomeLabel} htmlFor="hk-complete-outcome">
+              <Select
+                id="hk-complete-outcome"
+                value={outcome}
+                options={outcomeOptions}
+                onChange={(e) =>
+                  setOutcome(e.target.value as HousekeepingServiceOutcome)
+                }
+              />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <p className="muted">{hk.completeVacantHint}</p>
+            <FormField label={hk.afterComplete} htmlFor="hk-complete-after">
+              <Select
+                id="hk-complete-after"
+                value={markAvailable ? "available" : "keep"}
+                options={afterOptions}
+                onChange={(e) => setMarkAvailable(e.target.value === "available")}
+              />
+            </FormField>
+          </>
+        )}
         <FormField label={hk.notes} htmlFor="hk-complete-note">
           <Input
             id="hk-complete-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </FormField>
+      </form>
+    </Modal>
+  );
+}
+
+function ComeBackLaterModal({
+  task,
+  onClose,
+  onDone,
+}: {
+  task: HousekeepingTaskListItem | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const hk = t.operations.hk;
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (task) {
+      setNote("");
+      setError(null);
+    }
+  }, [task]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!task) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await comeBackLaterHousekeepingTask(task.id, { note: note.trim() || undefined });
+      onDone();
+    } catch (err) {
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={task !== null}
+      onClose={onClose}
+      title={hk.comeBackLaterTitle}
+      closeLabel={t.common.close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t.common.cancel}
+          </Button>
+          <Button form="hk-comeback-form" type="submit" loading={busy}>
+            {hk.comeBackLater}
+          </Button>
+        </>
+      }
+    >
+      <form id="hk-comeback-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <p className="muted">{hk.comeBackLaterHint}</p>
+        <FormField label={hk.notes} htmlFor="hk-comeback-note">
+          <Textarea
+            id="hk-comeback-note"
+            rows={2}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
@@ -771,116 +1236,6 @@ function CancelModal({
             onChange={(e) => setReason(e.target.value)}
           />
         </FormField>
-      </form>
-    </Modal>
-  );
-}
-
-function AssignModal({
-  task,
-  onClose,
-  onDone,
-}: {
-  task: HousekeepingTaskListItem | null;
-  onClose: () => void;
-  /** `unassigned` is true when the task was returned to the pending pool. */
-  onDone: (unassigned: boolean) => void;
-}) {
-  const { t } = useI18n();
-  const hk = t.operations.hk;
-  const me = useCurrentUser();
-  const [staffOptions, setStaffOptions] = useState<{ value: string; label: string }[]>([]);
-  const [value, setValue] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!task) return;
-    setValue(task.assigned_to ? String(task.assigned_to) : me ? String(me.id) : "");
-    setError(null);
-    listStaff({ page_size: 100 })
-      .then((res) => {
-        const options = res.results
-          .filter((m) => m.is_active)
-          .map((m) => ({ value: String(m.user_id), label: m.full_name }));
-        if (me && !options.some((o) => o.value === String(me.id))) {
-          options.unshift({ value: String(me.id), label: me.full_name });
-        }
-        setStaffOptions(options);
-      })
-      .catch(() => {
-        // Fallback: at least allow assigning to the current user.
-        setStaffOptions(me ? [{ value: String(me.id), label: me.full_name }] : []);
-      });
-  }, [task, me]);
-
-  async function assign(userId: number | null) {
-    if (!task) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await assignHousekeepingTask(task.id, userId);
-      onDone(userId === null);
-    } catch (err) {
-      setError(messageForError(err, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!value) return setError(t.errors.validation);
-    assign(Number(value));
-  }
-
-  return (
-    <Modal
-      open={task !== null}
-      onClose={onClose}
-      title={hk.assignTitle}
-      closeLabel={t.common.close}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
-            {t.common.cancel}
-          </Button>
-          {task?.assigned_to ? (
-            <Button variant="dangerSoft" loading={busy} onClick={() => assign(null)}>
-              {hk.unassign}
-            </Button>
-          ) : null}
-          <Button form="hk-assign-form" type="submit" loading={busy}>
-            {t.common.save}
-          </Button>
-        </>
-      }
-    >
-      <form id="hk-assign-form" className="stack" onSubmit={submit} noValidate>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <FormField label={hk.assignTo} htmlFor="hk-assign-user">
-          <Select
-            id="hk-assign-user"
-            value={value}
-            placeholder={hk.unassigned}
-            options={staffOptions}
-            onChange={(e) => setValue(e.target.value)}
-          />
-        </FormField>
-        {me ? (
-          <div className="cluster">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              icon={UserCheck}
-              disabled={busy}
-              onClick={() => setValue(String(me.id))}
-            >
-              {hk.assignMe}
-            </Button>
-          </div>
-        ) : null}
       </form>
     </Modal>
   );

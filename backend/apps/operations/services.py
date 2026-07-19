@@ -18,32 +18,45 @@ Room-status rules enforced here:
 """
 from __future__ import annotations
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.common.exceptions import (
     CancellationReasonRequired,
     ClaimantRequired,
+    ClaimProofRequired,
     CrossTenantReference,
     DisposalReasonRequired,
     DuplicateActiveTask,
+    FoundItemActivelyMatched,
+    FoundItemAlreadyMatched,
+    FoundItemNotMatchable,
     InspectionReasonRequired,
     InvalidOperationStatusTransition,
+    LostReportReasonRequired,
     OperationNotEditable,
+    RecipientContactRequired,
     RoomBlockedByMaintenance,
+    RoomNotReleasable,
 )
 from apps.rooms.models import Room, RoomStatus
-from apps.rooms.services import change_room_status
+from apps.rooms.services import RoomReleaseCycle, change_room_status
 from apps.tenancy.models import HotelMembership
 
 from .models import (
+    HousekeepingServiceOutcome,
     HousekeepingStatus,
     HousekeepingTask,
     HousekeepingTaskStatusLog,
     HousekeepingTaskType,
+    LostFoundCategory,
+    LostFoundClaimProofType,
     LostFoundItem,
     LostFoundItemStatusLog,
     LostFoundStatus,
+    LostReport,
+    LostReportStatus,
+    LostReportStatusLog,
     MaintenanceRequest,
     MaintenanceRequestStatusLog,
     MaintenanceStatus,
@@ -51,11 +64,38 @@ from .models import (
     RoomBlockStatus,
 )
 
+#: WP7 — categories that require stronger proof on handover (claim / return).
+#: These are the ACTUAL ``LostFoundCategory`` values (money / jewelry /
+#: documents); no new categories were introduced.
+SENSITIVE_LOST_FOUND_CATEGORIES = frozenset(
+    {
+        LostFoundCategory.MONEY,
+        LostFoundCategory.JEWELRY,
+        LostFoundCategory.DOCUMENTS,
+    }
+)
+
+#: The maximum characters kept for an ``identity_last4`` proof — a privacy cap
+#: so a full national id / passport / card number is never stored.
+IDENTITY_LAST4_MAX_LEN = 4
+
 NUMBER_PREFIXES = {
     "housekeeping": "HK",
     "maintenance": "MT",
     "lost_found": "LF",
+    "lost_report": "LR",
 }
+
+#: A found item is MATCHABLE to a lost report unless it is already terminally
+#: handed over / gone (owner rule): matchable = NOT in {returned, disposed,
+#: closed}. So found / stored / claimed items are matchable.
+NON_MATCHABLE_FOUND_STATUSES = frozenset(
+    {
+        LostFoundStatus.RETURNED,
+        LostFoundStatus.DISPOSED,
+        LostFoundStatus.CLOSED,
+    }
+)
 
 #: Room statuses housekeeping may move to `cleaning` when a task starts.
 CLEANABLE_ROOM_STATUSES = (RoomStatus.DIRTY, RoomStatus.AVAILABLE)
@@ -91,6 +131,36 @@ PRIORITY_RANK = {
     "normal": 2,
     "low": 3,
 }
+
+
+def order_by_priority_rank(qs, *, ordering: str, time_field: str):
+    """Order an operations queryset by LOGICAL priority severity.
+
+    The single sort used by BOTH the housekeeping and maintenance lists so the
+    two can never diverge. Priority is ranked by :data:`PRIORITY_RANK`
+    (urgent → high → normal → low), never by the raw ``priority`` CharField
+    (alphabetical would give high < low < normal < urgent).
+
+    ``ordering`` is ``"priority"`` (most urgent first) or ``"-priority"``
+    (reverse). Ties break on the newest record first (``-<time_field>``) then
+    ``-id`` for a fully deterministic order, matching each model's default
+    ``Meta.ordering``. ``time_field`` is the list's own timestamp column
+    (``requested_at`` for housekeeping, ``reported_at`` for maintenance).
+    """
+    from django.db.models import Case, IntegerField, Value, When
+
+    rank = Case(
+        *[
+            When(priority=value, then=Value(severity))
+            for value, severity in PRIORITY_RANK.items()
+        ],
+        default=Value(9),
+        output_field=IntegerField(),
+    )
+    rank_order = "priority_rank" if ordering == "priority" else "-priority_rank"
+    return qs.annotate(priority_rank=rank).order_by(
+        rank_order, f"-{time_field}", "-id"
+    )
 
 
 def _hk_record(task, *, event_type, severity, title, message, user=None):
@@ -147,6 +217,24 @@ LF_STATUS_TRANSITIONS = {
     LostFoundStatus.CLOSED: set(),
 }
 
+#: Active (still open) lost-report statuses — editable + counted as "open".
+ACTIVE_LR_STATUSES = (LostReportStatus.OPEN, LostReportStatus.SEARCHING)
+
+#: Forward-only transitions available through the GENERIC lost-report status
+#: endpoint. Everything else has its own entry point with its own required
+#: inputs: confirm_match (→matched), unmatch (matched→searching, reason),
+#: handover (matched→returned, proof), close_unfound / cancel (reason). From
+#: ``matched`` the ONLY exits are handover (returned) or unmatch (searching) —
+#: never a direct close/cancel.
+LR_STATUS_TRANSITIONS = {
+    LostReportStatus.OPEN: {LostReportStatus.SEARCHING},
+    LostReportStatus.SEARCHING: set(),
+    LostReportStatus.MATCHED: set(),
+    LostReportStatus.RETURNED: set(),
+    LostReportStatus.CLOSED_UNFOUND: set(),
+    LostReportStatus.CANCELLED: set(),
+}
+
 
 def _actor(user):
     return user if getattr(user, "is_authenticated", False) else None
@@ -191,12 +279,84 @@ def room_has_blocking_maintenance(room: Room, *, exclude_id=None) -> bool:
     return qs.exists()
 
 
+def _room_has_active_housekeeping(room: Room) -> bool:
+    """True while the room's cleaning cycle is not finished — an ACTIVE task
+    exists (pending / assigned / in_progress / awaiting_inspection). The task
+    being resolved by the current release path is completed BEFORE this check,
+    so it never counts against its own release."""
+    return HousekeepingTask.objects.filter(
+        room=room, status__in=ACTIVE_HK_STATUSES
+    ).exists()
+
+
+def _room_is_occupied(room: Room | None) -> bool:
+    """Occupancy is DERIVED from ``Stay`` — the single source of truth. A room
+    with an IN-HOUSE stay is occupied; there is no ``occupied`` room status and
+    this app never introduces one.
+
+    Callers that branch cleaning behaviour on this MUST have the room row-locked
+    inside the surrounding atomic block so the read is consistent with the
+    completion (a concurrent check-in/check-out on the same room serialises
+    behind that lock). ``Stay.room`` is a per-hotel FK, so filtering by room
+    alone already scopes to the room's hotel.
+    """
+    if room is None:
+        return False
+    from apps.stays.models import Stay, StayStatus
+
+    return Stay.objects.filter(room=room, status=StayStatus.IN_HOUSE).exists()
+
+
 def _ensure_room_releasable(room: Room, *, exclude_request_id=None) -> None:
-    """Guard for any attempt to mark a room `available` from operations."""
+    """Guard for any attempt to mark a room `available` from operations.
+
+    Ordering matters: the maintenance guards run FIRST and keep raising the
+    maintenance-specific ``RoomBlockedByMaintenance`` (backward-compat with the
+    409s already asserted). The NEW generic conditions (dirty room / active
+    cleaning task) raise ``RoomNotReleasable`` with a neutral ``details.reason``.
+    """
     if room.status in BLOCKED_ROOM_STATUSES and exclude_request_id is None:
         raise RoomBlockedByMaintenance({"room": room.id, "status": room.status})
     if room_has_blocking_maintenance(room, exclude_id=exclude_request_id):
         raise RoomBlockedByMaintenance({"room": room.id, "reason": "open_request"})
+    if room.status == RoomStatus.DIRTY:
+        raise RoomNotReleasable({"reason": "room_dirty"})
+    if _room_has_active_housekeeping(room):
+        raise RoomNotReleasable({"reason": "active_housekeeping"})
+
+
+def _lock_room(room_id):
+    """Row-lock the room for a read-then-write status transition (``SELECT ...
+    FOR UPDATE``). Must run inside a transaction; a no-op on SQLite (dev/tests).
+    Returns the locked instance, or ``None`` when the record has no room."""
+    if room_id is None:
+        return None
+    return Room.objects.select_for_update().get(pk=room_id)
+
+
+def _release_room(
+    room: Room,
+    *,
+    user,
+    note: str,
+    cycle_source: RoomReleaseCycle,
+    exclude_request_id=None,
+) -> None:
+    """The ONE operations path to ``available`` — releasability is re-checked
+    HERE and only then does the rooms controlled path run with the internal
+    ``cycle_source`` marker. Every release funnels through this helper, so a
+    future path cannot reach ``change_room_status(..., AVAILABLE)`` without the
+    checks (bypass is prevented by construction). ``room`` must already be
+    row-locked by the caller."""
+    _ensure_room_releasable(room, exclude_request_id=exclude_request_id)
+    if room.status != RoomStatus.AVAILABLE:
+        change_room_status(
+            room,
+            RoomStatus.AVAILABLE,
+            note=note,
+            user=user,
+            cycle_source=cycle_source,
+        )
 
 
 # --- Housekeeping ---------------------------------------------------------------
@@ -216,8 +376,20 @@ def _hk_log(task, previous, new, user, note=""):
 def _hk_start(task: HousekeepingTask, user) -> None:
     """Side effects of moving a task to in_progress."""
     task.started_at = task.started_at or timezone.now()
-    room = task.room
-    if room is not None and room.status in CLEANABLE_ROOM_STATUSES:
+    # Row-lock the room for this read-then-write status transition (runs inside
+    # the caller's atomic block) so start-cleaning cannot race a concurrent
+    # maintenance block (AVAILABLE -> MAINTENANCE) on the same room.
+    room = _lock_room(task.room_id)
+    # Occupancy gate (read under the lock): an OCCUPIED room's status is NEVER
+    # changed by the cleaning lifecycle. The cleaning is tracked by the TASK,
+    # not the room status — check-in's in-house-Stay guard already prevents
+    # double-booking, so leaving the room `available` is safe. Only a VACANT
+    # cleanable room flips to `cleaning`.
+    if (
+        room is not None
+        and room.status in CLEANABLE_ROOM_STATUSES
+        and not _room_is_occupied(room)
+    ):
         change_room_status(
             room,
             RoomStatus.CLEANING,
@@ -255,22 +427,37 @@ def create_housekeeping_task(
             return None
         raise DuplicateActiveTask({"room": room.id})
     actor = _actor(user)
-    task = HousekeepingTask.objects.create(
-        hotel=hotel,
-        task_number=next_number(hotel, "housekeeping"),
-        room=room,
-        stay=stay,
-        task_type=task_type,
-        status=(
-            HousekeepingStatus.ASSIGNED if assigned_to else HousekeepingStatus.PENDING
-        ),
-        priority=priority,
-        assigned_to=assigned_to,
-        notes=notes or "",
-        internal_notes=internal_notes or "",
-        created_by=actor,
-        updated_by=actor,
-    )
+    # DB-backed backstop: the partial-unique constraint
+    # ``uniq_active_housekeeping_task_per_room`` (migration 0003) is the last
+    # line of defence if a concurrent active task slips past the
+    # select_for_update() + exists() guard above (e.g. a race the row lock did
+    # not serialize). The INSERT runs inside a savepoint so a violation rolls
+    # back only the failed INSERT (and its sequence bump) and surfaces as a
+    # clean 409 — never a raw 500 — while automatic callers still skip.
+    try:
+        with transaction.atomic():
+            task = HousekeepingTask.objects.create(
+                hotel=hotel,
+                task_number=next_number(hotel, "housekeeping"),
+                room=room,
+                stay=stay,
+                task_type=task_type,
+                status=(
+                    HousekeepingStatus.ASSIGNED
+                    if assigned_to
+                    else HousekeepingStatus.PENDING
+                ),
+                priority=priority,
+                assigned_to=assigned_to,
+                notes=notes or "",
+                internal_notes=internal_notes or "",
+                created_by=actor,
+                updated_by=actor,
+            )
+    except IntegrityError:
+        if on_active == "skip":
+            return None
+        raise DuplicateActiveTask({"room": room.id})
     _hk_log(task, "", task.status, user)
     # Phase 14: activity + notifications (lazy import).
     from apps.notifications.services import record_activity
@@ -419,17 +606,28 @@ def _inspection_required(hotel) -> bool:
 
 @transaction.atomic
 def complete_housekeeping_task(
-    task: HousekeepingTask, *, user=None, mark_room_available=False, note=""
+    task: HousekeepingTask,
+    *,
+    user=None,
+    mark_room_available=False,
+    note="",
+    service_outcome=HousekeepingServiceOutcome.CLEANED,
 ) -> HousekeepingTask:
     if task.status not in ACTIVE_HK_STATUSES:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
         )
+    # The service result is recorded on completion. `come_back_later` is NOT a
+    # valid outcome (it is a separate non-terminal event); the endpoint's
+    # serializer rejects it, and a blank/absent value here means the routine
+    # "cleaned" result.
+    outcome = service_outcome or HousekeepingServiceOutcome.CLEANED
     # Inspection policy (final closure): with the hotel setting ON, the
     # attendant's completion parks the task for a supervisor — the room is
     # NOT released and mark_room_available is ignored. Approving is the only
     # path to completed. (A task already awaiting inspection can only move
-    # through approve/reject, never through this endpoint again.)
+    # through approve/reject, never through this endpoint again.) The declared
+    # outcome is stored now so it survives the park → approve round-trip.
     if task.status == HousekeepingStatus.AWAITING_INSPECTION:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "reason": "use_inspection_endpoint"}
@@ -438,6 +636,7 @@ def complete_housekeeping_task(
         previous = task.status
         task.status = HousekeepingStatus.AWAITING_INSPECTION
         task.started_at = task.started_at or timezone.now()
+        task.service_outcome = outcome
         task.updated_by = _actor(user)
         task.save()
         _hk_log(task, previous, task.status, user, note)
@@ -454,21 +653,29 @@ def complete_housekeeping_task(
     task.status = HousekeepingStatus.COMPLETED
     task.started_at = task.started_at or timezone.now()
     task.completed_at = timezone.now()
+    task.service_outcome = outcome
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
-    if room is not None:
+    # Row-lock the room for the read-then-write status transition. The task is
+    # already COMPLETED above, so it never counts against its own release.
+    room = _lock_room(task.room_id)
+    # Occupancy is DERIVED from the in-house Stay and read HERE, under the same
+    # atomic block that holds the room row-lock. The room-status behaviour
+    # branches on occupancy — NOT on task_type: an occupied room's status is
+    # left UNCHANGED (no release, no dirty, NO RoomStatusLog from completion),
+    # because occupancy already keeps it out of inventory. Only a VACANT room
+    # follows the existing check-out cleaning behaviour.
+    if room is not None and not _room_is_occupied(room):
         if mark_room_available:
-            # Never override maintenance/out_of_service/archived, and never
-            # release a room an open maintenance request still blocks.
-            _ensure_room_releasable(room)
-            if room.status != RoomStatus.AVAILABLE:
-                change_room_status(
-                    room,
-                    RoomStatus.AVAILABLE,
-                    note=f"Housekeeping {task.task_number} completed",
-                    user=user,
-                )
+            # ONE release helper: never override a hard block or an open
+            # blocking request, and never release a dirty room or one that
+            # still has another active cleaning task.
+            _release_room(
+                room,
+                user=user,
+                note=f"Housekeeping {task.task_number} completed",
+                cycle_source=RoomReleaseCycle.HOUSEKEEPING_RELEASE,
+            )
         elif room.status == RoomStatus.CLEANING:
             # Task done but the room was not released — back to dirty so it
             # stays visibly not-ready (explicit release only).
@@ -487,10 +694,52 @@ def complete_housekeeping_task(
         category="operation",
         severity="success",
         title=f"Housekeeping task {task.task_number} completed",
-        message=f"Room {room.number}" if room is not None else "",
+        message=(
+            (f"Room {room.number} · " if room is not None else "") + f"outcome: {outcome}"
+        ),
         actor=user,
         related_object=task,
         related_url="/hotel/operations",
+    )
+    return task
+
+
+@transaction.atomic
+def come_back_later_housekeeping_task(
+    task: HousekeepingTask, *, user=None, note=""
+) -> HousekeepingTask:
+    """Record a NON-TERMINAL ``come_back_later`` event on an active task.
+
+    Used when the attendant cannot service the room right now (guest asleep,
+    door chained, "please come back later") but the task is NOT finished. The
+    task STAYS ACTIVE — its status is left exactly as it was so it can be
+    revisited and completed later — and the event is written to BOTH the
+    per-task status log and the activity log so there is an audit trail. This
+    is deliberately NOT a completion and NOT a ``service_outcome`` value; there
+    is no scheduling system, just the event plus the task staying open.
+    """
+    if task.status not in (
+        HousekeepingStatus.PENDING,
+        HousekeepingStatus.ASSIGNED,
+        HousekeepingStatus.IN_PROGRESS,
+    ):
+        # Only workable states can be deferred. awaiting_inspection is the
+        # supervisor's queue, and completed/cancelled are terminal.
+        raise InvalidOperationStatusTransition(
+            {"from": task.status, "reason": "not_deferrable"}
+        )
+    # Status is intentionally UNCHANGED; we only stamp who touched it and log
+    # the event (previous == new marks a revisit rather than a transition).
+    task.updated_by = _actor(user)
+    task.save(update_fields=["updated_by", "updated_at"])
+    _hk_log(task, task.status, task.status, user, note or "come_back_later")
+    _hk_record(
+        task,
+        event_type="housekeeping.come_back_later",
+        severity="info",
+        title=f"Housekeeping task {task.task_number} — come back later",
+        message=(note or "")[:255] or (f"Room {task.room.number}" if task.room_id else ""),
+        user=user,
     )
     return task
 
@@ -507,8 +756,15 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
     task.cancellation_reason = reason.strip()
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
-    if room is not None and room.status == RoomStatus.CLEANING:
+    # Row-lock the room for the read-then-write status transition.
+    room = _lock_room(task.room_id)
+    # Occupancy gate (read under the lock): never touch an OCCUPIED room's
+    # status. Only a VACANT room left in `cleaning` by this task drops to dirty.
+    if (
+        room is not None
+        and room.status == RoomStatus.CLEANING
+        and not _room_is_occupied(room)
+    ):
         # The task that (likely) put the room into `cleaning` is gone; the
         # room goes back to dirty rather than staying in a stale state.
         change_room_status(
@@ -531,28 +787,33 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
 
 @transaction.atomic
 def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> HousekeepingTask:
-    """Supervisor approval: the task completes and the room is released —
-    unless maintenance still blocks it (maintenance stays the master)."""
+    """Supervisor approval: the task completes. A VACANT room is released —
+    unless maintenance still blocks it (maintenance stays the master). An
+    OCCUPIED room's status is left UNCHANGED (no release, no RoomStatusLog):
+    this is the primary in-stay completion path on inspection-enabled hotels,
+    and finishing an in-stay cleaning must never corrupt an occupied room."""
     if task.status != HousekeepingStatus.AWAITING_INSPECTION:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
         )
-    room = task.room
-    if room is not None:
-        # Same guard as an explicit release: never override maintenance /
-        # out_of_service / archived or an open blocking request.
-        _ensure_room_releasable(room)
+    # Row-lock the room for the read-then-write release.
+    room = _lock_room(task.room_id)
     previous = task.status
+    # Complete the task BEFORE the releasability check so this (awaiting-
+    # inspection = ACTIVE) task never counts against its own release. If the
+    # check then refuses (e.g. maintenance appeared), the whole atomic block
+    # rolls the completion back and the task stays awaiting inspection.
     task.status = HousekeepingStatus.COMPLETED
     task.completed_at = timezone.now()
     task.updated_by = _actor(user)
     task.save()
-    if room is not None and room.status != RoomStatus.AVAILABLE:
-        change_room_status(
+    # Occupancy gate (read under the lock): only a VACANT room is released.
+    if room is not None and not _room_is_occupied(room):
+        _release_room(
             room,
-            RoomStatus.AVAILABLE,
-            note=f"Housekeeping {task.task_number} inspection approved",
             user=user,
+            note=f"Housekeeping {task.task_number} inspection approved",
+            cycle_source=RoomReleaseCycle.HOUSEKEEPING_RELEASE,
         )
     _hk_log(task, previous, HousekeepingStatus.COMPLETED, user, note or "inspection approved")
     _hk_record(
@@ -568,9 +829,10 @@ def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> Houseke
 
 @transaction.atomic
 def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> HousekeepingTask:
-    """Supervisor rejection: the room goes back to dirty and the task returns
-    to in_progress so the attendant can finish it again. The rejection reason
-    is mandatory and preserved in the status log."""
+    """Supervisor rejection: the task returns to in_progress so the attendant
+    can finish it again. A VACANT room goes back to dirty; an OCCUPIED room's
+    status is left UNCHANGED (the cleaning lifecycle never mutates an occupied
+    room). The rejection reason is mandatory and preserved in the status log."""
     if not (reason or "").strip():
         raise InspectionReasonRequired()
     if task.status != HousekeepingStatus.AWAITING_INSPECTION:
@@ -581,10 +843,13 @@ def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> Housekeep
     task.status = HousekeepingStatus.IN_PROGRESS
     task.updated_by = _actor(user)
     task.save()
-    room = task.room
-    if room is not None and room.status in (
-        RoomStatus.CLEANING,
-        RoomStatus.AVAILABLE,
+    # Row-lock the room for the read-then-write status transition.
+    room = _lock_room(task.room_id)
+    # Occupancy gate (read under the lock): only a VACANT room drops to dirty.
+    if (
+        room is not None
+        and room.status in (RoomStatus.CLEANING, RoomStatus.AVAILABLE)
+        and not _room_is_occupied(room)
     ):
         change_room_status(
             room,
@@ -620,9 +885,8 @@ def _mt_log(request, previous, new, user, note=""):
 
 def _apply_room_block(request: MaintenanceRequest, user) -> None:
     """Move the room into the request's block status (maintenance/oos)."""
-    room = request.room
     if (
-        room is None
+        request.room_id is None
         or not request.affects_room_availability
         or request.room_block_status == RoomBlockStatus.NONE
     ):
@@ -632,6 +896,8 @@ def _apply_room_block(request: MaintenanceRequest, user) -> None:
         if request.room_block_status == RoomBlockStatus.MAINTENANCE
         else RoomStatus.OUT_OF_SERVICE
     )
+    # Row-lock the room for the read-then-write block transition.
+    room = _lock_room(request.room_id)
     if room.status in (target, RoomStatus.ARCHIVED):
         return
     change_room_status(
@@ -820,23 +1086,26 @@ def close_maintenance_request(
     request.closed_at = timezone.now()
     request.updated_by = _actor(user)
     request.save()
-    room = request.room
+    # Row-lock the room for the read-then-write transition.
+    room = _lock_room(request.room_id)
     if room is not None and room_next_status != "keep":
         if room.status == RoomStatus.ARCHIVED:
             raise InvalidOperationStatusTransition({"reason": "room_archived"})
+        note_txt = f"Maintenance {request.request_number} closed"[:255]
         if room_next_status == "available":
-            # Another open blocking request keeps the room out of inventory.
-            _ensure_room_releasable(room, exclude_request_id=request.id)
-            target = RoomStatus.AVAILABLE
-        else:
-            target = RoomStatus.DIRTY
-        if room.status != target:
-            change_room_status(
+            # Release through the ONE helper: another open blocking request — or
+            # a dirty / still-being-cleaned room — keeps it out of inventory.
+            # The maintenance-close cycle is the only one authorized to clear
+            # this request's own maintenance/out-of-service block.
+            _release_room(
                 room,
-                target,
-                note=f"Maintenance {request.request_number} closed"[:255],
                 user=user,
+                note=note_txt,
+                cycle_source=RoomReleaseCycle.MAINTENANCE_CLOSE,
+                exclude_request_id=request.id,
             )
+        elif room.status != RoomStatus.DIRTY:
+            change_room_status(room, RoomStatus.DIRTY, note=note_txt, user=user)
     _mt_log(request, previous, MaintenanceStatus.CLOSED, user, note)
     from apps.notifications.services import record_activity
 
@@ -870,7 +1139,8 @@ def cancel_maintenance_request(
     request.save()
     # If THIS request blocked the room and nothing else still blocks it, the
     # room drops to dirty (never straight to available — it needs inspection).
-    room = request.room
+    # Row-lock the room for the read-then-write transition.
+    room = _lock_room(request.room_id)
     if (
         room is not None
         and request.affects_room_availability
@@ -913,6 +1183,87 @@ def _lf_log(item, previous, new, user, note=""):
         note=(note or "")[:255],
         changed_by=_actor(user),
     )
+
+
+def _resolve_claim_proof(
+    item: LostFoundItem,
+    *,
+    claim_proof_type: str,
+    claim_proof_reference: str,
+    name: str,
+    phone: str,
+    has_guest: bool,
+    require_contact: bool = False,
+) -> tuple[str, str]:
+    """Validate the handover requirements for a claim / return and return the
+    (proof_type, proof_reference) to store.
+
+    The effective proof falls back to what is ALREADY on the item (so a return
+    after a proofed claim need not re-enter it), mirroring the name/phone
+    fallback. PRIVACY: the returned reference is bounded and NEVER contains a
+    full id/passport/card number — for ``identity_last4`` anything longer than
+    four characters is rejected outright (for ALL categories, not only the
+    sensitive ones).
+
+    * SENSITIVE categories (money / jewelry / documents): require a recipient
+      name, a phone OR a linked guest, a ``claim_proof_type`` and a non-empty
+      ``claim_proof_reference`` (the short verification description for
+      ``ownership_description``). Any missing piece -> :class:`ClaimProofRequired`
+      (422) with a neutral ``details.reason`` (never the value). Unaffected by
+      ``require_contact`` — this branch already demands name + phone-or-guest.
+    * NORMAL categories:
+      - ``require_contact`` FALSE (the CLAIM path, unchanged): a recipient name
+        OR a linked guest (:class:`ClaimantRequired`). Proof is NOT required.
+      - ``require_contact`` TRUE (the RETURN / handover path): a recipient name
+        is always required (:class:`ClaimantRequired` if missing) AND a phone OR
+        a linked guest (:class:`RecipientContactRequired` if BOTH missing), so a
+        handover is never weaker than the found-item return the frontend already
+        enforces. Proof is still NOT required for a normal category.
+    """
+    proof_type = (claim_proof_type or "").strip() or item.claim_proof_type
+    proof_reference = (claim_proof_reference or "").strip() or item.claim_proof_reference
+    # Privacy guard (unconditional): identity_last4 keeps at most the last 4
+    # characters — a longer value is refused rather than truncated/stored.
+    if (
+        proof_type == LostFoundClaimProofType.IDENTITY_LAST4
+        and len(proof_reference) > IDENTITY_LAST4_MAX_LEN
+    ):
+        raise ClaimProofRequired({"reason": "identity_last4_too_long"})
+    if item.category in SENSITIVE_LOST_FOUND_CATEGORIES:
+        if not name:
+            raise ClaimProofRequired({"reason": "recipient_name_required"})
+        if not phone and not has_guest:
+            raise ClaimProofRequired({"reason": "phone_or_guest_required"})
+        if not proof_type:
+            raise ClaimProofRequired({"reason": "proof_type_required"})
+        # Covers ownership_description's "non-empty short description" rule too.
+        if not proof_reference:
+            raise ClaimProofRequired({"reason": "proof_reference_required"})
+    elif require_contact:
+        # Handover (return) contract for NORMAL categories: name is mandatory and
+        # a phone-or-guest contact is mandatory — never weaker than the sensitive
+        # branch's name + phone-or-guest minimum.
+        if not name:
+            raise ClaimantRequired()
+        if not phone and not has_guest:
+            raise RecipientContactRequired()
+    elif not name and not has_guest:
+        raise ClaimantRequired()
+    return proof_type, proof_reference
+
+
+def _found_item_actively_matched(item: "LostFoundItem", *, exclude_report_id=None) -> bool:
+    """True iff a lost report ACTIVELY holds this found item (report
+    status == ``matched``). Mirrors the partial-unique
+    ``uniq_matched_found_item_active_report`` condition exactly."""
+    qs = LostReport.objects.filter(
+        hotel_id=item.hotel_id,
+        matched_found_item=item,
+        status=LostReportStatus.MATCHED,
+    )
+    if exclude_report_id is not None:
+        qs = qs.exclude(pk=exclude_report_id)
+    return qs.exists()
 
 
 @transaction.atomic
@@ -1017,41 +1368,107 @@ def change_lost_found_status(
 
 @transaction.atomic
 def claim_lost_found_item(
-    item: LostFoundItem, *, user=None, claimed_by_name="", claimed_by_phone="", note=""
+    item: LostFoundItem,
+    *,
+    user=None,
+    claimed_by_name="",
+    claimed_by_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
 ) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe (a concurrent
+    # confirm_match serialises against this lock). An item ACTIVELY matched by a
+    # lost report may NOT be claimed out from under the atomic handover.
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in (LostFoundStatus.FOUND, LostFoundStatus.STORED):
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.CLAIMED}
         )
-    if not (claimed_by_name or "").strip() and item.guest_id is None:
-        raise ClaimantRequired()
+    name = (claimed_by_name or "").strip() or item.claimed_by_name
+    phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    # WP7: enforce the handover requirements (stronger for sensitive categories)
+    # and resolve the bounded, privacy-safe proof to store.
+    proof_type, proof_reference = _resolve_claim_proof(
+        item,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        name=name,
+        phone=phone,
+        has_guest=item.guest_id is not None,
+    )
     previous = item.status
     item.status = LostFoundStatus.CLAIMED
-    item.claimed_by_name = (claimed_by_name or "").strip() or item.claimed_by_name
-    item.claimed_by_phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    item.claimed_by_name = name
+    item.claimed_by_phone = phone
+    item.claim_proof_type = proof_type
+    item.claim_proof_reference = proof_reference
     item.claimed_at = timezone.now()
     item.updated_by = _actor(user)
     item.save()
+    # NOTE: ``note`` is the caller-supplied status note only — the proof
+    # reference is NEVER written to the status log (privacy).
     _lf_log(item, previous, LostFoundStatus.CLAIMED, user, note)
     return item
 
 
 @transaction.atomic
 def return_lost_found_item(
-    item: LostFoundItem, *, user=None, claimed_by_name="", claimed_by_phone="", note=""
+    item: LostFoundItem,
+    *,
+    user=None,
+    claimed_by_name="",
+    claimed_by_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
+    recipient_has_guest: bool | None = None,
+    _via_matched_handover: bool = False,
 ) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe. Standalone
+    # returns of an item ACTIVELY matched by a lost report are refused; only the
+    # atomic ``hand_over_matched_report`` path passes ``_via_matched_handover``
+    # (a keyword-only, non-serializer, non-forgeable internal flag) to return the
+    # very item its own matching report holds.
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if not _via_matched_handover and _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in ACTIVE_LF_STATUSES:
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.RETURNED}
         )
     name = (claimed_by_name or "").strip() or item.claimed_by_name
-    # A returned item must record WHO received it: a claimant name or a guest.
-    if not name and item.guest_id is None:
-        raise ClaimantRequired()
+    phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    # A returned item must record WHO received it AND a way to reach them: the
+    # handover contract requires, for EVERY category, a recipient name + a phone
+    # OR a linked known guest (``require_contact=True``); SENSITIVE categories
+    # additionally require proof (resolved here, falling back to what the claim
+    # already stored so it need not be re-entered). ``recipient_has_guest``
+    # defaults to the found item's own guest link, but a caller (the atomic
+    # matched-report handover) may override it so a report tied to a KNOWN guest
+    # satisfies the guest condition even when the found item has no guest link.
+    has_guest = (
+        item.guest_id is not None
+        if recipient_has_guest is None
+        else recipient_has_guest
+    )
+    proof_type, proof_reference = _resolve_claim_proof(
+        item,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        name=name,
+        phone=phone,
+        has_guest=has_guest,
+        require_contact=True,
+    )
     previous = item.status
     item.status = LostFoundStatus.RETURNED
     item.claimed_by_name = name
-    item.claimed_by_phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    item.claimed_by_phone = phone
+    item.claim_proof_type = proof_type
+    item.claim_proof_reference = proof_reference
     item.claimed_at = item.claimed_at or timezone.now()
     item.returned_at = timezone.now()
     item.updated_by = _actor(user)
@@ -1075,6 +1492,13 @@ def return_lost_found_item(
 
 @transaction.atomic
 def dispose_lost_found_item(item: LostFoundItem, *, reason, user=None) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe. An item
+    # ACTIVELY matched by a lost report may NOT be disposed out from under the
+    # atomic handover — that would dangle the report as ``matched`` to a gone
+    # item. Release it first via the report's ``unmatch`` (documented reason).
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in (LostFoundStatus.FOUND, LostFoundStatus.STORED):
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.DISPOSED}
@@ -1116,3 +1540,402 @@ def close_lost_found_item(item: LostFoundItem, *, user=None, note="") -> LostFou
     item.save()
     _lf_log(item, previous, LostFoundStatus.CLOSED, user, note)
     return item
+
+
+# --- Lost report (LR — the "I lost X" cycle + safe manual matching) ----------
+#
+# A SEPARATE lifecycle from the FOUND item. A lost report is never auto-linked;
+# the ONLY link is the explicit, row-locked ``confirm_match``. A match NEVER
+# mutates the found item (its own found→…→returned lifecycle is untouched); only
+# a handover returns it — atomically, both-or-neither — through the EXISTING WP7
+# ``return_lost_found_item`` path so the sensitive-proof controls are reused.
+#
+# The status/note logs (``_lr_log``) NEVER carry the reporter phone or any proof
+# value (privacy — same discipline as the found-item logs).
+
+
+def _lr_log(report, previous, new, user, note=""):
+    LostReportStatusLog.objects.create(
+        hotel=report.hotel,
+        report=report,
+        previous_status=previous or "",
+        new_status=new,
+        note=(note or "")[:255],
+        changed_by=_actor(user),
+    )
+
+
+def _found_item_is_matchable(item: LostFoundItem) -> bool:
+    """Matchable = still holdable (owner rule): NOT returned / disposed / closed."""
+    return item.status not in NON_MATCHABLE_FOUND_STATUSES
+
+
+@transaction.atomic
+def create_lost_report(
+    hotel,
+    *,
+    user=None,
+    category=LostFoundCategory.OTHER,
+    description="",
+    distinctive_marks="",
+    last_seen_location="",
+    lost_at=None,
+    reporter_name="",
+    reporter_phone="",
+    guest=None,
+    stay=None,
+    reservation=None,
+    internal_notes="",
+) -> LostReport:
+    """File a guest/customer LOST report (nothing is physically held).
+
+    ``report_number`` is minted from the row-locked per-hotel ``lost_report``
+    sequence. A reporter name is required (reuses the neutral 422
+    :class:`ClaimantRequired`); all links are same-hotel checked.
+    """
+    _check_same_hotel(hotel, field="guest", obj=guest)
+    _check_same_hotel(hotel, field="stay", obj=stay)
+    _check_same_hotel(hotel, field="reservation", obj=reservation)
+    if not (reporter_name or "").strip():
+        # A lost report must name WHO reported it (the reporter) — reuse the
+        # existing neutral 422 rather than minting a near-duplicate code.
+        raise ClaimantRequired()
+    actor = _actor(user)
+    report = LostReport.objects.create(
+        hotel=hotel,
+        report_number=next_number(hotel, "lost_report"),
+        category=category,
+        description=description or "",
+        distinctive_marks=distinctive_marks or "",
+        last_seen_location=last_seen_location or "",
+        lost_at=lost_at,
+        reporter_name=reporter_name.strip(),
+        reporter_phone=reporter_phone or "",
+        guest=guest,
+        stay=stay,
+        reservation=reservation,
+        reported_by_user=actor,
+        status=LostReportStatus.OPEN,
+        internal_notes=internal_notes or "",
+        created_by=actor,
+        updated_by=actor,
+    )
+    _lr_log(report, "", report.status, user)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="lost_report.created",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} filed",
+        # Neutral message — no phone, no proof.
+        message=f"{report.reporter_name} · {report.get_category_display()}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def update_lost_report(report: LostReport, *, user=None, refs=None, **meta) -> LostReport:
+    """Edit report metadata/links while it is still OPEN or SEARCHING.
+
+    A matched report must be unmatched first; terminal reports are frozen. Link
+    edits are same-hotel checked."""
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise OperationNotEditable({"status": report.status})
+    refs = refs or {}
+    for field in ("guest", "stay", "reservation"):
+        if field in refs:
+            _check_same_hotel(report.hotel, field=field, obj=refs[field])
+            setattr(report, field, refs[field])
+    for field in (
+        "category",
+        "description",
+        "distinctive_marks",
+        "last_seen_location",
+        "lost_at",
+        "reporter_name",
+        "reporter_phone",
+        "internal_notes",
+    ):
+        if field in meta:
+            setattr(report, field, meta[field])
+    report.updated_by = _actor(user)
+    report.save()
+    return report
+
+
+@transaction.atomic
+def change_lost_report_status(
+    report: LostReport, *, new_status, user=None, note=""
+) -> LostReport:
+    """Generic move — only open→searching; every other move has its own action.
+
+    Row-locked so the transition read-check is consistent under contention."""
+    report = LostReport.objects.select_for_update().get(pk=report.pk)
+    if new_status not in LR_STATUS_TRANSITIONS.get(report.status, set()):
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": new_status}
+        )
+    previous = report.status
+    report.status = new_status
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, new_status, user, note)
+    return report
+
+
+@transaction.atomic
+def confirm_match(lost_report: LostReport, found_item: LostFoundItem, *, user=None) -> LostReport:
+    """Link an OPEN/SEARCHING lost report to a MATCHABLE found item.
+
+    Both rows are row-locked in a consistent order (the REPORT row first, then
+    the found-item row) so two reports racing for the same item — or a match
+    racing a concurrent return/dispose of the item — serialise without deadlock.
+
+    Guarantees:
+    * SAME hotel (else :class:`CrossTenantReference`).
+    * the found item is MATCHABLE — NOT returned/disposed/closed (else
+      :class:`FoundItemNotMatchable`).
+    * the report is OPEN or SEARCHING (else :class:`InvalidOperationStatusTransition`).
+    * the found item is not already actively matched by ANOTHER report — an
+      application belt (:class:`FoundItemAlreadyMatched`) PLUS the DB partial-
+      unique translated from the IntegrityError inside a savepoint.
+    * the FOUND ITEM IS UNTOUCHED — no status change, no merge, no delete.
+    """
+    # Consistent lock order: report first, then the found item (prevents the
+    # two-reports-one-item and match-vs-return races from deadlocking).
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    item = LostFoundItem.objects.select_for_update().get(pk=found_item.pk)
+    if item.hotel_id != report.hotel_id:
+        raise CrossTenantReference({"field": "found_item"})
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.MATCHED}
+        )
+    if not _found_item_is_matchable(item):
+        raise FoundItemNotMatchable({"status": item.status})
+    # Application belt: refuse an item another MATCHED report already holds.
+    if (
+        LostReport.objects.filter(
+            hotel=report.hotel,
+            matched_found_item=item,
+            status=LostReportStatus.MATCHED,
+        )
+        .exclude(pk=report.pk)
+        .exists()
+    ):
+        raise FoundItemAlreadyMatched({"item": item.id})
+    previous = report.status
+    report.matched_found_item = item
+    report.status = LostReportStatus.MATCHED
+    report.matched_by = _actor(user)
+    report.matched_at = timezone.now()
+    report.updated_by = _actor(user)
+    # DB-backed backstop: the partial-unique ``uniq_matched_found_item_active_report``
+    # is the last line of defence if a concurrent match slips past the row lock +
+    # belt above. The save runs inside a savepoint so a violation rolls back only
+    # this UPDATE (not the surrounding transaction) and surfaces as a clean 409.
+    try:
+        with transaction.atomic():
+            report.save()
+    except IntegrityError:
+        raise FoundItemAlreadyMatched({"item": item.id})
+    _lr_log(report, previous, report.status, user, f"matched:{item.item_number}")
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.matched",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} matched",
+        message=f"→ found item {item.item_number}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def unmatch(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Break a MATCHED report's link, returning it to SEARCHING (mandatory
+    reason). Allowed ONLY from ``matched``. The found item is UNTOUCHED — only
+    the report's link/matched stamps are cleared."""
+    if not (reason or "").strip():
+        raise LostReportReasonRequired({"reason": "unmatch"})
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status != LostReportStatus.MATCHED:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.SEARCHING}
+        )
+    previous = report.status
+    report.matched_found_item = None
+    report.matched_by = None
+    report.matched_at = None
+    report.status = LostReportStatus.SEARCHING
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    return report
+
+
+@transaction.atomic
+def hand_over_matched_report(
+    lost_report: LostReport,
+    *,
+    user=None,
+    recipient_name="",
+    recipient_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
+) -> LostReport:
+    """Hand the matched found item over to the reporter — ATOMIC both-or-neither.
+
+    The report + its matched found item are row-locked (report first, then the
+    item). The EXISTING :func:`return_lost_found_item` applies the unified
+    handover contract — for EVERY category a recipient name + a phone OR a linked
+    known guest, and for SENSITIVE categories additionally a proof type +
+    reference. ``recipient_phone`` is passed as the phone and the report's guest
+    (or the item's) as the linked-guest signal, so a report tied to a KNOWN guest
+    satisfies the "phone-or-guest" requirement even with no phone and no guest on
+    the found item. It flips the found item to ``returned``; THEN the report
+    flips to ``returned``. If EITHER step fails (missing recipient contact,
+    missing proof for a sensitive item, or the item was concurrently
+    returned/disposed) the WHOLE transaction rolls back — nothing changes."""
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status != LostReportStatus.MATCHED:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.RETURNED}
+        )
+    if report.matched_found_item_id is None:
+        raise InvalidOperationStatusTransition({"reason": "no_matched_item"})
+    item = LostFoundItem.objects.select_for_update().get(
+        pk=report.matched_found_item_id
+    )
+    if item.hotel_id != report.hotel_id:
+        raise CrossTenantReference({"field": "found_item"})
+    # Both-or-neither: return the found item through the EXISTING WP7 path. Its
+    # own @transaction.atomic opens a NESTED savepoint; any failure (proof
+    # controls / not-active item) rolls the savepoint back AND propagates so the
+    # outer transaction here rolls back too — the report is never left returned
+    # with an un-returned item, or vice-versa.
+    returned_item = return_lost_found_item(
+        item,
+        user=user,
+        claimed_by_name=recipient_name,
+        claimed_by_phone=recipient_phone,
+        note=note,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        # The handover contract requires a phone OR a linked known guest. An LR
+        # report tied to a KNOWN guest (the reporter) satisfies the guest
+        # condition even when the found item itself has no guest link, so thread
+        # the report's OR the item's guest link as the effective "has guest".
+        recipient_has_guest=(
+            report.guest_id is not None or item.guest_id is not None
+        ),
+        # Legitimate atomic handover of the very item THIS report matches — the
+        # actively-matched guard would otherwise (correctly) block a standalone
+        # return, so bypass it here only via this non-forgeable internal flag.
+        _via_matched_handover=True,
+    )
+    previous = report.status
+    report.status = LostReportStatus.RETURNED
+    report.returned_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    # Make the report's audit trail self-sufficient: record the NON-SENSITIVE
+    # recipient name (never phone/proof) alongside the caller note. The recipient
+    # is resolved exactly as the found item did — a blank name falls back to the
+    # item's stored claimant — so the report log stands on its own.
+    recipient = (recipient_name or "").strip() or returned_item.claimed_by_name
+    handover_note = (note or "").strip()
+    log_note = f"→ {recipient}" + (f" · {handover_note}" if handover_note else "")
+    _lr_log(report, previous, report.status, user, log_note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.returned",
+        category="operation",
+        severity="success",
+        title=f"Lost report {report.report_number} handed over",
+        message=f"→ {report.reporter_name}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def close_unfound(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Close an OPEN/SEARCHING report as NOT FOUND (mandatory reason)."""
+    if not (reason or "").strip():
+        raise LostReportReasonRequired({"reason": "close_unfound"})
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.CLOSED_UNFOUND}
+        )
+    previous = report.status
+    report.status = LostReportStatus.CLOSED_UNFOUND
+    report.unfound_reason = reason.strip()
+    report.closed_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.closed_unfound",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} closed (not found)",
+        message=reason.strip(),
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def cancel_lost_report(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Cancel an OPEN/SEARCHING report (mandatory reason — reuses the existing
+    neutral :class:`CancellationReasonRequired`)."""
+    if not (reason or "").strip():
+        raise CancellationReasonRequired()
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.CANCELLED}
+        )
+    previous = report.status
+    report.status = LostReportStatus.CANCELLED
+    report.cancellation_reason = reason.strip()
+    report.cancelled_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.cancelled",
+        category="operation",
+        severity="warning",
+        title=f"Lost report {report.report_number} cancelled",
+        message=reason.strip(),
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report

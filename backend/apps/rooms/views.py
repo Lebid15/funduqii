@@ -6,7 +6,7 @@ inventory only: no reservations, availability, guests or money.
 """
 from __future__ import annotations
 
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
 from rest_framework import generics, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -26,6 +26,7 @@ from .models import Floor, Room, RoomStatus, RoomType
 from .serializers import (
     FloorSerializer,
     RoomBulkCreateSerializer,
+    RoomOptionSerializer,
     RoomSerializer,
     RoomStatusUpdateSerializer,
     RoomTypeSerializer,
@@ -224,6 +225,53 @@ class RoomListCreateView(_HotelScopedMixin, generics.ListCreateAPIView):
         return Response(
             RoomSerializer(room).data, status=status.HTTP_201_CREATED
         )
+
+
+class RoomOptionsView(_HotelScopedMixin, generics.ListAPIView):
+    """COMPACT, read-only, server-side-searchable room OPTIONS for the operations
+    tabs' async-select dropdowns (decision 16). ADDITIVE — the existing room list
+    (:class:`RoomListCreateView`) is unchanged.
+
+    Why it exists: the operations dropdowns previously pulled ``rooms/?page_size=100``
+    and SILENTLY dropped every room past the first 100, because
+    ``DefaultPagination.max_page_size`` is 100. This endpoint fixes that WITHOUT
+    an unbounded/all-rooms response:
+
+    * hotel-scoped to ``request.hotel``, permission ``rooms.view`` (read-only);
+    * paginated by the standard ``DefaultPagination`` (page_size 25, max 100), so
+      page 2+ is reachable and NO room is dropped — the async-select paginates and
+      searches instead of fetching the whole inventory;
+    * server-side ``?search=`` matches room ``number`` OR room-type name OR floor
+      name (icontains), so the select queries the server as the user types;
+    * ``select_related("room_type", "floor")`` -> the compact serializer's
+      ``floor_name`` / ``room_type_name`` add no per-row query (no N+1);
+    * archived rooms are excluded — a dropdown lists SELECTABLE rooms;
+    * deterministic ``number`` ordering so pagination is stable (a page never
+      repeats or skips a row).
+
+    Only the GET verb is exposed (``ListAPIView``); ``get_permissions`` (from the
+    mixin) returns ``rooms.view`` for the read path.
+    """
+
+    serializer_class = RoomOptionSerializer
+
+    def get_queryset(self):
+        qs = (
+            Room.objects.filter(hotel=self.request.hotel)
+            .exclude(status=RoomStatus.ARCHIVED)
+            .select_related("room_type", "floor")
+        )
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(number__icontains=search)
+                | Q(room_type__name__icontains=search)
+                | Q(floor__name__icontains=search)
+            )
+        # Deterministic order (number, then id as a stable tiebreaker) so
+        # pagination is consistent across pages — the whole point is that no room
+        # is dropped, which requires a stable total order.
+        return qs.order_by("number", "id")
 
 
 class RoomBulkCreateView(APIView):
