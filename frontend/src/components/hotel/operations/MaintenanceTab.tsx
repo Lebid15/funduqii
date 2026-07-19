@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   BedDouble,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   Play,
   Plus,
   Tag,
+  Timer,
   UserCheck,
   Wrench,
   XCircle,
@@ -61,7 +62,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { OperationCard, type OperationMenuItem } from "./OperationCard";
 import { RoomOptionSelect } from "./RoomOptionSelect";
 import { StatCards, type OperationStat } from "./StatCards";
-import { AssignModal, useCan } from "./operationsShared";
+import { AssignModal, formatDuration, useCan } from "./operationsShared";
 
 const PAGE_SIZE = 25;
 const CATEGORIES: MaintenanceCategory[] = [
@@ -105,7 +106,27 @@ export function MaintenanceTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true after the FIRST settled load. It draws the line between the
+  // INITIAL load — which owns the full-screen LoadingState / ErrorState — and
+  // every later BACKGROUND fetch (filter, page, post-action reload), which keeps
+  // the cards mounted and only shows the subtle inline cue (a11y M1).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  // Ref mirror of `hasLoadedOnce`, read INSIDE the async catch so the initial-vs-
+  // background decision is never made from a stale closure value.
+  const loadedOnceRef = useRef(false);
+  // Guards the terminal state writes against a just-unmounted panel.
+  const mountedRef = useRef(true);
+  // Monotonic request id: only the LATEST load may write rows/count/loading, so a
+  // slow earlier fetch can never overwrite a newer one (no abort signal on these
+  // list endpoints).
+  const seqRef = useRef(0);
+  // The stable focus anchor after an action re-renders the list (a11y M1).
+  const resultsRef = useRef<HTMLDivElement>(null);
+  // Set true right before an ACTION-triggered reload so the settle effect knows to
+  // restore focus if the acting control unmounted.
+  const restoreFocusRef = useRef(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [quickRoom, setQuickRoom] = useState(0);
@@ -118,6 +139,7 @@ export function MaintenanceTab() {
   const [assignReq, setAssignReq] = useState<MaintenanceRequestListItem | null>(null);
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -134,6 +156,7 @@ export function MaintenanceTab() {
         listMaintenanceRequests({ status: "resolved", page: 1 }),
         getOperationsOverview(),
       ]);
+      if (seqRef.current !== seq) return;
       setRows(reqs.results);
       setCount(reqs.count);
       setStats({
@@ -142,15 +165,51 @@ export function MaintenanceTab() {
         awaitingClose: resolved.count,
         blockingRooms: overview.rooms_under_maintenance,
       });
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure — cards are already on screen. Surface it
+      // NON-BLOCKINGLY via a toast and keep them mounted; the full-screen
+      // ErrorState + retry is reserved for the initial load only.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, category, priority, t]);
+  }, [page, query, status, category, priority, t, notify]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // a11y M1 — after an ACTION-triggered reload settles, if the re-render dropped
+  // the focused control (focus fell to <body> or a now-detached node), move focus
+  // to the stable results anchor so keyboard/SR users keep their place. Keyed on
+  // `rows` (a fresh array on every successful load) so it fires reliably even when
+  // React coalesces the loading toggle.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  // Reload after a card action, flagging the settle effect to restore focus if
+  // the acting card/control unmounted in the re-render.
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
   }, [load]);
 
   async function run(id: number, action: () => Promise<unknown>, msg: string) {
@@ -158,7 +217,7 @@ export function MaintenanceTab() {
     try {
       await action();
       notify(msg);
-      await load();
+      await reloadAfterAction();
     } catch (err) {
       notify(messageForError(err, t), "error");
     } finally {
@@ -216,6 +275,21 @@ export function MaintenanceTab() {
     },
   ];
 
+  // Full-screen loader / error are reserved for the INITIAL load (gated on
+  // `hasLoadedOnce`, NOT on rows). Every later fetch keeps the current view + the
+  // subtle inline cue, and a transient failure is a non-blocking toast.
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+  // Announce the SETTLED result count once per settled fetch — blank while a
+  // fetch is in flight and before the first successful load.
+  const resultsAnnouncement =
+    !loading && hasLoadedOnce
+      ? count === 0
+        ? t.operations.noResults
+        : t.operations.resultsCount.replace("{count}", String(count))
+      : "";
+
   function renderCard(row: MaintenanceRequestListItem) {
     const active = ["open", "assigned", "in_progress"].includes(row.status);
     const canStatus = can("maintenance.status_update");
@@ -265,11 +339,17 @@ export function MaintenanceTab() {
         ? `${mt.blocksRoom} · ${mt.blocks[row.room_block_status as "maintenance" | "out_of_service"]}`
         : mt.blocksRoom;
 
+    // Elapsed work time from the start timestamp (up to the resolve time, or now
+    // for an in-progress request) — the same started_at → duration the cleaning
+    // card shows.
+    const duration = formatDuration(row.started_at, row.resolved_at, locale);
+
     return (
       <OperationCard
         accent={blocking ? "danger" : operationPriorityTone(row.priority)}
         number={row.request_number}
         title={row.title}
+        note={row.description || null}
         ariaLabel={`${mt.title} ${row.request_number}`}
         moreLabel={t.operations.moreActions}
         badges={
@@ -316,6 +396,16 @@ export function MaintenanceTab() {
             value: formatDateTime(row.reported_at, locale),
             icon: Clock,
           },
+          ...(row.started_at
+            ? [
+                {
+                  key: "duration",
+                  label: mt.duration,
+                  value: duration ?? "—",
+                  icon: Timer,
+                },
+              ]
+            : []),
           ...(row.resolved_at
             ? [
                 {
@@ -403,41 +493,75 @@ export function MaintenanceTab() {
           </FilterBar>
         </form>
 
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
+        {/* STABLE polite live region — mounted for the panel's whole life, so the
+            settled result count is announced by a TEXT CHANGE, never by mounting-
+            with-content. Blank while a fetch is in flight (a11y M1). */}
+        <div
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="mt-results-announce"
+        >
+          {resultsAnnouncement}
+        </div>
+
+        {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+        {showInitialError ? (
           <ErrorState
             title={t.states.errorTitle}
-            message={error}
+            message={error ?? ""}
             retryLabel={t.common.retry}
             onRetry={load}
           />
         ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={mt.empty} hint={mt.emptyHint} icon={Wrench} />
-          ) : (
-            <>
-              <div className="op-grid" role="list" aria-label={mt.title}>
-                {rows.map((row) => (
-                  <div role="listitem" key={row.id}>
-                    {renderCard(row)}
-                  </div>
-                ))}
-              </div>
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                labels={{
-                  previous: t.pagination.previous,
-                  next: t.pagination.next,
-                  status: t.pagination.page
-                    .replace("{page}", String(page))
-                    .replace("{total}", String(totalPages)),
-                }}
-              />
-            </>
-          )
+        {!showInitialLoading && !showInitialError ? (
+          <div
+            className="op-results"
+            ref={resultsRef}
+            tabIndex={-1}
+            aria-label={mt.title}
+          >
+            {/* Reserved-height status row — the background-refetch cue lives here
+                so toggling it never reflows the grid / empty state below. */}
+            <div className="op-results__status" role="status" aria-live="polite">
+              {backgroundRefreshing ? (
+                <span className="op-results__searching">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>{t.operations.updating}</span>
+                </span>
+              ) : null}
+            </div>
+            {rows.length === 0 ? (
+              <EmptyState title={mt.empty} hint={mt.emptyHint} icon={Wrench} />
+            ) : (
+              <>
+                <div
+                  className="op-grid"
+                  role="list"
+                  aria-label={mt.title}
+                  aria-busy={backgroundRefreshing}
+                >
+                  {rows.map((row) => (
+                    <div role="listitem" key={row.id}>
+                      {renderCard(row)}
+                    </div>
+                  ))}
+                </div>
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page
+                      .replace("{page}", String(page))
+                      .replace("{total}", String(totalPages)),
+                  }}
+                />
+              </>
+            )}
+          </div>
         ) : null}
       </Card>
 
@@ -452,7 +576,7 @@ export function MaintenanceTab() {
           setCreateOpen(false);
           setQuickRoom(0);
           notify(mt.created);
-          load();
+          reloadAfterAction();
         }}
       />
       <CloseModal
@@ -461,7 +585,7 @@ export function MaintenanceTab() {
         onDone={() => {
           setCloseReq(null);
           notify(mt.closedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <CancelModal
@@ -470,7 +594,7 @@ export function MaintenanceTab() {
         onDone={() => {
           setCancelReq(null);
           notify(mt.cancelledMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <AssignModal
@@ -490,7 +614,7 @@ export function MaintenanceTab() {
           await assignMaintenanceRequest(assignReq.id, userId);
           setAssignReq(null);
           notify(userId === null ? t.operations.saved : mt.assignedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
     </>

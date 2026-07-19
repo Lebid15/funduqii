@@ -137,7 +137,10 @@ export function RoomOptionSelect({
           }
         />
         <div className="cluster" style={{ justifyContent: "space-between" }}>
-          <span className="muted small">
+          {/* a11y Low: the async search/empty state is announced politely so a
+              screen-reader user hears "loading…" / "no rooms found" as the picker
+              fetches, instead of a silently-changing list. */}
+          <span className="muted small" role="status" aria-live="polite">
             {loading
               ? loadingLabel
               : selectOptions.length === 0

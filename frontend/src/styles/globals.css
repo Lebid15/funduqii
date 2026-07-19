@@ -5911,6 +5911,47 @@ a {
   box-shadow: var(--focus-ring);
   border-radius: var(--radius-lg);
 }
+/* The results area — a stable column holding the reserved status row (the
+ * background-refetch cue) above the card grid OR the empty state. Mirrors the
+ * guest-results family. It is ALSO the programmatic focus anchor after a card
+ * action re-renders the list: a11y M1 — if the acting control unmounted, focus
+ * lands here (labelled by the section) instead of falling to <body>. */
+.op-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.op-results:focus {
+  outline: none;
+}
+.op-results:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-lg);
+}
+/* The background-refetch cue lives in this ALWAYS-present row with a reserved
+ * min-height, so showing/hiding it never pushes the grid / empty state down
+ * (no vertical jump on filter/page change). */
+.op-results__status {
+  display: flex;
+  align-items: center;
+  min-height: 1.5rem;
+}
+/* Subtle inline "updating…" cue shown during a BACKGROUND refetch (filter/page
+ * change or a post-action reload). The cards / empty state stay mounted, so the
+ * full-screen loader never flickers after the first load. */
+.op-results__searching {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
+.op-results__searching .spinner {
+  width: 1rem;
+  height: 1rem;
+  border-width: 2px;
+}
 .op-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));

@@ -405,13 +405,20 @@ describe("HousekeepingTab — async states", () => {
   it("shows the loading state while the first load is in flight", async () => {
     const d = deferred<PaginatedResponse<ReturnType<typeof makeHkTask>>>();
     vi.mocked(listHousekeepingTasks).mockReturnValue(d.promise);
-    renderWithProviders(<HousekeepingTab />);
+    const { container } = renderWithProviders(<HousekeepingTab />);
 
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    // The full-screen INITIAL loader is a `.state` status panel. The room-picker
+    // in the filter bar has its OWN polite status region, so target the initial
+    // loader specifically (not a bare role=status).
+    expect(container.querySelector(".state[role='status']")).toBeInTheDocument();
     await act(async () => {
       d.resolve(page([]));
     });
-    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    // Once the first load settles, the full loader is gone (the cards region and
+    // its reserved background-refetch status row take over).
+    await waitFor(() =>
+      expect(container.querySelector(".state[role='status']")).not.toBeInTheDocument(),
+    );
   });
 
   it("shows an error state with a Retry that recovers", async () => {
@@ -441,5 +448,52 @@ describe("HousekeepingTab — RTL (ar locale)", () => {
     ]);
     renderWithProviders(<HousekeepingTab />, { locale: "ar" });
     expect(await screen.findByText(/وصول قريب/)).toBeInTheDocument();
+  });
+});
+
+describe("HousekeepingTab — a11y M1 (non-destructive refetch + live region + focus)", () => {
+  it("announces the settled result count in the stable live region", async () => {
+    tasks([makeHkTask()], 1);
+    renderWithProviders(<HousekeepingTab />);
+    await screen.findByText("Standard");
+    await waitFor(() =>
+      expect(screen.getByTestId("hk-results-announce")).toHaveTextContent("1 results"),
+    );
+  });
+
+  it("keeps the cards mounted with NO full-screen loader during a background refetch", async () => {
+    tasks([makeHkTask()], 1);
+    const { container } = renderWithProviders(<HousekeepingTab />);
+    await screen.findByText("Standard");
+
+    // Hold the next (filter-triggered) refetch in flight.
+    const d = deferred<PaginatedResponse<ReturnType<typeof makeHkTask>>>();
+    vi.mocked(listHousekeepingTasks).mockReturnValue(d.promise);
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "pending" } });
+
+    // The existing card stays mounted; the full-screen initial loader never shows.
+    expect(screen.getByText("Standard")).toBeInTheDocument();
+    expect(container.querySelector(".state[role='status']")).not.toBeInTheDocument();
+
+    await act(async () => {
+      d.resolve(page([makeHkTask()], 1));
+    });
+    await screen.findByText("Standard");
+  });
+
+  it("moves focus to the stable results anchor (never <body>) after an action drops the card", async () => {
+    access.set(["housekeeping.status_update"]);
+    tasks([makeHkTask({ status: "assigned", assigned_to: 501, assigned_to_name: "Sara" })], 1);
+    renderWithProviders(<HousekeepingTab />);
+    const start = await screen.findByRole("button", { name: "Start" });
+    start.focus();
+
+    // The action's reload returns an empty list (the card leaves the view).
+    vi.mocked(listHousekeepingTasks).mockResolvedValue(page([]));
+    fireEvent.click(start);
+
+    await screen.findByText("No housekeeping tasks");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveClass("op-results");
   });
 });

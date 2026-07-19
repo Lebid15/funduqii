@@ -275,6 +275,35 @@ describe("OperationsPanel — the stat row renders per tab", () => {
   });
 });
 
+describe("OperationsPanel — aria-controls references only the mounted panel", () => {
+  it("points the ACTIVE tab at the one mounted tabpanel and drops it on inactive tabs", async () => {
+    renderWithProviders(<OperationsPanel />);
+    await screen.findByText("No housekeeping tasks");
+
+    const cleaning = screen.getByRole("tab", { name: "Cleaning" });
+    const maintenance = screen.getByRole("tab", { name: "Maintenance" });
+    const panel = screen.getByRole("tabpanel");
+
+    // The active tab controls the mounted panel — and its id RESOLVES to it.
+    const controls = cleaning.getAttribute("aria-controls");
+    expect(controls).toBe(panel.id);
+    expect(document.getElementById(controls as string)).toBe(panel);
+    // Inactive tabs carry NO dangling aria-controls (their panel isn't mounted).
+    expect(maintenance).not.toHaveAttribute("aria-controls");
+
+    // Activating Maintenance mounts + references ITS panel and clears Cleaning's.
+    fireEvent.click(maintenance);
+    await screen.findByText("No maintenance requests");
+    const panel2 = screen.getByRole("tabpanel");
+    const controls2 = maintenance.getAttribute("aria-controls");
+    expect(controls2).toBe(panel2.id);
+    expect(document.getElementById(controls2 as string)).toBe(panel2);
+    expect(screen.getByRole("tab", { name: "Cleaning" })).not.toHaveAttribute(
+      "aria-controls",
+    );
+  });
+});
+
 describe("OperationsPanel — RTL (ar locale)", () => {
   it("labels the tablist in Arabic and treats ArrowLeft as forward", async () => {
     renderWithProviders(<OperationsPanel />, { locale: "ar" });

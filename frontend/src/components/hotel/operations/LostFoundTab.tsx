@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   BedDouble,
@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Undo2,
   User,
+  UserCheck,
   XCircle,
 } from "lucide-react";
 
@@ -110,7 +111,16 @@ export function LostFoundTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true after the FIRST settled load — the initial load owns the full
+  // LoadingState / ErrorState, later fetches keep the cards mounted (a11y M1).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [handOver, setHandOver] = useState<{
@@ -120,6 +130,7 @@ export function LostFoundTab() {
   const [disposeItem, setDisposeItem] = useState<LostFoundItemListItem | null>(null);
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -135,6 +146,7 @@ export function LostFoundTab() {
         listLostFoundItems({ status: "claimed", page: 1 }),
         listLostFoundItems({ status: "returned", page: 1 }),
       ]);
+      if (seqRef.current !== seq) return;
       setRows(items.results);
       setCount(items.count);
       setStats({
@@ -143,15 +155,47 @@ export function LostFoundTab() {
         claimed: claimed.count,
         returned: returned.count,
       });
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure — keep the cards, surface a non-blocking toast;
+      // the full ErrorState + retry is reserved for the initial load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, category, t]);
+  }, [page, query, status, category, t, notify]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // a11y M1 — after an ACTION-triggered reload settles, restore focus to the
+  // stable results anchor if the acting control unmounted (focus fell to <body>
+  // or a now-detached node). Keyed on `rows` (a fresh array on every successful
+  // load) so it fires reliably even when React coalesces the loading toggle.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
   }, [load]);
 
   async function run(id: number, action: () => Promise<unknown>, msg: string) {
@@ -159,7 +203,7 @@ export function LostFoundTab() {
     try {
       await action();
       notify(msg);
-      await load();
+      await reloadAfterAction();
     } catch (err) {
       notify(messageForError(err, t), "error");
     } finally {
@@ -214,6 +258,16 @@ export function LostFoundTab() {
       onFilter: () => applyStatusFilter("returned"),
     },
   ];
+
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+  const resultsAnnouncement =
+    !loading && hasLoadedOnce
+      ? count === 0
+        ? t.operations.noResults
+        : t.operations.resultsCount.replace("{count}", String(count))
+      : "";
 
   function renderCard(row: LostFoundItemListItem) {
     const canStatus = can("lost_found.status_update");
@@ -272,6 +326,7 @@ export function LostFoundTab() {
         accent={lostFoundStatusTone(row.status)}
         number={row.item_number}
         title={row.title}
+        note={row.description || null}
         ariaLabel={`${lf.title} ${row.item_number}`}
         moreLabel={t.operations.moreActions}
         badges={
@@ -300,6 +355,16 @@ export function LostFoundTab() {
             value: formatDateTime(row.found_at, locale),
             icon: Clock,
           },
+          ...(row.found_by_name
+            ? [
+                {
+                  key: "finder",
+                  label: lf.finder,
+                  value: row.found_by_name,
+                  icon: User,
+                },
+              ]
+            : []),
           {
             key: "storedLocation",
             label: lf.storedLocation,
@@ -308,6 +373,16 @@ export function LostFoundTab() {
           },
           ...(row.guest_name
             ? [{ key: "guest", label: lf.guest, value: row.guest_name, icon: User }]
+            : []),
+          ...(row.claimed_by_name
+            ? [
+                {
+                  key: "claimant",
+                  label: lf.claimant,
+                  value: row.claimed_by_name,
+                  icon: UserCheck,
+                },
+              ]
             : []),
           ...(row.room_number
             ? [
@@ -394,41 +469,72 @@ export function LostFoundTab() {
           </FilterBar>
         </form>
 
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
+        {/* STABLE polite live region — always mounted; announces the settled
+            result count by a text change (a11y M1). */}
+        <div
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="lf-results-announce"
+        >
+          {resultsAnnouncement}
+        </div>
+
+        {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+        {showInitialError ? (
           <ErrorState
             title={t.states.errorTitle}
-            message={error}
+            message={error ?? ""}
             retryLabel={t.common.retry}
             onRetry={load}
           />
         ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={lf.empty} hint={lf.emptyHint} icon={PackageSearch} />
-          ) : (
-            <>
-              <div className="op-grid" role="list" aria-label={lf.title}>
-                {rows.map((row) => (
-                  <div role="listitem" key={row.id}>
-                    {renderCard(row)}
-                  </div>
-                ))}
-              </div>
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                labels={{
-                  previous: t.pagination.previous,
-                  next: t.pagination.next,
-                  status: t.pagination.page
-                    .replace("{page}", String(page))
-                    .replace("{total}", String(totalPages)),
-                }}
-              />
-            </>
-          )
+        {!showInitialLoading && !showInitialError ? (
+          <div
+            className="op-results"
+            ref={resultsRef}
+            tabIndex={-1}
+            aria-label={lf.title}
+          >
+            <div className="op-results__status" role="status" aria-live="polite">
+              {backgroundRefreshing ? (
+                <span className="op-results__searching">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>{t.operations.updating}</span>
+                </span>
+              ) : null}
+            </div>
+            {rows.length === 0 ? (
+              <EmptyState title={lf.empty} hint={lf.emptyHint} icon={PackageSearch} />
+            ) : (
+              <>
+                <div
+                  className="op-grid"
+                  role="list"
+                  aria-label={lf.title}
+                  aria-busy={backgroundRefreshing}
+                >
+                  {rows.map((row) => (
+                    <div role="listitem" key={row.id}>
+                      {renderCard(row)}
+                    </div>
+                  ))}
+                </div>
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page
+                      .replace("{page}", String(page))
+                      .replace("{total}", String(totalPages)),
+                  }}
+                />
+              </>
+            )}
+          </div>
         ) : null}
       </Card>
 
@@ -438,7 +544,7 @@ export function LostFoundTab() {
         onSaved={() => {
           setCreateOpen(false);
           notify(lf.created);
-          load();
+          reloadAfterAction();
         }}
       />
       <HandOverModal
@@ -447,7 +553,7 @@ export function LostFoundTab() {
         onDone={(mode) => {
           setHandOver(null);
           notify(mode === "claim" ? lf.claimedMsg : lf.returnedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <DisposeModal
@@ -456,7 +562,7 @@ export function LostFoundTab() {
         onDone={() => {
           setDisposeItem(null);
           notify(lf.disposedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
     </>

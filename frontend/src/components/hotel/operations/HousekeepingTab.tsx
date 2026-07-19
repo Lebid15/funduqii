@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   BedDouble,
   Brush,
@@ -118,7 +118,7 @@ interface PresetRoom {
 }
 
 export function HousekeepingTab() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { notify } = useToast();
   const can = useCan();
   const hk = t.operations.hk;
@@ -143,7 +143,16 @@ export function HousekeepingTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true after the FIRST settled load — the initial load owns the full
+  // LoadingState / ErrorState, later fetches keep the cards mounted (a11y M1).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [quickRoom, setQuickRoom] = useState(0);
@@ -161,6 +170,7 @@ export function HousekeepingTab() {
   const [foundRoom, setFoundRoom] = useState<PresetRoom | null>(null);
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -181,6 +191,7 @@ export function HousekeepingTab() {
         listHousekeepingTasks({ status: "awaiting_inspection", page: 1 }),
         listArrivalsNotReady(),
       ]);
+      if (seqRef.current !== seq) return;
       setRows(tasks.results);
       setCount(tasks.count);
       setStats({
@@ -189,15 +200,47 @@ export function HousekeepingTab() {
         awaitingInspection: awaiting.count,
         upcomingArrival: arrivals.length,
       });
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure — keep the cards, non-blocking toast; the full
+      // ErrorState + retry is reserved for the initial load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, taskType, priority, roomId, date, mineOnly, ordering, t]);
+  }, [page, query, status, taskType, priority, roomId, date, mineOnly, ordering, t, notify]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // a11y M1 — after an ACTION-triggered reload settles, restore focus to the
+  // stable results anchor if the acting control unmounted (focus fell to <body>
+  // or a now-detached node). Keyed on `rows` (a fresh array on every successful
+  // load) so it fires reliably even when React coalesces the loading toggle.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
   }, [load]);
 
   async function run(id: number, action: () => Promise<unknown>, successMessage: string) {
@@ -205,7 +248,7 @@ export function HousekeepingTab() {
     try {
       await action();
       notify(successMessage);
-      await load();
+      await reloadAfterAction();
     } catch (err) {
       notify(messageForError(err, t), "error");
     } finally {
@@ -263,188 +306,21 @@ export function HousekeepingTab() {
     },
   ];
 
-  function renderCard(row: HousekeepingTaskListItem) {
-    const active = ["pending", "assigned", "in_progress"].includes(row.status);
-    const canStart = can("housekeeping.status_update");
-    const canAssign = can("housekeeping.assign");
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+  const resultsAnnouncement =
+    !loading && hasLoadedOnce
+      ? count === 0
+        ? t.operations.noResults
+        : t.operations.resultsCount.replace("{count}", String(count))
+      : "";
 
-    // ONE primary action, computed from state + permission (§4).
-    let primary: React.ComponentProps<typeof OperationCard>["primary"] = null;
-    let primaryKind = "";
-    if (row.status === "pending" || row.status === "assigned") {
-      if (!row.assigned_to && canAssign) {
-        primaryKind = "assign";
-        primary = { label: hk.assign, icon: UserCheck, onClick: () => setAssignTask(row) };
-      } else if (canStart) {
-        primaryKind = "start";
-        primary = {
-          label: hk.start,
-          icon: Play,
-          loading: busyId === row.id,
-          onClick: () =>
-            run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
-        };
-      } else if (canAssign) {
-        primaryKind = "assign";
-        primary = { label: hk.reassign, icon: UserCheck, onClick: () => setAssignTask(row) };
-      }
-    } else if (row.status === "in_progress" && canStart) {
-      primaryKind = "complete";
-      primary = {
-        label: hk.complete,
-        icon: CheckCircle2,
-        onClick: () => setCompleteTask(row),
-      };
-    } else if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
-      primaryKind = "approve";
-      primary = {
-        label: hk.approveInspection,
-        icon: ClipboardCheck,
-        loading: busyId === row.id,
-        onClick: () => run(row.id, () => approveInspection(row.id), t.operations.saved),
-      };
-    }
-
-    const menu: OperationMenuItem[] = [];
-    if ((row.status === "pending" || row.status === "assigned") && canStart && primaryKind !== "start") {
-      menu.push({
-        key: "start",
-        label: hk.start,
-        icon: Play,
-        onSelect: () =>
-          run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
-      });
-    }
-    if (active && canAssign && primaryKind !== "assign") {
-      menu.push({
-        key: "assign",
-        label: row.assigned_to ? hk.reassign : hk.assign,
-        icon: UserCheck,
-        onSelect: () => setAssignTask(row),
-      });
-    }
-    if (row.status === "in_progress" && canStart) {
-      menu.push({
-        key: "comeBack",
-        label: hk.comeBackLater,
-        icon: PauseCircle,
-        onSelect: () => setComeBackTask(row),
-      });
-    }
-    if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
-      menu.push({
-        key: "reject",
-        label: hk.rejectInspection,
-        icon: XCircle,
-        danger: true,
-        onSelect: () => setRejectTask(row),
-      });
-    }
-    if (active && can("housekeeping.update")) {
-      menu.push({
-        key: "priority",
-        label: hk.editPriority,
-        icon: SlidersHorizontal,
-        onSelect: () => setPriorityTask(row),
-      });
-    }
-    if (active && row.room !== null && can("maintenance.create")) {
-      menu.push({
-        key: "defect",
-        label: hk.reportDefect,
-        icon: Wrench,
-        onSelect: () => setDefectRoom({ id: row.room as number, label: row.room_number }),
-      });
-    }
-    if (active && row.room !== null && can("lost_found.create")) {
-      menu.push({
-        key: "found",
-        label: hk.registerFound,
-        icon: PackageSearch,
-        onSelect: () => setFoundRoom({ id: row.room as number, label: row.room_number }),
-      });
-    }
-    if (active && can("housekeeping.cancel")) {
-      menu.push({
-        key: "cancel",
-        label: t.common.cancel,
-        icon: XCircle,
-        danger: true,
-        onSelect: () => setCancelTask(row),
-      });
-    }
-
-    const duration = formatDuration(row.started_at, row.completed_at, locale);
-
-    return (
-      <OperationCard
-        accent={operationPriorityTone(row.priority)}
-        number={row.task_number}
-        title={<bdi dir="ltr">{row.room_number || "—"}</bdi>}
-        ariaLabel={`${hk.title} ${row.task_number}`}
-        moreLabel={t.operations.moreActions}
-        badges={
-          <>
-            <Badge tone={housekeepingStatusTone(row.status)} variant="filled">
-              {hk.status[row.status]}
-            </Badge>
-            <Badge tone={operationPriorityTone(row.priority)}>
-              {t.operations.priority[row.priority]}
-            </Badge>
-            {row.is_occupied ? (
-              <Badge tone="info" icon={BedDouble}>
-                {hk.occupied}
-              </Badge>
-            ) : null}
-            {row.upcoming_arrival.has_upcoming ? (
-              <Badge tone="warning" variant="outline" icon={PlaneLanding}>
-                {row.upcoming_arrival.arrival_date
-                  ? `${hk.arrivalSoon} · ${formatDate(row.upcoming_arrival.arrival_date, locale)}`
-                  : hk.arrivalSoon}
-              </Badge>
-            ) : null}
-            {row.status === "completed" && row.service_outcome ? (
-              <Badge tone="neutral">{hk.serviceOutcome[row.service_outcome]}</Badge>
-            ) : null}
-          </>
-        }
-        facts={[
-          { key: "type", label: hk.typeLabel, value: hk.types[row.task_type], icon: Brush },
-          { key: "unit", label: hk.unitType, value: row.room_type_name || "—", icon: Tag },
-          {
-            key: "floor",
-            label: hk.floor,
-            value: row.floor_name || row.floor_number || "—",
-            icon: Layers,
-          },
-          {
-            key: "assignee",
-            label: hk.assignee,
-            value: row.assigned_to_name || hk.unassigned,
-            icon: UserCheck,
-          },
-          {
-            key: "requested",
-            label: hk.requestedAt,
-            value: formatDateTime(row.requested_at, locale),
-            icon: Clock,
-          },
-          ...(row.started_at
-            ? [
-                {
-                  key: "duration",
-                  label: hk.duration,
-                  value: duration ?? "—",
-                  icon: Timer,
-                },
-              ]
-            : []),
-        ]}
-        primary={primary}
-        menu={menu}
-      />
-    );
-  }
+  // Cross-tab openers — extract the room context the create modals need.
+  const openDefect = (row: HousekeepingTaskListItem) =>
+    setDefectRoom({ id: row.room as number, label: row.room_number });
+  const openFound = (row: HousekeepingTaskListItem) =>
+    setFoundRoom({ id: row.room as number, label: row.room_number });
 
   return (
     <>
@@ -562,41 +438,85 @@ export function HousekeepingTab() {
           </FilterBar>
         </form>
 
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
+        {/* STABLE polite live region — always mounted; announces the settled
+            result count by a text change (a11y M1). */}
+        <div
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="hk-results-announce"
+        >
+          {resultsAnnouncement}
+        </div>
+
+        {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+        {showInitialError ? (
           <ErrorState
             title={t.states.errorTitle}
-            message={error}
+            message={error ?? ""}
             retryLabel={t.common.retry}
             onRetry={load}
           />
         ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={hk.empty} hint={hk.emptyHint} icon={Brush} />
-          ) : (
-            <>
-              <div className="op-grid" role="list" aria-label={hk.title}>
-                {rows.map((row) => (
-                  <div role="listitem" key={row.id}>
-                    {renderCard(row)}
-                  </div>
-                ))}
-              </div>
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                labels={{
-                  previous: t.pagination.previous,
-                  next: t.pagination.next,
-                  status: t.pagination.page
-                    .replace("{page}", String(page))
-                    .replace("{total}", String(totalPages)),
-                }}
-              />
-            </>
-          )
+        {!showInitialLoading && !showInitialError ? (
+          <div
+            className="op-results"
+            ref={resultsRef}
+            tabIndex={-1}
+            aria-label={hk.title}
+          >
+            <div className="op-results__status" role="status" aria-live="polite">
+              {backgroundRefreshing ? (
+                <span className="op-results__searching">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>{t.operations.updating}</span>
+                </span>
+              ) : null}
+            </div>
+            {rows.length === 0 ? (
+              <EmptyState title={hk.empty} hint={hk.emptyHint} icon={Brush} />
+            ) : (
+              <>
+                <div
+                  className="op-grid"
+                  role="list"
+                  aria-label={hk.title}
+                  aria-busy={backgroundRefreshing}
+                >
+                  {rows.map((row) => (
+                    <div role="listitem" key={row.id}>
+                      <HkCard
+                        row={row}
+                        can={can}
+                        busyId={busyId}
+                        run={run}
+                        onAssign={setAssignTask}
+                        onComplete={setCompleteTask}
+                        onCancel={setCancelTask}
+                        onReject={setRejectTask}
+                        onEditPriority={setPriorityTask}
+                        onComeBack={setComeBackTask}
+                        onReportDefect={openDefect}
+                        onRegisterFound={openFound}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page
+                      .replace("{page}", String(page))
+                      .replace("{total}", String(totalPages)),
+                  }}
+                />
+              </>
+            )}
+          </div>
         ) : null}
       </Card>
 
@@ -611,7 +531,7 @@ export function HousekeepingTab() {
           setCreateOpen(false);
           setQuickRoom(0);
           notify(hk.created);
-          load();
+          reloadAfterAction();
         }}
       />
       <CompleteModal
@@ -620,7 +540,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setCompleteTask(null);
           notify(hk.completedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <ComeBackLaterModal
@@ -629,7 +549,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setComeBackTask(null);
           notify(hk.comeBackLaterMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <CancelModal
@@ -638,7 +558,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setCancelTask(null);
           notify(hk.cancelledMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <AssignModal
@@ -658,7 +578,7 @@ export function HousekeepingTab() {
           await assignHousekeepingTask(assignTask.id, userId);
           setAssignTask(null);
           notify(userId === null ? t.operations.saved : hk.assignedMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <RejectInspectionModal
@@ -667,7 +587,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setRejectTask(null);
           notify(t.operations.saved);
-          load();
+          reloadAfterAction();
         }}
       />
       <PriorityModal
@@ -676,7 +596,7 @@ export function HousekeepingTab() {
         onDone={() => {
           setPriorityTask(null);
           notify(t.operations.saved);
-          load();
+          reloadAfterAction();
         }}
       />
       <CreateRequestModal
@@ -687,7 +607,7 @@ export function HousekeepingTab() {
         onSaved={() => {
           setDefectRoom(null);
           notify(t.operations.mt.created);
-          load();
+          reloadAfterAction();
         }}
       />
       <CreateItemModal
@@ -698,10 +618,229 @@ export function HousekeepingTab() {
         onSaved={() => {
           setFoundRoom(null);
           notify(t.operations.lf.created);
-          load();
+          reloadAfterAction();
         }}
       />
     </>
+  );
+}
+
+/**
+ * One cleaning task as a card. Presentational + props-driven: all permission and
+ * action wiring lives in the parent (passed as callbacks), and the parent's
+ * async `run` handles the reload + focus restoration. Extracted from an inline
+ * render function into a real component so the a11y-M1 ref plumbing in the parent
+ * is never traced as a "ref access during render" (mirrors the GuestCard shape).
+ */
+function HkCard({
+  row,
+  can,
+  busyId,
+  run,
+  onAssign,
+  onComplete,
+  onCancel,
+  onReject,
+  onEditPriority,
+  onComeBack,
+  onReportDefect,
+  onRegisterFound,
+}: {
+  row: HousekeepingTaskListItem;
+  can: (...codes: string[]) => boolean;
+  busyId: number | null;
+  run: (id: number, action: () => Promise<unknown>, successMessage: string) => void;
+  onAssign: (row: HousekeepingTaskListItem) => void;
+  onComplete: (row: HousekeepingTaskListItem) => void;
+  onCancel: (row: HousekeepingTaskListItem) => void;
+  onReject: (row: HousekeepingTaskListItem) => void;
+  onEditPriority: (row: HousekeepingTaskListItem) => void;
+  onComeBack: (row: HousekeepingTaskListItem) => void;
+  onReportDefect: (row: HousekeepingTaskListItem) => void;
+  onRegisterFound: (row: HousekeepingTaskListItem) => void;
+}) {
+  const { t, locale } = useI18n();
+  const hk = t.operations.hk;
+
+  const active = ["pending", "assigned", "in_progress"].includes(row.status);
+  const canStart = can("housekeeping.status_update");
+  const canAssign = can("housekeeping.assign");
+
+  // ONE primary action, computed from state + permission (§4).
+  let primary: React.ComponentProps<typeof OperationCard>["primary"] = null;
+  let primaryKind = "";
+  if (row.status === "pending" || row.status === "assigned") {
+    if (!row.assigned_to && canAssign) {
+      primaryKind = "assign";
+      primary = { label: hk.assign, icon: UserCheck, onClick: () => onAssign(row) };
+    } else if (canStart) {
+      primaryKind = "start";
+      primary = {
+        label: hk.start,
+        icon: Play,
+        loading: busyId === row.id,
+        onClick: () =>
+          run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
+      };
+    } else if (canAssign) {
+      primaryKind = "assign";
+      primary = { label: hk.reassign, icon: UserCheck, onClick: () => onAssign(row) };
+    }
+  } else if (row.status === "in_progress" && canStart) {
+    primaryKind = "complete";
+    primary = {
+      label: hk.complete,
+      icon: CheckCircle2,
+      onClick: () => onComplete(row),
+    };
+  } else if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
+    primaryKind = "approve";
+    primary = {
+      label: hk.approveInspection,
+      icon: ClipboardCheck,
+      loading: busyId === row.id,
+      onClick: () => run(row.id, () => approveInspection(row.id), t.operations.saved),
+    };
+  }
+
+  const menu: OperationMenuItem[] = [];
+  if ((row.status === "pending" || row.status === "assigned") && canStart && primaryKind !== "start") {
+    menu.push({
+      key: "start",
+      label: hk.start,
+      icon: Play,
+      onSelect: () =>
+        run(row.id, () => setHousekeepingStatus(row.id, "in_progress"), hk.startedMsg),
+    });
+  }
+  if (active && canAssign && primaryKind !== "assign") {
+    menu.push({
+      key: "assign",
+      label: row.assigned_to ? hk.reassign : hk.assign,
+      icon: UserCheck,
+      onSelect: () => onAssign(row),
+    });
+  }
+  if (row.status === "in_progress" && canStart) {
+    menu.push({
+      key: "comeBack",
+      label: hk.comeBackLater,
+      icon: PauseCircle,
+      onSelect: () => onComeBack(row),
+    });
+  }
+  if (row.status === "awaiting_inspection" && can("housekeeping.inspect")) {
+    menu.push({
+      key: "reject",
+      label: hk.rejectInspection,
+      icon: XCircle,
+      danger: true,
+      onSelect: () => onReject(row),
+    });
+  }
+  if (active && can("housekeeping.update")) {
+    menu.push({
+      key: "priority",
+      label: hk.editPriority,
+      icon: SlidersHorizontal,
+      onSelect: () => onEditPriority(row),
+    });
+  }
+  if (active && row.room !== null && can("maintenance.create")) {
+    menu.push({
+      key: "defect",
+      label: hk.reportDefect,
+      icon: Wrench,
+      onSelect: () => onReportDefect(row),
+    });
+  }
+  if (active && row.room !== null && can("lost_found.create")) {
+    menu.push({
+      key: "found",
+      label: hk.registerFound,
+      icon: PackageSearch,
+      onSelect: () => onRegisterFound(row),
+    });
+  }
+  if (active && can("housekeeping.cancel")) {
+    menu.push({
+      key: "cancel",
+      label: t.common.cancel,
+      icon: XCircle,
+      danger: true,
+      onSelect: () => onCancel(row),
+    });
+  }
+
+  const duration = formatDuration(row.started_at, row.completed_at, locale);
+
+  return (
+    <OperationCard
+      accent={operationPriorityTone(row.priority)}
+      number={row.task_number}
+      title={<bdi dir="ltr">{row.room_number || "—"}</bdi>}
+      ariaLabel={`${hk.title} ${row.task_number}`}
+      moreLabel={t.operations.moreActions}
+      badges={
+        <>
+          <Badge tone={housekeepingStatusTone(row.status)} variant="filled">
+            {hk.status[row.status]}
+          </Badge>
+          <Badge tone={operationPriorityTone(row.priority)}>
+            {t.operations.priority[row.priority]}
+          </Badge>
+          {row.is_occupied ? (
+            <Badge tone="info" icon={BedDouble}>
+              {hk.occupied}
+            </Badge>
+          ) : null}
+          {row.upcoming_arrival.has_upcoming ? (
+            <Badge tone="warning" variant="outline" icon={PlaneLanding}>
+              {row.upcoming_arrival.arrival_date
+                ? `${hk.arrivalSoon} · ${formatDate(row.upcoming_arrival.arrival_date, locale)}`
+                : hk.arrivalSoon}
+            </Badge>
+          ) : null}
+          {row.status === "completed" && row.service_outcome ? (
+            <Badge tone="neutral">{hk.serviceOutcome[row.service_outcome]}</Badge>
+          ) : null}
+        </>
+      }
+      facts={[
+        { key: "type", label: hk.typeLabel, value: hk.types[row.task_type], icon: Brush },
+        { key: "unit", label: hk.unitType, value: row.room_type_name || "—", icon: Tag },
+        {
+          key: "floor",
+          label: hk.floor,
+          value: row.floor_name || row.floor_number || "—",
+          icon: Layers,
+        },
+        {
+          key: "assignee",
+          label: hk.assignee,
+          value: row.assigned_to_name || hk.unassigned,
+          icon: UserCheck,
+        },
+        {
+          key: "requested",
+          label: hk.requestedAt,
+          value: formatDateTime(row.requested_at, locale),
+          icon: Clock,
+        },
+        ...(row.started_at
+          ? [
+              {
+                key: "duration",
+                label: hk.duration,
+                value: duration ?? "—",
+                icon: Timer,
+              },
+            ]
+          : []),
+      ]}
+      primary={primary}
+      menu={menu}
+    />
   );
 }
 

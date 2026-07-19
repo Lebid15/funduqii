@@ -277,3 +277,101 @@ describe("MaintenanceTab — async states", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 });
+
+describe("MaintenanceTab — card shows description + duration (F3a fields)", () => {
+  it("renders a clamped description note (with a full-text title) and a started_at duration", async () => {
+    requests([
+      makeMtRequest({
+        status: "in_progress",
+        description: "AC compressor is leaking water onto the carpet",
+        started_at: "2026-07-19T08:00:00Z",
+        resolved_at: "2026-07-19T09:30:00Z",
+      }),
+    ]);
+    const { container } = renderWithProviders(<MaintenanceTab />);
+    await screen.findByText("Broken air conditioner");
+
+    // The description is a clamped note whose FULL text stays in a title tooltip.
+    const note = container.querySelector(".op-card__note") as HTMLElement;
+    expect(note).toBeInTheDocument();
+    expect(note).toHaveTextContent("AC compressor is leaking water onto the carpet");
+    expect(note).toHaveAttribute(
+      "title",
+      "AC compressor is leaking water onto the carpet",
+    );
+
+    // A Duration fact appears once the request carries a start timestamp.
+    const card = container.querySelector(".op-card") as HTMLElement;
+    expect(within(card).getByText("Duration")).toBeInTheDocument();
+  });
+
+  it("omits the description note and the duration fact when both are absent", async () => {
+    requests([makeMtRequest({ status: "open", description: "", started_at: null })]);
+    const { container } = renderWithProviders(<MaintenanceTab />);
+    await screen.findByText("Broken air conditioner");
+    expect(container.querySelector(".op-card__note")).not.toBeInTheDocument();
+    const card = container.querySelector(".op-card") as HTMLElement;
+    expect(within(card).queryByText("Duration")).not.toBeInTheDocument();
+  });
+});
+
+describe("MaintenanceTab — a11y M1 (non-destructive refetch + live region + focus)", () => {
+  it("announces the settled result count in the stable live region", async () => {
+    requests([makeMtRequest({ status: "open" })], 1);
+    renderWithProviders(<MaintenanceTab />);
+    await screen.findByText("Broken air conditioner");
+    await waitFor(() =>
+      expect(screen.getByTestId("mt-results-announce")).toHaveTextContent("1 results"),
+    );
+  });
+
+  it("keeps the cards mounted with NO full-screen loader during a background refetch", async () => {
+    requests([makeMtRequest({ status: "open" })], 1);
+    const { container } = renderWithProviders(<MaintenanceTab />);
+    await screen.findByText("Broken air conditioner");
+
+    // Hold the next (filter-triggered) refetch in flight.
+    const d = deferred<PaginatedResponse<ReturnType<typeof makeMtRequest>>>();
+    vi.mocked(listMaintenanceRequests).mockReturnValue(d.promise);
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "open" } });
+
+    // The existing card stays mounted; the full-screen initial loader never shows.
+    expect(screen.getByText("Broken air conditioner")).toBeInTheDocument();
+    expect(container.querySelector(".state[role='status']")).not.toBeInTheDocument();
+
+    await act(async () => {
+      d.resolve(page([makeMtRequest({ status: "open" })], 1));
+    });
+    await screen.findByText("Broken air conditioner");
+  });
+
+  it("surfaces a background-refetch failure as a non-blocking toast, keeping the cards", async () => {
+    requests([makeMtRequest({ status: "open" })], 1);
+    renderWithProviders(<MaintenanceTab />);
+    await screen.findByText("Broken air conditioner");
+
+    vi.mocked(listMaintenanceRequests).mockRejectedValue(apiError("server_error", 500));
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "resolved" } });
+
+    // A toast appears; the full ErrorState + Retry does NOT, and the card stays.
+    await screen.findByText("Something went wrong. Please try again.");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByText("Broken air conditioner")).toBeInTheDocument();
+  });
+
+  it("moves focus to the stable results anchor (never <body>) after an action drops the card", async () => {
+    access.set(["maintenance.status_update"]);
+    requests([makeMtRequest({ status: "open" })], 1);
+    renderWithProviders(<MaintenanceTab />);
+    const start = await screen.findByRole("button", { name: "Start" });
+    start.focus();
+
+    // The action's reload returns an empty list (the card leaves the view).
+    vi.mocked(listMaintenanceRequests).mockResolvedValue(page([]));
+    fireEvent.click(start);
+
+    await screen.findByText("No maintenance requests");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveClass("op-results");
+  });
+});

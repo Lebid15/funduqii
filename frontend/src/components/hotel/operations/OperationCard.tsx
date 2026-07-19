@@ -242,7 +242,13 @@ export function OperationCard({
         </dl>
       ) : null}
 
-      {note ? <p className="op-card__note">{note}</p> : null}
+      {/* A short description clamped to two lines (op-card__note); the full text
+          stays available via the native title tooltip so nothing is lost. */}
+      {note ? (
+        <p className="op-card__note" title={note}>
+          {note}
+        </p>
+      ) : null}
 
       {hasActions ? (
         <div className="op-card__actions">

@@ -305,3 +305,66 @@ describe("LostFoundTab — stat filter + states", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 });
+
+describe("LostFoundTab — card shows description + finder + claimant (F3a fields)", () => {
+  it("renders the description note, the finder and the claimant NAME (no phone/proof)", async () => {
+    items([
+      makeLfItem({
+        status: "returned",
+        description: "Silver ring with a small blue stone",
+        found_by_name: "Sara Cleaner",
+        claimed_by_name: "Ali Owner",
+      }),
+    ]);
+    const { container } = renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+
+    const note = container.querySelector(".op-card__note") as HTMLElement;
+    expect(note).toHaveTextContent("Silver ring with a small blue stone");
+    expect(note).toHaveAttribute("title", "Silver ring with a small blue stone");
+
+    const card = container.querySelector(".op-card") as HTMLElement;
+    // FINDER + CLAIMANT NAME are shown…
+    expect(within(card).getByText("Found by")).toBeInTheDocument();
+    expect(within(card).getByText("Sara Cleaner")).toBeInTheDocument();
+    expect(within(card).getByText("Claimant")).toBeInTheDocument();
+    expect(within(card).getByText("Ali Owner")).toBeInTheDocument();
+    // …and nothing that looks like a phone leaks onto the card.
+    expect(card.textContent ?? "").not.toMatch(/0555\d/);
+  });
+
+  it("omits the finder/claimant facts when those names are blank", async () => {
+    items([makeLfItem({ found_by_name: "", claimed_by_name: "" })]);
+    const { container } = renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+    const card = container.querySelector(".op-card") as HTMLElement;
+    expect(within(card).queryByText("Found by")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Claimant")).not.toBeInTheDocument();
+  });
+});
+
+describe("LostFoundTab — a11y M1 (live region + focus)", () => {
+  it("announces the settled result count in the stable live region", async () => {
+    items([makeLfItem({ status: "stored" })], 1);
+    renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+    await waitFor(() =>
+      expect(screen.getByTestId("lf-results-announce")).toHaveTextContent("1 results"),
+    );
+  });
+
+  it("moves focus to the stable results anchor (never <body>) after an action drops the item", async () => {
+    access.set(["lost_found.status_update"]);
+    items([makeLfItem({ status: "found" })], 1);
+    renderWithProviders(<LostFoundTab />);
+    const store = await screen.findByRole("button", { name: "Store" });
+    store.focus();
+
+    vi.mocked(listLostFoundItems).mockResolvedValue(page([]));
+    fireEvent.click(store);
+
+    await screen.findByText("No lost & found items");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveClass("op-results");
+  });
+});

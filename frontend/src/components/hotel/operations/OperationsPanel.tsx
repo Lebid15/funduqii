@@ -94,7 +94,11 @@ export function OperationsPanel() {
               role="tab"
               id={`op-tab-${key}`}
               aria-selected={active}
-              aria-controls={`op-panel-${key}`}
+              // Only ONE tabpanel is mounted at a time (the active tab's), so
+              // aria-controls is set ONLY on the active tab — pointing an inactive
+              // tab at an unmounted panel id would be a dangling reference (a11y
+              // Low). Its panel id appears once the tab becomes active.
+              aria-controls={active ? `op-panel-${key}` : undefined}
               tabIndex={active ? 0 : -1}
               className={cx("tabs__tab", active && "tabs__tab--active")}
               onClick={() => setTab(key)}

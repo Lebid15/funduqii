@@ -2086,6 +2086,9 @@ export interface MaintenanceRequestListItem {
   room_number: string;
   stay: number | null;
   title: string;
+  /** F3a: the card renders a SHORT (clamped) form of this. Not disclosure-gated
+   * (only `internal_notes` is). */
+  description: string;
   category: MaintenanceCategory;
   priority: OperationPriority;
   status: MaintenanceStatus;
@@ -2094,14 +2097,15 @@ export interface MaintenanceRequestListItem {
   assigned_to: number | null;
   assigned_to_name: string;
   reported_at: string;
+  /** F3a: the maintenance-start timestamp (null until work starts) — the card
+   * derives a duration from it, like the cleaning card does. */
+  started_at: string | null;
   resolved_at: string | null;
   closed_at: string | null;
 }
 
 export interface MaintenanceRequest extends MaintenanceRequestListItem {
   room_status: string;
-  description: string;
-  started_at: string | null;
   cancelled_at: string | null;
   cancellation_reason: string;
   resolution_notes: string;
@@ -2145,6 +2149,8 @@ export interface LostFoundItemListItem {
   id: number;
   item_number: string;
   title: string;
+  /** F3a: the card renders a SHORT (clamped) form of this. Not disclosure-gated. */
+  description: string;
   category: LostFoundCategory;
   status: LostFoundStatus;
   found_at: string;
@@ -2154,14 +2160,17 @@ export interface LostFoundItemListItem {
   stay: number | null;
   guest: number | null;
   guest_name: string;
+  /** F3a: the FINDER (`found_by.full_name`). A NAME, not disclosure-gated — the
+   * phone + proof reference stay off the list. */
+  found_by_name: string;
   stored_location: string;
+  /** F3a: the CLAIMANT name (blank until claimed/returned). A NAME only — the
+   * claimant phone + proof reference are never on the card. */
+  claimed_by_name: string;
   returned_at: string | null;
 }
 
 export interface LostFoundItem extends LostFoundItemListItem {
-  description: string;
-  found_by_name: string;
-  claimed_by_name: string;
   claimed_by_phone: string;
   /** WP7 handover proof. The non-sensitive `claim_proof_type` marker is exposed
    * to any caller who can read the detail; `claim_proof_reference` is the
