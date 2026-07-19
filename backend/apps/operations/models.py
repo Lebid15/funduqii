@@ -576,3 +576,186 @@ class LostFoundItemStatusLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.item_id}: {self.previous_status}->{self.new_status}"
+
+
+# --- Lost report (LR — the guest/customer "I lost X" cycle) -------------------
+#
+# A SEPARATE cycle from ``LostFoundItem`` (the physical FOUND item). Here a guest
+# reports something they lost; NOTHING is physically held. The two are linked
+# only by an EXPLICIT, safe manual match (``matched_found_item``) — a lost report
+# is never auto-created from a found item and vice-versa. The found item's own
+# lifecycle (found → stored → … → returned) is UNTOUCHED by a match; only the
+# handover flips it (through the existing WP7 return path).
+
+
+class LostReportStatus(models.TextChoices):
+    OPEN = "open", "Open"
+    SEARCHING = "searching", "Searching"
+    MATCHED = "matched", "Matched"
+    RETURNED = "returned", "Returned"
+    CLOSED_UNFOUND = "closed_unfound", "Closed (not found)"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class LostReport(models.Model):
+    """A guest/customer report of a LOST item, filed by staff.
+
+    Text records only (no photos / uploads), reusing ``LostFoundCategory``.
+    ``reporter_phone`` and ``internal_notes`` are SENSITIVE/internal and are
+    permission-gated on read (see the serializers). A report may be linked to a
+    FOUND item only through the controlled ``confirm_match`` service; the DB
+    partial-unique ``uniq_matched_found_item_active_report`` guarantees at most
+    ONE actively-matched report per found item.
+    """
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel", on_delete=models.CASCADE, related_name="lost_reports"
+    )
+    report_number = models.CharField(max_length=20)
+    category = models.CharField(
+        max_length=16,
+        choices=LostFoundCategory.choices,
+        default=LostFoundCategory.OTHER,
+    )
+    description = models.TextField(blank=True, default="")
+    distinctive_marks = models.CharField(max_length=255, blank=True, default="")
+    last_seen_location = models.CharField(max_length=160, blank=True, default="")
+    lost_at = models.DateTimeField(null=True, blank=True)
+    reporter_name = models.CharField(max_length=180, blank=True, default="")
+    # SENSITIVE: gated behind lost_found.status_update on read (fail-closed).
+    reporter_phone = models.CharField(max_length=32, blank=True, default="")
+    guest = models.ForeignKey(
+        "guests.Guest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports",
+    )
+    stay = models.ForeignKey(
+        "stays.Stay",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports",
+    )
+    reservation = models.ForeignKey(
+        "reservations.Reservation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports",
+    )
+    reported_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports_reported",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=LostReportStatus.choices,
+        default=LostReportStatus.OPEN,
+    )
+    # The FOUND item this report is currently matched to (SET_NULL — a historical
+    # report survives item deletion). The found item is NEVER mutated by the
+    # match itself; only a handover returns it via the existing WP7 path.
+    matched_found_item = models.ForeignKey(
+        LostFoundItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="matched_by_reports",
+    )
+    # Internal operational back-channel — gated behind lost_found.update OR
+    # lost_found.status_update on read (fail-closed); never in the list/card.
+    internal_notes = models.CharField(max_length=255, blank=True, default="")
+    matched_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports_matched",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_reports_updated",
+    )
+    matched_at = models.DateTimeField(null=True, blank=True)
+    returned_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.CharField(max_length=255, blank=True, default="")
+    unfound_reason = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "lost_reports"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["hotel", "report_number"],
+                name="unique_lost_report_number_per_hotel",
+            ),
+            # SAFE-MATCH backstop: one found item can be ACTIVELY matched by at
+            # most ONE report. Partial UNIQUE index — portable on SQLite
+            # (dev/tests) and PostgreSQL (production, authoritative). Scoped to
+            # status == matched AND a non-null item, so returned/unmatched
+            # reports (which keep or clear the link) never constrain the item.
+            models.UniqueConstraint(
+                fields=["matched_found_item"],
+                condition=Q(status="matched") & Q(matched_found_item__isnull=False),
+                name="uniq_matched_found_item_active_report",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["hotel", "status"]),
+            models.Index(fields=["hotel", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.report_number} (hotel={self.hotel_id}, {self.status})"
+
+
+class LostReportStatusLog(models.Model):
+    """A lightweight, append-only per-report status history (mirrors
+    ``LostFoundItemStatusLog``) — NOT a general audit log and NEVER a place for
+    the sensitive reporter phone or any proof value."""
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel",
+        on_delete=models.CASCADE,
+        related_name="lost_report_status_logs",
+    )
+    report = models.ForeignKey(
+        LostReport, on_delete=models.CASCADE, related_name="status_logs"
+    )
+    previous_status = models.CharField(max_length=20, blank=True, default="")
+    new_status = models.CharField(max_length=20)
+    note = models.CharField(max_length=255, blank=True, default="")
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_report_status_changes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "lost_report_status_logs"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: {self.previous_status}->{self.new_status}"

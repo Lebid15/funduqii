@@ -42,6 +42,19 @@ Coverage:
   maintenance request on the SAME room. The room row-lock serialises them, so
   the final state is consistent — the room is NEVER ``available`` while an open
   blocking maintenance request exists.
+* C5 — two reports confirming a match to the SAME found item concurrently:
+  exactly ONE wins, the other raises ``FoundItemAlreadyMatched`` (backed by the
+  partial-unique ``uniq_matched_found_item_active_report``); at most one active
+  match survives.
+* C6 — a ``confirm_match`` racing a concurrent standalone dispose of the found
+  item: the item row-lock serialises them so the two can NEVER both commit —
+  either the dispose wins (item disposed, match refused ``FoundItemNotMatchable``)
+  or the match wins (report matched, dispose refused ``FoundItemActivelyMatched``
+  by the reverse guard). A report is NEVER left dangling as matched to a disposed
+  item.
+* C7 — a handover racing a concurrent unmatch on the SAME matched report: the
+  report row-lock serialises them, so the report ends EITHER returned OR
+  searching (never both, never a half-applied state).
 """
 from __future__ import annotations
 
@@ -51,10 +64,22 @@ from django.db import connection, connections
 from django.test import TransactionTestCase
 
 from apps.accounts.models import User
-from apps.common.exceptions import DuplicateActiveTask, RoomBlockedByMaintenance
+from apps.common.exceptions import (
+    DuplicateActiveTask,
+    FoundItemActivelyMatched,
+    FoundItemAlreadyMatched,
+    FoundItemNotMatchable,
+    InvalidOperationStatusTransition,
+    RoomBlockedByMaintenance,
+)
 from apps.operations.models import (
     HousekeepingStatus,
     HousekeepingTask,
+    LostFoundCategory,
+    LostFoundItem,
+    LostFoundStatus,
+    LostReport,
+    LostReportStatus,
     MaintenanceCategory,
     MaintenanceRequest,
     OperationPriority,
@@ -64,9 +89,15 @@ from apps.operations.services import (
     ACTIVE_HK_STATUSES,
     change_housekeeping_status,
     complete_housekeeping_task,
+    confirm_match,
     create_housekeeping_task,
+    create_lost_found_item,
+    create_lost_report,
     create_maintenance_request,
+    dispose_lost_found_item,
+    hand_over_matched_report,
     room_has_blocking_maintenance,
+    unmatch,
 )
 from apps.rooms.models import Floor, Room, RoomStatus, RoomType
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
@@ -427,3 +458,232 @@ class RoomStatusReleaseVsBlockConcurrencyTests(_OperationsConcurrencyBase):
             ).count(),
             1,
         )
+
+
+class LostReportMatchConcurrencyTests(_OperationsConcurrencyBase):
+    """C5 / C6 — concurrent SAFE-MATCH contention on a single found item."""
+
+    def setUp(self):
+        self._seed_hotel_room_user(slug="conc-lr-match")
+        # One found item both reports will race to claim, and two OPEN reports.
+        self.item = create_lost_found_item(
+            self.hotel, user=self.user, title="Black wallet",
+            category=LostFoundCategory.OTHER, status=LostFoundStatus.STORED,
+        )
+        self.report_a = create_lost_report(
+            self.hotel, user=self.user, reporter_name="Reporter A"
+        )
+        self.report_b = create_lost_report(
+            self.hotel, user=self.user, reporter_name="Reporter B"
+        )
+
+    def _match_worker(self, barrier, results, index, report):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                confirm_match(report, self.item, user=self.user)
+                results[index] = "matched"
+            except FoundItemAlreadyMatched:
+                results[index] = "already_matched"
+            except FoundItemNotMatchable:
+                results[index] = "not_matchable"
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def _dispose_worker(self, barrier, results, index):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                dispose_lost_found_item(self.item, reason="damaged", user=self.user)
+                results[index] = "disposed"
+            except FoundItemActivelyMatched:
+                # The match won the item lock first → the item is now actively
+                # matched and the reverse guard refuses this standalone dispose.
+                results[index] = "actively_matched"
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    # -- C5 -----------------------------------------------------------------
+    def test_c5_two_reports_one_item_only_one_wins(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        barrier = threading.Barrier(2)
+        results = ["", ""]
+        threads = [
+            threading.Thread(
+                target=self._match_worker,
+                args=(barrier, results, 0, self.report_a),
+            ),
+            threading.Thread(
+                target=self._match_worker,
+                args=(barrier, results, 1, self.report_b),
+            ),
+        ]
+        self._run(threads)
+
+        self._assert_no_unexpected(results)
+        # Exactly one winner; the loser is refused by the partial-unique belt.
+        self.assertEqual(sorted(results), ["already_matched", "matched"], results)
+        # At most ONE report is actively matched to the item.
+        self.assertEqual(
+            LostReport.objects.filter(
+                hotel=self.hotel,
+                matched_found_item=self.item,
+                status=LostReportStatus.MATCHED,
+            ).count(),
+            1,
+        )
+        # The found item is untouched (still STORED).
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, LostFoundStatus.STORED)
+
+    # -- C6 -----------------------------------------------------------------
+    def test_c6_match_versus_concurrent_dispose(self):
+        """The item row-lock SERIALISES a match against a concurrent standalone
+        dispose so the two can NEVER both commit — no deadlock, no torn state, no
+        dangling match. Whichever writer wins the item lock, the outcome is one of
+        exactly two consistent shapes:
+
+        * dispose won the lock  → it disposed a still-unmatched item; the match's
+          ``SELECT ... FOR UPDATE`` then reads a DISPOSED item and refuses cleanly
+          (``FoundItemNotMatchable``); the report is left OPEN with no link.
+        * match won the lock     → the report is matched to the (still-STORED)
+          item; the concurrent dispose's re-read under the lock sees the ACTIVE
+          match and is refused by the reverse guard (``FoundItemActivelyMatched``);
+          the item is left STORED — never disposed while a report holds it.
+        """
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        barrier = threading.Barrier(2)
+        # index 0 = match; index 1 = dispose.
+        results = ["", ""]
+        threads = [
+            threading.Thread(
+                target=self._match_worker,
+                args=(barrier, results, 0, self.report_a),
+            ),
+            threading.Thread(
+                target=self._dispose_worker, args=(barrier, results, 1)
+            ),
+        ]
+        self._run(threads)
+
+        self._assert_no_unexpected(results)
+        # Exactly one of two consistent race outcomes — never both mutations.
+        self.assertIn(
+            (results[0], results[1]),
+            {("matched", "actively_matched"), ("not_matchable", "disposed")},
+            results,
+        )
+
+        self.report_a.refresh_from_db()
+        self.item.refresh_from_db()
+        if results[0] == "matched":
+            # Match won → dispose refused, item stays STORED, report matched.
+            self.assertEqual(self.item.status, LostFoundStatus.STORED)
+            self.assertEqual(self.report_a.status, LostReportStatus.MATCHED)
+            self.assertEqual(self.report_a.matched_found_item_id, self.item.id)
+        else:
+            # Dispose won → match refused, item disposed, report untouched.
+            self.assertEqual(self.item.status, LostFoundStatus.DISPOSED)
+            self.assertEqual(self.report_a.status, LostReportStatus.OPEN)
+            self.assertIsNone(self.report_a.matched_found_item_id)
+
+        # THE INVARIANT: a report is NEVER left dangling as matched to a DISPOSED
+        # item — an actively-matched item is either still holdable, or there is no
+        # active match at all.
+        dangling = (
+            self.item.status == LostFoundStatus.DISPOSED
+            and LostReport.objects.filter(
+                hotel=self.hotel,
+                matched_found_item=self.item,
+                status=LostReportStatus.MATCHED,
+            ).exists()
+        )
+        self.assertFalse(dangling, "a report is matched to a DISPOSED item")
+
+
+class LostReportHandoverConcurrencyTests(_OperationsConcurrencyBase):
+    """C7 — a handover racing a concurrent unmatch on the same matched report."""
+
+    def setUp(self):
+        self._seed_hotel_room_user(slug="conc-lr-handover")
+        self.item = create_lost_found_item(
+            self.hotel, user=self.user, title="Black wallet",
+            category=LostFoundCategory.OTHER, status=LostFoundStatus.STORED,
+        )
+        self.report = create_lost_report(
+            self.hotel, user=self.user, reporter_name="Reporter"
+        )
+        confirm_match(self.report, self.item, user=self.user)
+
+    def _handover_worker(self, barrier, results, index):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                hand_over_matched_report(
+                    self.report, user=self.user, recipient_name="Owner"
+                )
+                results[index] = "returned"
+            except InvalidOperationStatusTransition:
+                # The unmatch won the report lock first → no longer matched.
+                results[index] = "not_matched"
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def _unmatch_worker(self, barrier, results, index):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                unmatch(self.report, reason="wrong item", user=self.user)
+                results[index] = "unmatched"
+            except InvalidOperationStatusTransition:
+                # The handover won the report lock first → already returned.
+                results[index] = "not_matched"
+        except Exception as exc:  # noqa: BLE001
+            results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def test_c7_handover_versus_concurrent_unmatch(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP)
+
+        barrier = threading.Barrier(2)
+        results = ["", ""]
+        threads = [
+            threading.Thread(
+                target=self._handover_worker, args=(barrier, results, 0)
+            ),
+            threading.Thread(
+                target=self._unmatch_worker, args=(barrier, results, 1)
+            ),
+        ]
+        self._run(threads)
+
+        self._assert_no_unexpected(results)
+        # Exactly ONE of the two mutations applied — the report row-lock serialises
+        # them, so the other sees a non-matched report and is refused.
+        self.report.refresh_from_db()
+        self.item.refresh_from_db()
+        if results[0] == "returned":
+            # Handover won: report returned, item returned, unmatch refused.
+            self.assertEqual(results[1], "not_matched", results)
+            self.assertEqual(self.report.status, LostReportStatus.RETURNED)
+            self.assertEqual(self.item.status, LostFoundStatus.RETURNED)
+        else:
+            # Unmatch won: report searching + link cleared, handover refused; the
+            # item is never returned by a rolled-back handover.
+            self.assertEqual(results[1], "unmatched", results)
+            self.assertEqual(results[0], "not_matched", results)
+            self.assertEqual(self.report.status, LostReportStatus.SEARCHING)
+            self.assertIsNone(self.report.matched_found_item_id)
+            self.assertEqual(self.item.status, LostFoundStatus.STORED)

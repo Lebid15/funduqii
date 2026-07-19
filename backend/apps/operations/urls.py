@@ -19,6 +19,15 @@ from .views import (
     LostFoundListCreateView,
     LostFoundReturnView,
     LostFoundStatusView,
+    LostReportCancelView,
+    LostReportCandidatesView,
+    LostReportCloseUnfoundView,
+    LostReportDetailView,
+    LostReportHandoverView,
+    LostReportListCreateView,
+    LostReportMatchView,
+    LostReportStatusView,
+    LostReportUnmatchView,
     MaintenanceAssignView,
     MaintenanceCancelView,
     MaintenanceCloseView,
@@ -155,5 +164,51 @@ urlpatterns = [
         "operations/lost-found/<int:pk>/close/",
         LostFoundCloseView.as_view(),
         name="lost-found-close",
+    ),
+    # Lost reports (the "I lost X" cycle + safe manual matching)
+    path(
+        "operations/lost-reports/",
+        LostReportListCreateView.as_view(),
+        name="lost-report-list",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/",
+        LostReportDetailView.as_view(),
+        name="lost-report-detail",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/status/",
+        LostReportStatusView.as_view(),
+        name="lost-report-status",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/match/",
+        LostReportMatchView.as_view(),
+        name="lost-report-match",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/unmatch/",
+        LostReportUnmatchView.as_view(),
+        name="lost-report-unmatch",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/handover/",
+        LostReportHandoverView.as_view(),
+        name="lost-report-handover",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/close-unfound/",
+        LostReportCloseUnfoundView.as_view(),
+        name="lost-report-close-unfound",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/cancel/",
+        LostReportCancelView.as_view(),
+        name="lost-report-cancel",
+    ),
+    path(
+        "operations/lost-reports/<int:pk>/candidates/",
+        LostReportCandidatesView.as_view(),
+        name="lost-report-candidates",
     ),
 ]

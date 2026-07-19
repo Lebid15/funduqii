@@ -28,8 +28,12 @@ from apps.common.exceptions import (
     CrossTenantReference,
     DisposalReasonRequired,
     DuplicateActiveTask,
+    FoundItemActivelyMatched,
+    FoundItemAlreadyMatched,
+    FoundItemNotMatchable,
     InspectionReasonRequired,
     InvalidOperationStatusTransition,
+    LostReportReasonRequired,
     OperationNotEditable,
     RoomBlockedByMaintenance,
     RoomNotReleasable,
@@ -49,6 +53,9 @@ from .models import (
     LostFoundItem,
     LostFoundItemStatusLog,
     LostFoundStatus,
+    LostReport,
+    LostReportStatus,
+    LostReportStatusLog,
     MaintenanceRequest,
     MaintenanceRequestStatusLog,
     MaintenanceStatus,
@@ -75,7 +82,19 @@ NUMBER_PREFIXES = {
     "housekeeping": "HK",
     "maintenance": "MT",
     "lost_found": "LF",
+    "lost_report": "LR",
 }
+
+#: A found item is MATCHABLE to a lost report unless it is already terminally
+#: handed over / gone (owner rule): matchable = NOT in {returned, disposed,
+#: closed}. So found / stored / claimed items are matchable.
+NON_MATCHABLE_FOUND_STATUSES = frozenset(
+    {
+        LostFoundStatus.RETURNED,
+        LostFoundStatus.DISPOSED,
+        LostFoundStatus.CLOSED,
+    }
+)
 
 #: Room statuses housekeeping may move to `cleaning` when a task starts.
 CLEANABLE_ROOM_STATUSES = (RoomStatus.DIRTY, RoomStatus.AVAILABLE)
@@ -195,6 +214,24 @@ LF_STATUS_TRANSITIONS = {
     LostFoundStatus.RETURNED: set(),
     LostFoundStatus.DISPOSED: set(),
     LostFoundStatus.CLOSED: set(),
+}
+
+#: Active (still open) lost-report statuses — editable + counted as "open".
+ACTIVE_LR_STATUSES = (LostReportStatus.OPEN, LostReportStatus.SEARCHING)
+
+#: Forward-only transitions available through the GENERIC lost-report status
+#: endpoint. Everything else has its own entry point with its own required
+#: inputs: confirm_match (→matched), unmatch (matched→searching, reason),
+#: handover (matched→returned, proof), close_unfound / cancel (reason). From
+#: ``matched`` the ONLY exits are handover (returned) or unmatch (searching) —
+#: never a direct close/cancel.
+LR_STATUS_TRANSITIONS = {
+    LostReportStatus.OPEN: {LostReportStatus.SEARCHING},
+    LostReportStatus.SEARCHING: set(),
+    LostReportStatus.MATCHED: set(),
+    LostReportStatus.RETURNED: set(),
+    LostReportStatus.CLOSED_UNFOUND: set(),
+    LostReportStatus.CANCELLED: set(),
 }
 
 
@@ -1198,6 +1235,20 @@ def _resolve_claim_proof(
     return proof_type, proof_reference
 
 
+def _found_item_actively_matched(item: "LostFoundItem", *, exclude_report_id=None) -> bool:
+    """True iff a lost report ACTIVELY holds this found item (report
+    status == ``matched``). Mirrors the partial-unique
+    ``uniq_matched_found_item_active_report`` condition exactly."""
+    qs = LostReport.objects.filter(
+        hotel_id=item.hotel_id,
+        matched_found_item=item,
+        status=LostReportStatus.MATCHED,
+    )
+    if exclude_report_id is not None:
+        qs = qs.exclude(pk=exclude_report_id)
+    return qs.exists()
+
+
 @transaction.atomic
 def create_lost_found_item(
     hotel,
@@ -1309,6 +1360,12 @@ def claim_lost_found_item(
     claim_proof_type="",
     claim_proof_reference="",
 ) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe (a concurrent
+    # confirm_match serialises against this lock). An item ACTIVELY matched by a
+    # lost report may NOT be claimed out from under the atomic handover.
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in (LostFoundStatus.FOUND, LostFoundStatus.STORED):
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.CLAIMED}
@@ -1350,7 +1407,16 @@ def return_lost_found_item(
     note="",
     claim_proof_type="",
     claim_proof_reference="",
+    _via_matched_handover: bool = False,
 ) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe. Standalone
+    # returns of an item ACTIVELY matched by a lost report are refused; only the
+    # atomic ``hand_over_matched_report`` path passes ``_via_matched_handover``
+    # (a keyword-only, non-serializer, non-forgeable internal flag) to return the
+    # very item its own matching report holds.
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if not _via_matched_handover and _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in ACTIVE_LF_STATUSES:
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.RETURNED}
@@ -1397,6 +1463,13 @@ def return_lost_found_item(
 
 @transaction.atomic
 def dispose_lost_found_item(item: LostFoundItem, *, reason, user=None) -> LostFoundItem:
+    # Row-lock + re-read so the actively-matched guard is race-safe. An item
+    # ACTIVELY matched by a lost report may NOT be disposed out from under the
+    # atomic handover — that would dangle the report as ``matched`` to a gone
+    # item. Release it first via the report's ``unmatch`` (documented reason).
+    item = LostFoundItem.objects.select_for_update().get(pk=item.pk)
+    if _found_item_actively_matched(item):
+        raise FoundItemActivelyMatched({"reason": "actively_matched"})
     if item.status not in (LostFoundStatus.FOUND, LostFoundStatus.STORED):
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.DISPOSED}
@@ -1438,3 +1511,391 @@ def close_lost_found_item(item: LostFoundItem, *, user=None, note="") -> LostFou
     item.save()
     _lf_log(item, previous, LostFoundStatus.CLOSED, user, note)
     return item
+
+
+# --- Lost report (LR — the "I lost X" cycle + safe manual matching) ----------
+#
+# A SEPARATE lifecycle from the FOUND item. A lost report is never auto-linked;
+# the ONLY link is the explicit, row-locked ``confirm_match``. A match NEVER
+# mutates the found item (its own found→…→returned lifecycle is untouched); only
+# a handover returns it — atomically, both-or-neither — through the EXISTING WP7
+# ``return_lost_found_item`` path so the sensitive-proof controls are reused.
+#
+# The status/note logs (``_lr_log``) NEVER carry the reporter phone or any proof
+# value (privacy — same discipline as the found-item logs).
+
+
+def _lr_log(report, previous, new, user, note=""):
+    LostReportStatusLog.objects.create(
+        hotel=report.hotel,
+        report=report,
+        previous_status=previous or "",
+        new_status=new,
+        note=(note or "")[:255],
+        changed_by=_actor(user),
+    )
+
+
+def _found_item_is_matchable(item: LostFoundItem) -> bool:
+    """Matchable = still holdable (owner rule): NOT returned / disposed / closed."""
+    return item.status not in NON_MATCHABLE_FOUND_STATUSES
+
+
+@transaction.atomic
+def create_lost_report(
+    hotel,
+    *,
+    user=None,
+    category=LostFoundCategory.OTHER,
+    description="",
+    distinctive_marks="",
+    last_seen_location="",
+    lost_at=None,
+    reporter_name="",
+    reporter_phone="",
+    guest=None,
+    stay=None,
+    reservation=None,
+    internal_notes="",
+) -> LostReport:
+    """File a guest/customer LOST report (nothing is physically held).
+
+    ``report_number`` is minted from the row-locked per-hotel ``lost_report``
+    sequence. A reporter name is required (reuses the neutral 422
+    :class:`ClaimantRequired`); all links are same-hotel checked.
+    """
+    _check_same_hotel(hotel, field="guest", obj=guest)
+    _check_same_hotel(hotel, field="stay", obj=stay)
+    _check_same_hotel(hotel, field="reservation", obj=reservation)
+    if not (reporter_name or "").strip():
+        # A lost report must name WHO reported it (the reporter) — reuse the
+        # existing neutral 422 rather than minting a near-duplicate code.
+        raise ClaimantRequired()
+    actor = _actor(user)
+    report = LostReport.objects.create(
+        hotel=hotel,
+        report_number=next_number(hotel, "lost_report"),
+        category=category,
+        description=description or "",
+        distinctive_marks=distinctive_marks or "",
+        last_seen_location=last_seen_location or "",
+        lost_at=lost_at,
+        reporter_name=reporter_name.strip(),
+        reporter_phone=reporter_phone or "",
+        guest=guest,
+        stay=stay,
+        reservation=reservation,
+        reported_by_user=actor,
+        status=LostReportStatus.OPEN,
+        internal_notes=internal_notes or "",
+        created_by=actor,
+        updated_by=actor,
+    )
+    _lr_log(report, "", report.status, user)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        hotel,
+        event_type="lost_report.created",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} filed",
+        # Neutral message — no phone, no proof.
+        message=f"{report.reporter_name} · {report.get_category_display()}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def update_lost_report(report: LostReport, *, user=None, refs=None, **meta) -> LostReport:
+    """Edit report metadata/links while it is still OPEN or SEARCHING.
+
+    A matched report must be unmatched first; terminal reports are frozen. Link
+    edits are same-hotel checked."""
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise OperationNotEditable({"status": report.status})
+    refs = refs or {}
+    for field in ("guest", "stay", "reservation"):
+        if field in refs:
+            _check_same_hotel(report.hotel, field=field, obj=refs[field])
+            setattr(report, field, refs[field])
+    for field in (
+        "category",
+        "description",
+        "distinctive_marks",
+        "last_seen_location",
+        "lost_at",
+        "reporter_name",
+        "reporter_phone",
+        "internal_notes",
+    ):
+        if field in meta:
+            setattr(report, field, meta[field])
+    report.updated_by = _actor(user)
+    report.save()
+    return report
+
+
+@transaction.atomic
+def change_lost_report_status(
+    report: LostReport, *, new_status, user=None, note=""
+) -> LostReport:
+    """Generic move — only open→searching; every other move has its own action.
+
+    Row-locked so the transition read-check is consistent under contention."""
+    report = LostReport.objects.select_for_update().get(pk=report.pk)
+    if new_status not in LR_STATUS_TRANSITIONS.get(report.status, set()):
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": new_status}
+        )
+    previous = report.status
+    report.status = new_status
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, new_status, user, note)
+    return report
+
+
+@transaction.atomic
+def confirm_match(lost_report: LostReport, found_item: LostFoundItem, *, user=None) -> LostReport:
+    """Link an OPEN/SEARCHING lost report to a MATCHABLE found item.
+
+    Both rows are row-locked in a consistent order (the REPORT row first, then
+    the found-item row) so two reports racing for the same item — or a match
+    racing a concurrent return/dispose of the item — serialise without deadlock.
+
+    Guarantees:
+    * SAME hotel (else :class:`CrossTenantReference`).
+    * the found item is MATCHABLE — NOT returned/disposed/closed (else
+      :class:`FoundItemNotMatchable`).
+    * the report is OPEN or SEARCHING (else :class:`InvalidOperationStatusTransition`).
+    * the found item is not already actively matched by ANOTHER report — an
+      application belt (:class:`FoundItemAlreadyMatched`) PLUS the DB partial-
+      unique translated from the IntegrityError inside a savepoint.
+    * the FOUND ITEM IS UNTOUCHED — no status change, no merge, no delete.
+    """
+    # Consistent lock order: report first, then the found item (prevents the
+    # two-reports-one-item and match-vs-return races from deadlocking).
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    item = LostFoundItem.objects.select_for_update().get(pk=found_item.pk)
+    if item.hotel_id != report.hotel_id:
+        raise CrossTenantReference({"field": "found_item"})
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.MATCHED}
+        )
+    if not _found_item_is_matchable(item):
+        raise FoundItemNotMatchable({"status": item.status})
+    # Application belt: refuse an item another MATCHED report already holds.
+    if (
+        LostReport.objects.filter(
+            hotel=report.hotel,
+            matched_found_item=item,
+            status=LostReportStatus.MATCHED,
+        )
+        .exclude(pk=report.pk)
+        .exists()
+    ):
+        raise FoundItemAlreadyMatched({"item": item.id})
+    previous = report.status
+    report.matched_found_item = item
+    report.status = LostReportStatus.MATCHED
+    report.matched_by = _actor(user)
+    report.matched_at = timezone.now()
+    report.updated_by = _actor(user)
+    # DB-backed backstop: the partial-unique ``uniq_matched_found_item_active_report``
+    # is the last line of defence if a concurrent match slips past the row lock +
+    # belt above. The save runs inside a savepoint so a violation rolls back only
+    # this UPDATE (not the surrounding transaction) and surfaces as a clean 409.
+    try:
+        with transaction.atomic():
+            report.save()
+    except IntegrityError:
+        raise FoundItemAlreadyMatched({"item": item.id})
+    _lr_log(report, previous, report.status, user, f"matched:{item.item_number}")
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.matched",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} matched",
+        message=f"→ found item {item.item_number}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def unmatch(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Break a MATCHED report's link, returning it to SEARCHING (mandatory
+    reason). Allowed ONLY from ``matched``. The found item is UNTOUCHED — only
+    the report's link/matched stamps are cleared."""
+    if not (reason or "").strip():
+        raise LostReportReasonRequired({"reason": "unmatch"})
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status != LostReportStatus.MATCHED:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.SEARCHING}
+        )
+    previous = report.status
+    report.matched_found_item = None
+    report.matched_by = None
+    report.matched_at = None
+    report.status = LostReportStatus.SEARCHING
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    return report
+
+
+@transaction.atomic
+def hand_over_matched_report(
+    lost_report: LostReport,
+    *,
+    user=None,
+    recipient_name="",
+    recipient_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
+) -> LostReport:
+    """Hand the matched found item over to the reporter — ATOMIC both-or-neither.
+
+    The report + its matched found item are row-locked (report first, then the
+    item). The EXISTING :func:`return_lost_found_item` applies the WP7 normal /
+    sensitive proof controls (``recipient_phone`` is passed as the phone so the
+    sensitive "phone-or-guest" check is satisfied) and flips the found item to
+    ``returned``; THEN the report flips to ``returned``. If EITHER step fails
+    (e.g. missing proof for a sensitive item, or the item was concurrently
+    returned/disposed) the WHOLE transaction rolls back — nothing changes."""
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status != LostReportStatus.MATCHED:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.RETURNED}
+        )
+    if report.matched_found_item_id is None:
+        raise InvalidOperationStatusTransition({"reason": "no_matched_item"})
+    item = LostFoundItem.objects.select_for_update().get(
+        pk=report.matched_found_item_id
+    )
+    if item.hotel_id != report.hotel_id:
+        raise CrossTenantReference({"field": "found_item"})
+    # Both-or-neither: return the found item through the EXISTING WP7 path. Its
+    # own @transaction.atomic opens a NESTED savepoint; any failure (proof
+    # controls / not-active item) rolls the savepoint back AND propagates so the
+    # outer transaction here rolls back too — the report is never left returned
+    # with an un-returned item, or vice-versa.
+    returned_item = return_lost_found_item(
+        item,
+        user=user,
+        claimed_by_name=recipient_name,
+        claimed_by_phone=recipient_phone,
+        note=note,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        # Legitimate atomic handover of the very item THIS report matches — the
+        # actively-matched guard would otherwise (correctly) block a standalone
+        # return, so bypass it here only via this non-forgeable internal flag.
+        _via_matched_handover=True,
+    )
+    previous = report.status
+    report.status = LostReportStatus.RETURNED
+    report.returned_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    # Make the report's audit trail self-sufficient: record the NON-SENSITIVE
+    # recipient name (never phone/proof) alongside the caller note. The recipient
+    # is resolved exactly as the found item did — a blank name falls back to the
+    # item's stored claimant — so the report log stands on its own.
+    recipient = (recipient_name or "").strip() or returned_item.claimed_by_name
+    handover_note = (note or "").strip()
+    log_note = f"→ {recipient}" + (f" · {handover_note}" if handover_note else "")
+    _lr_log(report, previous, report.status, user, log_note)
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.returned",
+        category="operation",
+        severity="success",
+        title=f"Lost report {report.report_number} handed over",
+        message=f"→ {report.reporter_name}",
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def close_unfound(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Close an OPEN/SEARCHING report as NOT FOUND (mandatory reason)."""
+    if not (reason or "").strip():
+        raise LostReportReasonRequired({"reason": "close_unfound"})
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.CLOSED_UNFOUND}
+        )
+    previous = report.status
+    report.status = LostReportStatus.CLOSED_UNFOUND
+    report.unfound_reason = reason.strip()
+    report.closed_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.closed_unfound",
+        category="operation",
+        severity="info",
+        title=f"Lost report {report.report_number} closed (not found)",
+        message=reason.strip(),
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report
+
+
+@transaction.atomic
+def cancel_lost_report(lost_report: LostReport, *, reason, user=None) -> LostReport:
+    """Cancel an OPEN/SEARCHING report (mandatory reason — reuses the existing
+    neutral :class:`CancellationReasonRequired`)."""
+    if not (reason or "").strip():
+        raise CancellationReasonRequired()
+    report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
+    if report.status not in ACTIVE_LR_STATUSES:
+        raise InvalidOperationStatusTransition(
+            {"from": report.status, "to": LostReportStatus.CANCELLED}
+        )
+    previous = report.status
+    report.status = LostReportStatus.CANCELLED
+    report.cancellation_reason = reason.strip()
+    report.cancelled_at = timezone.now()
+    report.updated_by = _actor(user)
+    report.save()
+    _lr_log(report, previous, report.status, user, reason.strip())
+    from apps.notifications.services import record_activity
+
+    record_activity(
+        report.hotel,
+        event_type="lost_report.cancelled",
+        category="operation",
+        severity="warning",
+        title=f"Lost report {report.report_number} cancelled",
+        message=reason.strip(),
+        actor=user,
+        related_object=report,
+        related_url="/hotel/operations",
+    )
+    return report

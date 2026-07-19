@@ -18,6 +18,9 @@ from .models import (
     LostFoundItem,
     LostFoundItemStatusLog,
     LostFoundStatus,
+    LostReport,
+    LostReportStatus,
+    LostReportStatusLog,
     MaintenanceCategory,
     MaintenanceRequest,
     MaintenanceRequestStatusLog,
@@ -483,6 +486,8 @@ class LostFoundItemListSerializer(serializers.ModelSerializer):
     found_by_name = serializers.CharField(
         source="found_by.full_name", read_only=True, default=""
     )
+    # Discriminator for a MERGED found-item + lost-report view on the frontend.
+    record_type = serializers.SerializerMethodField()
 
     class Meta:
         model = LostFoundItem
@@ -498,9 +503,12 @@ class LostFoundItemListSerializer(serializers.ModelSerializer):
             "id", "item_number", "title", "description", "category", "status",
             "found_at", "found_location", "room", "room_number", "stay",
             "guest", "guest_name", "found_by_name", "stored_location",
-            "claimed_by_name", "returned_at",
+            "claimed_by_name", "returned_at", "record_type",
         ]
         read_only_fields = fields
+
+    def get_record_type(self, obj) -> str:
+        return "found_item"
 
 
 class LostFoundItemSerializer(serializers.ModelSerializer):
@@ -546,4 +554,190 @@ class LostFoundItemSerializer(serializers.ModelSerializer):
         if not _has_perm(request, "lost_found.status_update"):
             data.pop("claimed_by_phone", None)
             data.pop("claim_proof_reference", None)
+        return data
+
+
+# --- Lost report (LR — the "I lost X" cycle) ---------------------------------
+
+
+class LostReportStatusLogSerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.CharField(
+        source="changed_by.full_name", read_only=True, default=""
+    )
+
+    class Meta:
+        model = LostReportStatusLog
+        fields = _status_log_fields()
+        read_only_fields = fields
+
+
+class LostReportCreateSerializer(serializers.Serializer):
+    category = serializers.ChoiceField(
+        choices=LostFoundCategory.choices,
+        required=False,
+        default=LostFoundCategory.OTHER,
+    )
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    distinctive_marks = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    last_seen_location = serializers.CharField(
+        max_length=160, required=False, allow_blank=True, default=""
+    )
+    lost_at = serializers.DateTimeField(required=False, allow_null=True)
+    # reporter_name is OPTIONAL at the SHAPE layer so the domain service raises
+    # the neutral 422 ``claimant_required`` (rather than a bare field-required).
+    reporter_name = serializers.CharField(
+        max_length=180, required=False, allow_blank=True, default=""
+    )
+    reporter_phone = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+    guest = serializers.IntegerField(required=False, allow_null=True)
+    stay = serializers.IntegerField(required=False, allow_null=True)
+    reservation = serializers.IntegerField(required=False, allow_null=True)
+    internal_notes = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+
+class LostReportUpdateSerializer(serializers.Serializer):
+    category = serializers.ChoiceField(choices=LostFoundCategory.choices, required=False)
+    description = serializers.CharField(required=False, allow_blank=True)
+    distinctive_marks = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    last_seen_location = serializers.CharField(
+        max_length=160, required=False, allow_blank=True
+    )
+    lost_at = serializers.DateTimeField(required=False, allow_null=True)
+    reporter_name = serializers.CharField(max_length=180, required=False)
+    reporter_phone = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    guest = serializers.IntegerField(required=False, allow_null=True)
+    stay = serializers.IntegerField(required=False, allow_null=True)
+    reservation = serializers.IntegerField(required=False, allow_null=True)
+    internal_notes = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class LostReportStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=LostReportStatus.choices)
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+
+
+class LostReportMatchSerializer(serializers.Serializer):
+    found_item = serializers.IntegerField()
+
+
+class LostReportReasonSerializer(serializers.Serializer):
+    # Reason is OPTIONAL at the SHAPE layer so the domain service raises the
+    # neutral typed error (lost_report_reason_required / cancellation_reason_
+    # required) instead of a bare field-required. Used by unmatch / close-unfound
+    # / cancel.
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+
+
+class LostReportHandoverSerializer(serializers.Serializer):
+    recipient_name = serializers.CharField(
+        max_length=180, required=False, allow_blank=True, default=""
+    )
+    recipient_phone = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    # WP7 proof (enforced by the SERVICE only for sensitive categories, reusing
+    # ``return_lost_found_item``'s controls). Shape only here.
+    claim_proof_type = serializers.ChoiceField(
+        choices=LostFoundClaimProofType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    claim_proof_reference = serializers.CharField(
+        max_length=40, required=False, allow_blank=True, default=""
+    )
+
+
+class LostReportListSerializer(serializers.ModelSerializer):
+    # Card/list: EXCLUDES ``reporter_phone`` + ``internal_notes`` ENTIRELY
+    # (never rendered at all, not merely gated). Only the safe operational
+    # context is surfaced.
+    guest_name = serializers.CharField(source="guest.full_name", read_only=True, default="")
+    reservation_number = serializers.CharField(
+        source="reservation.reservation_number", read_only=True, default=""
+    )
+    room_number = serializers.CharField(source="stay.room.number", read_only=True, default="")
+    matched_found_item_summary = serializers.SerializerMethodField()
+    # Discriminator for a MERGED found-item + lost-report view on the frontend.
+    record_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LostReport
+        fields = [
+            "id", "report_number", "description", "category", "status",
+            "last_seen_location", "reporter_name", "lost_at",
+            "stay", "guest", "guest_name", "reservation", "reservation_number",
+            "room_number", "matched_found_item", "matched_found_item_summary",
+            "created_at", "updated_at", "matched_at", "returned_at",
+            "record_type",
+        ]
+        read_only_fields = fields
+
+    def get_matched_found_item_summary(self, report) -> dict | None:
+        item = report.matched_found_item
+        if item is None:
+            return None
+        # Safe summary only — the found item's own sensitive fields (phone /
+        # proof) are NEVER surfaced through a lost-report payload.
+        return {"item_number": item.item_number, "title": item.title}
+
+    def get_record_type(self, report) -> str:
+        return "lost_report"
+
+
+class LostReportSerializer(serializers.ModelSerializer):
+    guest_name = serializers.CharField(source="guest.full_name", read_only=True, default="")
+    reservation_number = serializers.CharField(
+        source="reservation.reservation_number", read_only=True, default=""
+    )
+    room_number = serializers.CharField(source="stay.room.number", read_only=True, default="")
+    matched_found_item_summary = serializers.SerializerMethodField()
+    status_logs = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LostReport
+        fields = [
+            "id", "report_number", "category", "status", "description",
+            "distinctive_marks", "last_seen_location", "lost_at",
+            "reporter_name", "reporter_phone", "stay", "guest", "guest_name",
+            "reservation", "reservation_number", "room_number",
+            "matched_found_item", "matched_found_item_summary", "internal_notes",
+            "matched_at", "returned_at", "closed_at", "cancelled_at",
+            "cancellation_reason", "unfound_reason", "status_logs",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_matched_found_item_summary(self, report) -> dict | None:
+        item = report.matched_found_item
+        if item is None:
+            return None
+        return {"item_number": item.item_number, "title": item.title}
+
+    def get_status_logs(self, report):
+        logs = report.status_logs.select_related("changed_by")[:10]
+        return LostReportStatusLogSerializer(logs, many=True).data
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        # Disclosure gates (mirror WP6, fail-closed):
+        # * internal_notes — only a caller who can ACT on the record
+        #   (lost_found.update OR lost_found.status_update).
+        if not _can_see_internal_notes(request, "lost_found"):
+            data.pop("internal_notes", None)
+        # * reporter_phone — SENSITIVE contact captured for the handover flow
+        #   (performed under lost_found.status_update), so only a holder of that
+        #   permission sees it. Fail-closed; already ABSENT from the list/card.
+        if not _has_perm(request, "lost_found.status_update"):
+            data.pop("reporter_phone", None)
         return data

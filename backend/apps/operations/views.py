@@ -22,6 +22,7 @@ from apps.common.exceptions import (
 from apps.guests.models import Guest
 from apps.rbac.permissions import HasHotelMembership, HasHotelPermission
 from apps.rbac.services import has_hotel_permission
+from apps.reservations.models import Reservation
 from apps.rooms.models import Room, RoomStatus
 from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
@@ -34,6 +35,8 @@ from .models import (
     LostFoundCategory,
     LostFoundItem,
     LostFoundStatus,
+    LostReport,
+    LostReportStatus,
     MaintenanceCategory,
     MaintenanceRequest,
     MaintenanceStatus,
@@ -57,6 +60,14 @@ from .serializers import (
     LostFoundItemSerializer,
     LostFoundStatusSerializer,
     LostFoundUpdateSerializer,
+    LostReportCreateSerializer,
+    LostReportHandoverSerializer,
+    LostReportListSerializer,
+    LostReportMatchSerializer,
+    LostReportReasonSerializer,
+    LostReportSerializer,
+    LostReportStatusSerializer,
+    LostReportUpdateSerializer,
     MaintenanceCloseSerializer,
     MaintenanceCreateSerializer,
     MaintenanceRequestListSerializer,
@@ -826,6 +837,250 @@ class LostFoundCloseView(APIView):
         return Response(_detail(LostFoundItemSerializer, item, request))
 
 
+# --- Lost report (LR — the "I lost X" cycle + safe manual matching) ----------
+#
+# PERMISSION REUSE (owner decision — NO new codes, NO RBAC change): the lost
+# report reuses the SAME ``lost_found.*`` permissions as the found item —
+#   view / candidates      -> lost_found.view      (LfView)
+#   create (file a report)  -> lost_found.create    (LfCreate)
+#   edit (PATCH metadata)   -> lost_found.update     (LfUpdate)
+#   status / match / unmatch / handover / close-unfound / cancel
+#                           -> lost_found.status_update (LfStatus)
+# so a role that can act on lost-and-found can act on lost reports too.
+
+
+class LostReportListCreateView(generics.ListCreateAPIView):
+    def get_permissions(self):
+        return [LfCreate()] if self.request.method == "POST" else [LfView()]
+
+    def get_serializer_class(self):
+        return LostReportListSerializer
+
+    def get_queryset(self):
+        # select_related feeds the list serializer's guest_name /
+        # reservation_number / room_number (via stay->room) and the matched-item
+        # summary with NO per-row query.
+        qs = LostReport.objects.filter(hotel=self.request.hotel).select_related(
+            "guest", "reservation", "stay__room", "matched_found_item"
+        )
+        p = self.request.query_params
+        if p.get("status") in {c for c, _ in LostReportStatus.choices}:
+            qs = qs.filter(status=p["status"])
+        if p.get("category") in {c for c, _ in LostFoundCategory.choices}:
+            qs = qs.filter(category=p["category"])
+        if p.get("guest") and str(p["guest"]).isdigit():
+            qs = qs.filter(guest_id=int(p["guest"]))
+        if p.get("stay") and str(p["stay"]).isdigit():
+            qs = qs.filter(stay_id=int(p["stay"]))
+        if p.get("date"):
+            qs = qs.filter(created_at__date=p["date"])
+        if p.get("search"):
+            qs = (
+                qs.filter(report_number__icontains=p["search"])
+                | qs.filter(description__icontains=p["search"])
+                | qs.filter(reporter_name__icontains=p["search"])
+                | qs.filter(last_seen_location__icontains=p["search"])
+            )
+        ordering = p.get("ordering")
+        if ordering in ("created_at", "-created_at", "report_number", "-report_number"):
+            qs = qs.order_by(ordering)
+        return qs.distinct()
+
+    def create(self, request: Request, *args, **kwargs) -> Response:
+        _guard_write(request)
+        serializer = LostReportCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        report = services.create_lost_report(
+            request.hotel,
+            user=request.user,
+            category=data["category"],
+            description=data.get("description", ""),
+            distinctive_marks=data.get("distinctive_marks", ""),
+            last_seen_location=data.get("last_seen_location", ""),
+            lost_at=data.get("lost_at"),
+            reporter_name=data.get("reporter_name", ""),
+            reporter_phone=data.get("reporter_phone", ""),
+            guest=_get(Guest, request, data["guest"]) if data.get("guest") else None,
+            stay=_get(Stay, request, data["stay"]) if data.get("stay") else None,
+            reservation=(
+                _get(Reservation, request, data["reservation"])
+                if data.get("reservation")
+                else None
+            ),
+            internal_notes=data.get("internal_notes", ""),
+        )
+        return Response(
+            _detail(LostReportSerializer, report, request),
+            status=http_status.HTTP_201_CREATED,
+        )
+
+
+class LostReportDetailView(APIView):
+    def get_permissions(self):
+        return [LfUpdate()] if self.request.method == "PATCH" else [LfView()]
+
+    def get(self, request: Request, pk: int) -> Response:
+        report = _get(LostReport, request, pk)
+        return Response(_detail(LostReportSerializer, report, request))
+
+    def patch(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        refs = {}
+        for field, model in (
+            ("guest", Guest),
+            ("stay", Stay),
+            ("reservation", Reservation),
+        ):
+            if field in data:
+                refs[field] = _get(model, request, data[field]) if data[field] else None
+        meta = {
+            k: v for k, v in data.items() if k not in ("guest", "stay", "reservation")
+        }
+        report = services.update_lost_report(
+            report, user=request.user, refs=refs, **meta
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportStatusView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = services.change_lost_report_status(
+            report,
+            new_status=serializer.validated_data["status"],
+            user=request.user,
+            note=serializer.validated_data.get("note", ""),
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportMatchView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportMatchSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # The found item is fetched hotel-scoped (404 for a cross-tenant id); the
+        # service re-checks same-hotel + matchability under the row lock.
+        found_item = _get(LostFoundItem, request, serializer.validated_data["found_item"])
+        report = services.confirm_match(report, found_item, user=request.user)
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportUnmatchView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportReasonSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = services.unmatch(
+            report, reason=serializer.validated_data.get("reason", ""), user=request.user
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportHandoverView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportHandoverSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = services.hand_over_matched_report(
+            report, user=request.user, **serializer.validated_data
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportCloseUnfoundView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportReasonSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = services.close_unfound(
+            report, reason=serializer.validated_data.get("reason", ""), user=request.user
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+class LostReportCancelView(APIView):
+    permission_classes = [LfStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        report = _get(LostReport, request, pk)
+        serializer = LostReportReasonSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = services.cancel_lost_report(
+            report, reason=serializer.validated_data.get("reason", ""), user=request.user
+        )
+        return Response(_detail(LostReportSerializer, report, request))
+
+
+#: Safety cap on the candidate picker payload — a bounded shortlist, never the
+#: whole store. The ``search`` / ``category`` filters narrow it further.
+CANDIDATE_LIMIT = 100
+
+
+class LostReportCandidatesView(APIView):
+    """Matchable FOUND items in the SAME hotel for a report's manual match.
+
+    Returns items that are still holdable (NOT returned/disposed/closed) and NOT
+    already actively matched by another report, via ``LostFoundItemListSerializer``
+    (so NO phone / proof / unsafe oracle leaks). ``lost_found.view`` gates it —
+    the same read permission as the lists."""
+
+    permission_classes = [LfView]
+
+    def get(self, request: Request, pk: int) -> Response:
+        # 404s a cross-tenant / unknown report id, keeping the picker hotel-scoped.
+        _get(LostReport, request, pk)
+        already_matched_ids = LostReport.objects.filter(
+            hotel=request.hotel,
+            status=LostReportStatus.MATCHED,
+            matched_found_item__isnull=False,
+        ).values_list("matched_found_item_id", flat=True)
+        qs = (
+            LostFoundItem.objects.filter(hotel=request.hotel)
+            .exclude(status__in=services.NON_MATCHABLE_FOUND_STATUSES)
+            .exclude(id__in=already_matched_ids)
+            .select_related("room", "guest", "found_by")
+        )
+        p = self.request.query_params
+        if p.get("category") in {c for c, _ in LostFoundCategory.choices}:
+            qs = qs.filter(category=p["category"])
+        if p.get("search"):
+            qs = (
+                qs.filter(item_number__icontains=p["search"])
+                | qs.filter(title__icontains=p["search"])
+                | qs.filter(description__icontains=p["search"])
+                | qs.filter(found_location__icontains=p["search"])
+            )
+        qs = qs.distinct().order_by("-found_at", "-id")[:CANDIDATE_LIMIT]
+        data = LostFoundItemListSerializer(
+            qs, many=True, context={"request": request}
+        ).data
+        return Response(data)
+
+
 # --- Overview ---------------------------------------------------------------------
 
 
@@ -855,6 +1110,7 @@ class OperationsOverviewView(APIView):
         hk = HousekeepingTask.objects.filter(hotel=hotel)
         mt = MaintenanceRequest.objects.filter(hotel=hotel)
         lf = LostFoundItem.objects.filter(hotel=hotel)
+        lr = LostReport.objects.filter(hotel=hotel)
         return Response(
             {
                 "dirty_rooms": rooms.filter(status=RoomStatus.DIRTY).count(),
@@ -875,6 +1131,22 @@ class OperationsOverviewView(APIView):
                 ).count(),
                 "lost_found_open": lf.filter(
                     status__in=[LostFoundStatus.FOUND, LostFoundStatus.STORED]
+                ).count(),
+                # LOST-REPORT statcards (additive):
+                "open_lost_reports": lr.filter(
+                    status__in=[
+                        LostReportStatus.OPEN,
+                        LostReportStatus.SEARCHING,
+                    ]
+                ).count(),
+                "stored_found_items": lf.filter(
+                    status__in=[LostFoundStatus.FOUND, LostFoundStatus.STORED]
+                ).count(),
+                "confirmed_matches": lr.filter(
+                    status=LostReportStatus.MATCHED
+                ).count(),
+                "returned_reports": lr.filter(
+                    status=LostReportStatus.RETURNED
                 ).count(),
                 "urgent_tasks": (
                     hk.filter(

@@ -272,6 +272,58 @@ class DisposalReasonRequired(FunduqiiAPIException):
     default_code = "disposal_reason_required"
 
 
+# --- Lost report ↔ found item matching (LOST-REPORT cycle) -------------------
+
+
+class FoundItemNotMatchable(FunduqiiAPIException):
+    """A lost report may only be matched to a found item that is still holdable —
+    matchable = NOT in {returned, disposed, closed}. A found/stored/claimed item
+    is matchable; an already-returned / disposed / closed item is not (there is
+    nothing left to hand over). ``details.status`` is the neutral current status
+    marker — it never leaks the item's sensitive claimant/proof data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item can no longer be matched to a lost report."
+    default_code = "found_item_not_matchable"
+
+
+class FoundItemAlreadyMatched(FunduqiiAPIException):
+    """A found item can be ACTIVELY matched by at most ONE lost report. Raised
+    when a second report tries to claim an item that another matched report
+    already holds — including the concurrent-insert race translated from the DB
+    partial-unique ``uniq_matched_found_item_active_report``. Carries only the
+    neutral ``details.item`` id, never the other report's data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item is already matched to another lost report."
+    default_code = "found_item_already_matched"
+
+
+class FoundItemActivelyMatched(FunduqiiAPIException):
+    """A found item that is ACTIVELY matched by a lost report (report
+    status == ``matched``) may NOT be independently disposed / returned /
+    claimed through the standalone lost-&-found actions — that would leave the
+    report dangling as ``matched`` to a gone item and risk a handover to the
+    wrong party. The item must be released first via the report's ``unmatch``
+    (which requires a documented reason) or handed over through the atomic
+    ``hand_over_matched_report`` path. ``details.reason`` is a neutral marker
+    (``actively_matched``); it never leaks the matching report's data."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This found item is actively matched to a lost report; unmatch it first."
+    default_code = "found_item_actively_matched"
+
+
+class LostReportReasonRequired(FunduqiiAPIException):
+    """A lost-report action that must carry a reason was called without one.
+    ``details.reason`` is a NEUTRAL marker of WHICH action needs it — one of
+    ``unmatch`` or ``close_unfound`` — never the (absent) reason value itself."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required for this lost-report action."
+    default_code = "lost_report_reason_required"
+
+
 # --- Staff & permissions management (Phase 11) ------------------------------
 
 
