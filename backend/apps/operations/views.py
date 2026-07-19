@@ -113,6 +113,26 @@ def _resolve_user(user_id):
     return user
 
 
+def _detail(serializer_cls, obj, request):
+    """Render a DETAIL serializer WITH the request in context so the WP6
+    disclosure gates (internal_notes / claimed_by_phone) can evaluate the
+    caller's permissions. Fail-closed if the request is ever absent."""
+    return serializer_cls(obj, context={"request": request}).data
+
+
+def _guard_initial_assign(request, assigned_to, assign_code: str) -> None:
+    """Initial-assign guard (WP6, goal A): supplying a non-empty ``assigned_to``
+    at CREATE time requires the caller to ALSO hold the domain's assign
+    permission, on top of ``.create``. A caller with ``.create`` but not
+    ``.assign`` may still create the item WITHOUT an assignee; a create that
+    DOES carry an assignee without ``.assign`` is refused 403 — never silently
+    dropped, never accepted. Reassignment later already requires ``.assign``."""
+    if assigned_to is not None and not has_hotel_permission(
+        request.user, request.hotel, assign_code
+    ):
+        raise PermissionDenied()
+
+
 # --- Housekeeping ---------------------------------------------------------------
 
 # The cleaning card's "upcoming arrival" hint covers arrivals from the hotel
@@ -249,6 +269,7 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
         serializer = HousekeepingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        _guard_initial_assign(request, data.get("assigned_to"), "housekeeping.assign")
         task = services.create_housekeeping_task(
             request.hotel,
             user=request.user,
@@ -261,7 +282,8 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
             internal_notes=data.get("internal_notes", ""),
         )
         return Response(
-            HousekeepingTaskSerializer(task).data, status=http_status.HTTP_201_CREATED
+            _detail(HousekeepingTaskSerializer, task, request),
+            status=http_status.HTTP_201_CREATED,
         )
 
 
@@ -271,7 +293,7 @@ class HousekeepingDetailView(APIView):
 
     def get(self, request: Request, pk: int) -> Response:
         task = _get(HousekeepingTask, request, pk)
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
     def patch(self, request: Request, pk: int) -> Response:
         _guard_write(request)
@@ -281,7 +303,7 @@ class HousekeepingDetailView(APIView):
         task = services.update_housekeeping_task(
             task, user=request.user, **serializer.validated_data
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingStatusView(APIView):
@@ -298,7 +320,7 @@ class HousekeepingStatusView(APIView):
             user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingAssignView(APIView):
@@ -314,7 +336,7 @@ class HousekeepingAssignView(APIView):
             assigned_to=_resolve_user(serializer.validated_data["assigned_to"]),
             user=request.user,
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingCompleteView(APIView):
@@ -332,7 +354,7 @@ class HousekeepingCompleteView(APIView):
             note=serializer.validated_data.get("note", ""),
             service_outcome=serializer.validated_data["service_outcome"],
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingComeBackLaterView(APIView):
@@ -349,7 +371,7 @@ class HousekeepingComeBackLaterView(APIView):
             user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingCancelView(APIView):
@@ -363,7 +385,7 @@ class HousekeepingCancelView(APIView):
         task = services.cancel_housekeeping_task(
             task, reason=serializer.validated_data["reason"], user=request.user
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingInspectApproveView(APIView):
@@ -374,7 +396,7 @@ class HousekeepingInspectApproveView(APIView):
         task = _get(HousekeepingTask, request, pk)
         note = str(request.data.get("note", "") or "")[:255]
         task = services.approve_inspection(task, user=request.user, note=note)
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class HousekeepingInspectRejectView(APIView):
@@ -388,7 +410,7 @@ class HousekeepingInspectRejectView(APIView):
         task = services.reject_inspection(
             task, reason=serializer.validated_data["reason"], user=request.user
         )
-        return Response(HousekeepingTaskSerializer(task).data)
+        return Response(_detail(HousekeepingTaskSerializer, task, request))
 
 
 class ArrivalRoomsNotReadyView(APIView):
@@ -404,6 +426,14 @@ class ArrivalRoomsNotReadyView(APIView):
         from apps.stays.models import Stay, StayStatus
 
         today = get_business_date(request.hotel)
+        # WP6 disclosure gate (goal B): the FULL reservation number is a booking
+        # reference. A housekeeping-only caller still sees the operational info
+        # (room / unit + arrival presence & date) but NOT the full number — that
+        # is present ONLY for a caller who also holds ``reservations.view``. No
+        # RBAC change: the field's PRESENCE is gated by the existing permission.
+        can_see_reservation_number = has_hotel_permission(
+            request.user, request.hotel, "reservations.view"
+        )
         pinned = (
             Reservation.objects.filter(
                 hotel=request.hotel,
@@ -429,15 +459,22 @@ class ArrivalRoomsNotReadyView(APIView):
                 )
                 if not_ready:
                     seen.add(room.id)
-                    rows.append(
-                        {
-                            "room": room.id,
-                            "room_number": room.number,
-                            "room_status": room.status,
-                            "occupied": room.id in occupied,
-                            "reservation_number": reservation.reservation_number,
-                        }
-                    )
+                    row = {
+                        "room": room.id,
+                        "room_number": room.number,
+                        "room_status": room.status,
+                        "occupied": room.id in occupied,
+                        # Operational arrival info, safe for a housekeeping-only
+                        # caller (these are pinned to the hotel business date).
+                        "arrival_date": (
+                            reservation.check_in_date.isoformat()
+                            if reservation.check_in_date
+                            else None
+                        ),
+                    }
+                    if can_see_reservation_number:
+                        row["reservation_number"] = reservation.reservation_number
+                    rows.append(row)
         rows.sort(key=lambda r: r["room_number"])
         return Response(rows)
 
@@ -497,6 +534,7 @@ class MaintenanceListCreateView(generics.ListCreateAPIView):
         serializer = MaintenanceCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        _guard_initial_assign(request, data.get("assigned_to"), "maintenance.assign")
         obj = services.create_maintenance_request(
             request.hotel,
             user=request.user,
@@ -512,7 +550,8 @@ class MaintenanceListCreateView(generics.ListCreateAPIView):
             internal_notes=data.get("internal_notes", ""),
         )
         return Response(
-            MaintenanceRequestSerializer(obj).data, status=http_status.HTTP_201_CREATED
+            _detail(MaintenanceRequestSerializer, obj, request),
+            status=http_status.HTTP_201_CREATED,
         )
 
 
@@ -522,7 +561,7 @@ class MaintenanceDetailView(APIView):
 
     def get(self, request: Request, pk: int) -> Response:
         obj = _get(MaintenanceRequest, request, pk)
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
     def patch(self, request: Request, pk: int) -> Response:
         _guard_write(request)
@@ -532,7 +571,7 @@ class MaintenanceDetailView(APIView):
         obj = services.update_maintenance_request(
             obj, user=request.user, **serializer.validated_data
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 class MaintenanceStatusView(APIView):
@@ -549,7 +588,7 @@ class MaintenanceStatusView(APIView):
             user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 class MaintenanceAssignView(APIView):
@@ -565,7 +604,7 @@ class MaintenanceAssignView(APIView):
             assigned_to=_resolve_user(serializer.validated_data["assigned_to"]),
             user=request.user,
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 class MaintenanceResolveView(APIView):
@@ -582,7 +621,7 @@ class MaintenanceResolveView(APIView):
             resolution_notes=serializer.validated_data.get("resolution_notes", ""),
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 class MaintenanceCloseView(APIView):
@@ -599,7 +638,7 @@ class MaintenanceCloseView(APIView):
             room_next_status=serializer.validated_data["room_next_status"],
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 class MaintenanceCancelView(APIView):
@@ -613,7 +652,7 @@ class MaintenanceCancelView(APIView):
         obj = services.cancel_maintenance_request(
             obj, reason=serializer.validated_data["reason"], user=request.user
         )
-        return Response(MaintenanceRequestSerializer(obj).data)
+        return Response(_detail(MaintenanceRequestSerializer, obj, request))
 
 
 # --- Lost & Found -----------------------------------------------------------------
@@ -676,7 +715,8 @@ class LostFoundListCreateView(generics.ListCreateAPIView):
             internal_notes=data.get("internal_notes", ""),
         )
         return Response(
-            LostFoundItemSerializer(item).data, status=http_status.HTTP_201_CREATED
+            _detail(LostFoundItemSerializer, item, request),
+            status=http_status.HTTP_201_CREATED,
         )
 
 
@@ -686,7 +726,7 @@ class LostFoundDetailView(APIView):
 
     def get(self, request: Request, pk: int) -> Response:
         item = _get(LostFoundItem, request, pk)
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
     def patch(self, request: Request, pk: int) -> Response:
         _guard_write(request)
@@ -704,7 +744,7 @@ class LostFoundDetailView(APIView):
         item = services.update_lost_found_item(
             item, user=request.user, refs=refs, **meta
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 class LostFoundStatusView(APIView):
@@ -721,7 +761,7 @@ class LostFoundStatusView(APIView):
             user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 class LostFoundClaimView(APIView):
@@ -735,7 +775,7 @@ class LostFoundClaimView(APIView):
         item = services.claim_lost_found_item(
             item, user=request.user, **serializer.validated_data
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 class LostFoundReturnView(APIView):
@@ -749,7 +789,7 @@ class LostFoundReturnView(APIView):
         item = services.return_lost_found_item(
             item, user=request.user, **serializer.validated_data
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 class LostFoundDisposeView(APIView):
@@ -763,7 +803,7 @@ class LostFoundDisposeView(APIView):
         item = services.dispose_lost_found_item(
             item, reason=serializer.validated_data.get("reason", ""), user=request.user
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 class LostFoundCloseView(APIView):
@@ -777,7 +817,7 @@ class LostFoundCloseView(APIView):
         item = services.close_lost_found_item(
             item, user=request.user, note=serializer.validated_data.get("note", "")
         )
-        return Response(LostFoundItemSerializer(item).data)
+        return Response(_detail(LostFoundItemSerializer, item, request))
 
 
 # --- Overview ---------------------------------------------------------------------

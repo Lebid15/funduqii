@@ -1316,6 +1316,46 @@ class ArrivalsNotReadyTests(APITestCase, OperationsMixin):
         )
         self.assertEqual(r.status_code, 403)
 
+    # --- WP6 goal B: full reservation_number disclosure gate ----------------
+
+    def test_reservation_number_hidden_from_housekeeping_only_caller(self):
+        # A housekeeping-only caller (no reservations.view) still sees the
+        # operational info (room + arrival date) but NOT the full number.
+        import json
+
+        dirty = self._room("401", RoomStatus.DIRTY)
+        res = self._arrival(dirty)
+        hk_only = add_member(self.hotel, "hkonly@x.com", perms=["housekeeping.view"])
+        self.client.force_authenticate(hk_only)
+        r = self.client.get(
+            reverse("operations:housekeeping-arrivals-not-ready"), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        row = r.data[0]
+        self.assertEqual(row["room_number"], "401")
+        # Operational arrival info is retained.
+        self.assertEqual(row["arrival_date"], timezone.localdate().isoformat())
+        # The full reservation number is absent — nowhere in the payload.
+        self.assertNotIn("reservation_number", row)
+        self.assertNotIn(res.reservation_number, json.dumps(r.data))
+
+    def test_reservation_number_visible_with_reservations_view(self):
+        dirty = self._room("402", RoomStatus.DIRTY)
+        res = self._arrival(dirty)
+        caller = add_member(
+            self.hotel,
+            "resview@x.com",
+            perms=["housekeeping.view", "reservations.view"],
+        )
+        self.client.force_authenticate(caller)
+        r = self.client.get(
+            reverse("operations:housekeeping-arrivals-not-ready"), **HDR(self.hotel)
+        )
+        self.assertEqual(r.status_code, 200)
+        row = r.data[0]
+        self.assertEqual(row["arrival_date"], timezone.localdate().isoformat())
+        self.assertEqual(row["reservation_number"], res.reservation_number)
+
 
 # --------------------------------------------------------------------------- #
 # WP5 — Housekeeping cleaning-card enrichment (unit context + occupancy +      #
@@ -1516,3 +1556,264 @@ class HousekeepingCardEnrichmentTests(APITestCase, OperationsMixin):
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["is_occupied"])
         self.assertFalse(rows[0]["upcoming_arrival"]["has_upcoming"])
+
+
+# --------------------------------------------------------------------------- #
+# WP6 — closure safety: initial-assign permission gate (goal A) + restricted    #
+# disclosure of internal_notes / full reservation_number / phone (goal B),      #
+# all within the EXISTING RBAC, fail-closed.                                    #
+# --------------------------------------------------------------------------- #
+
+
+class InitialAssignPermissionTests(APITestCase, OperationsMixin):
+    """Goal A: supplying an assignee at CREATE time requires the domain's
+    ``.assign`` permission IN ADDITION to ``.create`` — otherwise 403 (never a
+    silent drop, never accepted). Without an assignee, ``.create`` alone still
+    creates the item unassigned. Reassignment already requires ``.assign``."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.room = make_room(self.hotel, status=RoomStatus.DIRTY)
+        # An active same-hotel member who is a valid assignee target.
+        self.worker = add_member(self.hotel, "w@x.com", perms=["housekeeping.view"])
+
+    # -- Housekeeping --------------------------------------------------------
+
+    def test_hk_create_with_assignee_without_assign_is_403(self):
+        creator = add_member(self.hotel, "c@x.com", perms=["housekeeping.create"])
+        self.client.force_authenticate(creator)
+        r = self.create_hk(assigned_to=self.worker.id)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "permission_denied")
+        # The item was NOT created (assignee not silently dropped, not accepted).
+        self.assertEqual(HousekeepingTask.objects.filter(hotel=self.hotel).count(), 0)
+
+    def test_hk_create_with_assignee_and_assign_is_201(self):
+        creator = add_member(
+            self.hotel,
+            "c2@x.com",
+            perms=["housekeeping.create", "housekeeping.assign"],
+        )
+        self.client.force_authenticate(creator)
+        r = self.create_hk(assigned_to=self.worker.id)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["assigned_to"], self.worker.id)
+        self.assertEqual(r.data["status"], "assigned")
+
+    def test_hk_create_without_assignee_only_needs_create(self):
+        creator = add_member(self.hotel, "c3@x.com", perms=["housekeeping.create"])
+        self.client.force_authenticate(creator)
+        r = self.create_hk()
+        self.assertEqual(r.status_code, 201)
+        self.assertIsNone(r.data["assigned_to"])
+
+    def test_hk_create_with_explicit_null_assignee_only_needs_create(self):
+        creator = add_member(self.hotel, "c4@x.com", perms=["housekeeping.create"])
+        self.client.force_authenticate(creator)
+        r = self.create_hk(assigned_to=None)
+        self.assertEqual(r.status_code, 201)
+        self.assertIsNone(r.data["assigned_to"])
+
+    # -- Maintenance ---------------------------------------------------------
+
+    def test_mt_create_with_assignee_without_assign_is_403(self):
+        creator = add_member(self.hotel, "cm@x.com", perms=["maintenance.create"])
+        self.client.force_authenticate(creator)
+        r = self.create_mt(assigned_to=self.worker.id)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["code"], "permission_denied")
+        self.assertEqual(
+            MaintenanceRequest.objects.filter(hotel=self.hotel).count(), 0
+        )
+
+    def test_mt_create_with_assignee_and_assign_is_201(self):
+        creator = add_member(
+            self.hotel,
+            "cm2@x.com",
+            perms=["maintenance.create", "maintenance.assign"],
+        )
+        self.client.force_authenticate(creator)
+        r = self.create_mt(assigned_to=self.worker.id)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["assigned_to"], self.worker.id)
+
+    def test_mt_create_without_assignee_only_needs_create(self):
+        creator = add_member(self.hotel, "cm3@x.com", perms=["maintenance.create"])
+        self.client.force_authenticate(creator)
+        r = self.create_mt()
+        self.assertEqual(r.status_code, 201)
+        self.assertIsNone(r.data["assigned_to"])
+
+    def test_reassignment_still_requires_assign_permission(self):
+        # A .create-only caller creates unassigned, then cannot reassign via the
+        # dedicated assign endpoint (which is gated on .assign) — 403.
+        creator = add_member(
+            self.hotel, "c5@x.com", perms=["housekeeping.create", "housekeeping.view"]
+        )
+        self.client.force_authenticate(creator)
+        task = self.create_hk().data
+        r = self.act("housekeeping", task["id"], "assign", {"assigned_to": self.worker.id})
+        self.assertEqual(r.status_code, 403)
+
+
+class DisclosureGateTests(APITestCase, OperationsMixin):
+    """Goal B: internal_notes / claimed_by_phone are disclosed only within the
+    existing RBAC and never leak into lists/cards; fail-closed without a request
+    context."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel, status=RoomStatus.DIRTY)
+
+    # -- internal_notes ------------------------------------------------------
+
+    def test_hk_internal_notes_gated_detail_and_absent_from_list(self):
+        self.client.force_authenticate(self.manager)
+        task = self.create_hk(internal_notes="staff only note").data
+        detail_url = reverse("operations:housekeeping-detail", args=[task["id"]])
+        list_url = reverse("operations:housekeeping-list")
+
+        # Actor with status_update sees internal_notes.
+        actor = add_member(
+            self.hotel,
+            "a@x.com",
+            perms=["housekeeping.view", "housekeeping.status_update"],
+        )
+        self.client.force_authenticate(actor)
+        self.assertEqual(
+            self.client.get(detail_url, **HDR(self.hotel)).data["internal_notes"],
+            "staff only note",
+        )
+
+        # Actor with update (also view to read) sees it too.
+        updater = add_member(
+            self.hotel,
+            "u@x.com",
+            perms=["housekeeping.view", "housekeeping.update"],
+        )
+        self.client.force_authenticate(updater)
+        self.assertEqual(
+            self.client.get(detail_url, **HDR(self.hotel)).data["internal_notes"],
+            "staff only note",
+        )
+
+        # A view-only caller: internal_notes dropped.
+        viewer = add_member(self.hotel, "v@x.com", perms=["housekeeping.view"])
+        self.client.force_authenticate(viewer)
+        self.assertNotIn(
+            "internal_notes", self.client.get(detail_url, **HDR(self.hotel)).data
+        )
+
+        # The list/card never carries internal_notes, even for the manager.
+        self.client.force_authenticate(self.manager)
+        rows = self.client.get(list_url, **HDR(self.hotel)).data["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotIn("internal_notes", row)
+
+    def test_mt_internal_notes_gated_detail_and_absent_from_list(self):
+        self.client.force_authenticate(self.manager)
+        req = self.create_mt(internal_notes="mt secret").data
+        detail_url = reverse("operations:maintenance-detail", args=[req["id"]])
+
+        viewer = add_member(self.hotel, "mv@x.com", perms=["maintenance.view"])
+        self.client.force_authenticate(viewer)
+        self.assertNotIn(
+            "internal_notes", self.client.get(detail_url, **HDR(self.hotel)).data
+        )
+        rows = self.client.get(
+            reverse("operations:maintenance-list"), **HDR(self.hotel)
+        ).data["results"]
+        for row in rows:
+            self.assertNotIn("internal_notes", row)
+
+        actor = add_member(
+            self.hotel,
+            "ma@x.com",
+            perms=["maintenance.view", "maintenance.status_update"],
+        )
+        self.client.force_authenticate(actor)
+        self.assertEqual(
+            self.client.get(detail_url, **HDR(self.hotel)).data["internal_notes"],
+            "mt secret",
+        )
+
+    # -- Lost & Found: internal_notes + claimant phone -----------------------
+
+    def test_lf_internal_notes_and_phone_gated(self):
+        self.client.force_authenticate(self.manager)
+        item = self.create_lf(internal_notes="lf secret").data
+        # Capture a claimant phone through the claim flow.
+        self.act(
+            "lost-found",
+            item["id"],
+            "claim",
+            {"claimed_by_name": "John Smith", "claimed_by_phone": "+90 555 111"},
+        )
+        detail_url = reverse("operations:lost-found-detail", args=[item["id"]])
+        list_url = reverse("operations:lost-found-list")
+
+        # A view-only caller sees NEITHER the internal notes NOR the phone,
+        # but the claimant NAME may remain (not over-restricted).
+        viewer = add_member(self.hotel, "lv@x.com", perms=["lost_found.view"])
+        self.client.force_authenticate(viewer)
+        d = self.client.get(detail_url, **HDR(self.hotel)).data
+        self.assertNotIn("internal_notes", d)
+        self.assertNotIn("claimed_by_phone", d)
+        self.assertEqual(d["claimed_by_name"], "John Smith")
+
+        # The list/card never carries the phone (or internal_notes).
+        rows = self.client.get(list_url, **HDR(self.hotel)).data["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotIn("claimed_by_phone", row)
+            self.assertNotIn("internal_notes", row)
+
+        # A holder of lost_found.status_update (the claim/return actor) sees both.
+        actor = add_member(
+            self.hotel,
+            "la@x.com",
+            perms=["lost_found.view", "lost_found.status_update"],
+        )
+        self.client.force_authenticate(actor)
+        d = self.client.get(detail_url, **HDR(self.hotel)).data
+        self.assertEqual(d["claimed_by_phone"], "+90 555 111")
+        self.assertEqual(d["internal_notes"], "lf secret")
+
+    def test_lf_claim_response_shows_phone_to_actor(self):
+        # The claim/return path itself: the actor holds lost_found.status_update,
+        # so the phone captured in that flow is visible in the action response.
+        actor = add_member(
+            self.hotel,
+            "lca@x.com",
+            perms=[
+                "lost_found.view",
+                "lost_found.create",
+                "lost_found.status_update",
+            ],
+        )
+        self.client.force_authenticate(actor)
+        item = self.create_lf().data
+        r = self.act(
+            "lost-found",
+            item["id"],
+            "claim",
+            {"claimed_by_name": "Jane", "claimed_by_phone": "+1 222"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["claimed_by_phone"], "+1 222")
+
+    def test_lf_serializer_fail_closed_without_request_context(self):
+        # Fail-closed: a serializer used WITHOUT a request context drops the
+        # gated sensitive fields entirely (never shown as a fallback).
+        from apps.operations.serializers import LostFoundItemSerializer
+
+        self.client.force_authenticate(self.manager)
+        item_data = self.create_lf(internal_notes="secret").data
+        item = LostFoundItem.objects.get(pk=item_data["id"])
+        item.claimed_by_phone = "+90 000"
+        item.save(update_fields=["claimed_by_phone"])
+        data = LostFoundItemSerializer(item).data  # no context
+        self.assertNotIn("internal_notes", data)
+        self.assertNotIn("claimed_by_phone", data)

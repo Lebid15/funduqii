@@ -25,6 +25,41 @@ from .models import (
     RoomBlockStatus,
 )
 
+# --- Disclosure gates (WP6) ---------------------------------------------------
+# Restricted disclosure of sensitive/internal fields, mirroring the guests
+# ``to_representation`` precedent (context request + hotel-permission check,
+# FAIL-CLOSED when the request/permission is absent). No new permission codes:
+# existing RBAC codes gate each field.
+
+
+def _has_perm(request, code: str) -> bool:
+    """Fail-closed hotel-permission check for the serializer disclosure gates.
+
+    A serializer used WITHOUT a request context (or without ``request.user`` /
+    ``request.hotel``) is NEVER treated as authorized — the gated field is
+    dropped, not shown. Mirrors ``guests.serializers.can_view_sensitive``.
+    """
+    from apps.rbac.services import has_hotel_permission
+
+    if request is None:
+        return False
+    user = getattr(request, "user", None)
+    hotel = getattr(request, "hotel", None)
+    if user is None or hotel is None:
+        return False
+    return has_hotel_permission(user, hotel, code)
+
+
+def _can_see_internal_notes(request, section: str) -> bool:
+    """Internal notes are an operational back-channel exposed ONLY to a caller
+    who can ACT on the record — the section's ``update`` OR ``status_update``
+    permission. Fail-closed when the request/permission is absent. Never present
+    in any list serializer / card payload (only the detail serializers)."""
+    return _has_perm(request, f"{section}.update") or _has_perm(
+        request, f"{section}.status_update"
+    )
+
+
 # --- Shared -------------------------------------------------------------------
 
 
@@ -215,6 +250,15 @@ class HousekeepingTaskSerializer(serializers.ModelSerializer):
         logs = task.status_logs.select_related("changed_by")[:10]
         return HousekeepingStatusLogSerializer(logs, many=True).data
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # WP6 disclosure gate: drop ``internal_notes`` unless the caller can act
+        # on the record (housekeeping.update / .status_update). Fail-closed when
+        # there is no request context.
+        if not _can_see_internal_notes(self.context.get("request"), "housekeeping"):
+            data.pop("internal_notes", None)
+        return data
+
 
 # --- Maintenance ------------------------------------------------------------------
 
@@ -333,6 +377,15 @@ class MaintenanceRequestSerializer(serializers.ModelSerializer):
         logs = request_obj.status_logs.select_related("changed_by")[:10]
         return MaintenanceStatusLogSerializer(logs, many=True).data
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # WP6 disclosure gate: drop ``internal_notes`` unless the caller can act
+        # on the record (maintenance.update / .status_update). Fail-closed when
+        # there is no request context.
+        if not _can_see_internal_notes(self.context.get("request"), "maintenance"):
+            data.pop("internal_notes", None)
+        return data
+
 
 # --- Lost & Found -----------------------------------------------------------------
 
@@ -439,3 +492,18 @@ class LostFoundItemSerializer(serializers.ModelSerializer):
     def get_status_logs(self, item):
         logs = item.status_logs.select_related("changed_by")[:10]
         return LostFoundStatusLogSerializer(logs, many=True).data
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        # WP6 disclosure gate: internal notes only for a caller who can act on
+        # the record (lost_found.update / .status_update); fail-closed.
+        if not _can_see_internal_notes(request, "lost_found"):
+            data.pop("internal_notes", None)
+        # WP6 phone gate: ``claimed_by_phone`` is captured during the claim /
+        # return flow (both performed under lost_found.status_update), so only a
+        # holder of that permission sees it. Fail-closed without a request
+        # context. It is already ABSENT from the list serializer / card.
+        if not _has_perm(request, "lost_found.status_update"):
+            data.pop("claimed_by_phone", None)
+        return data
