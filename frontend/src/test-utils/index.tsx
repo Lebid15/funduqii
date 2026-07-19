@@ -13,6 +13,7 @@ import { render } from "@testing-library/react";
 import { ToastProvider } from "@/components/ui";
 import type { ApiError } from "@/lib/api/client";
 import type {
+  ArrivalNotReadyRow,
   Guest,
   GuestChangeLogRow,
   GuestCurrentUnit,
@@ -21,6 +22,12 @@ import type {
   GuestProfile,
   GuestReservationRow,
   GuestStayRow,
+  HousekeepingTaskListItem,
+  LostFoundItemListItem,
+  MaintenanceRequestListItem,
+  OperationsOverview,
+  RoomOption,
+  StaffMemberListItem,
 } from "@/lib/api/types";
 import type { Locale } from "@/lib/i18n/config";
 import { I18nProvider } from "@/lib/i18n/I18nProvider";
@@ -230,6 +237,156 @@ export function makeChangeLogRow(
     actor: "Front Desk",
     occurred_at: "2026-07-01T09:00:00Z",
     created_at: "2026-07-01T09:00:00Z",
+    ...overrides,
+  };
+}
+
+/* ==========================================================================
+ * Operations factories (MANDATE WP12 / owner §17). Deterministic fixtures for
+ * the three-tab operations UI: housekeeping tasks, maintenance requests, lost &
+ * found items, plus the arrival hint, overview counters and room-option feed.
+ * ======================================================================== */
+
+/** GET /operations/housekeeping row (defaults: a vacant, unassigned, pending
+ * check-out cleaning task with NO upcoming arrival — override per test). */
+export function makeHkTask(
+  overrides: Partial<HousekeepingTaskListItem> = {},
+): HousekeepingTaskListItem {
+  return {
+    id: 1,
+    task_number: "HK00001",
+    room: 11,
+    room_number: "101",
+    stay: null,
+    task_type: "checkout_cleaning",
+    status: "pending",
+    priority: "normal",
+    assigned_to: null,
+    assigned_to_name: "",
+    requested_at: "2026-07-19T08:00:00Z",
+    started_at: null,
+    completed_at: null,
+    service_outcome: "",
+    room_type_name: "Standard",
+    floor_name: "Ground",
+    floor_number: "0",
+    is_occupied: false,
+    // Housekeeping-only arrival hint — carries a date, NEVER a reservation no.
+    upcoming_arrival: { has_upcoming: false, arrival_date: null, arrival_time: null },
+    ...overrides,
+  };
+}
+
+/** GET /operations/maintenance row (defaults: an open, non-blocking, high-priority
+ * HVAC request in room 101). */
+export function makeMtRequest(
+  overrides: Partial<MaintenanceRequestListItem> = {},
+): MaintenanceRequestListItem {
+  return {
+    id: 1,
+    request_number: "MT00001",
+    room: 11,
+    room_number: "101",
+    stay: null,
+    title: "Broken air conditioner",
+    category: "hvac",
+    priority: "high",
+    status: "open",
+    affects_room_availability: false,
+    room_block_status: "none",
+    assigned_to: null,
+    assigned_to_name: "",
+    reported_at: "2026-07-19T08:00:00Z",
+    resolved_at: null,
+    closed_at: null,
+    ...overrides,
+  };
+}
+
+/** GET /operations/lost-found row (defaults: a found, non-sensitive item stored
+ * in "Safe box A" with no linked guest). */
+export function makeLfItem(
+  overrides: Partial<LostFoundItemListItem> = {},
+): LostFoundItemListItem {
+  return {
+    id: 1,
+    item_number: "LF00001",
+    title: "Black leather wallet",
+    category: "other",
+    status: "found",
+    found_at: "2026-07-19T08:00:00Z",
+    found_location: "Lobby",
+    room: null,
+    room_number: "",
+    stay: null,
+    guest: null,
+    guest_name: "",
+    stored_location: "Safe box A",
+    returned_at: null,
+    ...overrides,
+  };
+}
+
+/** GET /operations/housekeeping/arrivals-not-ready row. Reservation number is
+ * ABSENT by default (housekeeping-only disclosure). */
+export function makeArrivalRow(
+  overrides: Partial<ArrivalNotReadyRow> = {},
+): ArrivalNotReadyRow {
+  return {
+    room: 11,
+    room_number: "101",
+    room_status: "dirty",
+    occupied: false,
+    arrival_date: "2026-07-20",
+    ...overrides,
+  };
+}
+
+/** GET /operations/overview counters (defaults: all zero). */
+export function makeOverview(
+  overrides: Partial<OperationsOverview> = {},
+): OperationsOverview {
+  return {
+    dirty_rooms: 0,
+    hk_pending: 0,
+    hk_in_progress: 0,
+    open_maintenance: 0,
+    rooms_under_maintenance: 0,
+    lost_found_open: 0,
+    urgent_tasks: 0,
+    ...overrides,
+  };
+}
+
+/** GET /rooms/options row for the async room picker. */
+export function makeRoomOption(overrides: Partial<RoomOption> = {}): RoomOption {
+  return {
+    id: 11,
+    number: "101",
+    floor_name: "Ground",
+    room_type_name: "Standard",
+    ...overrides,
+  };
+}
+
+/** GET /staff row (defaults: an active member) — feeds the assignee pickers. */
+export function makeStaffRow(
+  overrides: Partial<StaffMemberListItem> = {},
+): StaffMemberListItem {
+  return {
+    id: 1,
+    user_id: 501,
+    full_name: "Sara Cleaner",
+    email: "sara@example.com",
+    phone: "",
+    membership_type: "staff",
+    is_manager: false,
+    is_active: true,
+    is_primary_manager: false,
+    job_title: "Housekeeper",
+    staff_code: "HK1",
+    permission_count: 0,
+    created_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
