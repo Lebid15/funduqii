@@ -54,10 +54,10 @@ export function hotelNavItems(t: Dictionary): HotelNavItem[] {
     { href: "/hotel/operations", label: t.sidebar.housekeeping, icon: ClipboardList },
     { href: "/hotel/services", label: t.sidebar.restaurant, icon: UtensilsCrossed },
     {
-      href: "/hotel/finance?tab=folios",
+      href: "/hotel/guest-folio",
       label: t.sidebar.guestFolio,
       icon: FileText,
-      access: ["finance.view"],
+      access: ["service_orders.create", "services.view", "finance.view"],
     },
     {
       href: "/hotel/finance?tab=expenses",

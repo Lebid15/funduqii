@@ -3931,5 +3931,136 @@
       "planNotAvailable": "Bu paket artık bu talep için uygun değil.",
       "reasonRequired": "Bir neden gerekli."
     }
+  },
+  "guestFolio": {
+    "title": "Misafir folyosu",
+    "subtitle": "Konaklayan bir misafirin folyosuna ek hizmet ekleyin ve hizmet kataloğunu yönetin.",
+    "searchPlaceholder": "Misafir veya oda ara",
+    "empty": "Konaklayan misafir yok",
+    "emptyHint": "Giriş yapmış misafirler burada görünür, böylece hizmet ekleyebilirsiniz.",
+    "tabs": {
+      "folio": "Folyo",
+      "catalog": "Hizmetler ve fiyatlar"
+    },
+    "stats": {
+      "inHouse": "Konaklayan misafirler",
+      "withServices": "Hizmeti olanlar"
+    },
+    "card": {
+      "roomType": "Birim türü",
+      "floor": "Kat",
+      "stayDates": "Konaklama",
+      "serviceTotal": "Hizmet toplamı",
+      "balance": "Bakiye",
+      "paid": "Ödenen",
+      "financials": "Mali bilgiler",
+      "detailsHidden": "Mali ayrıntılar bir finans izni gerektirir",
+      "addService": "Hizmet ekle",
+      "viewServices": "Hizmetleri gör",
+      "more": "Daha fazla",
+      "serviceCount": "{count} hizmet"
+    },
+    "addModal": {
+      "title": "Hizmet ekle",
+      "forGuest": "{guest} için —",
+      "noCatalog": "Katalogda etkin hizmet yok. Önce Hizmetler ve fiyatlar bölümünden bir tane ekleyin.",
+      "service": "Hizmet",
+      "selectService": "Bir hizmet seçin",
+      "serviceRequired": "Bir hizmet seçin.",
+      "quantity": "Adet",
+      "quantityInvalid": "Sıfırdan büyük bir adet girin.",
+      "unitPrice": "Birim fiyat",
+      "priceInvalid": "Geçerli bir birim fiyat girin.",
+      "overrideLabel": "Fiyatı değiştir",
+      "reason": "Gerekçe",
+      "reasonPlaceholder": "Fiyat neden değiştiriliyor?",
+      "previewTitle": "Tahmin",
+      "previewTax": "Vergi",
+      "previewTotal": "Tahmini toplam",
+      "previewHint": "Bir tahmindir — nihai tutarı folyo hesaplar.",
+      "submit": "Folyoya ekle",
+      "added": "Hizmet folyoya eklendi."
+    },
+    "viewModal": {
+      "title": "Folyo hizmetleri",
+      "forGuest": "{guest} için —",
+      "item": "Hizmet",
+      "quantity": "Adet",
+      "unitAmount": "Birim",
+      "tax": "Vergi",
+      "total": "Toplam",
+      "staff": "Ekleyen",
+      "time": "Zaman",
+      "statusPosted": "İşlendi",
+      "statusVoided": "İptal edildi",
+      "voidReason": "Gerekçe",
+      "voidedBy": "İptal eden",
+      "actions": "İşlemler",
+      "void": "İptal et",
+      "voidTitle": "Hizmet satırını iptal et",
+      "voidHint": "İptal, bu satırı folyo bakiyesinden çıkarır. Bir gerekçe gerekir.",
+      "empty": "Bu folyoda henüz hizmet yok",
+      "emptyHint": "Eklediğiniz hizmetler burada listelenir.",
+      "voided": "Hizmet satırı iptal edildi."
+    },
+    "catalog": {
+      "title": "Hizmetler ve fiyatlar",
+      "subtitle": "Otelin, misafir folyolarına yansıtılan ek hizmetler kataloğu.",
+      "create": "Yeni hizmet",
+      "createTitle": "Yeni hizmet",
+      "editTitle": "Hizmeti düzenle",
+      "deactivate": "Devre dışı bırak",
+      "deactivated": "Hizmet devre dışı bırakıldı.",
+      "activate": "Etkinleştir",
+      "activated": "Hizmet etkinleştirildi.",
+      "created": "Hizmet oluşturuldu.",
+      "updated": "Hizmet güncellendi.",
+      "statusActive": "Etkin",
+      "statusInactive": "Pasif",
+      "filterActive": "Etkin",
+      "filterInactive": "Pasif",
+      "empty": "Henüz hizmet yok",
+      "emptyHint": "Folyolara ek yansıtmaya başlamak için bir hizmet oluşturun.",
+      "currencyPlaceholder": "örn. USD",
+      "fields": {
+        "name": "Ad",
+        "category": "Kategori",
+        "unitPrice": "Birim fiyat",
+        "taxRate": "Vergi",
+        "pricingMode": "Fiyatlandırma",
+        "displayOrder": "Sıra",
+        "status": "Durum",
+        "description": "Açıklama",
+        "currency": "Para birimi"
+      },
+      "categories": {
+        "laundry": "Çamaşırhane",
+        "parking": "Otopark",
+        "transport": "Ulaşım",
+        "minibar": "Minibar",
+        "extra_bed": "İlave yatak",
+        "special_cleaning": "Özel temizlik",
+        "damages": "Hasarlar",
+        "external_request": "Dış talep",
+        "other": "Diğer"
+      },
+      "pricingModes": {
+        "fixed": "Sabit",
+        "variable": "Değişken"
+      },
+      "errors": {
+        "nameRequired": "Hizmet adı gerekli.",
+        "currencyInvalid": "Para birimi 3 harfli bir kod olmalı.",
+        "priceInvalid": "Birim fiyat negatif olamaz.",
+        "taxInvalid": "Vergi 0 ile 100 arasında olmalı.",
+        "orderInvalid": "Görüntüleme sırası negatif olamaz.",
+        "duplicateName": "Bu ada sahip bir hizmet zaten var."
+      }
+    },
+    "errors": {
+      "idempotencyConflict": "Bu hizmet zaten gönderildi. Tekrar denemeden önce sayfayı yenileyip folyoyu kontrol edin.",
+      "serviceInactive": "Bu hizmet pasif ve eklenemez.",
+      "reasonRequired": "Fiyatı değiştirmek için bir gerekçe gerekir."
+    }
   }
 }

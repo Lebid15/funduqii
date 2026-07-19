@@ -205,6 +205,15 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.finance.errors.reservationFolioNotSupported;
     case "active_invoice_exists":
       return t.finance.errors.activeInvoiceExists;
+    // GUEST-FOLIO-EXTRA-SERVICES-CLOSURE — actionable messages for the
+    // add-service flow (the rest reuse existing codes: folio_currency_mismatch,
+    // stay_not_in_house, folio_closed, invalid_amount, void_reason_required).
+    case "idempotency_key_conflict":
+      return t.guestFolio.errors.idempotencyConflict;
+    case "guest_service_inactive":
+      return t.guestFolio.errors.serviceInactive;
+    case "variable_price_reason_required":
+      return t.guestFolio.errors.reasonRequired;
     case "order_already_posted":
       return t.services.errors.alreadyPosted;
     case "order_not_postable":
