@@ -628,7 +628,10 @@ class LostReportHandoverConcurrencyTests(_OperationsConcurrencyBase):
             barrier.wait(timeout=15)
             try:
                 hand_over_matched_report(
-                    self.report, user=self.user, recipient_name="Owner"
+                    self.report,
+                    user=self.user,
+                    recipient_name="Owner",
+                    recipient_phone="0555",
                 )
                 results[index] = "returned"
             except InvalidOperationStatusTransition:

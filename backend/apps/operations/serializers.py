@@ -28,6 +28,11 @@ from .models import (
     OperationPriority,
     RoomBlockStatus,
 )
+# The SENSITIVE lost-&-found categories (money / jewelry / documents) live in
+# services and are the single source of truth for "needs stronger proof". The
+# services module never imports serializers, so this module-level import forms
+# NO circular dependency — reuse it rather than re-declaring the set.
+from .services import SENSITIVE_LOST_FOUND_CATEGORIES
 
 # --- Disclosure gates (WP6) ---------------------------------------------------
 # Restricted disclosure of sensitive/internal fields, mirroring the guests
@@ -687,8 +692,16 @@ class LostReportListSerializer(serializers.ModelSerializer):
         if item is None:
             return None
         # Safe summary only — the found item's own sensitive fields (phone /
-        # proof) are NEVER surfaced through a lost-report payload.
-        return {"item_number": item.item_number, "title": item.title}
+        # proof / internal notes / claimant) are NEVER surfaced through a
+        # lost-report payload. ``requires_strong_claim_proof`` is a NON-sensitive
+        # boolean derived from the (non-sensitive) category so the frontend can
+        # signal the stronger handover requirement before the handover call.
+        return {
+            "item_number": item.item_number,
+            "title": item.title,
+            "category": item.category,
+            "requires_strong_claim_proof": item.category in SENSITIVE_LOST_FOUND_CATEGORIES,
+        }
 
     def get_record_type(self, report) -> str:
         return "lost_report"
@@ -721,7 +734,14 @@ class LostReportSerializer(serializers.ModelSerializer):
         item = report.matched_found_item
         if item is None:
             return None
-        return {"item_number": item.item_number, "title": item.title}
+        # Safe summary only — no phone / proof / internal notes / claimant. Only
+        # the (non-sensitive) category and the derived boolean are exposed.
+        return {
+            "item_number": item.item_number,
+            "title": item.title,
+            "category": item.category,
+            "requires_strong_claim_proof": item.category in SENSITIVE_LOST_FOUND_CATEGORIES,
+        }
 
     def get_status_logs(self, report):
         logs = report.status_logs.select_related("changed_by")[:10]

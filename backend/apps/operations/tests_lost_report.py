@@ -23,7 +23,9 @@ from apps.common.exceptions import (
     FoundItemNotMatchable,
     InvalidOperationStatusTransition,
     LostReportReasonRequired,
+    RecipientContactRequired,
 )
+from apps.guests.models import Guest
 from apps.operations.models import (
     LostFoundCategory,
     LostFoundItem,
@@ -354,7 +356,10 @@ class LostReportHandoverTests(APITestCase, LostReportMixin):
         item = make_found_item(self.hotel, category=LostFoundCategory.OTHER)
         confirm_match(self.report, item, user=self.manager)
         report = hand_over_matched_report(
-            self.report, user=self.manager, recipient_name="Owner Guest"
+            self.report,
+            user=self.manager,
+            recipient_name="Owner Guest",
+            recipient_phone="0555",
         )
         report.refresh_from_db()
         item.refresh_from_db()
@@ -621,7 +626,10 @@ class LostReportStatCardTests(APITestCase, LostReportMixin):
         item2 = make_found_item(self.hotel, status=LostFoundStatus.STORED)
         confirm_match(returned_r, item2, user=self.manager)
         hand_over_matched_report(
-            returned_r, user=self.manager, recipient_name="Owner"
+            returned_r,
+            user=self.manager,
+            recipient_name="Owner",
+            recipient_phone="0555",
         )
 
         resp = self.client.get(reverse("operations:overview"), **HDR(self.hotel))
@@ -724,7 +732,10 @@ class ActivelyMatchedItemGuardTests(APITestCase, LostReportMixin):
         # non-forgeable ``_via_matched_handover`` bypass lets the legitimate
         # return through the same guard that blocks the standalone action.
         report = hand_over_matched_report(
-            self.report, user=self.manager, recipient_name="Owner Guest"
+            self.report,
+            user=self.manager,
+            recipient_name="Owner Guest",
+            recipient_phone="0555",
         )
         report.refresh_from_db()
         self.item.refresh_from_db()
@@ -754,7 +765,8 @@ class ActivelyMatchedItemGuardTests(APITestCase, LostReportMixin):
         return_item = fresh_unmatched_item()
         resp = self.client.post(
             reverse("operations:lost-found-return", args=[return_item.id]),
-            {"claimed_by_name": "Owner"}, format="json", **HDR(self.hotel),
+            {"claimed_by_name": "Owner", "claimed_by_phone": "0555"},
+            format="json", **HDR(self.hotel),
         )
         self.assertEqual(resp.status_code, 200, resp.content)
         return_item.refresh_from_db()
@@ -811,3 +823,305 @@ class ActivelyMatchedItemGuardTests(APITestCase, LostReportMixin):
         self.assertIn("Owner Guest", log.note)
         # Privacy: the phone is NEVER written to the status log.
         self.assertNotIn("0555999888", log.note)
+
+
+# --------------------------------------------------------------------------- #
+# matched_found_item_summary — safe shape (list AND detail)                      #
+# --------------------------------------------------------------------------- #
+
+
+class MatchedFoundItemSummaryTests(APITestCase, LostReportMixin):
+    """The matched-found-item summary (list AND detail serializers) exposes
+    EXACTLY {item_number, title, category, requires_strong_claim_proof}. The
+    boolean is True for the SENSITIVE categories (money / jewelry / documents)
+    and False for a normal one; NOTHING sensitive (phone / proof reference /
+    proof type / internal_notes / claimant) ever appears in the summary."""
+
+    _EXPECTED_KEYS = {
+        "item_number",
+        "title",
+        "category",
+        "requires_strong_claim_proof",
+    }
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=LF_PERMS
+        )
+        self.client.force_authenticate(self.manager)
+
+    def _matched_report(self, category):
+        report = create_lost_report(self.hotel, reporter_name="R")
+        item = make_found_item(
+            self.hotel, category=category, status=LostFoundStatus.STORED
+        )
+        # Seed the item's OWN sensitive fields so we can prove they never leak
+        # into the lost-report summary.
+        LostFoundItem.objects.filter(pk=item.pk).update(
+            claimed_by_name="Secret Claimant",
+            claimed_by_phone="0555secret",
+            claim_proof_type="receipt_reference",
+            claim_proof_reference="RCPT-SECRET",
+            internal_notes="internal secret",
+        )
+        confirm_match(report, item, user=self.manager)
+        report.refresh_from_db()
+        return report, item
+
+    def _assert_safe_summary(self, summary, item, *, sensitive):
+        self.assertEqual(set(summary.keys()), self._EXPECTED_KEYS)
+        self.assertEqual(summary["item_number"], item.item_number)
+        self.assertEqual(summary["title"], item.title)
+        self.assertEqual(summary["category"], item.category)
+        self.assertEqual(summary["requires_strong_claim_proof"], sensitive)
+        # No sensitive KEY and no sensitive VALUE anywhere in the summary.
+        for forbidden in (
+            "claimed_by_phone",
+            "claimed_by_name",
+            "claim_proof_type",
+            "claim_proof_reference",
+            "internal_notes",
+            "reporter_phone",
+            "guest",
+        ):
+            self.assertNotIn(forbidden, summary)
+        blob = " ".join(str(v) for v in summary.values())
+        for secret in (
+            "Secret Claimant",
+            "0555secret",
+            "RCPT-SECRET",
+            "internal secret",
+        ):
+            self.assertNotIn(secret, blob)
+
+    def test_detail_summary_true_for_all_sensitive_categories(self):
+        for category in (
+            LostFoundCategory.MONEY,
+            LostFoundCategory.JEWELRY,
+            LostFoundCategory.DOCUMENTS,
+        ):
+            report, item = self._matched_report(category)
+            data = LostReportSerializer(report, context={"request": None}).data
+            self._assert_safe_summary(
+                data["matched_found_item_summary"], item, sensitive=True
+            )
+
+    def test_detail_summary_false_for_normal_category(self):
+        report, item = self._matched_report(LostFoundCategory.OTHER)
+        data = LostReportSerializer(report, context={"request": None}).data
+        self._assert_safe_summary(
+            data["matched_found_item_summary"], item, sensitive=False
+        )
+
+    def test_list_summary_true_for_sensitive_category(self):
+        report, item = self._matched_report(LostFoundCategory.MONEY)
+        data = LostReportListSerializer(report).data
+        self._assert_safe_summary(
+            data["matched_found_item_summary"], item, sensitive=True
+        )
+
+    def test_list_summary_false_for_normal_category(self):
+        report, item = self._matched_report(LostFoundCategory.CLOTHING)
+        data = LostReportListSerializer(report).data
+        self._assert_safe_summary(
+            data["matched_found_item_summary"], item, sensitive=False
+        )
+
+    def test_summary_is_none_when_unmatched(self):
+        report = create_lost_report(self.hotel, reporter_name="R")
+        self.assertIsNone(
+            LostReportListSerializer(report).data["matched_found_item_summary"]
+        )
+        self.assertIsNone(
+            LostReportSerializer(report, context={"request": None}).data[
+                "matched_found_item_summary"
+            ]
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Unified handover (return) contract — backend-enforced                          #
+# --------------------------------------------------------------------------- #
+
+
+class LostReportHandoverContractTests(APITestCase, LostReportMixin):
+    """Every LR handover requires a recipient NAME + a phone OR a linked known
+    guest; SENSITIVE items additionally require proof. A report tied to a KNOWN
+    guest satisfies the phone-or-guest requirement with NO phone (threaded via
+    ``recipient_has_guest = report.guest OR item.guest``)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=LF_PERMS
+        )
+        self.client.force_authenticate(self.manager)
+
+    def _matched(self, *, category=LostFoundCategory.OTHER, guest=None):
+        report = create_lost_report(self.hotel, reporter_name="R", guest=guest)
+        item = make_found_item(
+            self.hotel, category=category, status=LostFoundStatus.STORED
+        )
+        confirm_match(report, item, user=self.manager)
+        report.refresh_from_db()
+        return report, item
+
+    def _assert_untouched(self, report, item):
+        report.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(report.status, LostReportStatus.MATCHED)
+        self.assertIsNone(report.returned_at)
+        self.assertEqual(item.status, LostFoundStatus.STORED)
+        self.assertIsNone(item.returned_at)
+
+    def test_handover_requires_recipient_name(self):
+        report, item = self._matched()
+        with self.assertRaises(ClaimantRequired):
+            hand_over_matched_report(report, user=self.manager, recipient_name="")
+        self._assert_untouched(report, item)
+
+    def test_handover_requires_phone_or_guest(self):
+        # Name present but NO phone and NO linked guest → recipient_contact_required,
+        # and (atomicity) BOTH records stay untouched.
+        report, item = self._matched()
+        with self.assertRaises(RecipientContactRequired):
+            hand_over_matched_report(report, user=self.manager, recipient_name="Owner")
+        self._assert_untouched(report, item)
+
+    def test_handover_with_phone_succeeds(self):
+        report, item = self._matched()
+        hand_over_matched_report(
+            report, user=self.manager, recipient_name="Owner", recipient_phone="0555"
+        )
+        report.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(report.status, LostReportStatus.RETURNED)
+        self.assertEqual(item.status, LostFoundStatus.RETURNED)
+
+    def test_handover_with_report_guest_and_no_phone_succeeds(self):
+        # The report is tied to a KNOWN guest; the FOUND item has NO guest link.
+        # The report's guest satisfies phone-or-guest even with NO phone.
+        guest = Guest.objects.create(
+            hotel=self.hotel, full_name="Known Guest", email="kg@x.com"
+        )
+        report, item = self._matched(guest=guest)
+        self.assertIsNone(item.guest_id)
+        hand_over_matched_report(report, user=self.manager, recipient_name="Owner")
+        report.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(report.status, LostReportStatus.RETURNED)
+        self.assertEqual(item.status, LostFoundStatus.RETURNED)
+
+    def test_handover_sensitive_requires_proof(self):
+        report, item = self._matched(category=LostFoundCategory.MONEY)
+        with self.assertRaises(ClaimProofRequired):
+            hand_over_matched_report(
+                report,
+                user=self.manager,
+                recipient_name="Owner",
+                recipient_phone="0555",
+            )
+        self._assert_untouched(report, item)
+
+    def test_handover_normal_does_not_require_proof_fields(self):
+        # A NORMAL matched item needs name + contact, but NO proof fields.
+        report, item = self._matched(category=LostFoundCategory.OTHER)
+        hand_over_matched_report(
+            report, user=self.manager, recipient_name="Owner", recipient_phone="0555"
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.status, LostFoundStatus.RETURNED)
+        self.assertEqual(item.claim_proof_type, "")
+        self.assertEqual(item.claim_proof_reference, "")
+
+
+# --------------------------------------------------------------------------- #
+# Direct found RETURN contract + CLAIM path is UNCHANGED                         #
+# --------------------------------------------------------------------------- #
+
+
+class DirectFoundReturnContractTests(APITestCase, LostReportMixin):
+    """The DIRECT found-item return now enforces the SAME contact contract as the
+    matched-report handover — a recipient name + a phone OR a linked guest, for
+    normal categories too. The CLAIM path is NOT tightened (still name-or-guest,
+    no new phone requirement)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=LF_PERMS
+        )
+        self.client.force_authenticate(self.manager)
+
+    def _return(self, item, body):
+        return self.client.post(
+            reverse("operations:lost-found-return", args=[item.id]),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _claim(self, item, body):
+        return self.client.post(
+            reverse("operations:lost-found-claim", args=[item.id]),
+            body,
+            format="json",
+            **HDR(self.hotel),
+        )
+
+    def _guest_item(self, email):
+        guest = Guest.objects.create(hotel=self.hotel, full_name="G", email=email)
+        item = create_lost_found_item(
+            self.hotel,
+            title="Wallet",
+            category=LostFoundCategory.OTHER,
+            status=LostFoundStatus.STORED,
+            guest=guest,
+        )
+        return item
+
+    def test_normal_return_name_only_requires_contact(self):
+        item = make_found_item(self.hotel, status=LostFoundStatus.STORED)
+        resp = self._return(item, {"claimed_by_name": "Owner"})
+        self.assertEqual(resp.status_code, 422, resp.content)
+        self.assertEqual(resp.json()["code"], "recipient_contact_required")
+        item.refresh_from_db()
+        self.assertEqual(item.status, LostFoundStatus.STORED)
+
+    def test_return_missing_name_is_claimant_required(self):
+        item = make_found_item(self.hotel, status=LostFoundStatus.STORED)
+        resp = self._return(item, {})
+        self.assertEqual(resp.status_code, 422, resp.content)
+        self.assertEqual(resp.json()["code"], "claimant_required")
+
+    def test_normal_return_with_phone_succeeds(self):
+        item = make_found_item(self.hotel, status=LostFoundStatus.STORED)
+        resp = self._return(
+            item, {"claimed_by_name": "Owner", "claimed_by_phone": "0555"}
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], LostFoundStatus.RETURNED)
+
+    def test_normal_return_with_linked_guest_succeeds(self):
+        # A linked guest satisfies phone-or-guest with NO phone.
+        item = self._guest_item("g1@x.com")
+        resp = self._return(item, {"claimed_by_name": "Owner"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], LostFoundStatus.RETURNED)
+
+    def test_normal_claim_name_only_still_succeeds(self):
+        # The CLAIM path was NOT tightened: a normal claim with only a name
+        # (no phone, no guest) still succeeds.
+        item = make_found_item(self.hotel, status=LostFoundStatus.STORED)
+        resp = self._claim(item, {"claimed_by_name": "Owner"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], LostFoundStatus.CLAIMED)
+
+    def test_normal_claim_guest_only_still_succeeds(self):
+        # name-or-guest for CLAIM stays intact: a guest link alone (no name)
+        # still claims.
+        item = self._guest_item("g2@x.com")
+        resp = self._claim(item, {})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], LostFoundStatus.CLAIMED)

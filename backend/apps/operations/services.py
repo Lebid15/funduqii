@@ -35,6 +35,7 @@ from apps.common.exceptions import (
     InvalidOperationStatusTransition,
     LostReportReasonRequired,
     OperationNotEditable,
+    RecipientContactRequired,
     RoomBlockedByMaintenance,
     RoomNotReleasable,
 )
@@ -1192,6 +1193,7 @@ def _resolve_claim_proof(
     name: str,
     phone: str,
     has_guest: bool,
+    require_contact: bool = False,
 ) -> tuple[str, str]:
     """Validate the handover requirements for a claim / return and return the
     (proof_type, proof_reference) to store.
@@ -1207,9 +1209,16 @@ def _resolve_claim_proof(
       name, a phone OR a linked guest, a ``claim_proof_type`` and a non-empty
       ``claim_proof_reference`` (the short verification description for
       ``ownership_description``). Any missing piece -> :class:`ClaimProofRequired`
-      (422) with a neutral ``details.reason`` (never the value).
-    * NORMAL categories: unchanged minimum — a recipient name OR a linked guest
-      (:class:`ClaimantRequired`). Proof is NOT newly required.
+      (422) with a neutral ``details.reason`` (never the value). Unaffected by
+      ``require_contact`` — this branch already demands name + phone-or-guest.
+    * NORMAL categories:
+      - ``require_contact`` FALSE (the CLAIM path, unchanged): a recipient name
+        OR a linked guest (:class:`ClaimantRequired`). Proof is NOT required.
+      - ``require_contact`` TRUE (the RETURN / handover path): a recipient name
+        is always required (:class:`ClaimantRequired` if missing) AND a phone OR
+        a linked guest (:class:`RecipientContactRequired` if BOTH missing), so a
+        handover is never weaker than the found-item return the frontend already
+        enforces. Proof is still NOT required for a normal category.
     """
     proof_type = (claim_proof_type or "").strip() or item.claim_proof_type
     proof_reference = (claim_proof_reference or "").strip() or item.claim_proof_reference
@@ -1230,6 +1239,14 @@ def _resolve_claim_proof(
         # Covers ownership_description's "non-empty short description" rule too.
         if not proof_reference:
             raise ClaimProofRequired({"reason": "proof_reference_required"})
+    elif require_contact:
+        # Handover (return) contract for NORMAL categories: name is mandatory and
+        # a phone-or-guest contact is mandatory — never weaker than the sensitive
+        # branch's name + phone-or-guest minimum.
+        if not name:
+            raise ClaimantRequired()
+        if not phone and not has_guest:
+            raise RecipientContactRequired()
     elif not name and not has_guest:
         raise ClaimantRequired()
     return proof_type, proof_reference
@@ -1407,6 +1424,7 @@ def return_lost_found_item(
     note="",
     claim_proof_type="",
     claim_proof_reference="",
+    recipient_has_guest: bool | None = None,
     _via_matched_handover: bool = False,
 ) -> LostFoundItem:
     # Row-lock + re-read so the actively-matched guard is race-safe. Standalone
@@ -1423,16 +1441,27 @@ def return_lost_found_item(
         )
     name = (claimed_by_name or "").strip() or item.claimed_by_name
     phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
-    # A returned item must record WHO received it; SENSITIVE categories also
-    # require the phone/guest + proof (resolved here, falling back to what the
-    # claim already stored so it need not be re-entered).
+    # A returned item must record WHO received it AND a way to reach them: the
+    # handover contract requires, for EVERY category, a recipient name + a phone
+    # OR a linked known guest (``require_contact=True``); SENSITIVE categories
+    # additionally require proof (resolved here, falling back to what the claim
+    # already stored so it need not be re-entered). ``recipient_has_guest``
+    # defaults to the found item's own guest link, but a caller (the atomic
+    # matched-report handover) may override it so a report tied to a KNOWN guest
+    # satisfies the guest condition even when the found item has no guest link.
+    has_guest = (
+        item.guest_id is not None
+        if recipient_has_guest is None
+        else recipient_has_guest
+    )
     proof_type, proof_reference = _resolve_claim_proof(
         item,
         claim_proof_type=claim_proof_type,
         claim_proof_reference=claim_proof_reference,
         name=name,
         phone=phone,
-        has_guest=item.guest_id is not None,
+        has_guest=has_guest,
+        require_contact=True,
     )
     previous = item.status
     item.status = LostFoundStatus.RETURNED
@@ -1769,11 +1798,15 @@ def hand_over_matched_report(
     """Hand the matched found item over to the reporter — ATOMIC both-or-neither.
 
     The report + its matched found item are row-locked (report first, then the
-    item). The EXISTING :func:`return_lost_found_item` applies the WP7 normal /
-    sensitive proof controls (``recipient_phone`` is passed as the phone so the
-    sensitive "phone-or-guest" check is satisfied) and flips the found item to
-    ``returned``; THEN the report flips to ``returned``. If EITHER step fails
-    (e.g. missing proof for a sensitive item, or the item was concurrently
+    item). The EXISTING :func:`return_lost_found_item` applies the unified
+    handover contract — for EVERY category a recipient name + a phone OR a linked
+    known guest, and for SENSITIVE categories additionally a proof type +
+    reference. ``recipient_phone`` is passed as the phone and the report's guest
+    (or the item's) as the linked-guest signal, so a report tied to a KNOWN guest
+    satisfies the "phone-or-guest" requirement even with no phone and no guest on
+    the found item. It flips the found item to ``returned``; THEN the report
+    flips to ``returned``. If EITHER step fails (missing recipient contact,
+    missing proof for a sensitive item, or the item was concurrently
     returned/disposed) the WHOLE transaction rolls back — nothing changes."""
     report = LostReport.objects.select_for_update().get(pk=lost_report.pk)
     if report.status != LostReportStatus.MATCHED:
@@ -1800,6 +1833,13 @@ def hand_over_matched_report(
         note=note,
         claim_proof_type=claim_proof_type,
         claim_proof_reference=claim_proof_reference,
+        # The handover contract requires a phone OR a linked known guest. An LR
+        # report tied to a KNOWN guest (the reporter) satisfies the guest
+        # condition even when the found item itself has no guest link, so thread
+        # the report's OR the item's guest link as the effective "has guest".
+        recipient_has_guest=(
+            report.guest_id is not None or item.guest_id is not None
+        ),
         # Legitimate atomic handover of the very item THIS report matches — the
         # actively-matched guard would otherwise (correctly) block a standalone
         # return, so bypass it here only via this non-forgeable internal flag.

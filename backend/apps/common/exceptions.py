@@ -266,6 +266,23 @@ class ClaimProofRequired(FunduqiiAPIException):
     default_code = "claim_proof_required"
 
 
+class RecipientContactRequired(FunduqiiAPIException):
+    """Every handover (return) — for EVERY category, sensitive or normal —
+    must record HOW to reach the recipient: a phone OR a linked known guest.
+    Raised on a NORMAL-category return/handover when the recipient name is
+    present but BOTH a phone and a linked guest are missing (the sensitive
+    categories already enforce this via :class:`ClaimProofRequired`). It carries
+    NO value — never the (absent) phone, the recipient name, or any guest data —
+    so the 422 body cannot leak contact information.
+
+    Distinct from :class:`ClaimantRequired` (missing recipient NAME): this one
+    fires only once a name is present but no reachable contact is."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = "Enter the recipient's phone or link a known guest."
+    default_code = "recipient_contact_required"
+
+
 class DisposalReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A reason is required to dispose of this item."

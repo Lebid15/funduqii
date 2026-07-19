@@ -740,7 +740,12 @@ class LostFoundTests(APITestCase, OperationsMixin):
         item = self.create_lf().data
         r = self.act("lost-found", item["id"], "return", {})
         self.assertEqual(r.status_code, 422)
-        r = self.act("lost-found", item["id"], "return", {"claimed_by_name": "Jane"})
+        # A recipient name AND a reachable contact (phone or linked guest) are
+        # required on the return/handover — supply both for the success path.
+        r = self.act(
+            "lost-found", item["id"], "return",
+            {"claimed_by_name": "Jane", "claimed_by_phone": "+90 555"},
+        )
         self.assertEqual(r.data["status"], "returned")
         self.assertIsNotNone(r.data["returned_at"])
 
@@ -756,7 +761,10 @@ class LostFoundTests(APITestCase, OperationsMixin):
         item = self.create_lf().data
         r = self.act("lost-found", item["id"], "close", {})
         self.assertEqual(r.status_code, 400)
-        self.act("lost-found", item["id"], "return", {"claimed_by_name": "Jane"})
+        self.act(
+            "lost-found", item["id"], "return",
+            {"claimed_by_name": "Jane", "claimed_by_phone": "+90 555"},
+        )
         r = self.act("lost-found", item["id"], "close", {})
         self.assertEqual(r.data["status"], "closed")
 
@@ -771,7 +779,10 @@ class LostFoundTests(APITestCase, OperationsMixin):
 
     def test_returned_item_not_editable(self):
         item = self.create_lf().data
-        self.act("lost-found", item["id"], "return", {"claimed_by_name": "Jane"})
+        self.act(
+            "lost-found", item["id"], "return",
+            {"claimed_by_name": "Jane", "claimed_by_phone": "+90 555"},
+        )
         r = self.client.patch(
             reverse("operations:lost-found-detail", args=[item["id"]]),
             {"title": "New"},
@@ -1945,7 +1956,12 @@ class SensitiveClaimProofTests(APITestCase, OperationsMixin):
 
     def test_normal_category_return_needs_no_proof(self):
         item = self.create_lf(category="electronics").data
-        r = self.act("lost-found", item["id"], "return", {"claimed_by_name": "Jane"})
+        # No PROOF fields needed for a normal category — but the handover still
+        # needs a recipient name + a reachable contact (phone or linked guest).
+        r = self.act(
+            "lost-found", item["id"], "return",
+            {"claimed_by_name": "Jane", "claimed_by_phone": "+90 555"},
+        )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["status"], "returned")
 
