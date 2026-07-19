@@ -1315,3 +1315,204 @@ class ArrivalsNotReadyTests(APITestCase, OperationsMixin):
             reverse("operations:housekeeping-arrivals-not-ready"), **HDR(self.hotel)
         )
         self.assertEqual(r.status_code, 403)
+
+
+# --------------------------------------------------------------------------- #
+# WP5 — Housekeeping cleaning-card enrichment (unit context + occupancy +      #
+# upcoming-arrival hint), page-level batch maps, no N+1, hotel-scoped.         #
+# --------------------------------------------------------------------------- #
+
+
+class HousekeepingCardEnrichmentTests(APITestCase, OperationsMixin):
+    """The HK LIST payload feeds the cleaning card: real unit type / floor,
+    derived occupancy, and a COMPACT upcoming-arrival hint (presence + date/time
+    ONLY, never the reservation number). Occupancy + arrival are page-level batch
+    maps, so the query count stays constant regardless of how many tasks a page
+    holds."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(self.manager)
+        self.floor = Floor.objects.create(
+            hotel=self.hotel, name="First Floor", number="1"
+        )
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Deluxe Suite", code="DLX",
+            base_capacity=2, max_capacity=2,
+        )
+
+    def _room(self, number, status=RoomStatus.DIRTY):
+        return Room.objects.create(
+            hotel=self.hotel, floor=self.floor, room_type=self.rtype,
+            number=number, status=status,
+        )
+
+    def _task(self, room):
+        return HousekeepingTask.objects.create(
+            hotel=self.hotel, task_number=f"HK{room.number}", room=room,
+        )
+
+    def _in_house_stay(self, room, *, hotel=None):
+        hotel = hotel or self.hotel
+        guest = Guest.objects.create(
+            hotel=hotel, full_name="Guest", email=f"g{room.number}@{hotel.slug}.com"
+        )
+        return Stay.objects.create(
+            hotel=hotel, room=room, primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=timezone.localdate(),
+            planned_check_out_date=timezone.localdate() + timezone.timedelta(days=2),
+            actual_check_in_at=timezone.now(),
+        )
+
+    def _arrival(self, room, *, arrival_time=None, days_ahead=0, hotel=None,
+                 room_type=None, number_suffix=""):
+        hotel = hotel or self.hotel
+        room_type = room_type or self.rtype
+        today = timezone.localdate()
+        res = Reservation.objects.create(
+            hotel=hotel, reservation_number=f"RSV-{room.number}{number_suffix}",
+            status=ReservationStatus.CONFIRMED,
+            check_in_date=today + timezone.timedelta(days=days_ahead),
+            check_out_date=today + timezone.timedelta(days=days_ahead + 2),
+            expected_arrival_time=arrival_time,
+            primary_guest_name="Arrival Guest",
+        )
+        ReservationRoomLine.objects.create(
+            hotel=hotel, reservation=res, room_type=room_type,
+            room=room, quantity=1,
+        )
+        return res
+
+    def _list(self, hotel=None):
+        return self.client.get(
+            reverse("operations:housekeeping-list"), **HDR(hotel or self.hotel)
+        )
+
+    def test_list_exposes_unit_and_context_fields(self):
+        room = self._room("101")
+        self._task(room)
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["room_number"], "101")
+        self.assertEqual(row["room_type_name"], "Deluxe Suite")
+        self.assertEqual(row["floor_name"], "First Floor")
+        self.assertEqual(row["floor_number"], "1")
+        # Additive: the pre-existing fields survive.
+        self.assertIn("assigned_to_name", row)
+        self.assertIn("requested_at", row)
+        # Derived context is present with the documented shapes.
+        self.assertIn("is_occupied", row)
+        self.assertIsInstance(row["is_occupied"], bool)
+        self.assertEqual(
+            set(row["upcoming_arrival"]),
+            {"has_upcoming", "arrival_date", "arrival_time"},
+        )
+
+    def test_is_occupied_true_only_for_in_house_stay(self):
+        occupied = self._room("201")
+        vacant = self._room("202")
+        departed = self._room("203")
+        for r in (occupied, vacant, departed):
+            self._task(r)
+        self._in_house_stay(occupied)
+        # A CHECKED-OUT stay is NOT occupancy.
+        gone = Guest.objects.create(hotel=self.hotel, full_name="Gone", email="gone@x.com")
+        Stay.objects.create(
+            hotel=self.hotel, room=departed, primary_guest=gone,
+            status=StayStatus.CHECKED_OUT,
+            planned_check_in_date=timezone.localdate() - timezone.timedelta(days=1),
+            planned_check_out_date=timezone.localdate(),
+            actual_check_in_at=timezone.now() - timezone.timedelta(days=1),
+            actual_check_out_at=timezone.now(),
+        )
+        rows = {r["room_number"]: r for r in self._list().data["results"]}
+        self.assertTrue(rows["201"]["is_occupied"])
+        self.assertFalse(rows["202"]["is_occupied"])
+        self.assertFalse(rows["203"]["is_occupied"])
+
+    def test_upcoming_arrival_reflects_near_arrival_and_hides_reservation_number(self):
+        import datetime
+        import json
+
+        arriving = self._room("301")
+        quiet = self._room("302")
+        self._task(arriving)
+        self._task(quiet)
+        res = self._arrival(arriving, arrival_time=datetime.time(14, 30))
+        rows = {r["room_number"]: r for r in self._list().data["results"]}
+
+        ua = rows["301"]["upcoming_arrival"]
+        self.assertTrue(ua["has_upcoming"])
+        self.assertEqual(ua["arrival_date"], timezone.localdate().isoformat())
+        self.assertEqual(ua["arrival_time"], "14:30:00")
+        self.assertFalse(rows["302"]["upcoming_arrival"]["has_upcoming"])
+        self.assertIsNone(rows["302"]["upcoming_arrival"]["arrival_date"])
+
+        # HK-only privacy: the full reservation number appears NOWHERE — neither
+        # as a task field nor inside the arrival hint.
+        blob = json.dumps(rows)
+        self.assertNotIn(res.reservation_number, blob)
+        self.assertNotIn("reservation_number", rows["301"])
+        self.assertNotIn("reservation_number", ua)
+
+    def test_arrival_outside_near_window_is_not_flagged(self):
+        room = self._room("305")
+        self._task(room)
+        # A far-future arrival (beyond today + UPCOMING_ARRIVAL_WINDOW_DAYS) must
+        # not surface on the card.
+        self._arrival(room, days_ahead=10)
+        rows = self._list().data["results"]
+        self.assertFalse(rows[0]["upcoming_arrival"]["has_upcoming"])
+
+    def test_query_count_is_constant_regardless_of_task_count(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def seed(start, end):
+            for i in range(start, end):
+                room = self._room(f"4{i:02d}")
+                self._task(room)
+                # Exercise BOTH batch maps for every row.
+                self._in_house_stay(room)
+                self._arrival(room, days_ahead=0)
+
+        # ONE task on the page.
+        seed(0, 1)
+        # Warm up so any one-time setup query does not skew the baseline.
+        self._list()
+        with CaptureQueriesContext(connection) as ctx:
+            resp1 = self._list()
+        self.assertEqual(len(resp1.data["results"]), 1)
+        baseline = len(ctx.captured_queries)
+
+        # Grow the page to FOUR tasks/rooms/stays/arrivals: the count must NOT
+        # grow with the number of rows (batch maps prove no N+1).
+        seed(1, 4)
+        with self.assertNumQueries(baseline):
+            resp4 = self._list()
+        self.assertEqual(len(resp4.data["results"]), 4)
+
+    def test_maps_are_hotel_scoped(self):
+        room = self._room("501")
+        self._task(room)
+        # Another hotel with its OWN occupied room + near arrival on the SAME
+        # room number: neither may leak into this hotel's card.
+        other = make_hotel(slug="oiso")
+        ofloor = Floor.objects.create(hotel=other, name="OF", number="9")
+        otype = RoomType.objects.create(
+            hotel=other, name="OStd", code="OSTD", base_capacity=2, max_capacity=2
+        )
+        oroom = Room.objects.create(
+            hotel=other, floor=ofloor, room_type=otype, number="501",
+            status=RoomStatus.DIRTY,
+        )
+        self._in_house_stay(oroom, hotel=other)
+        self._arrival(oroom, hotel=other, room_type=otype, number_suffix="X")
+
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["is_occupied"])
+        self.assertFalse(rows[0]["upcoming_arrival"]["has_upcoming"])

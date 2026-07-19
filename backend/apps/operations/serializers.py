@@ -128,18 +128,68 @@ class HousekeepingComeBackLaterSerializer(serializers.Serializer):
 
 class HousekeepingTaskListSerializer(serializers.ModelSerializer):
     room_number = serializers.CharField(source="room.number", read_only=True, default="")
+    # Unit context for the cleaning CARD. ``room`` is SET_NULL (a historical
+    # task may outlive its room), so every room-sourced field carries a blank
+    # default; ``room_type``/``floor`` are PROTECT FKs on ``Room`` so they are
+    # always present when the room is. ``floor_number`` is the card's fallback
+    # label when ``floor_name`` is blank.
+    room_type_name = serializers.CharField(
+        source="room.room_type.name", read_only=True, default=""
+    )
+    floor_name = serializers.CharField(
+        source="room.floor.name", read_only=True, default=""
+    )
+    floor_number = serializers.CharField(
+        source="room.floor.number", read_only=True, default=""
+    )
     assigned_to_name = serializers.CharField(
         source="assigned_to.full_name", read_only=True, default=""
     )
+    # Derived, O(1) from PAGE-level batch maps built once in the list view — never
+    # a per-row query (see ``HousekeepingListCreateView.list``). Occupancy stays
+    # DERIVED from an in-house ``Stay`` (there is no ``occupied`` room status).
+    is_occupied = serializers.SerializerMethodField()
+    # Compact HK-only arrival hint: presence + date/time ONLY. It deliberately
+    # OMITS the reservation number — a housekeeping-only role must never see the
+    # full booking reference; the card just needs to know an arrival is coming
+    # to this unit and when.
+    upcoming_arrival = serializers.SerializerMethodField()
 
     class Meta:
         model = HousekeepingTask
         fields = [
-            "id", "task_number", "room", "room_number", "stay", "task_type",
+            "id", "task_number", "room", "room_number", "room_type_name",
+            "floor_name", "floor_number", "stay", "task_type",
             "status", "priority", "assigned_to", "assigned_to_name",
             "requested_at", "started_at", "completed_at", "service_outcome",
+            "is_occupied", "upcoming_arrival",
         ]
         read_only_fields = fields
+
+    def get_is_occupied(self, task) -> bool:
+        # The map is a set of room_ids with an in-house stay on THIS page's
+        # rooms. Absent context (serializer reused elsewhere) => not occupied.
+        occupied = self.context.get("occupied_room_ids") or set()
+        return task.room_id in occupied
+
+    def get_upcoming_arrival(self, task) -> dict:
+        arrivals = self.context.get("upcoming_arrival_map") or {}
+        info = arrivals.get(task.room_id)
+        if not info:
+            return {
+                "has_upcoming": False,
+                "arrival_date": None,
+                "arrival_time": None,
+            }
+        # ISO strings keep the wire contract stable and free of the reservation
+        # number. ``arrival_time`` is optional on the booking (may be null).
+        arrival_date = info["arrival_date"]
+        arrival_time = info["arrival_time"]
+        return {
+            "has_upcoming": True,
+            "arrival_date": arrival_date.isoformat() if arrival_date else None,
+            "arrival_time": arrival_time.isoformat() if arrival_time else None,
+        }
 
 
 class HousekeepingTaskSerializer(serializers.ModelSerializer):

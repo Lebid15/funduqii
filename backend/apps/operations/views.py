@@ -6,6 +6,8 @@ go through the domain services; room status is never written from a view.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from rest_framework import generics
 from rest_framework import status as http_status
@@ -113,6 +115,11 @@ def _resolve_user(user_id):
 
 # --- Housekeeping ---------------------------------------------------------------
 
+# The cleaning card's "upcoming arrival" hint covers arrivals from the hotel
+# business date through this many days ahead (today + tomorrow). Kept explicit
+# and named so the near-window is auditable, not a magic number.
+UPCOMING_ARRIVAL_WINDOW_DAYS = 1
+
 
 class HousekeepingListCreateView(generics.ListCreateAPIView):
     def get_permissions(self):
@@ -122,8 +129,12 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
         return HousekeepingTaskListSerializer
 
     def get_queryset(self):
+        # select_related walks room -> room_type / floor (and assigned_to) so the
+        # list serializer reads room_type_name / floor_name / floor_number / the
+        # assignee with NO per-row query. Occupancy + upcoming-arrival are NOT
+        # here — they are page-level batch maps built in ``list`` below.
         qs = HousekeepingTask.objects.filter(hotel=self.request.hotel).select_related(
-            "room", "assigned_to"
+            "room__room_type", "room__floor", "assigned_to"
         )
         p = self.request.query_params
         if p.get("status") in {c for c, _ in HousekeepingStatus.choices}:
@@ -159,6 +170,79 @@ class HousekeepingListCreateView(generics.ListCreateAPIView):
         ):
             qs = qs.order_by(ordering)
         return qs.distinct()
+
+    def list(self, request: Request, *args, **kwargs) -> Response:
+        """Return the page plus TWO page-level batch maps so occupancy and the
+        upcoming-arrival hint cost a CONSTANT number of queries regardless of how
+        many tasks the page holds (no N+1):
+
+        * ``occupied_room_ids`` — ONE query over the page's rooms for in-house
+          ``Stay`` rows (occupancy stays derived from ``Stay``, never a status).
+        * ``upcoming_arrival_map`` — ONE query over the page's rooms for CONFIRMED
+          reservations arriving within the near window; keyed room_id -> soonest
+          arrival date/time. It carries NO reservation number (HK-only privacy).
+
+        Both are scoped to ``request.hotel`` AND to the page's room_ids, then
+        passed to the serializer via context where the ``SerializerMethodField``s
+        read them O(1).
+        """
+        from apps.reservations.models import ReservationRoomLine, ReservationStatus
+        from apps.shifts.services import get_business_date
+        from apps.stays.models import Stay, StayStatus
+
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        tasks = page if page is not None else list(queryset)
+
+        room_ids = {t.room_id for t in tasks if t.room_id is not None}
+        occupied_room_ids: set[int] = set()
+        upcoming_arrival_map: dict[int, dict] = {}
+        if room_ids:
+            occupied_room_ids = set(
+                Stay.objects.filter(
+                    hotel=request.hotel,
+                    room_id__in=room_ids,
+                    status=StayStatus.IN_HOUSE,
+                ).values_list("room_id", flat=True)
+            )
+            business_date = get_business_date(request.hotel)
+            window_end = business_date + timedelta(days=UPCOMING_ARRIVAL_WINDOW_DAYS)
+            arrival_rows = (
+                ReservationRoomLine.objects.filter(
+                    hotel=request.hotel,
+                    room_id__in=room_ids,
+                    reservation__status=ReservationStatus.CONFIRMED,
+                    reservation__check_in_date__gte=business_date,
+                    reservation__check_in_date__lte=window_end,
+                )
+                .order_by(
+                    "reservation__check_in_date",
+                    "reservation__expected_arrival_time",
+                    "reservation_id",
+                )
+                .values_list(
+                    "room_id",
+                    "reservation__check_in_date",
+                    "reservation__expected_arrival_time",
+                )
+            )
+            for room_id, check_in_date, arrival_time in arrival_rows:
+                # Rows are soonest-first; keep only the earliest arrival per room.
+                if room_id not in upcoming_arrival_map:
+                    upcoming_arrival_map[room_id] = {
+                        "arrival_date": check_in_date,
+                        "arrival_time": arrival_time,
+                    }
+
+        context = {
+            **self.get_serializer_context(),
+            "occupied_room_ids": occupied_room_ids,
+            "upcoming_arrival_map": upcoming_arrival_map,
+        }
+        serializer = self.get_serializer_class()(tasks, many=True, context=context)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def create(self, request: Request, *args, **kwargs) -> Response:
         _guard_write(request)
