@@ -24,6 +24,7 @@ from django.utils import timezone
 from apps.common.exceptions import (
     CancellationReasonRequired,
     ClaimantRequired,
+    ClaimProofRequired,
     CrossTenantReference,
     DisposalReasonRequired,
     DuplicateActiveTask,
@@ -43,6 +44,8 @@ from .models import (
     HousekeepingTask,
     HousekeepingTaskStatusLog,
     HousekeepingTaskType,
+    LostFoundCategory,
+    LostFoundClaimProofType,
     LostFoundItem,
     LostFoundItemStatusLog,
     LostFoundStatus,
@@ -52,6 +55,21 @@ from .models import (
     OperationsNumberSequence,
     RoomBlockStatus,
 )
+
+#: WP7 — categories that require stronger proof on handover (claim / return).
+#: These are the ACTUAL ``LostFoundCategory`` values (money / jewelry /
+#: documents); no new categories were introduced.
+SENSITIVE_LOST_FOUND_CATEGORIES = frozenset(
+    {
+        LostFoundCategory.MONEY,
+        LostFoundCategory.JEWELRY,
+        LostFoundCategory.DOCUMENTS,
+    }
+)
+
+#: The maximum characters kept for an ``identity_last4`` proof — a privacy cap
+#: so a full national id / passport / card number is never stored.
+IDENTITY_LAST4_MAX_LEN = 4
 
 NUMBER_PREFIXES = {
     "housekeeping": "HK",
@@ -1129,6 +1147,57 @@ def _lf_log(item, previous, new, user, note=""):
     )
 
 
+def _resolve_claim_proof(
+    item: LostFoundItem,
+    *,
+    claim_proof_type: str,
+    claim_proof_reference: str,
+    name: str,
+    phone: str,
+    has_guest: bool,
+) -> tuple[str, str]:
+    """Validate the handover requirements for a claim / return and return the
+    (proof_type, proof_reference) to store.
+
+    The effective proof falls back to what is ALREADY on the item (so a return
+    after a proofed claim need not re-enter it), mirroring the name/phone
+    fallback. PRIVACY: the returned reference is bounded and NEVER contains a
+    full id/passport/card number — for ``identity_last4`` anything longer than
+    four characters is rejected outright (for ALL categories, not only the
+    sensitive ones).
+
+    * SENSITIVE categories (money / jewelry / documents): require a recipient
+      name, a phone OR a linked guest, a ``claim_proof_type`` and a non-empty
+      ``claim_proof_reference`` (the short verification description for
+      ``ownership_description``). Any missing piece -> :class:`ClaimProofRequired`
+      (422) with a neutral ``details.reason`` (never the value).
+    * NORMAL categories: unchanged minimum — a recipient name OR a linked guest
+      (:class:`ClaimantRequired`). Proof is NOT newly required.
+    """
+    proof_type = (claim_proof_type or "").strip() or item.claim_proof_type
+    proof_reference = (claim_proof_reference or "").strip() or item.claim_proof_reference
+    # Privacy guard (unconditional): identity_last4 keeps at most the last 4
+    # characters — a longer value is refused rather than truncated/stored.
+    if (
+        proof_type == LostFoundClaimProofType.IDENTITY_LAST4
+        and len(proof_reference) > IDENTITY_LAST4_MAX_LEN
+    ):
+        raise ClaimProofRequired({"reason": "identity_last4_too_long"})
+    if item.category in SENSITIVE_LOST_FOUND_CATEGORIES:
+        if not name:
+            raise ClaimProofRequired({"reason": "recipient_name_required"})
+        if not phone and not has_guest:
+            raise ClaimProofRequired({"reason": "phone_or_guest_required"})
+        if not proof_type:
+            raise ClaimProofRequired({"reason": "proof_type_required"})
+        # Covers ownership_description's "non-empty short description" rule too.
+        if not proof_reference:
+            raise ClaimProofRequired({"reason": "proof_reference_required"})
+    elif not name and not has_guest:
+        raise ClaimantRequired()
+    return proof_type, proof_reference
+
+
 @transaction.atomic
 def create_lost_found_item(
     hotel,
@@ -1231,41 +1300,80 @@ def change_lost_found_status(
 
 @transaction.atomic
 def claim_lost_found_item(
-    item: LostFoundItem, *, user=None, claimed_by_name="", claimed_by_phone="", note=""
+    item: LostFoundItem,
+    *,
+    user=None,
+    claimed_by_name="",
+    claimed_by_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
 ) -> LostFoundItem:
     if item.status not in (LostFoundStatus.FOUND, LostFoundStatus.STORED):
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.CLAIMED}
         )
-    if not (claimed_by_name or "").strip() and item.guest_id is None:
-        raise ClaimantRequired()
+    name = (claimed_by_name or "").strip() or item.claimed_by_name
+    phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    # WP7: enforce the handover requirements (stronger for sensitive categories)
+    # and resolve the bounded, privacy-safe proof to store.
+    proof_type, proof_reference = _resolve_claim_proof(
+        item,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        name=name,
+        phone=phone,
+        has_guest=item.guest_id is not None,
+    )
     previous = item.status
     item.status = LostFoundStatus.CLAIMED
-    item.claimed_by_name = (claimed_by_name or "").strip() or item.claimed_by_name
-    item.claimed_by_phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    item.claimed_by_name = name
+    item.claimed_by_phone = phone
+    item.claim_proof_type = proof_type
+    item.claim_proof_reference = proof_reference
     item.claimed_at = timezone.now()
     item.updated_by = _actor(user)
     item.save()
+    # NOTE: ``note`` is the caller-supplied status note only — the proof
+    # reference is NEVER written to the status log (privacy).
     _lf_log(item, previous, LostFoundStatus.CLAIMED, user, note)
     return item
 
 
 @transaction.atomic
 def return_lost_found_item(
-    item: LostFoundItem, *, user=None, claimed_by_name="", claimed_by_phone="", note=""
+    item: LostFoundItem,
+    *,
+    user=None,
+    claimed_by_name="",
+    claimed_by_phone="",
+    note="",
+    claim_proof_type="",
+    claim_proof_reference="",
 ) -> LostFoundItem:
     if item.status not in ACTIVE_LF_STATUSES:
         raise InvalidOperationStatusTransition(
             {"from": item.status, "to": LostFoundStatus.RETURNED}
         )
     name = (claimed_by_name or "").strip() or item.claimed_by_name
-    # A returned item must record WHO received it: a claimant name or a guest.
-    if not name and item.guest_id is None:
-        raise ClaimantRequired()
+    phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    # A returned item must record WHO received it; SENSITIVE categories also
+    # require the phone/guest + proof (resolved here, falling back to what the
+    # claim already stored so it need not be re-entered).
+    proof_type, proof_reference = _resolve_claim_proof(
+        item,
+        claim_proof_type=claim_proof_type,
+        claim_proof_reference=claim_proof_reference,
+        name=name,
+        phone=phone,
+        has_guest=item.guest_id is not None,
+    )
     previous = item.status
     item.status = LostFoundStatus.RETURNED
     item.claimed_by_name = name
-    item.claimed_by_phone = (claimed_by_phone or "").strip() or item.claimed_by_phone
+    item.claimed_by_phone = phone
+    item.claim_proof_type = proof_type
+    item.claim_proof_reference = proof_reference
     item.claimed_at = item.claimed_at or timezone.now()
     item.returned_at = timezone.now()
     item.updated_by = _actor(user)

@@ -245,6 +245,27 @@ class ClaimantRequired(FunduqiiAPIException):
     default_code = "claimant_required"
 
 
+class ClaimProofRequired(FunduqiiAPIException):
+    """WP7 — a SENSITIVE lost-and-found item (money / jewelry / documents) may
+    only be handed over with stronger proof: a recipient name, a phone OR a
+    linked guest, and a ``claim_proof_type`` + ``claim_proof_reference``. It is
+    also raised when ``identity_last4`` carries more than four characters (a
+    privacy guard against storing a full id/passport/card number).
+
+    ``details.reason`` is a NEUTRAL marker — one of ``recipient_name_required``,
+    ``phone_or_guest_required``, ``proof_type_required``,
+    ``proof_reference_required`` or ``identity_last4_too_long`` — and NEVER
+    carries the proof value itself, so the 422 body cannot leak the reference."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_detail = (
+        "This sensitive item requires proof of ownership before it can be "
+        "handed over: a recipient name, a phone or a linked guest, and a proof "
+        "type with its reference."
+    )
+    default_code = "claim_proof_required"
+
+
 class DisposalReasonRequired(FunduqiiAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = "A reason is required to dispose of this item."

@@ -2443,7 +2443,8 @@
       "disposalReasonRequired": "A reason is required to dispose of this item.",
       "duplicateActive": "This room already has an active cleaning task — complete or cancel it first.",
       "inspectionReasonRequired": "An inspection rejection reason is required.",
-      "roomNotReleasable": "This room can't be made available directly — it must finish its operational release cycle first (cleaning completed and inspected, or its blocking maintenance closed)."
+      "roomNotReleasable": "This room can't be made available directly — it must finish its operational release cycle first (cleaning completed and inspected, or its blocking maintenance closed).",
+      "claimProofRequired": "This sensitive item can only be handed over with proof of ownership: a recipient name, a phone or a linked guest, and a proof type with its reference."
     }
   },
   "staff": {

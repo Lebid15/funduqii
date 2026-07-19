@@ -2443,7 +2443,8 @@
       "disposalReasonRequired": "Eşyayı imha etmek için neden gereklidir.",
       "duplicateActive": "Bu odanın zaten aktif bir temizlik görevi var — önce tamamlayın veya iptal edin.",
       "inspectionReasonRequired": "Denetim ret nedeni zorunludur.",
-      "roomNotReleasable": "Bu oda doğrudan müsait yapılamaz — önce operasyonel serbest bırakma döngüsünü tamamlamalı (temizlik bitip denetlenerek veya engelleyen bakım kapatılarak)."
+      "roomNotReleasable": "Bu oda doğrudan müsait yapılamaz — önce operasyonel serbest bırakma döngüsünü tamamlamalı (temizlik bitip denetlenerek veya engelleyen bakım kapatılarak).",
+      "claimProofRequired": "Bu hassas eşya yalnızca mülkiyet kanıtıyla teslim edilebilir: teslim alan adı, bir telefon veya bağlı misafir ve referansıyla birlikte bir kanıt türü."
     }
   },
   "staff": {

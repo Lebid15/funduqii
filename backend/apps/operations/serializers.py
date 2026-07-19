@@ -14,6 +14,7 @@ from .models import (
     HousekeepingTaskStatusLog,
     HousekeepingTaskType,
     LostFoundCategory,
+    LostFoundClaimProofType,
     LostFoundItem,
     LostFoundItemStatusLog,
     LostFoundStatus,
@@ -445,6 +446,19 @@ class LostFoundClaimSerializer(serializers.Serializer):
         max_length=32, required=False, allow_blank=True, default=""
     )
     note = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    # WP7 handover proof (required by the SERVICE only for sensitive categories).
+    # Shape only here: a closed proof-type choice + a SHORT bounded reference.
+    # The privacy rules (identity_last4 <= 4, sensitive-category requirement)
+    # live in the domain service (``_resolve_claim_proof``).
+    claim_proof_type = serializers.ChoiceField(
+        choices=LostFoundClaimProofType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    claim_proof_reference = serializers.CharField(
+        max_length=40, required=False, allow_blank=True, default=""
+    )
 
 
 class LostFoundDisposeSerializer(serializers.Serializer):
@@ -483,7 +497,8 @@ class LostFoundItemSerializer(serializers.ModelSerializer):
             "id", "item_number", "title", "description", "category", "status",
             "found_at", "found_location", "room", "room_number", "stay",
             "guest", "guest_name", "found_by_name", "stored_location",
-            "claimed_by_name", "claimed_by_phone", "claimed_at", "returned_at",
+            "claimed_by_name", "claimed_by_phone", "claim_proof_type",
+            "claim_proof_reference", "claimed_at", "returned_at",
             "disposed_at", "closed_at", "notes", "internal_notes",
             "status_logs", "created_at", "updated_at",
         ]
@@ -504,6 +519,11 @@ class LostFoundItemSerializer(serializers.ModelSerializer):
         # return flow (both performed under lost_found.status_update), so only a
         # holder of that permission sees it. Fail-closed without a request
         # context. It is already ABSENT from the list serializer / card.
+        # WP7 proof-reference gate: ``claim_proof_reference`` is the sensitive
+        # ownership-proof VALUE — gated behind the SAME permission as the phone,
+        # fail-closed, and never present in any list serializer / card. The
+        # ``claim_proof_type`` marker is NOT sensitive and stays visible.
         if not _has_perm(request, "lost_found.status_update"):
             data.pop("claimed_by_phone", None)
+            data.pop("claim_proof_reference", None)
         return data

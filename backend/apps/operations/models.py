@@ -420,6 +420,24 @@ class LostFoundStatus(models.TextChoices):
     CLOSED = "closed", "Closed"
 
 
+class LostFoundClaimProofType(models.TextChoices):
+    """The KIND of ownership proof recorded when a SENSITIVE item (money /
+    jewelry / documents) is claimed or returned (WP7).
+
+    Deliberately a small, closed set of NON-sensitive markers. The proof VALUE
+    lives in ``claim_proof_reference`` (bounded, permission-gated on read); this
+    type is safe to show on its own. ``IDENTITY_LAST4`` never stores more than
+    the last four characters of an id/passport (the service rejects longer),
+    and ``OWNERSHIP_DESCRIPTION`` is a short free-text verification note — never
+    an image, file, or full document number.
+    """
+
+    IDENTITY_LAST4 = "identity_last4", "Identity document — last 4"
+    RECEIPT_REFERENCE = "receipt_reference", "Receipt / reference number"
+    OWNERSHIP_DESCRIPTION = "ownership_description", "Ownership description"
+    OTHER = "other", "Other"
+
+
 class LostFoundItem(models.Model):
     """A found item, optionally linked to a room / stay / guest.
 
@@ -476,6 +494,18 @@ class LostFoundItem(models.Model):
     stored_location = models.CharField(max_length=160, blank=True, default="")
     claimed_by_name = models.CharField(max_length=180, blank=True, default="")
     claimed_by_phone = models.CharField(max_length=32, blank=True, default="")
+    # WP7 handover proof for SENSITIVE categories (money / jewelry / documents).
+    # ``claim_proof_type`` is a non-sensitive marker (safe to show); the value in
+    # ``claim_proof_reference`` is bounded and permission-gated on read. PRIVACY:
+    # the reference NEVER holds a full national id / passport / card number — for
+    # ``identity_last4`` the service rejects anything longer than 4 characters.
+    claim_proof_type = models.CharField(
+        max_length=24,
+        choices=LostFoundClaimProofType.choices,
+        blank=True,
+        default="",
+    )
+    claim_proof_reference = models.CharField(max_length=40, blank=True, default="")
     claimed_at = models.DateTimeField(null=True, blank=True)
     returned_at = models.DateTimeField(null=True, blank=True)
     disposed_at = models.DateTimeField(null=True, blank=True)

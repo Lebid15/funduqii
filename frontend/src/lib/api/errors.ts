@@ -245,6 +245,8 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.roomNotReleasable;
     case "claimant_required":
       return t.operations.errors.claimantRequired;
+    case "claim_proof_required":
+      return t.operations.errors.claimProofRequired;
     case "disposal_reason_required":
       return t.operations.errors.disposalReasonRequired;
     case "duplicate_active_task":

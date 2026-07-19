@@ -1817,3 +1817,250 @@ class DisclosureGateTests(APITestCase, OperationsMixin):
         data = LostFoundItemSerializer(item).data  # no context
         self.assertNotIn("internal_notes", data)
         self.assertNotIn("claimed_by_phone", data)
+
+
+# --------------------------------------------------------------------------- #
+# WP7 — sensitive lost & found proof-of-ownership on handover                    #
+# --------------------------------------------------------------------------- #
+
+
+class SensitiveClaimProofTests(APITestCase, OperationsMixin):
+    """WP7: money / jewelry / documents require a recipient name, a phone OR a
+    linked guest, and a proof type + reference on claim/return; normal
+    categories keep the existing minimum. The proof REFERENCE is bounded,
+    privacy-validated (identity_last4 <= 4) and gated on read like the phone."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel)
+        self.client.force_authenticate(self.manager)
+
+    def _proof(self, **extra):
+        body = {
+            "claimed_by_name": "John Smith",
+            "claimed_by_phone": "+90 555 111",
+            "claim_proof_type": "receipt_reference",
+            "claim_proof_reference": "RCP-9910",
+        }
+        body.update(extra)
+        return body
+
+    # -- Enforcement on the SENSITIVE set ------------------------------------
+
+    def test_sensitive_claim_without_proof_rejected(self):
+        item = self.create_lf(category="money").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            {"claimed_by_name": "John", "claimed_by_phone": "+90 555"},
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        self.assertEqual(r.data["details"]["reason"], "proof_type_required")
+
+    def test_sensitive_claim_without_name_rejected(self):
+        item = self.create_lf(category="jewelry").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(claimed_by_name=""),
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        self.assertEqual(r.data["details"]["reason"], "recipient_name_required")
+
+    def test_sensitive_claim_without_phone_or_guest_rejected(self):
+        item = self.create_lf(category="documents").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(claimed_by_phone=""),
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        self.assertEqual(r.data["details"]["reason"], "phone_or_guest_required")
+
+    def test_sensitive_claim_missing_reference_rejected(self):
+        item = self.create_lf(category="money").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(claim_proof_reference=""),
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        self.assertEqual(r.data["details"]["reason"], "proof_reference_required")
+
+    def test_sensitive_claim_with_all_fields_succeeds_and_stores(self):
+        item = self.create_lf(category="money").data
+        r = self.act("lost-found", item["id"], "claim", self._proof())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "claimed")
+        self.assertEqual(r.data["claim_proof_type"], "receipt_reference")
+        # The manager holds status_update, so the reference is visible here.
+        self.assertEqual(r.data["claim_proof_reference"], "RCP-9910")
+        obj = LostFoundItem.objects.get(pk=item["id"])
+        self.assertEqual(obj.claim_proof_type, "receipt_reference")
+        self.assertEqual(obj.claim_proof_reference, "RCP-9910")
+
+    def test_sensitive_claim_with_guest_and_no_phone_ok(self):
+        guest = Guest.objects.create(hotel=self.hotel, full_name="G", email="gg@x.com")
+        item = self.create_lf(category="jewelry", guest=guest.id).data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            {
+                "claimed_by_name": "John",
+                "claim_proof_type": "ownership_description",
+                "claim_proof_reference": "gold ring, engraved 2019",
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "claimed")
+
+    def test_sensitive_return_requires_proof(self):
+        item = self.create_lf(category="money").data
+        r = self.act(
+            "lost-found", item["id"], "return",
+            {"claimed_by_name": "John", "claimed_by_phone": "+90 555"},
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        r = self.act("lost-found", item["id"], "return", self._proof())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "returned")
+
+    def test_sensitive_return_reuses_stored_claim_proof(self):
+        # Claim with proof, then return WITHOUT re-supplying it: the return
+        # reuses the stored name/phone/proof (like the name/phone fallback).
+        item = self.create_lf(category="documents").data
+        self.act("lost-found", item["id"], "claim", self._proof())
+        r = self.act("lost-found", item["id"], "return", {})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "returned")
+
+    # -- NORMAL categories keep the existing minimum -------------------------
+
+    def test_normal_category_claim_needs_no_proof(self):
+        item = self.create_lf(category="clothing").data
+        r = self.act("lost-found", item["id"], "claim", {"claimed_by_name": "John"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "claimed")
+
+    def test_normal_category_return_needs_no_proof(self):
+        item = self.create_lf(category="electronics").data
+        r = self.act("lost-found", item["id"], "return", {"claimed_by_name": "Jane"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["status"], "returned")
+
+    def test_normal_category_still_requires_claimant(self):
+        item = self.create_lf(category="clothing").data
+        r = self.act("lost-found", item["id"], "claim", {})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claimant_required")
+
+    # -- Proof-type specific validation --------------------------------------
+
+    def test_identity_last4_rejects_long_value(self):
+        item = self.create_lf(category="money").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(
+                claim_proof_type="identity_last4",
+                claim_proof_reference="123456789",
+            ),
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+        self.assertEqual(r.data["details"]["reason"], "identity_last4_too_long")
+
+    def test_identity_last4_four_chars_ok(self):
+        item = self.create_lf(category="money").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(
+                claim_proof_type="identity_last4", claim_proof_reference="4321"
+            ),
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            LostFoundItem.objects.get(pk=item["id"]).claim_proof_reference, "4321"
+        )
+
+    def test_ownership_description_requires_nonempty(self):
+        item = self.create_lf(category="documents").data
+        r = self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(
+                claim_proof_type="ownership_description",
+                claim_proof_reference="",
+            ),
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.data["code"], "claim_proof_required")
+
+    # -- Privacy: the reference is gated / never leaks -----------------------
+
+    def test_reference_absent_from_list(self):
+        item = self.create_lf(category="money").data
+        self.act("lost-found", item["id"], "claim", self._proof())
+        rows = self.client.get(
+            reverse("operations:lost-found-list"), **HDR(self.hotel)
+        ).data["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotIn("claim_proof_reference", row)
+            self.assertNotIn("claim_proof_type", row)
+
+    def test_reference_gated_to_status_update_in_detail(self):
+        item = self.create_lf(category="money").data
+        self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(claim_proof_reference="RCP-SECRET"),
+        )
+        detail_url = reverse("operations:lost-found-detail", args=[item["id"]])
+
+        # A view-only caller: the reference is dropped, but the (non-sensitive)
+        # proof TYPE is still visible.
+        viewer = add_member(self.hotel, "lv@x.com", perms=["lost_found.view"])
+        self.client.force_authenticate(viewer)
+        d = self.client.get(detail_url, **HDR(self.hotel)).data
+        self.assertNotIn("claim_proof_reference", d)
+        self.assertEqual(d["claim_proof_type"], "receipt_reference")
+
+        # A lost_found.status_update holder (the claim/return actor) sees it.
+        actor = add_member(
+            self.hotel, "la@x.com",
+            perms=["lost_found.view", "lost_found.status_update"],
+        )
+        self.client.force_authenticate(actor)
+        d = self.client.get(detail_url, **HDR(self.hotel)).data
+        self.assertEqual(d["claim_proof_reference"], "RCP-SECRET")
+
+    def test_reference_fail_closed_without_request_context(self):
+        from apps.operations.serializers import LostFoundItemSerializer
+
+        item_data = self.create_lf(category="money").data
+        item = LostFoundItem.objects.get(pk=item_data["id"])
+        item.claim_proof_type = "receipt_reference"
+        item.claim_proof_reference = "RCP-NOCTX"
+        item.save(update_fields=["claim_proof_type", "claim_proof_reference"])
+        data = LostFoundItemSerializer(item).data  # no context
+        self.assertNotIn("claim_proof_reference", data)
+        # The type marker is not sensitive and remains present.
+        self.assertEqual(data["claim_proof_type"], "receipt_reference")
+
+    def test_reference_never_in_status_log_or_activity(self):
+        from apps.notifications.models import ActivityEvent
+
+        secret = "RCP-DO-NOT-LEAK-42"
+        item = self.create_lf(category="money").data
+        self.act(
+            "lost-found", item["id"], "claim",
+            self._proof(claim_proof_reference=secret),
+        )
+        self.act("lost-found", item["id"], "return", {})  # reuses stored proof
+        detail_url = reverse("operations:lost-found-detail", args=[item["id"]])
+        d = self.client.get(detail_url, **HDR(self.hotel)).data
+        for log in d["status_logs"]:
+            self.assertNotIn(secret, (log.get("note") or ""))
+        # The reference must not appear in any activity event payload either.
+        for ev in ActivityEvent.objects.filter(hotel=self.hotel):
+            self.assertNotIn(secret, ev.title)
+            self.assertNotIn(secret, ev.message)
