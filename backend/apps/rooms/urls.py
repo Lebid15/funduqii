@@ -8,6 +8,7 @@ from .views import (
     RoomDetailView,
     RoomListCreateView,
     RoomOperationalBoardView,
+    RoomOptionsView,
     RoomStatusView,
     RoomTypeDetailView,
     RoomTypeListCreateView,
@@ -29,6 +30,9 @@ urlpatterns = [
         RoomOperationalBoardView.as_view(),
         name="room-operational-board",
     ),
+    # Compact, read-only, searchable options feed for operations-tab dropdowns.
+    # Registered BEFORE rooms/<int:pk>/ so "options" is never swallowed by the pk.
+    path("rooms/options/", RoomOptionsView.as_view(), name="room-options"),
     path("rooms/", RoomListCreateView.as_view(), name="room-list"),
     # Registered BEFORE rooms/<int:pk>/ so "bulk" is never swallowed by the pk.
     path("rooms/bulk/", RoomBulkCreateView.as_view(), name="room-bulk-create"),
