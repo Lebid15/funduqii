@@ -142,9 +142,10 @@ class ManualRoomChargeBlockedTests(APITestCase):
         for t in ("service", "tax", "other"):
             res = self._charge(type=t, unit_amount="50.00")
             self.assertEqual(res.status_code, 201, f"{t}: {res.data}")
-        # discount allows a negative amount (unchanged behaviour).
-        res = self._charge(type="discount", unit_amount="-10.00")
-        self.assertEqual(res.status_code, 201, res.data)
+        # P4 — DISCOUNT (a credit type) is no longer accepted on the generic
+        # charge-create path; credits go through finance.adjust instead.
+        res = self._charge(type="discount", unit_amount="10.00")
+        self.assertEqual(res.status_code, 400, res.data)
 
 
 class AddChargeRoomChokepointTests(TestCase):

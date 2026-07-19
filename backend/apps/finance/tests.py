@@ -244,13 +244,25 @@ class ChargeTests(APITestCase, FinanceMixin):
         self.assertEqual(charge.total_amount, Decimal("230.00"))
 
     def test_negative_amount_rejected_for_service(self):
+        # P4 — a negative amount on the generic charge-create path is now
+        # rejected up-front by the serializer (must_not_be_negative), still a
+        # clean 400. Credits/negatives belong to finance.adjust.
         res = self.add_charge(self.fid, type="service", unit_amount="-50.00")
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.data["code"], "invalid_amount")
+        self.assertIn("must_not_be_negative", str(res.data))
 
-    def test_discount_allows_negative(self):
-        res = self.add_charge(self.fid, type="discount", description="Loyalty", unit_amount="-20.00")
-        self.assertEqual(res.status_code, 201)
+    def test_discount_and_adjustment_refused_via_charge_create(self):
+        # P4 — credit corrections no longer go through the generic charge-create
+        # path (they belong to finance.adjust / adjust_charge, which is reasoned,
+        # linked, one-per-original and audited). Both credit TYPES and any
+        # negative amount are rejected here with a clean 400.
+        for t in ("discount", "adjustment"):
+            res = self.add_charge(self.fid, type=t, description="Loyalty", unit_amount="20.00")
+            self.assertEqual(res.status_code, 400, f"{t}: {res.data}")
+            self.assertIn("credit_charges_go_through_adjust", str(res.data))
+        neg = self.add_charge(self.fid, type="other", description="X", unit_amount="-20.00")
+        self.assertEqual(neg.status_code, 400)
+        self.assertIn("must_not_be_negative", str(neg.data))
 
     def test_void_charge_requires_reason_and_excludes_from_balance(self):
         self.add_charge(self.fid, unit_amount="100.00")
@@ -1506,3 +1518,374 @@ class ExpenseDerivationTests(ExpensesClosureBase):
             **HDR(self.hotel),
         )
         self.assertEqual(res.data["count"], 1)
+
+
+# --------------------------------------------------------------------------- #
+# GUEST-FOLIO-EXTRA-SERVICES-CLOSURE (finance backend foundation)             #
+# --------------------------------------------------------------------------- #
+
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
+from apps.finance.constants import ChargeSource, SERVICE_LINE_SOURCES
+
+
+class ChargeSourceConstantsTests(APITestCase):
+    """PKG-CONST — a single source-of-truth for charge ``source`` values whose
+    strings MUST equal what the code already stored (no data migration)."""
+
+    def test_values_match_existing_source_strings(self):
+        self.assertEqual(ChargeSource.MANUAL, "manual")
+        self.assertEqual(ChargeSource.SERVICE_ORDER, "service_order")
+        self.assertEqual(ChargeSource.STAY_ROOM, "stay_room")
+        self.assertEqual(ChargeSource.ROOM_ACCOUNT, "room_account")
+        self.assertEqual(ChargeSource.ADJUSTMENT, "adjustment")
+        self.assertEqual(ChargeSource.GUEST_EXTRA_SERVICE, "guest_extra_service")
+
+    def test_room_night_source_uses_the_constant(self):
+        self.assertEqual(fin.ROOM_NIGHT_SOURCE, ChargeSource.STAY_ROOM)
+        self.assertEqual(fin.ROOM_NIGHT_SOURCE, "stay_room")
+
+    def test_service_line_sources_allowlist(self):
+        self.assertEqual(
+            set(SERVICE_LINE_SOURCES),
+            {ChargeSource.GUEST_EXTRA_SERVICE, ChargeSource.SERVICE_ORDER},
+        )
+        # SOURCES, not ChargeType.SERVICE — a room-night / manual source is NOT
+        # a service line even though ROOM/others exist.
+        self.assertIn("service_order", SERVICE_LINE_SOURCES)
+        self.assertIn("guest_extra_service", SERVICE_LINE_SOURCES)
+        self.assertNotIn("manual", SERVICE_LINE_SOURCES)
+        self.assertNotIn("stay_room", SERVICE_LINE_SOURCES)
+
+    def test_add_charge_default_source_is_manual_constant(self):
+        hotel = make_hotel()
+        manager = add_member(
+            hotel, "cs@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        folio = fin.create_folio(hotel, customer_name="A", user=manager)
+        charge = fin.add_charge(
+            folio, charge_type="service", description="X", quantity=1,
+            unit_amount="10.00", user=manager,
+        )
+        self.assertEqual(charge.source, "manual")
+
+
+class OverviewAggregationParityTests(APITestCase, ClosureMixin):
+    """S1 — the finance-overview DB aggregation MUST return exactly what a
+    per-folio ``folio_balance`` loop would, across composite folio states, and
+    without ever summing different currencies together."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        self.client.force_authenticate(self.manager)
+
+    def _folio(self, name, currency=None):
+        folio = fin.create_folio(self.hotel, customer_name=name, user=self.manager)
+        if currency:
+            Folio.objects.filter(pk=folio.pk).update(currency=currency)
+            folio.refresh_from_db()
+        return folio
+
+    def _charge(self, folio, amount, ctype="service"):
+        return fin.add_charge(
+            folio, charge_type=ctype, description="c", quantity=1,
+            unit_amount=amount, user=self.manager,
+        )
+
+    def _pay(self, folio, amount):
+        return fin.record_payment(
+            folio, amount=amount, method="cash", user=self.manager
+        )
+
+    def _reference(self, base):
+        """The oracle: iterate ``folio_balance`` exactly like the old loop."""
+        open_folios = list(
+            Folio.objects.filter(hotel=self.hotel, status=FolioStatus.OPEN)
+        )
+        base_folios = [f for f in open_folios if f.currency == base]
+        outstanding = Decimal("0.00")
+        unpaid = 0
+        for f in base_folios:
+            bal = fin.folio_balance(f)["balance"]
+            outstanding += bal
+            if bal > Decimal("0.00"):
+                unpaid += 1
+        foreign = [f for f in open_folios if f.currency != base]
+        return {
+            "outstanding": fin.money(outstanding),
+            "unpaid": unpaid,
+            "foreign_count": len(foreign),
+            "foreign_currencies": sorted({f.currency for f in foreign}),
+        }
+
+    def test_parity_across_composite_states(self):
+        # empty folio
+        self._folio("empty")
+        # charges-only
+        self._charge(self._folio("charges"), "200.00")
+        # payments-only (credit balance)
+        self._pay(self._folio("payments"), "50.00")
+        # charges + payments (partial)
+        mix = self._folio("mix")
+        self._charge(mix, "300.00")
+        self._pay(mix, "120.00")
+        # charge voided (same-day) -> excluded
+        cv = self._folio("charge_void")
+        voided = self._charge(cv, "999.00")
+        self._charge(cv, "40.00")
+        fin.void_charge(voided, reason="mistake", user=self.manager)
+        # payment voided (same-day) -> excluded
+        pv = self._folio("pay_void")
+        self._charge(pv, "80.00")
+        bad = self._pay(pv, "80.00")
+        fin.void_payment(bad, reason="mistake", user=self.manager)
+        # payment reversed (aged -> full counter-payment, both posted, net out)
+        pr = self._folio("pay_reverse")
+        self._charge(pr, "100.00")
+        orig = self._pay(pr, "60.00")
+        self.age_payment(orig)
+        fin.reverse_payment(orig, reason="late correction", user=self.manager)
+        # multi-currency foreign folio (excluded from the summed number)
+        eur = self._folio("eur", currency="EUR")
+        self._charge(eur, "500.00")
+        gbp = self._folio("gbp", currency="GBP")
+        self._charge(gbp, "10.00")
+
+        base = "USD"
+        expected = self._reference(base)
+        agg = fin.aggregate_open_folio_balances(
+            Folio.objects.filter(hotel=self.hotel, status=FolioStatus.OPEN),
+            base_currency=base,
+        )
+        self.assertEqual(agg, expected)
+
+        # And the HTTP overview surfaces the same numbers.
+        ov = self.client.get(reverse("finance:overview"), **HDR(self.hotel)).data
+        self.assertEqual(ov["outstanding_balance"], str(expected["outstanding"]))
+        self.assertEqual(ov["unpaid_folios"], expected["unpaid"])
+        self.assertEqual(
+            ov["foreign_currency_folios"]["count"], expected["foreign_count"]
+        )
+        self.assertEqual(
+            ov["foreign_currency_folios"]["currencies"],
+            expected["foreign_currencies"],
+        )
+
+    def test_overview_query_count_constant_for_1_vs_n_folios(self):
+        # One open folio with activity.
+        f1 = self._folio("one")
+        self._charge(f1, "100.00")
+        self._pay(f1, "40.00")
+        with CaptureQueriesContext(connection) as q1:
+            self.client.get(reverse("finance:overview"), **HDR(self.hotel))
+        # Many more open folios with activity.
+        for i in range(6):
+            fi = self._folio(f"f{i}")
+            self._charge(fi, "100.00")
+            self._pay(fi, "40.00")
+        with CaptureQueriesContext(connection) as qn:
+            self.client.get(reverse("finance:overview"), **HDR(self.hotel))
+        self.assertEqual(
+            len(q1.captured_queries),
+            len(qn.captured_queries),
+            msg="finance overview must not add a query per open folio (no N+1)",
+        )
+
+
+class ChargeSnapshotTests(APITestCase, ClosureMixin):
+    """P2 — nullable frozen snapshots on FolioCharge; no FK to any catalog."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        self.client.force_authenticate(self.manager)
+        self.folio = fin.create_folio(
+            self.hotel, customer_name="A", user=self.manager
+        )
+
+    def test_snapshots_persist_when_provided(self):
+        charge = fin.add_charge(
+            self.folio, charge_type="service", description="Spa", quantity=1,
+            unit_amount="50.00", source=ChargeSource.GUEST_EXTRA_SERVICE,
+            currency_snapshot="USD", service_name_snapshot="Spa session",
+            unit_price_snapshot="50.00", tax_rate_snapshot="15.00",
+            source_reference="8f1c-uuid-ref", user=self.manager,
+        )
+        charge.refresh_from_db()
+        self.assertEqual(charge.source, "guest_extra_service")
+        self.assertEqual(charge.currency_snapshot, "USD")
+        self.assertEqual(charge.service_name_snapshot, "Spa session")
+        self.assertEqual(charge.unit_price_snapshot, Decimal("50.00"))
+        self.assertEqual(charge.tax_rate_snapshot, Decimal("15.00"))
+        self.assertEqual(charge.source_reference, "8f1c-uuid-ref")
+
+    def test_existing_charges_keep_null_snapshots(self):
+        charge = fin.add_charge(
+            self.folio, charge_type="service", description="Plain", quantity=1,
+            unit_amount="10.00", user=self.manager,
+        )
+        charge.refresh_from_db()
+        self.assertIsNone(charge.currency_snapshot)
+        self.assertIsNone(charge.service_name_snapshot)
+        self.assertIsNone(charge.unit_price_snapshot)
+        self.assertIsNone(charge.tax_rate_snapshot)
+        self.assertIsNone(charge.source_reference)
+
+    def test_snapshot_is_a_frozen_copy_not_a_reference(self):
+        name = "Spa session"
+        price = Decimal("50.00")
+        charge = fin.add_charge(
+            self.folio, charge_type="service", description="Spa", quantity=1,
+            unit_amount="50.00", service_name_snapshot=name,
+            unit_price_snapshot=price, user=self.manager,
+        )
+        # A later catalog rename / reprice changes the SOURCE values...
+        name = "Spa session (renamed)"
+        price = Decimal("75.00")
+        # ...the posted charge's snapshot is unchanged (a value copy, no FK).
+        charge.refresh_from_db()
+        self.assertEqual(charge.service_name_snapshot, "Spa session")
+        self.assertEqual(charge.unit_price_snapshot, Decimal("50.00"))
+
+    def test_no_fk_from_charge_to_guest_services(self):
+        related_apps = {
+            f.related_model._meta.app_label
+            for f in FolioCharge._meta.get_fields()
+            if f.is_relation and f.related_model is not None
+        }
+        self.assertNotIn("guest_services", related_apps)
+        self.assertNotIn("guest_service", related_apps)
+
+
+class ChargeCreateRestrictionTests(APITestCase, ClosureMixin):
+    """P4 — the generic charge-create path posts DEBITS only; credit corrections
+    go through finance.adjust; an overflow returns a clean typed 400."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        self.client.force_authenticate(self.manager)
+        self.fid = self.create_folio(customer_name="A").data["id"]
+
+    def test_charge_create_only_holder_refused_credit_and_negative(self):
+        staff = add_member(
+            self.hotel, "cc@x.com", perms=["finance.view", "finance.charge_create"]
+        )
+        self.client.force_authenticate(staff)
+        for t in ("discount", "adjustment"):
+            r = self.add_charge(self.fid, type=t, unit_amount="20.00")
+            self.assertEqual(r.status_code, 400, f"{t}: {r.data}")
+            self.assertIn("credit_charges_go_through_adjust", str(r.data))
+        neg = self.add_charge(self.fid, type="service", unit_amount="-5.00")
+        self.assertEqual(neg.status_code, 400)
+        self.assertIn("must_not_be_negative", str(neg.data))
+        # ...but the ordinary debit types still post.
+        for t in ("service", "tax", "other"):
+            ok = self.add_charge(self.fid, type=t, unit_amount="15.00")
+            self.assertEqual(ok.status_code, 201, f"{t}: {ok.data}")
+
+    def test_credit_correction_still_flows_through_adjust(self):
+        # A charge-create-only holder cannot credit; finance.adjust can (with a
+        # mandatory reason, linked to the original, one-per-original, audited).
+        self.add_charge(self.fid, unit_amount="100.00", tax_rate="15.00")
+        charge = self.age_charge(
+            FolioCharge.objects.filter(folio_id=self.fid).latest("id")
+        )
+        no_reason = self.client.post(
+            reverse("finance:charge-adjust", args=[charge.id]), {},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(no_reason.status_code, 400)
+        ok = self.adjust_api(charge.id)
+        self.assertEqual(ok.status_code, 201)
+        adj = FolioCharge.objects.get(folio_id=self.fid, adjusts=charge)
+        self.assertEqual(adj.type, "adjustment")
+        self.assertEqual(adj.source, "adjustment")
+        self.assertEqual(adj.total_amount, -charge.total_amount)
+
+    def test_amount_overflow_returns_clean_400_not_500(self):
+        # quantity x unit_amount reaches 11 integer digits (>= MONEY_MAX_ABS);
+        # the guard returns a typed 400 instead of a DB NumericValueOutOfRange.
+        r = self.add_charge(
+            self.fid, type="service", quantity="2", unit_amount="9999999999.00"
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["code"], "invalid_amount")
+
+
+class ChargeDTOEnrichmentTests(APITestCase, ClosureMixin):
+    """P7 — enriched charge DTO fields + an itemized departure statement."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        self.client.force_authenticate(self.manager)
+        self.folio = fin.create_folio(
+            self.hotel, customer_name="Alice", user=self.manager
+        )
+
+    def test_charge_dto_exposes_created_by_source_qty_unit_tax(self):
+        fin.add_charge(
+            self.folio, charge_type="service", description="Laundry", quantity=2,
+            unit_amount="25.00", tax_rate="15.00", user=self.manager,
+        )
+        data = self.client.get(
+            reverse("finance:folio-detail", args=[self.folio.id]), **HDR(self.hotel)
+        ).data
+        line = data["charges"][0]
+        self.assertEqual(line["created_by"], self.manager.email)
+        self.assertEqual(line["created_by_name"], self.manager.full_name)
+        self.assertEqual(line["source"], "manual")
+        self.assertEqual(line["quantity"], "2.00")
+        self.assertEqual(line["unit_amount"], "25.00")
+        self.assertEqual(line["tax_amount"], "7.50")
+        self.assertEqual(line["tax_rate"], "15.00")
+
+    def test_statement_is_itemized_and_flags_service_lines(self):
+        # A restaurant/café order line, a guest-extra-service line, and a plain
+        # manual line all appear as itemized rows.
+        fin.add_charge(
+            self.folio, charge_type="service", description="Dinner", quantity=1,
+            unit_amount="40.00", source=ChargeSource.SERVICE_ORDER,
+            user=self.manager,
+        )
+        fin.add_charge(
+            self.folio, charge_type="service", description="Spa", quantity=1,
+            unit_amount="60.00", source=ChargeSource.GUEST_EXTRA_SERVICE,
+            service_name_snapshot="Spa session", source_reference="ref-1",
+            user=self.manager,
+        )
+        fin.add_charge(
+            self.folio, charge_type="other", description="Misc", quantity=1,
+            unit_amount="5.00", user=self.manager,
+        )
+        r = self.client.get(
+            reverse("finance:folio-statement", args=[self.folio.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 200)
+        items = r.data["line_items"]
+        self.assertEqual(len(items), 3)
+        by_source = {i["source"]: i for i in items}
+        self.assertTrue(by_source["service_order"]["is_service_line"])
+        self.assertTrue(by_source["guest_extra_service"]["is_service_line"])
+        self.assertFalse(by_source["manual"]["is_service_line"])
+        spa = by_source["guest_extra_service"]
+        self.assertEqual(spa["unit_price"], "60.00")
+        self.assertEqual(spa["quantity"], "1.00")
+        self.assertEqual(spa["staff"], self.manager.full_name)
+        self.assertEqual(spa["service_name_snapshot"], "Spa session")
+        self.assertEqual(spa["source_reference"], "ref-1")
+        # The existing folio print still works unchanged.
+        self.assertEqual(r.data["document"], "statement")
+        self.assertEqual(len(r.data["folio"]["charges"]), 3)

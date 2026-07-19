@@ -25,6 +25,7 @@ from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
+from .constants import SERVICE_LINE_SOURCES
 from .models import (
     Expense,
     Folio,
@@ -97,6 +98,44 @@ def _hotel_header(hotel) -> dict:
 
 def _get(model, request, pk):
     return generics.get_object_or_404(model, pk=pk, hotel=request.hotel)
+
+
+def _statement_line_items(folio) -> list:
+    """P7 — itemize a folio's POSTED charges for the departure statement.
+
+    Reads only the already-prefetched ``folio.charges`` (no extra query) and
+    projects each posted line with its origin, quantity, unit price, tax, and
+    the staff member who posted it. ``is_service_line`` uses the central
+    ``SERVICE_LINE_SOURCES`` allowlist so guest extra-service and
+    restaurant/café lines are flagged consistently.
+    """
+    items = []
+    for c in folio.charges.all():
+        if c.status != PostingStatus.POSTED:
+            continue
+        staff = None
+        if c.created_by_id:
+            staff = c.created_by.full_name or c.created_by.email
+        items.append(
+            {
+                "id": c.id,
+                "charge_number": c.charge_number,
+                "type": c.type,
+                "source": c.source,
+                "is_service_line": c.source in SERVICE_LINE_SOURCES,
+                "description": c.description,
+                "quantity": str(c.quantity),
+                "unit_price": str(c.unit_amount),
+                "tax_rate": str(c.tax_rate),
+                "tax_amount": str(c.tax_amount),
+                "total_amount": str(c.total_amount),
+                "charge_date": str(c.charge_date),
+                "staff": staff,
+                "service_name_snapshot": c.service_name_snapshot,
+                "source_reference": c.source_reference,
+            }
+        )
+    return items
 
 
 def _opt_decimal(data, field):
@@ -181,8 +220,11 @@ class FolioDetailView(generics.RetrieveUpdateAPIView):
         return [CanUpdate()] if self.request.method == "PATCH" else [CanView()]
 
     def get_queryset(self):
+        # ``charges__created_by`` is prefetched so the P7 DTO enrichment
+        # (created_by / staff name per charge line) does not add an N+1 on this
+        # single-folio detail response.
         return Folio.objects.filter(hotel=self.request.hotel).prefetch_related(
-            "charges", "payments"
+            "charges__created_by", "payments"
         )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
@@ -494,7 +536,9 @@ class FolioStatementView(APIView):
         folio = generics.get_object_or_404(
             Folio.objects.select_related(
                 "reservation", "guest", "stay", "stay__room"
-            ).prefetch_related("charges__adjusts", "payments__reverses"),
+            ).prefetch_related(
+                "charges__adjusts", "charges__created_by", "payments__reverses"
+            ),
             pk=pk,
             hotel=request.hotel,
         )
@@ -504,6 +548,14 @@ class FolioStatementView(APIView):
                 "document": "statement",
                 "hotel": _hotel_header(request.hotel),
                 "folio": FolioSerializer(folio).data,
+                # P7 — an itemized bill of the POSTED charge lines (source, qty,
+                # unit price, tax, and the staff who posted each). Restaurant /
+                # café (``service_order``) and guest extra-service
+                # (``guest_extra_service``) lines therefore appear here as
+                # first-class rows. This is additive metadata over the existing
+                # ``folio.charges`` — the departure page / checkout cycle and the
+                # final print are unchanged.
+                "line_items": _statement_line_items(folio),
                 "stay": (
                     {
                         "id": stay.id,
@@ -757,19 +809,18 @@ class FinanceOverviewView(APIView):
         today = get_business_date(hotel)
         hotel_currency = _hotel_header(hotel)["currency"]
         open_folios = Folio.objects.filter(hotel=hotel, status=FolioStatus.OPEN)
-        outstanding = ZERO
-        unpaid = 0
-        foreign_count = 0
-        foreign_currencies = set()
-        for folio in open_folios.prefetch_related("charges", "payments"):
-            if folio.currency != hotel_currency:
-                foreign_count += 1
-                foreign_currencies.add(folio.currency)
-                continue
-            bal = services.folio_balance(folio)["balance"]
-            outstanding += bal
-            if bal > ZERO:
-                unpaid += 1
+        # S1 — aggregate the open-folio balances in the DB (constant query count,
+        # no per-folio loop / N+1) REUSING the exact ``folio_balance`` definition
+        # so the overview can never drift from the per-folio number. Currency is
+        # kept separate: only base-currency folios feed ``outstanding``/``unpaid``;
+        # foreign-currency folios are counted + listed, never summed in.
+        agg = services.aggregate_open_folio_balances(
+            open_folios, base_currency=hotel_currency
+        )
+        outstanding = agg["outstanding"]
+        unpaid = agg["unpaid"]
+        foreign_count = agg["foreign_count"]
+        foreign_currencies = agg["foreign_currencies"]
         payments_today = Payment.objects.filter(
             Q(business_date=today) | Q(business_date__isnull=True, paid_at__date=today),
             hotel=hotel,
@@ -787,7 +838,7 @@ class FinanceOverviewView(APIView):
                 "unpaid_folios": unpaid,
                 "foreign_currency_folios": {
                     "count": foreign_count,
-                    "currencies": sorted(foreign_currencies),
+                    "currencies": foreign_currencies,
                 },
                 "payments_today": str(services.money(payments_today)),
                 "expenses_today": str(services.money(expenses_today)),

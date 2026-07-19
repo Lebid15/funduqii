@@ -47,6 +47,7 @@ from apps.common.exceptions import (
     TableOutOfService,
 )
 from apps.finance import services as finance_services
+from apps.finance.constants import ChargeSource
 from apps.finance.models import ChargeType, Folio, FolioStatus
 from apps.finance.services import money
 
@@ -598,7 +599,7 @@ def post_order_to_folio(order: ServiceOrder, *, user=None) -> ServiceOrder:
         unit_amount=totals["subtotal"],
         tax_rate=_effective_rate(totals),
         tax_amount=totals["tax_total"],
-        source="service_order",
+        source=ChargeSource.SERVICE_ORDER,
         user=user,
     )
     now = timezone.now()
@@ -660,7 +661,7 @@ def settle_order_direct(order: ServiceOrder, *, method, user=None) -> ServiceOrd
         unit_amount=totals["subtotal"],
         tax_rate=_effective_rate(totals),
         tax_amount=totals["tax_total"],
-        source="service_order",
+        source=ChargeSource.SERVICE_ORDER,
         user=user,
     )
     payment = finance_services.record_payment(
