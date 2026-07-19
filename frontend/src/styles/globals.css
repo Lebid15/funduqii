@@ -5906,6 +5906,65 @@ a {
   gap: var(--space-3);
   margin-block-end: var(--space-4);
 }
+/* Shared type bar atop the Lost-&-Found tab: the segmented record-kind toggle
+ * (found ↔ lost report — the TYPE FILTER) on one side, the two primary register
+ * buttons on the other. Token-only; wraps gracefully on narrow widths. */
+.op-typebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+}
+.op-typebar__toggle {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+.op-typebar__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* Candidate picker (the Match flow) — a compact, scrollable list of eligible
+ * found items, each a row with its identity plus a Select action. */
+.op-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 22rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.op-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.op-candidate__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+.op-candidate__title {
+  font-weight: var(--font-weight-medium);
+}
+.op-candidate__meta {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
 .op-tabpanel:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);

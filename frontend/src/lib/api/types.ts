@@ -2168,6 +2168,10 @@ export interface LostFoundItemListItem {
    * claimant phone + proof reference are never on the card. */
   claimed_by_name: string;
   returned_at: string | null;
+  /** Record-kind discriminator for the merged found-item + lost-report view.
+   * The backend sends it; kept OPTIONAL so existing found-item consumers that
+   * don't read it stay valid. */
+  record_type?: "found_item";
 }
 
 export interface LostFoundItem extends LostFoundItemListItem {
@@ -2189,6 +2193,67 @@ export interface LostFoundItem extends LostFoundItemListItem {
   status_logs: OperationStatusLogEntry[];
   created_at: string;
   updated_at: string;
+}
+
+/* --- Lost report (the "a guest reports a lost item" cycle) ------------------ */
+
+export type LostReportStatus =
+  | "open"
+  | "searching"
+  | "matched"
+  | "returned"
+  | "closed_unfound"
+  | "cancelled";
+
+/** Compact summary of the found item a report is matched to. Deliberately just
+ * the number + title — the found item's own sensitive phone / proof fields are
+ * never surfaced through a lost-report payload. */
+export interface MatchedFoundItemSummary {
+  item_number: string;
+  title: string;
+}
+
+export interface LostReportListItem {
+  id: number;
+  report_number: string;
+  /** F3a: the card renders a SHORT (clamped) form of this. Not disclosure-gated. */
+  description: string;
+  category: LostFoundCategory;
+  status: LostReportStatus;
+  last_seen_location: string;
+  reporter_name: string;
+  lost_at: string | null;
+  stay: number | null;
+  guest: number | null;
+  guest_name: string;
+  reservation: number | null;
+  reservation_number: string;
+  room_number: string;
+  /** The matched found item's id (null until matched). */
+  matched_found_item: number | null;
+  matched_found_item_summary: MatchedFoundItemSummary | null;
+  created_at: string;
+  updated_at: string;
+  matched_at: string | null;
+  returned_at: string | null;
+  /** Record-kind discriminator for the merged found-item + lost-report view. */
+  record_type: "lost_report";
+}
+
+export interface LostReport extends LostReportListItem {
+  distinctive_marks: string;
+  /** SENSITIVE handover contact captured during the flow; present ONLY for a
+   * caller holding `lost_found.status_update` (fail-closed), never on the
+   * list/card. */
+  reporter_phone?: string;
+  /** WP6 disclosure gate: ABSENT unless the caller can act on the record
+   * (lost_found.update / .status_update). Fail-closed, so optional. */
+  internal_notes?: string;
+  closed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  unfound_reason: string;
+  status_logs: OperationStatusLogEntry[];
 }
 
 export interface OperationsOverview {

@@ -2475,6 +2475,83 @@
         "returned": "Teslim edildi"
       }
     },
+    "lr": {
+      "title": "Kayıp bildirimleri",
+      "register": "Kayıp bildirimi oluştur",
+      "reportNumber": "Bildirim no",
+      "reporterName": "Bildiren",
+      "reporterPhone": "Bildiren telefonu",
+      "description": "Açıklama",
+      "distinctiveMarks": "Ayırt edici işaretler",
+      "lastSeenLocation": "Son görülen yer",
+      "lostAt": "Kayıp zamanı",
+      "categoryLabel": "Kategori",
+      "guest": "Misafir",
+      "noGuest": "Misafir yok",
+      "reservation": "Rezervasyon",
+      "internalNotes": "Dahili notlar",
+      "matchedItem": "Eşleşen eşya",
+      "typeFilter": {
+        "label": "Kayıt türü",
+        "found": "Bulunan eşyalar",
+        "lostReport": "Kayıp bildirimleri"
+      },
+      "badge": {
+        "found": "Bulunan eşya",
+        "lostReport": "Kayıp bildirimi"
+      },
+      "status": {
+        "open": "Açık",
+        "searching": "Aranıyor",
+        "matched": "Eşleşti",
+        "returned": "Teslim edildi",
+        "closed_unfound": "Kapatıldı (bulunamadı)",
+        "cancelled": "İptal edildi"
+      },
+      "match": "Eşleştir",
+      "startSearching": "Aramayı başlat",
+      "handover": "Teslim et",
+      "unmatch": "Eşleşmeyi kaldır",
+      "closeUnfound": "Bulunamadı olarak kapat",
+      "cancel": "Bildirimi iptal et",
+      "createTitle": "Kayıp bildirimi oluştur",
+      "createHint": "Bir misafirin kayıp eşya bildirimini kaydedin. Bildiren adı gereklidir.",
+      "matchTitle": "Bulunan bir eşyayı eşleştir",
+      "matchHint": "Bu bildirime uyan bulunan bir eşya seçin.",
+      "handoverTitle": "Eşleşen eşyayı teslim et",
+      "handoverHint": "Eşyayı kimin aldığını kaydedin.",
+      "unmatchTitle": "Eşleşmeyi kaldır",
+      "closeUnfoundTitle": "Bulunamadı olarak kapat",
+      "cancelTitle": "Bildirimi iptal et",
+      "recipientName": "Teslim alan adı",
+      "recipientPhone": "Teslim alan telefonu",
+      "proofType": "Mülkiyet kanıtı (isteğe bağlı)",
+      "proofReference": "Kanıt referansı (isteğe bağlı)",
+      "sensitiveHint": "Eşleşen eşya hassassa (para, mücevher veya belge) mülkiyet kanıtı gereklidir.",
+      "reason": "Neden",
+      "note": "Not",
+      "created": "Kayıp bildirimi oluşturuldu.",
+      "matchedMsg": "Bildirim, bulunan eşya ile eşleştirildi.",
+      "handedOverMsg": "Eşya teslim edildi.",
+      "unmatchedMsg": "Eşleşme kaldırıldı.",
+      "closedUnfoundMsg": "Bildirim bulunamadı olarak kapatıldı.",
+      "cancelledMsg": "Bildirim iptal edildi.",
+      "startedSearchingMsg": "Arama başlatıldı.",
+      "candidateSearchPlaceholder": "Bulunan eşyaları ara…",
+      "candidateEmpty": "Eşleşen bulunan eşya yok.",
+      "candidateSelect": "Seç",
+      "empty": "Kayıp bildirimi yok",
+      "emptyHint": "Bir misafir kayıp eşya bildirdiğinde bir kayıp bildirimi oluşturun.",
+      "searchPlaceholder": "Numara, bildiren veya eşyaya göre ara…",
+      "reporterNameRequired": "Bildiren adı gereklidir.",
+      "reasonRequired": "Bir neden gereklidir.",
+      "stats": {
+        "open": "Açık",
+        "searching": "Aranıyor",
+        "matched": "Eşleşti",
+        "returned": "Teslim edildi"
+      }
+    },
     "errors": {
       "invalidTransition": "Bu durum değişikliğine izin verilmiyor.",
       "notEditable": "Bu kayıt artık düzenlenemez.",
@@ -2484,7 +2561,11 @@
       "duplicateActive": "Bu odanın zaten aktif bir temizlik görevi var — önce tamamlayın veya iptal edin.",
       "inspectionReasonRequired": "Denetim ret nedeni zorunludur.",
       "roomNotReleasable": "Bu oda doğrudan müsait yapılamaz — önce operasyonel serbest bırakma döngüsünü tamamlamalı (temizlik bitip denetlenerek veya engelleyen bakım kapatılarak).",
-      "claimProofRequired": "Bu hassas eşya yalnızca mülkiyet kanıtıyla teslim edilebilir: teslim alan adı, bir telefon veya bağlı misafir ve referansıyla birlikte bir kanıt türü."
+      "claimProofRequired": "Bu hassas eşya yalnızca mülkiyet kanıtıyla teslim edilebilir: teslim alan adı, bir telefon veya bağlı misafir ve referansıyla birlikte bir kanıt türü.",
+      "foundItemNotMatchable": "Bu bulunan eşya artık bir kayıp bildirimi ile eşleştirilemez.",
+      "foundItemAlreadyMatched": "Bu bulunan eşya zaten başka bir kayıp bildirimiyle eşleştirilmiş.",
+      "foundItemActivelyMatched": "Bu bulunan eşya şu anda bir kayıp bildirimiyle eşleştirilmiş — iade etmeden, teslim almadan veya elden çıkarmadan önce o bildirimin eşleşmesini kaldırın.",
+      "lostReportReasonRequired": "Bu kayıp bildirimi işlemi için bir neden gereklidir."
     }
   },
   "staff": {

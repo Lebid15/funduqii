@@ -72,6 +72,19 @@ vi.mock("@/lib/api/operations", () => ({
   returnLostFoundItem: vi.fn(),
   disposeLostFoundItem: vi.fn(),
   closeLostFoundItem: vi.fn(),
+  // Lost reports — used by the LostReportsSection mounted when the type toggle
+  // switches to the lost-report sub-view.
+  listLostReports: vi.fn(),
+  getLostReport: vi.fn(),
+  createLostReport: vi.fn(),
+  updateLostReport: vi.fn(),
+  setLostReportStatus: vi.fn(),
+  matchLostReport: vi.fn(),
+  unmatchLostReport: vi.fn(),
+  handoverLostReport: vi.fn(),
+  closeUnfoundLostReport: vi.fn(),
+  cancelLostReport: vi.fn(),
+  listLostReportCandidates: vi.fn(),
 }));
 
 vi.mock("@/lib/api/rooms", () => ({ listRoomOptions: vi.fn() }));
@@ -79,7 +92,12 @@ vi.mock("@/lib/api/staff", () => ({ listStaff: vi.fn() }));
 vi.mock("@/lib/api/guests", () => ({ listGuests: vi.fn() }));
 vi.mock("@/lib/api/stays", () => ({ listCurrentResidents: vi.fn() }));
 
-import { listLostFoundItems, returnLostFoundItem } from "@/lib/api/operations";
+import {
+  listLostFoundItems,
+  listLostReportCandidates,
+  listLostReports,
+  returnLostFoundItem,
+} from "@/lib/api/operations";
 import { listRoomOptions } from "@/lib/api/rooms";
 import { listGuests } from "@/lib/api/guests";
 import type { PaginatedResponse } from "@/lib/api/types";
@@ -112,6 +130,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   access.set(["lost_found.status_update", "lost_found.close", "lost_found.create"]);
   vi.mocked(listLostFoundItems).mockResolvedValue(page([]));
+  vi.mocked(listLostReports).mockResolvedValue(page([]));
+  vi.mocked(listLostReportCandidates).mockResolvedValue([]);
   vi.mocked(listRoomOptions).mockResolvedValue(page([]));
   vi.mocked(listGuests).mockResolvedValue(page([]));
 });
@@ -274,7 +294,10 @@ describe("LostFoundTab — stat filter + states", () => {
     renderWithProviders(<LostFoundTab />);
     await screen.findByText("Black leather wallet");
 
-    fireEvent.click(screen.getByRole("button", { name: /Found/ }));
+    // Scope to the stat row: the new record-type toggle also carries a "Found
+    // items" button, so an unscoped /Found/ would be ambiguous.
+    const statGroup = screen.getByRole("group", { name: "Lost & found" });
+    fireEvent.click(within(statGroup).getByRole("button", { name: /Found/ }));
     await waitFor(() =>
       expect(
         vi.mocked(listLostFoundItems).mock.calls.some(
@@ -366,5 +389,47 @@ describe("LostFoundTab — a11y M1 (live region + focus)", () => {
     await screen.findByText("No lost & found items");
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toHaveClass("op-results");
+  });
+});
+
+describe("LostFoundTab — record-type toggle + two register buttons", () => {
+  it("renders BOTH primary register buttons when the user can create", async () => {
+    items([makeLfItem()]);
+    renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+
+    // Owner requirement: two primary register actions live in the shared bar.
+    expect(screen.getByRole("button", { name: "Register found item" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "File a lost report" })).toBeInTheDocument();
+  });
+
+  it("hides the register buttons when the user cannot create", async () => {
+    access.set(["lost_found.status_update"]);
+    items([makeLfItem()]);
+    renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+
+    expect(
+      screen.queryByRole("button", { name: "Register found item" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "File a lost report" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("switches from the found sub-view to the lost-report sub-view", async () => {
+    items([makeLfItem()]);
+    vi.mocked(listLostReports).mockResolvedValue(page([]));
+    renderWithProviders(<LostFoundTab />);
+    await screen.findByText("Black leather wallet");
+
+    // The toggle is a group of two aria-pressed buttons.
+    const typeGroup = screen.getByRole("group", { name: "Record type" });
+    fireEvent.click(within(typeGroup).getByRole("button", { name: "Lost reports" }));
+
+    // The found list is gone; the lost-report section (its empty state) is shown.
+    await screen.findByText("No lost reports");
+    expect(screen.queryByText("Black leather wallet")).not.toBeInTheDocument();
+    await waitFor(() => expect(listLostReports).toHaveBeenCalled());
   });
 });

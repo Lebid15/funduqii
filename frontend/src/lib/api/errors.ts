@@ -253,6 +253,14 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.operations.errors.duplicateActive;
     case "inspection_reason_required":
       return t.operations.errors.inspectionReasonRequired;
+    case "found_item_not_matchable":
+      return t.operations.errors.foundItemNotMatchable;
+    case "found_item_already_matched":
+      return t.operations.errors.foundItemAlreadyMatched;
+    case "found_item_actively_matched":
+      return t.operations.errors.foundItemActivelyMatched;
+    case "lost_report_reason_required":
+      return t.operations.errors.lostReportReasonRequired;
     case "email_already_registered":
       return t.staff.errors.emailExists;
     case "membership_already_exists":

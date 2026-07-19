@@ -13,6 +13,8 @@ import type {
   LostFoundClaimProofType,
   LostFoundItem,
   LostFoundItemListItem,
+  LostReport,
+  LostReportListItem,
   MaintenanceRequest,
   MaintenanceRequestListItem,
   OperationsOverview,
@@ -407,4 +409,142 @@ export function closeLostFoundItem(id: number, note = ""): Promise<LostFoundItem
     method: "POST",
     body: JSON.stringify({ note }),
   });
+}
+
+// --- Lost reports (the "a guest reports a lost item" cycle + safe matching) -------
+
+export interface LostReportListParams {
+  status?: string;
+  category?: string;
+  guest?: number;
+  stay?: number;
+  date?: string;
+  search?: string;
+  ordering?: string;
+  page?: number;
+}
+
+export function listLostReports(
+  params?: LostReportListParams,
+): Promise<PaginatedResponse<LostReportListItem>> {
+  return hotelJson<PaginatedResponse<LostReportListItem>>(
+    `${B}/lost-reports${toQuery(params)}`,
+  );
+}
+
+export function getLostReport(id: number): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}`);
+}
+
+export interface LostReportCreateBody {
+  category?: string;
+  description?: string;
+  distinctive_marks?: string;
+  last_seen_location?: string;
+  lost_at?: string | null;
+  /** REQUIRED — a blank value is rejected by the backend with 422
+   * `claimant_required`. */
+  reporter_name: string;
+  reporter_phone?: string;
+  guest?: number | null;
+  stay?: number | null;
+  reservation?: number | null;
+  internal_notes?: string;
+}
+
+export function createLostReport(body: LostReportCreateBody): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type LostReportUpdateBody = Partial<LostReportCreateBody>;
+
+export function updateLostReport(
+  id: number,
+  body: LostReportUpdateBody,
+): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Advance a report's status. The backend permits ONLY open→searching here. */
+export function setLostReportStatus(
+  id: number,
+  status: string,
+  note = "",
+): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status, note }),
+  });
+}
+
+export function matchLostReport(id: number, foundItem: number): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/match`, {
+    method: "POST",
+    body: JSON.stringify({ found_item: foundItem }),
+  });
+}
+
+export function unmatchLostReport(id: number, reason: string): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/unmatch`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export interface LostReportHandoverBody {
+  recipient_name?: string;
+  recipient_phone?: string;
+  note?: string;
+  /** WP7 ownership proof — enforced by the backend ONLY for sensitive matched
+   * items; omitting it there is rejected with `claim_proof_required` (422). */
+  claim_proof_type?: LostFoundClaimProofType;
+  claim_proof_reference?: string;
+}
+
+export function handoverLostReport(
+  id: number,
+  body: LostReportHandoverBody,
+): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/handover`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function closeUnfoundLostReport(
+  id: number,
+  reason: string,
+): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/close-unfound`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function cancelLostReport(id: number, reason: string): Promise<LostReport> {
+  return hotelJson<LostReport>(`${B}/lost-reports/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export interface LostReportCandidateParams {
+  search?: string;
+  category?: string;
+}
+
+/** Found items eligible to match this report (PLAIN array, capped 100). */
+export function listLostReportCandidates(
+  id: number,
+  params?: LostReportCandidateParams,
+): Promise<LostFoundItemListItem[]> {
+  return hotelJson<LostFoundItemListItem[]>(
+    `${B}/lost-reports/${id}/candidates${toQuery(params)}`,
+  );
 }

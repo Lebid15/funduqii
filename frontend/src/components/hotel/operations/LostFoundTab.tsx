@@ -6,6 +6,7 @@ import {
   BedDouble,
   Check,
   Clock,
+  FileText,
   HandCoins,
   MapPin,
   Package,
@@ -58,6 +59,7 @@ import type {
 import { formatDateTime, lostFoundStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
+import { LostReportsSection } from "./LostReportsSection";
 import { OperationCard, type OperationMenuItem } from "./OperationCard";
 import { RoomOptionSelect } from "./RoomOptionSelect";
 import { StatCards, type OperationStat } from "./StatCards";
@@ -94,7 +96,17 @@ export function LostFoundTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const lf = t.operations.lf;
+  const lr = t.operations.lr;
   const can = useCan();
+
+  // WP10 hard invariant: still EXACTLY three tabs. A second RECORD KIND — the
+  // guest-reported "lost report" cycle — lives INSIDE this tab, chosen by a
+  // segmented type control (the type filter). "found" keeps the original UI
+  // byte-stable; "lost_report" renders the self-contained LostReportsSection.
+  const [recordType, setRecordType] = useState<"found" | "lost_report">("found");
+  // The lost-report CREATE modal open flag lives here because its trigger button
+  // sits in the shared type bar; the section renders the modal from this flag.
+  const [lrCreateOpen, setLrCreateOpen] = useState(false);
 
   const [rows, setRows] = useState<LostFoundItemListItem[]>([]);
   const [count, setCount] = useState(0);
@@ -128,6 +140,26 @@ export function LostFoundTab() {
     mode: HandOverMode;
   } | null>(null);
   const [disposeItem, setDisposeItem] = useState<LostFoundItemListItem | null>(null);
+
+  // Type-bar handlers — declared AFTER every useState they touch (setCreateOpen
+  // included), so no state setter is referenced before its declaration (which
+  // would defeat the React Compiler's memoization analysis).
+  function selectFound() {
+    setRecordType("found");
+    setLrCreateOpen(false);
+  }
+  function selectLostReport() {
+    setRecordType("lost_report");
+  }
+  function registerFound() {
+    setRecordType("found");
+    setLrCreateOpen(false);
+    setCreateOpen(true);
+  }
+  function fileLostReport() {
+    setRecordType("lost_report");
+    setLrCreateOpen(true);
+  }
 
   const load = useCallback(async () => {
     const seq = (seqRef.current += 1);
@@ -335,6 +367,11 @@ export function LostFoundTab() {
               {lf.status[row.status]}
             </Badge>
             <Badge tone="neutral">{lf.categories[row.category]}</Badge>
+            {/* Record-kind badge (additive) — the found-item counterpart of the
+                lost-report badge, so a merged view reads unambiguously. */}
+            <Badge tone="neutral" variant="outline" icon={Package}>
+              {lr.badge.found}
+            </Badge>
             {sensitive ? (
               <Badge tone="warning" variant="outline" icon={ShieldCheck}>
                 {lf.sensitive}
@@ -413,19 +450,68 @@ export function LostFoundTab() {
 
   return (
     <>
+      {/* Shared type bar: the segmented TYPE FILTER (found ↔ lost report) plus
+          BOTH primary register buttons (owner requirement), always visible when
+          the user can create. Register buttons are relocated here from the found
+          SectionHeader so both kinds are reachable from either sub-view. */}
+      <div className="op-typebar">
+        <div className="op-typebar__toggle" role="group" aria-label={lr.typeFilter.label}>
+          <Button
+            type="button"
+            size="sm"
+            variant={recordType === "found" ? "primary" : "secondary"}
+            aria-pressed={recordType === "found"}
+            onClick={selectFound}
+          >
+            {lr.typeFilter.found}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={recordType === "lost_report" ? "primary" : "secondary"}
+            aria-pressed={recordType === "lost_report"}
+            onClick={selectLostReport}
+          >
+            {lr.typeFilter.lostReport}
+          </Button>
+        </div>
+        {can("lost_found.create") ? (
+          <div className="op-typebar__actions">
+            {/* Emphasis follows the active sub-view: the register button for the
+                current recordType is primary, the other secondary. Both always
+                visible (owner requirement). */}
+            <Button
+              icon={Plus}
+              variant={recordType === "found" ? "primary" : "secondary"}
+              onClick={registerFound}
+            >
+              {lf.create}
+            </Button>
+            <Button
+              icon={FileText}
+              variant={recordType === "lost_report" ? "primary" : "secondary"}
+              onClick={fileLostReport}
+            >
+              {lr.register}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {recordType === "lost_report" ? (
+        <LostReportsSection
+          createOpen={lrCreateOpen}
+          onCreateClose={() => setLrCreateOpen(false)}
+        />
+      ) : (
+        <>
+      {/* The original FOUND-item body — kept byte-stable (only additive: the
+          record badge in renderCard). Inlined in the type ternary so it keeps
+          sharing the parent's state/effects with no remount. */}
       <StatCards stats={statCards} loading={loading} ariaLabel={lf.title} />
 
       <Card>
-        <SectionHeader
-          title={lf.title}
-          actions={
-            can("lost_found.create") ? (
-              <Button icon={Plus} onClick={() => setCreateOpen(true)}>
-                {lf.create}
-              </Button>
-            ) : null
-          }
-        />
+        <SectionHeader title={lf.title} />
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -565,6 +651,8 @@ export function LostFoundTab() {
           reloadAfterAction();
         }}
       />
+        </>
+      )}
     </>
   );
 }

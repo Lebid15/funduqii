@@ -2475,6 +2475,83 @@
         "returned": "مُسلَّمة"
       }
     },
+    "lr": {
+      "title": "بلاغات الفقدان",
+      "register": "تسجيل بلاغ فقدان",
+      "reportNumber": "رقم البلاغ",
+      "reporterName": "المُبلِّغ",
+      "reporterPhone": "هاتف المُبلِّغ",
+      "description": "الوصف",
+      "distinctiveMarks": "علامات مميزة",
+      "lastSeenLocation": "آخر مكان شوهد فيه",
+      "lostAt": "وقت الفقدان",
+      "categoryLabel": "التصنيف",
+      "guest": "النزيل",
+      "noGuest": "بدون نزيل",
+      "reservation": "الحجز",
+      "internalNotes": "ملاحظات داخلية",
+      "matchedItem": "الغرض المطابَق",
+      "typeFilter": {
+        "label": "نوع السجل",
+        "found": "الأغراض الموجودة",
+        "lostReport": "بلاغات الفقدان"
+      },
+      "badge": {
+        "found": "غرض موجود",
+        "lostReport": "بلاغ فقدان"
+      },
+      "status": {
+        "open": "مفتوح",
+        "searching": "قيد البحث",
+        "matched": "مطابَق",
+        "returned": "تم التسليم",
+        "closed_unfound": "مغلق (لم يُعثر عليه)",
+        "cancelled": "ملغى"
+      },
+      "match": "مطابقة",
+      "startSearching": "بدء البحث",
+      "handover": "تسليم",
+      "unmatch": "إلغاء المطابقة",
+      "closeUnfound": "إغلاق كغير موجود",
+      "cancel": "إلغاء البلاغ",
+      "createTitle": "تسجيل بلاغ فقدان",
+      "createHint": "سجّل بلاغ فقدان غرض للنزيل. اسم المُبلِّغ مطلوب.",
+      "matchTitle": "مطابقة غرض موجود",
+      "matchHint": "اختر غرضًا موجودًا يطابق هذا البلاغ.",
+      "handoverTitle": "تسليم الغرض المطابَق",
+      "handoverHint": "سجّل من يستلم الغرض.",
+      "unmatchTitle": "إلغاء المطابقة",
+      "closeUnfoundTitle": "إغلاق كغير موجود",
+      "cancelTitle": "إلغاء البلاغ",
+      "recipientName": "اسم المستلم",
+      "recipientPhone": "هاتف المستلم",
+      "proofType": "إثبات الملكية (اختياري)",
+      "proofReference": "مرجع الإثبات (اختياري)",
+      "sensitiveHint": "إذا كان الغرض المطابَق حساسًا (نقود أو مجوهرات أو وثائق) فيلزم إثبات ملكية.",
+      "reason": "السبب",
+      "note": "ملاحظة",
+      "created": "تم تسجيل بلاغ الفقدان.",
+      "matchedMsg": "تمت مطابقة البلاغ بالغرض الموجود.",
+      "handedOverMsg": "تم تسليم الغرض.",
+      "unmatchedMsg": "أُلغيت المطابقة.",
+      "closedUnfoundMsg": "أُغلق البلاغ كغير موجود.",
+      "cancelledMsg": "أُلغي البلاغ.",
+      "startedSearchingMsg": "بدأ البحث.",
+      "candidateSearchPlaceholder": "ابحث في الأغراض الموجودة…",
+      "candidateEmpty": "لا توجد أغراض موجودة مطابقة.",
+      "candidateSelect": "اختيار",
+      "empty": "لا توجد بلاغات فقدان",
+      "emptyHint": "سجّل بلاغ فقدان عندما يبلّغ نزيل عن غرض مفقود.",
+      "searchPlaceholder": "ابحث بالرقم أو المُبلِّغ أو الغرض…",
+      "reporterNameRequired": "اسم المُبلِّغ مطلوب.",
+      "reasonRequired": "السبب مطلوب.",
+      "stats": {
+        "open": "مفتوحة",
+        "searching": "قيد البحث",
+        "matched": "مطابَقة",
+        "returned": "مُسلَّمة"
+      }
+    },
     "errors": {
       "invalidTransition": "تغيير الحالة هذا غير مسموح.",
       "notEditable": "لم يعد يمكن تعديل هذا السجل.",
@@ -2484,7 +2561,11 @@
       "duplicateActive": "للغرفة مهمة تنظيف نشطة بالفعل — أكملها أو ألغِها أولًا.",
       "inspectionReasonRequired": "سبب رفض الفحص إلزامي.",
       "roomNotReleasable": "لا يمكن إتاحة هذه الغرفة مباشرةً — يجب أن تُكمل دورة التحرير التشغيلية أولًا (إنهاء التنظيف وفحصه، أو إغلاق الصيانة الحاجبة).",
-      "claimProofRequired": "لا يُسلَّم هذا الغرض الحساس إلا بإثبات ملكية: اسم المستلم، وهاتف أو نزيل مرتبط، ونوع الإثبات مع مرجعه."
+      "claimProofRequired": "لا يُسلَّم هذا الغرض الحساس إلا بإثبات ملكية: اسم المستلم، وهاتف أو نزيل مرتبط، ونوع الإثبات مع مرجعه.",
+      "foundItemNotMatchable": "لم يعد يمكن مطابقة هذا الغرض الموجود مع بلاغ فقدان.",
+      "foundItemAlreadyMatched": "هذا الغرض الموجود مطابَق بالفعل مع بلاغ فقدان آخر.",
+      "foundItemActivelyMatched": "هذا الغرض الموجود مطابَق حاليًا مع بلاغ فقدان — ألغِ مطابقة البلاغ أولًا قبل تسليمه أو تسلُّمه أو التخلص منه.",
+      "lostReportReasonRequired": "السبب مطلوب لهذا الإجراء على بلاغ الفقدان."
     }
   },
   "staff": {
