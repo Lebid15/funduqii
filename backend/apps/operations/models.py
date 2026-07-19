@@ -73,6 +73,22 @@ class HousekeepingStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class HousekeepingServiceOutcome(models.TextChoices):
+    """The service result recorded when a cleaning task is COMPLETED.
+
+    These four are the ONLY terminal outcomes. ``come_back_later`` is NOT one
+    of them — it is a separate, non-terminal event that leaves the task active
+    (see ``services.come_back_later_housekeeping_task``). The outcome is a pure
+    record of what happened in the room; it NEVER drives room status (occupancy
+    stays derived from the in-house Stay).
+    """
+
+    CLEANED = "cleaned", "Cleaned"
+    GUEST_REFUSED = "guest_refused", "Guest refused"
+    DO_NOT_DISTURB = "do_not_disturb", "Do not disturb"
+    NO_ACCESS = "no_access", "No access"
+
+
 class HousekeepingTask(models.Model):
     """A cleaning / preparation task for one room.
 
@@ -123,6 +139,15 @@ class HousekeepingTask(models.Model):
     requested_at = models.DateTimeField(default=timezone.now)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # The terminal service result, set at completion (blank until then). One of
+    # HousekeepingServiceOutcome; NEVER a room status and NEVER `come_back_later`
+    # (that is a separate non-terminal event, not an outcome value).
+    service_outcome = models.CharField(
+        max_length=20,
+        choices=HousekeepingServiceOutcome.choices,
+        blank=True,
+        default="",
+    )
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.CharField(max_length=255, blank=True, default="")
     notes = models.CharField(max_length=255, blank=True, default="")

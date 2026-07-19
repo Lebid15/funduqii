@@ -38,6 +38,7 @@ from apps.rooms.services import RoomReleaseCycle, change_room_status
 from apps.tenancy.models import HotelMembership
 
 from .models import (
+    HousekeepingServiceOutcome,
     HousekeepingStatus,
     HousekeepingTask,
     HousekeepingTaskStatusLog,
@@ -232,6 +233,24 @@ def _room_has_active_housekeeping(room: Room) -> bool:
     ).exists()
 
 
+def _room_is_occupied(room: Room | None) -> bool:
+    """Occupancy is DERIVED from ``Stay`` — the single source of truth. A room
+    with an IN-HOUSE stay is occupied; there is no ``occupied`` room status and
+    this app never introduces one.
+
+    Callers that branch cleaning behaviour on this MUST have the room row-locked
+    inside the surrounding atomic block so the read is consistent with the
+    completion (a concurrent check-in/check-out on the same room serialises
+    behind that lock). ``Stay.room`` is a per-hotel FK, so filtering by room
+    alone already scopes to the room's hotel.
+    """
+    if room is None:
+        return False
+    from apps.stays.models import Stay, StayStatus
+
+    return Stay.objects.filter(room=room, status=StayStatus.IN_HOUSE).exists()
+
+
 def _ensure_room_releasable(room: Room, *, exclude_request_id=None) -> None:
     """Guard for any attempt to mark a room `available` from operations.
 
@@ -303,10 +322,18 @@ def _hk_start(task: HousekeepingTask, user) -> None:
     task.started_at = task.started_at or timezone.now()
     # Row-lock the room for this read-then-write status transition (runs inside
     # the caller's atomic block) so start-cleaning cannot race a concurrent
-    # maintenance block (AVAILABLE -> MAINTENANCE) on the same room. Status
-    # logic is unchanged.
+    # maintenance block (AVAILABLE -> MAINTENANCE) on the same room.
     room = _lock_room(task.room_id)
-    if room is not None and room.status in CLEANABLE_ROOM_STATUSES:
+    # Occupancy gate (read under the lock): an OCCUPIED room's status is NEVER
+    # changed by the cleaning lifecycle. The cleaning is tracked by the TASK,
+    # not the room status — check-in's in-house-Stay guard already prevents
+    # double-booking, so leaving the room `available` is safe. Only a VACANT
+    # cleanable room flips to `cleaning`.
+    if (
+        room is not None
+        and room.status in CLEANABLE_ROOM_STATUSES
+        and not _room_is_occupied(room)
+    ):
         change_room_status(
             room,
             RoomStatus.CLEANING,
@@ -523,17 +550,28 @@ def _inspection_required(hotel) -> bool:
 
 @transaction.atomic
 def complete_housekeeping_task(
-    task: HousekeepingTask, *, user=None, mark_room_available=False, note=""
+    task: HousekeepingTask,
+    *,
+    user=None,
+    mark_room_available=False,
+    note="",
+    service_outcome=HousekeepingServiceOutcome.CLEANED,
 ) -> HousekeepingTask:
     if task.status not in ACTIVE_HK_STATUSES:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
         )
+    # The service result is recorded on completion. `come_back_later` is NOT a
+    # valid outcome (it is a separate non-terminal event); the endpoint's
+    # serializer rejects it, and a blank/absent value here means the routine
+    # "cleaned" result.
+    outcome = service_outcome or HousekeepingServiceOutcome.CLEANED
     # Inspection policy (final closure): with the hotel setting ON, the
     # attendant's completion parks the task for a supervisor — the room is
     # NOT released and mark_room_available is ignored. Approving is the only
     # path to completed. (A task already awaiting inspection can only move
-    # through approve/reject, never through this endpoint again.)
+    # through approve/reject, never through this endpoint again.) The declared
+    # outcome is stored now so it survives the park → approve round-trip.
     if task.status == HousekeepingStatus.AWAITING_INSPECTION:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "reason": "use_inspection_endpoint"}
@@ -542,6 +580,7 @@ def complete_housekeeping_task(
         previous = task.status
         task.status = HousekeepingStatus.AWAITING_INSPECTION
         task.started_at = task.started_at or timezone.now()
+        task.service_outcome = outcome
         task.updated_by = _actor(user)
         task.save()
         _hk_log(task, previous, task.status, user, note)
@@ -558,12 +597,19 @@ def complete_housekeeping_task(
     task.status = HousekeepingStatus.COMPLETED
     task.started_at = task.started_at or timezone.now()
     task.completed_at = timezone.now()
+    task.service_outcome = outcome
     task.updated_by = _actor(user)
     task.save()
     # Row-lock the room for the read-then-write status transition. The task is
     # already COMPLETED above, so it never counts against its own release.
     room = _lock_room(task.room_id)
-    if room is not None:
+    # Occupancy is DERIVED from the in-house Stay and read HERE, under the same
+    # atomic block that holds the room row-lock. The room-status behaviour
+    # branches on occupancy — NOT on task_type: an occupied room's status is
+    # left UNCHANGED (no release, no dirty, NO RoomStatusLog from completion),
+    # because occupancy already keeps it out of inventory. Only a VACANT room
+    # follows the existing check-out cleaning behaviour.
+    if room is not None and not _room_is_occupied(room):
         if mark_room_available:
             # ONE release helper: never override a hard block or an open
             # blocking request, and never release a dirty room or one that
@@ -592,10 +638,52 @@ def complete_housekeeping_task(
         category="operation",
         severity="success",
         title=f"Housekeeping task {task.task_number} completed",
-        message=f"Room {room.number}" if room is not None else "",
+        message=(
+            (f"Room {room.number} · " if room is not None else "") + f"outcome: {outcome}"
+        ),
         actor=user,
         related_object=task,
         related_url="/hotel/operations",
+    )
+    return task
+
+
+@transaction.atomic
+def come_back_later_housekeeping_task(
+    task: HousekeepingTask, *, user=None, note=""
+) -> HousekeepingTask:
+    """Record a NON-TERMINAL ``come_back_later`` event on an active task.
+
+    Used when the attendant cannot service the room right now (guest asleep,
+    door chained, "please come back later") but the task is NOT finished. The
+    task STAYS ACTIVE — its status is left exactly as it was so it can be
+    revisited and completed later — and the event is written to BOTH the
+    per-task status log and the activity log so there is an audit trail. This
+    is deliberately NOT a completion and NOT a ``service_outcome`` value; there
+    is no scheduling system, just the event plus the task staying open.
+    """
+    if task.status not in (
+        HousekeepingStatus.PENDING,
+        HousekeepingStatus.ASSIGNED,
+        HousekeepingStatus.IN_PROGRESS,
+    ):
+        # Only workable states can be deferred. awaiting_inspection is the
+        # supervisor's queue, and completed/cancelled are terminal.
+        raise InvalidOperationStatusTransition(
+            {"from": task.status, "reason": "not_deferrable"}
+        )
+    # Status is intentionally UNCHANGED; we only stamp who touched it and log
+    # the event (previous == new marks a revisit rather than a transition).
+    task.updated_by = _actor(user)
+    task.save(update_fields=["updated_by", "updated_at"])
+    _hk_log(task, task.status, task.status, user, note or "come_back_later")
+    _hk_record(
+        task,
+        event_type="housekeeping.come_back_later",
+        severity="info",
+        title=f"Housekeeping task {task.task_number} — come back later",
+        message=(note or "")[:255] or (f"Room {task.room.number}" if task.room_id else ""),
+        user=user,
     )
     return task
 
@@ -614,7 +702,13 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
     task.save()
     # Row-lock the room for the read-then-write status transition.
     room = _lock_room(task.room_id)
-    if room is not None and room.status == RoomStatus.CLEANING:
+    # Occupancy gate (read under the lock): never touch an OCCUPIED room's
+    # status. Only a VACANT room left in `cleaning` by this task drops to dirty.
+    if (
+        room is not None
+        and room.status == RoomStatus.CLEANING
+        and not _room_is_occupied(room)
+    ):
         # The task that (likely) put the room into `cleaning` is gone; the
         # room goes back to dirty rather than staying in a stale state.
         change_room_status(
@@ -637,8 +731,11 @@ def cancel_housekeeping_task(task: HousekeepingTask, *, reason, user=None) -> Ho
 
 @transaction.atomic
 def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> HousekeepingTask:
-    """Supervisor approval: the task completes and the room is released —
-    unless maintenance still blocks it (maintenance stays the master)."""
+    """Supervisor approval: the task completes. A VACANT room is released —
+    unless maintenance still blocks it (maintenance stays the master). An
+    OCCUPIED room's status is left UNCHANGED (no release, no RoomStatusLog):
+    this is the primary in-stay completion path on inspection-enabled hotels,
+    and finishing an in-stay cleaning must never corrupt an occupied room."""
     if task.status != HousekeepingStatus.AWAITING_INSPECTION:
         raise InvalidOperationStatusTransition(
             {"from": task.status, "to": HousekeepingStatus.COMPLETED}
@@ -654,7 +751,8 @@ def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> Houseke
     task.completed_at = timezone.now()
     task.updated_by = _actor(user)
     task.save()
-    if room is not None:
+    # Occupancy gate (read under the lock): only a VACANT room is released.
+    if room is not None and not _room_is_occupied(room):
         _release_room(
             room,
             user=user,
@@ -675,9 +773,10 @@ def approve_inspection(task: HousekeepingTask, *, user=None, note="") -> Houseke
 
 @transaction.atomic
 def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> HousekeepingTask:
-    """Supervisor rejection: the room goes back to dirty and the task returns
-    to in_progress so the attendant can finish it again. The rejection reason
-    is mandatory and preserved in the status log."""
+    """Supervisor rejection: the task returns to in_progress so the attendant
+    can finish it again. A VACANT room goes back to dirty; an OCCUPIED room's
+    status is left UNCHANGED (the cleaning lifecycle never mutates an occupied
+    room). The rejection reason is mandatory and preserved in the status log."""
     if not (reason or "").strip():
         raise InspectionReasonRequired()
     if task.status != HousekeepingStatus.AWAITING_INSPECTION:
@@ -690,9 +789,11 @@ def reject_inspection(task: HousekeepingTask, *, reason, user=None) -> Housekeep
     task.save()
     # Row-lock the room for the read-then-write status transition.
     room = _lock_room(task.room_id)
-    if room is not None and room.status in (
-        RoomStatus.CLEANING,
-        RoomStatus.AVAILABLE,
+    # Occupancy gate (read under the lock): only a VACANT room drops to dirty.
+    if (
+        room is not None
+        and room.status in (RoomStatus.CLEANING, RoomStatus.AVAILABLE)
+        and not _room_is_occupied(room)
     ):
         change_room_status(
             room,

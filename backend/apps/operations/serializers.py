@@ -8,6 +8,7 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from .models import (
+    HousekeepingServiceOutcome,
     HousekeepingStatus,
     HousekeepingTask,
     HousekeepingTaskStatusLog,
@@ -110,6 +111,19 @@ class HousekeepingStatusSerializer(serializers.Serializer):
 class HousekeepingCompleteSerializer(serializers.Serializer):
     mark_room_available = serializers.BooleanField(required=False, default=False)
     note = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    # The terminal service result. Validated against the FOUR outcomes only —
+    # `come_back_later` is deliberately NOT a choice here (it is a separate
+    # non-terminal action), so sending it as an outcome is rejected 400.
+    service_outcome = serializers.ChoiceField(
+        choices=HousekeepingServiceOutcome.choices,
+        required=False,
+        default=HousekeepingServiceOutcome.CLEANED,
+    )
+
+
+class HousekeepingComeBackLaterSerializer(serializers.Serializer):
+    # Non-terminal defer event; only an optional note. No outcome, no status.
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
 
 
 class HousekeepingTaskListSerializer(serializers.ModelSerializer):
@@ -123,7 +137,7 @@ class HousekeepingTaskListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "task_number", "room", "room_number", "stay", "task_type",
             "status", "priority", "assigned_to", "assigned_to_name",
-            "requested_at", "started_at", "completed_at",
+            "requested_at", "started_at", "completed_at", "service_outcome",
         ]
         read_only_fields = fields
 
@@ -141,9 +155,9 @@ class HousekeepingTaskSerializer(serializers.ModelSerializer):
         fields = [
             "id", "task_number", "room", "room_number", "room_status", "stay",
             "task_type", "status", "priority", "assigned_to", "assigned_to_name",
-            "requested_at", "started_at", "completed_at", "cancelled_at",
-            "cancellation_reason", "notes", "internal_notes", "status_logs",
-            "created_at", "updated_at",
+            "requested_at", "started_at", "completed_at", "service_outcome",
+            "cancelled_at", "cancellation_reason", "notes", "internal_notes",
+            "status_logs", "created_at", "updated_at",
         ]
         read_only_fields = fields
 

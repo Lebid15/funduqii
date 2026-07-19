@@ -40,6 +40,7 @@ from .models import (
 from .serializers import (
     AssignSerializer,
     CancelSerializer,
+    HousekeepingComeBackLaterSerializer,
     HousekeepingCompleteSerializer,
     HousekeepingCreateSerializer,
     HousekeepingStatusSerializer,
@@ -244,6 +245,24 @@ class HousekeepingCompleteView(APIView):
             task,
             user=request.user,
             mark_room_available=serializer.validated_data["mark_room_available"],
+            note=serializer.validated_data.get("note", ""),
+            service_outcome=serializer.validated_data["service_outcome"],
+        )
+        return Response(HousekeepingTaskSerializer(task).data)
+
+
+class HousekeepingComeBackLaterView(APIView):
+    # Non-terminal defer event — same permission as other status updates.
+    permission_classes = [HkStatus]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        task = _get(HousekeepingTask, request, pk)
+        serializer = HousekeepingComeBackLaterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        task = services.come_back_later_housekeeping_task(
+            task,
+            user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
         return Response(HousekeepingTaskSerializer(task).data)

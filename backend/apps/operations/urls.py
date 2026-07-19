@@ -5,6 +5,7 @@ from .views import (
     ArrivalRoomsNotReadyView,
     HousekeepingAssignView,
     HousekeepingCancelView,
+    HousekeepingComeBackLaterView,
     HousekeepingCompleteView,
     HousekeepingDetailView,
     HousekeepingInspectApproveView,
@@ -62,6 +63,11 @@ urlpatterns = [
         "operations/housekeeping/<int:pk>/complete/",
         HousekeepingCompleteView.as_view(),
         name="housekeeping-complete",
+    ),
+    path(
+        "operations/housekeeping/<int:pk>/come-back-later/",
+        HousekeepingComeBackLaterView.as_view(),
+        name="housekeeping-come-back-later",
     ),
     path(
         "operations/housekeeping/<int:pk>/inspect/approve/",
