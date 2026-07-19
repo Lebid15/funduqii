@@ -2064,3 +2064,210 @@ class SensitiveClaimProofTests(APITestCase, OperationsMixin):
         for ev in ActivityEvent.objects.filter(hotel=self.hotel):
             self.assertNotIn(secret, ev.title)
             self.assertNotIn(secret, ev.message)
+
+
+# --------------------------------------------------------------------------- #
+# F3a — operations CARD list fields. The LIST serializers now expose the        #
+# owner-required card fields (Maintenance: short description + start/resolve    #
+# time; Lost & Found: description + the FINDER + the CLAIMANT name) so the       #
+# cards stop being blind. No N+1 (constant query count across N rows) and NO     #
+# leak of the disclosure-gated fields (internal_notes / phone / proof ref).      #
+# --------------------------------------------------------------------------- #
+
+
+class MaintenanceCardListFieldsTests(APITestCase, OperationsMixin):
+    """The maintenance LIST feeds the card, so it must carry the short
+    ``description`` and the ``started_at`` start timestamp (the resolve half,
+    ``resolved_at``, is already present) — with NO per-row query and WITHOUT the
+    disclosure-gated ``internal_notes``."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel, status=RoomStatus.AVAILABLE)
+        self.client.force_authenticate(self.manager)
+
+    def _list(self, hotel=None):
+        return self.client.get(
+            reverse("operations:maintenance-list"), **HDR(hotel or self.hotel)
+        )
+
+    def test_list_exposes_description_and_started_at(self):
+        req = self.create_mt(
+            title="Broken AC",
+            description="Compressor is dead",
+            internal_notes="secret",
+        ).data
+        # Move it through in_progress so started_at is populated.
+        self.act("maintenance", req["id"], "status", {"status": "in_progress"})
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["description"], "Compressor is dead")
+        self.assertIsNotNone(row["started_at"])
+        # Additive: the pre-existing card fields survive.
+        self.assertEqual(row["title"], "Broken AC")
+        self.assertIn("resolved_at", row)  # the resolve half of the pair
+        self.assertIn("reported_at", row)
+
+    def test_list_excludes_internal_notes(self):
+        # Regression guard: the added fields must NOT drag internal_notes onto
+        # the list (WP6 keeps it detail-only, gated).
+        self.create_mt(title="X", internal_notes="mt secret")
+        rows = self._list().data["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotIn("internal_notes", row)
+
+    def test_list_is_hotel_scoped(self):
+        self.create_mt(title="Mine", description="local")
+        other = make_hotel(slug="omtcard")
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        make_room(other, number="900")
+        self.client.force_authenticate(om)
+        self.create_mt(hotel=other, title="Theirs", description="foreign")
+        # Back to our manager: only our row, no cross-hotel leak of description.
+        self.client.force_authenticate(self.manager)
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["description"], "local")
+
+    def test_query_count_constant_with_added_fields(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def seed(start, end):
+            for i in range(start, end):
+                room = make_room(self.hotel, number=f"7{i:02d}")
+                MaintenanceRequest.objects.create(
+                    hotel=self.hotel,
+                    request_number=f"MT7{i:02d}",
+                    room=room,
+                    title=f"Fix {i}",
+                    description=f"desc {i}",
+                    started_at=timezone.now(),
+                    assigned_to=self.manager,
+                )
+
+        # ONE row on the page; warm up so one-time setup queries do not skew it.
+        seed(0, 1)
+        self._list()
+        with CaptureQueriesContext(connection) as ctx:
+            resp1 = self._list()
+        self.assertEqual(len(resp1.data["results"]), 1)
+        baseline = len(ctx.captured_queries)
+
+        # Grow to FOUR rows (each with description + started_at + assignee): the
+        # query count must NOT grow with the number of rows.
+        seed(1, 4)
+        with self.assertNumQueries(baseline):
+            resp4 = self._list()
+        self.assertEqual(len(resp4.data["results"]), 4)
+
+
+class LostFoundCardListFieldsTests(APITestCase, OperationsMixin):
+    """The Lost-&-Found LIST feeds the card, so it must carry the item
+    ``description``, the finder (``found_by_name``) and the claimant NAME
+    (``claimed_by_name``) — with NO per-row query and WITHOUT the disclosure-
+    gated phone / internal_notes / claim_proof_reference."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER)
+        self.room = make_room(self.hotel)
+        self.client.force_authenticate(self.manager)
+
+    def _list(self, hotel=None):
+        return self.client.get(
+            reverse("operations:lost-found-list"), **HDR(hotel or self.hotel)
+        )
+
+    def test_list_exposes_description_finder_and_claimant(self):
+        item = self.create_lf(
+            title="Black wallet", description="Leather, two cards"
+        ).data
+        # Claim it so a claimant name (and phone) are captured.
+        self.act(
+            "lost-found", item["id"], "claim",
+            {"claimed_by_name": "John Smith", "claimed_by_phone": "+90 555"},
+        )
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["description"], "Leather, two cards")
+        # The finder is the creating member (found_by = actor at create).
+        self.assertEqual(row["found_by_name"], self.manager.full_name)
+        self.assertEqual(row["claimed_by_name"], "John Smith")
+        # Additive: pre-existing card fields survive.
+        self.assertIn("stored_location", row)
+        self.assertIn("guest_name", row)
+
+    def test_list_excludes_phone_notes_and_proof_reference(self):
+        # Regression guard: the added names/description must NOT drag the gated
+        # phone / internal_notes / proof reference onto the list.
+        item = self.create_lf(
+            title="Passport", category="documents", internal_notes="lf secret"
+        ).data
+        self.act(
+            "lost-found", item["id"], "claim",
+            {
+                "claimed_by_name": "Jane",
+                "claimed_by_phone": "+1 222",
+                "claim_proof_type": "identity_last4",
+                "claim_proof_reference": "1234",
+            },
+        )
+        rows = self._list().data["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotIn("claimed_by_phone", row)
+            self.assertNotIn("internal_notes", row)
+            self.assertNotIn("claim_proof_reference", row)
+            # The non-sensitive claimant NAME IS present (not over-restricted).
+            self.assertIn("claimed_by_name", row)
+
+    def test_list_is_hotel_scoped(self):
+        self.create_lf(title="Mine", description="local")
+        other = make_hotel(slug="olfcard")
+        om = add_member(other, "om@x.com", kind=MembershipType.MANAGER)
+        self.client.force_authenticate(om)
+        self.create_lf(hotel=other, title="Theirs", description="foreign")
+        self.client.force_authenticate(self.manager)
+        rows = self._list().data["results"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["description"], "local")
+
+    def test_query_count_constant_with_added_fields(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def seed(start, end):
+            for i in range(start, end):
+                # A DISTINCT finder per item: a missing found_by join would show
+                # up as N+1 (one extra query per row) here.
+                finder = add_member(
+                    self.hotel, f"finder{i}@x.com", perms=["lost_found.view"]
+                )
+                LostFoundItem.objects.create(
+                    hotel=self.hotel,
+                    item_number=f"LF8{i:02d}",
+                    title=f"Item {i}",
+                    description=f"desc {i}",
+                    found_by=finder,
+                    claimed_by_name=f"Owner {i}",
+                )
+
+        # ONE row; warm up so one-time setup queries do not skew the baseline.
+        seed(0, 1)
+        self._list()
+        with CaptureQueriesContext(connection) as ctx:
+            resp1 = self._list()
+        self.assertEqual(len(resp1.data["results"]), 1)
+        baseline = len(ctx.captured_queries)
+
+        # Grow to FOUR rows, each with a distinct finder: the query count must
+        # stay constant (select_related("found_by") proves no N+1).
+        seed(1, 4)
+        with self.assertNumQueries(baseline):
+            resp4 = self._list()
+        self.assertEqual(len(resp4.data["results"]), 4)

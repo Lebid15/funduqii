@@ -490,6 +490,9 @@ class MaintenanceListCreateView(generics.ListCreateAPIView):
         return MaintenanceRequestListSerializer
 
     def get_queryset(self):
+        # The list serializer's added ``description`` / ``started_at`` are DIRECT
+        # columns on MaintenanceRequest, so the existing room/assignee joins are
+        # sufficient — no extra select_related, no per-row query.
         qs = MaintenanceRequest.objects.filter(hotel=self.request.hotel).select_related(
             "room", "assigned_to"
         )
@@ -666,8 +669,11 @@ class LostFoundListCreateView(generics.ListCreateAPIView):
         return LostFoundItemListSerializer
 
     def get_queryset(self):
+        # ``found_by`` is select_related so the list serializer's ``found_by_name``
+        # (found_by.full_name) adds NO per-row query. ``description`` /
+        # ``claimed_by_name`` are direct columns and need no join.
         qs = LostFoundItem.objects.filter(hotel=self.request.hotel).select_related(
-            "room", "guest"
+            "room", "guest", "found_by"
         )
         p = self.request.query_params
         if p.get("status") in {c for c, _ in LostFoundStatus.choices}:

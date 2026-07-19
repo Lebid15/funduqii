@@ -344,11 +344,19 @@ class MaintenanceRequestListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MaintenanceRequest
+        # ``description`` (the model's TextField — the card renders a short form
+        # client-side) and ``started_at`` (the maintenance start timestamp) let
+        # the maintenance CARD show its short description + start/resolve time
+        # (owner card spec §11/§14). Both are DIRECT columns on the model, so
+        # they add NO per-row query. Neither is disclosure-gated (WP6 gated only
+        # ``internal_notes`` — deliberately still absent here); ``resolved_at``
+        # is the resolve half of the start/resolve pair already present.
         fields = [
             "id", "request_number", "room", "room_number", "stay", "title",
-            "category", "priority", "status", "affects_room_availability",
-            "room_block_status", "assigned_to", "assigned_to_name",
-            "reported_at", "resolved_at", "closed_at",
+            "description", "category", "priority", "status",
+            "affects_room_availability", "room_block_status", "assigned_to",
+            "assigned_to_name", "reported_at", "started_at", "resolved_at",
+            "closed_at",
         ]
         read_only_fields = fields
 
@@ -472,13 +480,25 @@ class LostFoundCloseSerializer(serializers.Serializer):
 class LostFoundItemListSerializer(serializers.ModelSerializer):
     room_number = serializers.CharField(source="room.number", read_only=True, default="")
     guest_name = serializers.CharField(source="guest.full_name", read_only=True, default="")
+    found_by_name = serializers.CharField(
+        source="found_by.full_name", read_only=True, default=""
+    )
 
     class Meta:
         model = LostFoundItem
+        # The Lost-&-Found CARD needs the item ``description``, the FINDER
+        # (``found_by_name`` from ``found_by.full_name``, like the detail
+        # serializer) and the CLAIMANT NAME (``claimed_by_name``) per the owner
+        # card spec §11/§14. NONE of these are disclosure-gated: WP6 kept names
+        # and gates ONLY the phone (``claimed_by_phone``) + the WP7 proof VALUE
+        # (``claim_proof_reference``) — both deliberately still ABSENT from this
+        # list. ``description``/``claimed_by_name`` are direct columns;
+        # ``found_by`` is select_related in the list view, so NO per-row query.
         fields = [
-            "id", "item_number", "title", "category", "status", "found_at",
-            "found_location", "room", "room_number", "stay", "guest",
-            "guest_name", "stored_location", "returned_at",
+            "id", "item_number", "title", "description", "category", "status",
+            "found_at", "found_location", "room", "room_number", "stay",
+            "guest", "guest_name", "found_by_name", "stored_location",
+            "claimed_by_name", "returned_at",
         ]
         read_only_fields = fields
 
