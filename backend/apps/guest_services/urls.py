@@ -13,6 +13,7 @@ from .views import (
     CatalogDetailView,
     CatalogListCreateView,
     GuestFolioDirectoryView,
+    StayServiceLinesView,
 )
 
 app_name = "guest_services"
@@ -44,6 +45,12 @@ urlpatterns = [
         "guest-services/stays/<int:stay_id>/add/",
         AddGuestServiceView.as_view(),
         name="stay-add-service",
+    ),
+    # Money-safe operational view of the stay's folio SERVICE line items.
+    path(
+        "guest-services/stays/<int:stay_id>/service-lines/",
+        StayServiceLinesView.as_view(),
+        name="stay-service-lines",
     ),
     # Compact in-house folio directory.
     path(

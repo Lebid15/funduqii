@@ -23,6 +23,7 @@ from rest_framework.views import APIView
 
 from apps.common.exceptions import PermissionDenied
 from apps.common.pagination import DefaultPagination
+from apps.finance.models import PostingStatus
 from apps.rbac.permissions import HasHotelMembership, HasHotelPermission
 from apps.rbac.services import has_hotel_permission
 from apps.stays.models import Stay
@@ -203,6 +204,76 @@ class GuestFolioDirectoryView(APIView):
             _directory_row(stay, can_see_finance=can_see_finance) for stay in page
         ]
         return paginator.get_paginated_response(rows)
+
+
+# --- Per-stay service line items (operational, money-SAFE) -------------------
+
+
+def _user_name(user):
+    return getattr(user, "full_name", None) if user is not None else None
+
+
+def _service_line_row(charge, *, folio_currency) -> dict:
+    """One folio SERVICE line item for the operational surface. Carries the line's
+    OWN amounts (the point is to SHOW the service items) but NEVER the folio
+    balance / payments / deposits / insurance. ``id`` is the ``FolioCharge`` id so
+    the frontend can reuse the EXISTING finance void-charge endpoint on it."""
+    voided = charge.status == PostingStatus.VOIDED
+    return {
+        "id": charge.id,
+        "source": charge.source,
+        "description": charge.description,
+        "service_name_snapshot": charge.service_name_snapshot or charge.description,
+        "quantity": str(charge.quantity),
+        "unit_amount": str(charge.unit_amount),
+        "tax_rate": str(charge.tax_rate),
+        "tax_amount": str(charge.tax_amount),
+        "total_amount": str(charge.total_amount),
+        "currency": folio_currency,
+        "created_by": _user_name(charge.created_by),
+        "created_at": charge.created_at.isoformat(),
+        "status": charge.status,
+        # Populated only for a voided line (stable shape: null otherwise).
+        "void_reason": (charge.void_reason or None) if voided else None,
+        "voided_by": _user_name(charge.voided_by) if voided else None,
+    }
+
+
+class StayServiceLinesView(APIView):
+    """GET guest-services/stays/{stay_id}/service-lines/ — the stay's OPEN folio
+    SERVICE line items (guest extra services + posted service orders), INCLUDING
+    voided ones (void history is operational). Money-SAFE: it returns ONLY the
+    service lines — never the balance, payments, deposits, insurance, room nights,
+    adjustments/discounts, or any non-service source — so a ``service_orders.create``
+    holder WITHOUT ``finance.view`` can still view the items. Empty folio -> []."""
+
+    def get_permissions(self):
+        # Same any-of set as the directory (operational users included).
+        return [CanViewGuestFolioDirectory()]
+
+    def get(self, request: Request, stay_id: int) -> Response:
+        from apps.finance.constants import SERVICE_LINE_SOURCES
+        from apps.finance.models import Folio, FolioCharge, FolioStatus
+
+        stay = generics.get_object_or_404(Stay, pk=stay_id, hotel=request.hotel)
+        folio = (
+            Folio.objects.filter(
+                hotel=request.hotel, stay=stay, status=FolioStatus.OPEN
+            )
+            .order_by("id")
+            .first()
+        )
+        if folio is None:
+            return Response([])
+        source_values = sorted(str(s) for s in SERVICE_LINE_SOURCES)
+        charges = (
+            FolioCharge.objects.filter(folio=folio, source__in=source_values)
+            .select_related("created_by", "voided_by")
+            .order_by("created_at", "id")
+        )
+        return Response(
+            [_service_line_row(c, folio_currency=folio.currency) for c in charges]
+        )
 
 
 # --- Catalog management (P9 "Services & Prices") ----------------------------

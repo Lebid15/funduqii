@@ -814,3 +814,148 @@ class CatalogAPITests(APITestCase):
         self.assertEqual(r_list.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertEqual(r_detail.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertTrue(GuestExtraService.objects.filter(pk=svc.pk).exists())
+
+
+# --- Per-stay service line items (operational, money-safe) ------------------
+
+
+class StayServiceLinesTests(APITestCase):
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.stay = make_stay(self.hotel)
+        self.folio = Folio.objects.get(
+            hotel=self.hotel, stay=self.stay, status=FolioStatus.OPEN
+        )
+
+    def _url(self, stay=None):
+        return reverse(
+            "guest_services:stay-service-lines", args=[(stay or self.stay).id]
+        )
+
+    def _seed_lines(self):
+        # Two counted service lines (guest_extra_service + service_order)...
+        gx = add_charge(
+            self.folio, charge_type=ChargeType.SERVICE, description="Laundry",
+            quantity=1, unit_amount="20.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+            service_name_snapshot="Laundry",
+        )
+        so = add_charge(
+            self.folio, charge_type=ChargeType.SERVICE, description="Order ORD1",
+            quantity=1, unit_amount="30.00", tax_rate="0.00",
+            source=ChargeSource.SERVICE_ORDER,
+        )
+        # ...a voided guest_extra_service line (void history is operational)...
+        voided = add_charge(
+            self.folio, charge_type=ChargeType.SERVICE, description="Cancelled spa",
+            quantity=1, unit_amount="99.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        void_charge(voided, reason="guest complaint")
+        # ...and EXCLUDED lines: a room night, an adjustment, a manual charge.
+        add_charge(
+            self.folio, charge_type=ChargeType.ROOM, description="night",
+            quantity=1, unit_amount="100.00", source=ChargeSource.STAY_ROOM,
+            room_night=timezone.localdate(),
+        )
+        add_charge(
+            self.folio, charge_type=ChargeType.ADJUSTMENT, description="adj",
+            quantity=1, unit_amount="-5.00", tax_rate="0.00",
+            source=ChargeSource.ADJUSTMENT,
+        )
+        add_charge(
+            self.folio, charge_type=ChargeType.SERVICE, description="manual",
+            quantity=1, unit_amount="15.00", tax_rate="0.00",
+            source=ChargeSource.MANUAL,
+        )
+        return gx, so, voided
+
+    def test_returns_only_allowlisted_sources_including_voided(self):
+        gx, so, voided = self._seed_lines()
+        user = add_member(self.hotel, "so@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        by_id = {row["id"]: row for row in r.data}
+        # Only the 3 service-source lines (incl. the voided one) are present.
+        self.assertEqual(set(by_id), {gx.id, so.id, voided.id})
+        self.assertEqual(
+            {row["source"] for row in r.data},
+            {"guest_extra_service", "service_order"},
+        )
+        # The FolioCharge id is exposed (so the FE can reuse the existing void).
+        self.assertEqual(by_id[gx.id]["id"], gx.id)
+        # Voided line carries its status + reason.
+        self.assertEqual(by_id[voided.id]["status"], "voided")
+        self.assertEqual(by_id[voided.id]["void_reason"], "guest complaint")
+        # A posted line has no void metadata.
+        self.assertIsNone(by_id[gx.id]["void_reason"])
+        self.assertIsNone(by_id[gx.id]["voided_by"])
+        # snapshot fallback + currency = folio currency; NO balance/payments keys.
+        self.assertEqual(by_id[gx.id]["service_name_snapshot"], "Laundry")
+        self.assertEqual(by_id[so.id]["service_name_snapshot"], "Order ORD1")
+        self.assertEqual(by_id[gx.id]["currency"], self.folio.currency)
+        for row in r.data:
+            for forbidden in ("balance", "total_payments", "payments", "deposit"):
+                self.assertNotIn(forbidden, row)
+
+    def test_reachable_by_each_of_the_three_permissions(self):
+        self._seed_lines()
+        for code in ("service_orders.create", "services.view", "finance.view"):
+            user = add_member(self.hotel, f"{code}@x.com", perms=(code,))
+            self.client.force_authenticate(user)
+            r = self.client.get(self._url(), **HDR(self.hotel))
+            self.assertEqual(r.status_code, status.HTTP_200_OK, code)
+            self.assertEqual(len(r.data), 3, code)
+
+    def test_denied_without_any_of_three(self):
+        user = add_member(self.hotel, "none@x.com", perms=("stays.view",))
+        self.client.force_authenticate(user)
+        r = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cross_hotel_stay_404(self):
+        other = make_hotel(slug="other")
+        other_stay = make_stay(other, room_number="900")
+        user = add_member(self.hotel, "so@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        r = self.client.get(self._url(other_stay), **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_empty_or_no_open_folio_returns_empty_list(self):
+        # A stay with no folio at all -> [] (200), not an error.
+        no_folio_stay = make_stay(self.hotel, room_number="777", with_folio=False)
+        user = add_member(self.hotel, "so@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        r = self.client.get(self._url(no_folio_stay), **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data, [])
+        # An open folio with no service lines -> also [].
+        r2 = self.client.get(self._url(), **HDR(self.hotel))
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)
+        self.assertEqual(r2.data, [])
+
+    def test_no_n_plus_one(self):
+        user = add_member(self.hotel, "so@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        url = self._url()
+        add_charge(
+            self.folio, charge_type=ChargeType.SERVICE, description="l1",
+            quantity=1, unit_amount="10.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        with CaptureQueriesContext(connection) as ctx1:
+            r1 = self.client.get(url, **HDR(self.hotel))
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        base = len(ctx1.captured_queries)
+        for i in range(4):
+            add_charge(
+                self.folio, charge_type=ChargeType.SERVICE, description=f"l{i}",
+                quantity=1, unit_amount="10.00", tax_rate="0.00",
+                source=ChargeSource.SERVICE_ORDER,
+            )
+        with CaptureQueriesContext(connection) as ctx2:
+            r2 = self.client.get(url, **HDR(self.hotel))
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(r2.data), 5)
+        self.assertEqual(len(ctx2.captured_queries), base, "service-lines has an N+1")
