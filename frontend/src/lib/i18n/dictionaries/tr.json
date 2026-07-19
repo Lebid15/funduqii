@@ -2201,28 +2201,15 @@
     "title": "Operasyon",
     "subtitle": "Odalarınız için kat hizmetleri, bakım ve kayıp eşya.",
     "saved": "Başarıyla kaydedildi.",
+    "moreActions": "Diğer",
+    "tablistLabel": "Operasyon bölümleri",
+    "roomSearchPlaceholder": "Oda ara…",
+    "loadMore": "Daha fazla yükle",
+    "roomsEmpty": "Oda bulunamadı.",
     "tabs": {
-      "overview": "Genel bakış",
-      "housekeeping": "Kat hizmetleri",
+      "housekeeping": "Temizlik",
       "maintenance": "Bakım",
-      "lostFound": "Kayıp eşya",
-      "roomBoard": "Oda panosu"
-    },
-    "overview": {
-      "dirtyRooms": "Kirli odalar",
-      "dirtyRoomsHint": "Temizlik bekleyen odalar.",
-      "hkPending": "Bekleyen temizlik görevleri",
-      "hkPendingHint": "Bekleyen veya atanmış temizlik görevleri.",
-      "hkInProgress": "Devam eden temizlik",
-      "hkInProgressHint": "Şu anda temizlenen odalar.",
-      "openMaintenance": "Açık bakım",
-      "openMaintenanceHint": "Henüz çözülmemiş talepler.",
-      "roomsUnderMaintenance": "Bakımdaki odalar",
-      "roomsUnderMaintenanceHint": "Bakım veya servis dışı olarak bloke odalar.",
-      "lostFoundOpen": "Açık kayıp eşya",
-      "lostFoundOpenHint": "Sahibini bekleyen bulunan veya saklanan eşyalar.",
-      "urgentTasks": "Acil görevler",
-      "urgentTasksHint": "Hâlâ aktif acil temizlik ve bakım."
+      "lostFound": "Kayıp eşya"
     },
     "priorityLabel": "Öncelik",
     "priority": {
@@ -2293,7 +2280,37 @@
       "dateFilter": "Tarih",
       "orderingPriority": "Önceliğe göre sırala",
       "editPriority": "Önceliği düzenle",
-      "priorityLabel": "Öncelik"
+      "priorityLabel": "Öncelik",
+      "assign": "Ata",
+      "occupied": "Dolu",
+      "arrivalSoon": "Yakında varış",
+      "duration": "Süre",
+      "unitType": "Birim türü",
+      "floor": "Kat",
+      "reportDefect": "Arıza bildir",
+      "registerFound": "Bulunan eşya kaydet",
+      "comeBackLater": "Sonra dön",
+      "comeBackLaterTitle": "Sonra dön",
+      "comeBackLaterHint": "Görev aktif kalır — erteleme nedeni için isteğe bağlı bir not ekleyin.",
+      "comeBackLaterMsg": "Ertelendi — görev aktif kalır.",
+      "serviceOutcomeLabel": "Hizmet sonucu",
+      "serviceOutcome": {
+        "cleaned": "Temizlendi",
+        "guest_refused": "Misafir reddetti",
+        "do_not_disturb": "Rahatsız etmeyin",
+        "no_access": "Erişim yok"
+      },
+      "completeOccupiedHint": "Bu oda dolu. Hizmet sonucunu kaydedin — oda durumu değişmez ve burada müsait yapılmaz.",
+      "completeVacantHint": "Oda boş. Temizlikten sonra ne olacağını seçin.",
+      "afterComplete": "Tamamladıktan sonra",
+      "afterCompleteKeep": "Kirli bırak (kontrol gerekli)",
+      "afterCompleteAvailable": "Odayı müsait yap",
+      "stats": {
+        "needsCleaning": "Temizlik gerekli",
+        "inCleaning": "Temizlikte",
+        "awaitingInspection": "Denetim bekliyor",
+        "upcomingArrival": "Yaklaşan varış"
+      }
     },
     "mt": {
       "title": "Bakım talepleri",
@@ -2353,9 +2370,24 @@
       "searchPlaceholder": "Numara, başlık veya odaya göre ara…",
       "titleRequired": "Başlık gereklidir.",
       "reportedAt": "Bildirim tarihi",
+      "resolvedAt": "Çözüm tarihi",
       "assignToMe": "Bana ata",
       "assignee": "Atanan kişi",
-      "unassigned": "Atanmadı"
+      "unassigned": "Atanmadı",
+      "assign": "Ata",
+      "reassign": "Yeniden ata",
+      "assignTitle": "Talebi ata",
+      "assignTo": "Personel",
+      "assignMe": "Ben",
+      "unassign": "Atamayı kaldır",
+      "commonArea": "Ortak alan",
+      "blocksRoom": "Odayı bloke eder",
+      "stats": {
+        "new": "Yeni",
+        "inRepair": "Onarımda",
+        "blockingRooms": "Bloke odalar",
+        "awaitingClose": "Kapatma bekliyor"
+      }
     },
     "lf": {
       "title": "Kayıp eşya",
@@ -2414,26 +2446,28 @@
       "empty": "Kayıp eşya yok",
       "emptyHint": "Kaydı başlatmak için bulunan bir eşyayı kaydedin.",
       "searchPlaceholder": "Numara, eşya veya yere göre ara…",
-      "titleRequired": "Eşya adı gereklidir."
-    },
-    "board": {
-      "title": "Oda durum panosu",
-      "hint": "Odalar operasyonel durumlarına göre gruplanır. Doluluk, oda durumu olarak değil, mevcut konaklamalardan gösterilir.",
-      "inHouse": "Konaklayan var",
-      "floor": "Kat",
-      "roomType": "Tür",
-      "createTask": "Temizlik görevi",
-      "createRequest": "Bakım",
-      "markDirty": "Kirli işaretle",
-      "markAvailable": "Müsait işaretle",
-      "markedDirty": "Oda kirli işaretlendi.",
-      "markedAvailable": "Oda müsait işaretlendi.",
-      "columnEmpty": "Bu durumda oda yok.",
-      "empty": "Henüz oda yok",
-      "emptyHint": "Önce Odalar bölümünden odaları oluşturun.",
-      "arrivalNotReady": "Bugün varış — hazır değil",
-      "arrivalsNotReadyCount": "Bugünkü varışlar için hazır olmayan odalar",
-      "arrivalsOnly": "Sadece varışa hazır olmayanlar"
+      "titleRequired": "Eşya adı gereklidir.",
+      "sensitive": "Hassas",
+      "recipientName": "Teslim alan adı",
+      "recipientPhone": "Teslim alan telefonu",
+      "linkedGuest": "Bağlı misafir",
+      "handoverContactHint": "Bir telefon numarası girin veya bağlı misafire dayanın.",
+      "proofTypeLabel": "Mülkiyet kanıtı",
+      "proofTypes": {
+        "identity_last4": "Kimlik son 4 hane",
+        "receipt_reference": "Makbuz referansı",
+        "ownership_description": "Mülkiyet açıklaması",
+        "other": "Diğer"
+      },
+      "proofReference": "Kanıt referansı",
+      "sensitiveHint": "Bu hassas bir eşya — teslim için mülkiyet kanıtı gereklidir.",
+      "proofRequired": "Bir kanıt türü seçin ve referansını girin.",
+      "stats": {
+        "found": "Bulundu",
+        "stored": "Saklandı",
+        "claimed": "Talep edildi",
+        "returned": "Teslim edildi"
+      }
     },
     "errors": {
       "invalidTransition": "Bu durum değişikliğine izin verilmiyor.",

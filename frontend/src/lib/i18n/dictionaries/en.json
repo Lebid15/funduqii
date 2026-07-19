@@ -2201,28 +2201,15 @@
     "title": "Operations",
     "subtitle": "Housekeeping, maintenance and lost & found for your rooms.",
     "saved": "Saved successfully.",
+    "moreActions": "More",
+    "tablistLabel": "Operations sections",
+    "roomSearchPlaceholder": "Search rooms…",
+    "loadMore": "Load more",
+    "roomsEmpty": "No rooms found.",
     "tabs": {
-      "overview": "Overview",
-      "housekeeping": "Housekeeping",
+      "housekeeping": "Cleaning",
       "maintenance": "Maintenance",
-      "lostFound": "Lost & Found",
-      "roomBoard": "Room board"
-    },
-    "overview": {
-      "dirtyRooms": "Dirty rooms",
-      "dirtyRoomsHint": "Rooms waiting for cleaning.",
-      "hkPending": "Cleaning tasks waiting",
-      "hkPendingHint": "Pending or assigned housekeeping tasks.",
-      "hkInProgress": "Cleaning in progress",
-      "hkInProgressHint": "Rooms being cleaned right now.",
-      "openMaintenance": "Open maintenance",
-      "openMaintenanceHint": "Requests not yet resolved.",
-      "roomsUnderMaintenance": "Rooms under maintenance",
-      "roomsUnderMaintenanceHint": "Rooms blocked as maintenance or out of service.",
-      "lostFoundOpen": "Open lost & found",
-      "lostFoundOpenHint": "Found or stored items awaiting their owner.",
-      "urgentTasks": "Urgent tasks",
-      "urgentTasksHint": "Urgent housekeeping and maintenance still active."
+      "lostFound": "Lost & found"
     },
     "priorityLabel": "Priority",
     "priority": {
@@ -2293,7 +2280,37 @@
       "dateFilter": "Date",
       "orderingPriority": "Sort by priority",
       "editPriority": "Edit priority",
-      "priorityLabel": "Priority"
+      "priorityLabel": "Priority",
+      "assign": "Assign",
+      "occupied": "Occupied",
+      "arrivalSoon": "Arrival soon",
+      "duration": "Duration",
+      "unitType": "Unit type",
+      "floor": "Floor",
+      "reportDefect": "Report a defect",
+      "registerFound": "Register a found item",
+      "comeBackLater": "Come back later",
+      "comeBackLaterTitle": "Come back later",
+      "comeBackLaterHint": "The task stays active — add an optional note about the delay.",
+      "comeBackLaterMsg": "Deferred — the task stays active.",
+      "serviceOutcomeLabel": "Service result",
+      "serviceOutcome": {
+        "cleaned": "Cleaned",
+        "guest_refused": "Guest refused",
+        "do_not_disturb": "Do not disturb",
+        "no_access": "No access"
+      },
+      "completeOccupiedHint": "This room is occupied. Record the service result — the room status is not changed and it is never made available here.",
+      "completeVacantHint": "The room is vacant. Choose what happens to it after cleaning.",
+      "afterComplete": "After completing",
+      "afterCompleteKeep": "Keep dirty (needs inspection)",
+      "afterCompleteAvailable": "Make the room available",
+      "stats": {
+        "needsCleaning": "Needs cleaning",
+        "inCleaning": "In cleaning",
+        "awaitingInspection": "Awaiting inspection",
+        "upcomingArrival": "Upcoming arrival"
+      }
     },
     "mt": {
       "title": "Maintenance requests",
@@ -2353,9 +2370,24 @@
       "searchPlaceholder": "Search by number, title or room…",
       "titleRequired": "A title is required.",
       "reportedAt": "Reported",
+      "resolvedAt": "Resolved",
       "assignToMe": "Assign to me",
       "assignee": "Assignee",
-      "unassigned": "Unassigned"
+      "unassigned": "Unassigned",
+      "assign": "Assign",
+      "reassign": "Reassign",
+      "assignTitle": "Assign request",
+      "assignTo": "Staff member",
+      "assignMe": "Me",
+      "unassign": "Unassign",
+      "commonArea": "Common area",
+      "blocksRoom": "Blocks the room",
+      "stats": {
+        "new": "New",
+        "inRepair": "In repair",
+        "blockingRooms": "Blocking rooms",
+        "awaitingClose": "Awaiting close"
+      }
     },
     "lf": {
       "title": "Lost & found",
@@ -2414,26 +2446,28 @@
       "empty": "No lost & found items",
       "emptyHint": "Register a found item to start the log.",
       "searchPlaceholder": "Search by number, item or location…",
-      "titleRequired": "An item title is required."
-    },
-    "board": {
-      "title": "Room status board",
-      "hint": "Rooms grouped by their operational status. Occupancy is shown from in-house stays, never as a room status.",
-      "inHouse": "In-house stay",
-      "floor": "Floor",
-      "roomType": "Type",
-      "createTask": "Cleaning task",
-      "createRequest": "Maintenance",
-      "markDirty": "Mark dirty",
-      "markAvailable": "Mark available",
-      "markedDirty": "Room marked dirty.",
-      "markedAvailable": "Room marked available.",
-      "columnEmpty": "No rooms in this status.",
-      "empty": "No rooms yet",
-      "emptyHint": "Create rooms first from the Rooms section.",
-      "arrivalNotReady": "Arrival today — not ready",
-      "arrivalsNotReadyCount": "Rooms with today's arrivals not ready",
-      "arrivalsOnly": "Not ready for arrival only"
+      "titleRequired": "An item title is required.",
+      "sensitive": "Sensitive",
+      "recipientName": "Recipient name",
+      "recipientPhone": "Recipient phone",
+      "linkedGuest": "Linked guest",
+      "handoverContactHint": "Provide a phone number, or rely on the linked guest.",
+      "proofTypeLabel": "Proof of ownership",
+      "proofTypes": {
+        "identity_last4": "ID last 4 digits",
+        "receipt_reference": "Receipt reference",
+        "ownership_description": "Ownership description",
+        "other": "Other"
+      },
+      "proofReference": "Proof reference",
+      "sensitiveHint": "This is a sensitive item — ownership proof is required to hand it over.",
+      "proofRequired": "Choose a proof type and enter its reference.",
+      "stats": {
+        "found": "Found",
+        "stored": "Stored",
+        "claimed": "Claimed",
+        "returned": "Returned"
+      }
     },
     "errors": {
       "invalidTransition": "This status change is not allowed.",

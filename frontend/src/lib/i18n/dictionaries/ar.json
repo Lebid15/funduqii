@@ -2201,28 +2201,15 @@
     "title": "التشغيل",
     "subtitle": "تنظيف الغرف والصيانة والمفقودات لغرف فندقك.",
     "saved": "تم الحفظ بنجاح.",
+    "moreActions": "المزيد",
+    "tablistLabel": "أقسام التشغيل",
+    "roomSearchPlaceholder": "ابحث عن غرفة…",
+    "loadMore": "تحميل المزيد",
+    "roomsEmpty": "لا توجد غرف.",
     "tabs": {
-      "overview": "نظرة عامة",
       "housekeeping": "التنظيف",
       "maintenance": "الصيانة",
-      "lostFound": "المفقودات",
-      "roomBoard": "لوحة الغرف"
-    },
-    "overview": {
-      "dirtyRooms": "غرف متسخة",
-      "dirtyRoomsHint": "غرف بانتظار التنظيف.",
-      "hkPending": "مهام تنظيف بالانتظار",
-      "hkPendingHint": "مهام تنظيف معلّقة أو مسندة.",
-      "hkInProgress": "تنظيف جارٍ",
-      "hkInProgressHint": "غرف يجري تنظيفها الآن.",
-      "openMaintenance": "صيانة مفتوحة",
-      "openMaintenanceHint": "طلبات لم تُحل بعد.",
-      "roomsUnderMaintenance": "غرف تحت الصيانة",
-      "roomsUnderMaintenanceHint": "غرف محجوبة كصيانة أو خارج الخدمة.",
-      "lostFoundOpen": "مفقودات مفتوحة",
-      "lostFoundOpenHint": "أغراض معثور عليها أو مخزنة بانتظار صاحبها.",
-      "urgentTasks": "مهام عاجلة",
-      "urgentTasksHint": "تنظيف وصيانة عاجلة ما تزال نشطة."
+      "lostFound": "المفقودات والموجودات"
     },
     "priorityLabel": "الأولوية",
     "priority": {
@@ -2293,7 +2280,37 @@
       "dateFilter": "التاريخ",
       "orderingPriority": "ترتيب بالأولوية",
       "editPriority": "تعديل الأولوية",
-      "priorityLabel": "الأولوية"
+      "priorityLabel": "الأولوية",
+      "assign": "إسناد",
+      "occupied": "مشغولة",
+      "arrivalSoon": "وصول قريب",
+      "duration": "المدة",
+      "unitType": "نوع الوحدة",
+      "floor": "الطابق",
+      "reportDefect": "الإبلاغ عن عطل",
+      "registerFound": "تسجيل غرض معثور عليه",
+      "comeBackLater": "العودة لاحقًا",
+      "comeBackLaterTitle": "العودة لاحقًا",
+      "comeBackLaterHint": "تبقى المهمة نشطة — أضف ملاحظة اختيارية عن سبب التأجيل.",
+      "comeBackLaterMsg": "تم التأجيل — تبقى المهمة نشطة.",
+      "serviceOutcomeLabel": "نتيجة الخدمة",
+      "serviceOutcome": {
+        "cleaned": "تم التنظيف",
+        "guest_refused": "رفض النزيل",
+        "do_not_disturb": "عدم الإزعاج",
+        "no_access": "تعذّر الدخول"
+      },
+      "completeOccupiedHint": "هذه الغرفة مشغولة. سجّل نتيجة الخدمة — لا تتغيّر حالة الغرفة ولا تُتاح من هنا.",
+      "completeVacantHint": "الغرفة شاغرة. اختر ما يحدث لها بعد التنظيف.",
+      "afterComplete": "بعد الإكمال",
+      "afterCompleteKeep": "إبقاؤها متسخة (تحتاج فحصًا)",
+      "afterCompleteAvailable": "جعل الغرفة متاحة",
+      "stats": {
+        "needsCleaning": "بحاجة تنظيف",
+        "inCleaning": "قيد التنظيف",
+        "awaitingInspection": "بانتظار الفحص",
+        "upcomingArrival": "وصول قريب"
+      }
     },
     "mt": {
       "title": "طلبات الصيانة",
@@ -2353,9 +2370,24 @@
       "searchPlaceholder": "ابحث بالرقم أو العنوان أو الغرفة…",
       "titleRequired": "العنوان مطلوب.",
       "reportedAt": "تاريخ التبليغ",
+      "resolvedAt": "تاريخ الحل",
       "assignToMe": "أسند إليّ",
       "assignee": "المسند إليه",
-      "unassigned": "غير مسند"
+      "unassigned": "غير مسند",
+      "assign": "إسناد",
+      "reassign": "إعادة التعيين",
+      "assignTitle": "إسناد الطلب",
+      "assignTo": "الموظف",
+      "assignMe": "أنا",
+      "unassign": "إزالة التعيين",
+      "commonArea": "منطقة عامة",
+      "blocksRoom": "يحجب الغرفة",
+      "stats": {
+        "new": "جديدة",
+        "inRepair": "قيد الإصلاح",
+        "blockingRooms": "تحجب غرفًا",
+        "awaitingClose": "بانتظار الإغلاق"
+      }
     },
     "lf": {
       "title": "المفقودات",
@@ -2414,26 +2446,28 @@
       "empty": "لا توجد مفقودات",
       "emptyHint": "سجّل غرضًا معثورًا عليه لبدء السجل.",
       "searchPlaceholder": "ابحث بالرقم أو الغرض أو المكان…",
-      "titleRequired": "اسم الغرض مطلوب."
-    },
-    "board": {
-      "title": "لوحة حالة الغرف",
-      "hint": "الغرف مجمعة حسب حالتها التشغيلية. يُعرض الإشغال من الإقامات الحالية، وليس كحالة غرفة.",
-      "inHouse": "إقامة حالية",
-      "floor": "الطابق",
-      "roomType": "النوع",
-      "createTask": "مهمة تنظيف",
-      "createRequest": "صيانة",
-      "markDirty": "جعلها متسخة",
-      "markAvailable": "جعلها متاحة",
-      "markedDirty": "أصبحت الغرفة متسخة.",
-      "markedAvailable": "أصبحت الغرفة متاحة.",
-      "columnEmpty": "لا غرف في هذه الحالة.",
-      "empty": "لا توجد غرف بعد",
-      "emptyHint": "أنشئ الغرف أولًا من قسم الغرف.",
-      "arrivalNotReady": "وصول اليوم — غير جاهزة",
-      "arrivalsNotReadyCount": "غرف وصول اليوم غير الجاهزة",
-      "arrivalsOnly": "غير الجاهزة للوصول فقط"
+      "titleRequired": "اسم الغرض مطلوب.",
+      "sensitive": "حساس",
+      "recipientName": "اسم المستلم",
+      "recipientPhone": "هاتف المستلم",
+      "linkedGuest": "نزيل مرتبط",
+      "handoverContactHint": "أدخل رقم هاتف، أو اعتمد على النزيل المرتبط.",
+      "proofTypeLabel": "إثبات الملكية",
+      "proofTypes": {
+        "identity_last4": "آخر 4 أرقام من الهوية",
+        "receipt_reference": "مرجع الإيصال",
+        "ownership_description": "وصف الملكية",
+        "other": "أخرى"
+      },
+      "proofReference": "مرجع الإثبات",
+      "sensitiveHint": "هذا غرض حساس — يلزم إثبات ملكية لتسليمه.",
+      "proofRequired": "اختر نوع الإثبات وأدخل مرجعه.",
+      "stats": {
+        "found": "معثور عليها",
+        "stored": "محفوظة",
+        "claimed": "مُطالب بها",
+        "returned": "مُسلَّمة"
+      }
     },
     "errors": {
       "invalidTransition": "تغيير الحالة هذا غير مسموح.",

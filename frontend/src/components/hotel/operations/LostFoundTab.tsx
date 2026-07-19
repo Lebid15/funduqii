@@ -1,15 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Archive, PackageSearch, Plus } from "lucide-react";
+import {
+  Archive,
+  BedDouble,
+  Check,
+  Clock,
+  HandCoins,
+  MapPin,
+  Package,
+  PackageSearch,
+  Plus,
+  ShieldCheck,
+  Undo2,
+  User,
+  XCircle,
+} from "lucide-react";
 
 import {
   Alert,
   Badge,
   Button,
   Card,
-  ConfirmDialog,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -22,7 +34,6 @@ import {
   Select,
   Textarea,
   useToast,
-  type Column,
 } from "@/components/ui";
 import {
   claimLostFoundItem,
@@ -32,20 +43,24 @@ import {
   listLostFoundItems,
   returnLostFoundItem,
   setLostFoundStatus,
+  type ClaimBody,
   type LostFoundCreateBody,
 } from "@/lib/api/operations";
 import { listGuests } from "@/lib/api/guests";
-import { listRooms } from "@/lib/api/rooms";
 import { messageForError } from "@/lib/api/errors";
 import type {
   Guest,
   LostFoundCategory,
+  LostFoundClaimProofType,
   LostFoundItemListItem,
-  Room,
 } from "@/lib/api/types";
 import { formatDateTime, lostFoundStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { useHotelAccess } from "@/lib/session/HotelAccessContext";
+
+import { OperationCard, type OperationMenuItem } from "./OperationCard";
+import { RoomOptionSelect } from "./RoomOptionSelect";
+import { StatCards, type OperationStat } from "./StatCards";
+import { isSensitiveCategory, useCan } from "./operationsShared";
 
 const PAGE_SIZE = 25;
 const CATEGORIES: LostFoundCategory[] = [
@@ -58,14 +73,20 @@ const CATEGORIES: LostFoundCategory[] = [
   "other",
 ];
 const STATUSES = ["found", "stored", "claimed", "returned", "disposed", "closed"] as const;
+const PROOF_TYPES: LostFoundClaimProofType[] = [
+  "identity_last4",
+  "receipt_reference",
+  "ownership_description",
+  "other",
+];
 
 type HandOverMode = "claim" | "return";
 
-/** Cosmetic permission gate — every API re-checks server-side regardless. */
-function useCan() {
-  const access = useHotelAccess();
-  return (...codes: string[]) =>
-    access === null || (!access.loading && access.can(...codes));
+interface LfStats {
+  found: number | null;
+  stored: number | null;
+  claimed: number | null;
+  returned: number | null;
 }
 
 export function LostFoundTab() {
@@ -75,8 +96,13 @@ export function LostFoundTab() {
   const can = useCan();
 
   const [rows, setRows] = useState<LostFoundItemListItem[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
   const [count, setCount] = useState(0);
+  const [stats, setStats] = useState<LfStats>({
+    found: null,
+    stored: null,
+    claimed: null,
+    returned: null,
+  });
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
   const [category, setCategory] = useState("");
@@ -92,24 +118,31 @@ export function LostFoundTab() {
     mode: HandOverMode;
   } | null>(null);
   const [disposeItem, setDisposeItem] = useState<LostFoundItemListItem | null>(null);
-  const [closeItem, setCloseItem] = useState<LostFoundItemListItem | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [items, roomList] = await Promise.all([
+      const [items, found, stored, claimed, returned] = await Promise.all([
         listLostFoundItems({
           page,
           search: query || undefined,
           status: status || undefined,
           category: category || undefined,
         }),
-        listRooms({ page_size: 100 }),
+        listLostFoundItems({ status: "found", page: 1 }),
+        listLostFoundItems({ status: "stored", page: 1 }),
+        listLostFoundItems({ status: "claimed", page: 1 }),
+        listLostFoundItems({ status: "returned", page: 1 }),
       ]);
       setRows(items.results);
       setCount(items.count);
-      setRooms(roomList.results);
+      setStats({
+        found: found.count,
+        stored: stored.count,
+        claimed: claimed.count,
+        returned: returned.count,
+      });
     } catch (err) {
       setError(messageForError(err, t));
     } finally {
@@ -134,105 +167,179 @@ export function LostFoundTab() {
     }
   }
 
+  function applyStatusFilter(next: string) {
+    setPage(1);
+    setStatus((current) => (current === next ? "" : next));
+  }
+
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const statusOptions = STATUSES.map((s) => ({ value: s, label: lf.status[s] }));
   const categoryOptions = CATEGORIES.map((c) => ({ value: c, label: lf.categories[c] }));
 
-  const columns: Column<LostFoundItemListItem>[] = [
-    { key: "item_number", header: lf.itemNumber },
-    { key: "title", header: lf.titleLabel },
-    { key: "category", header: lf.categoryLabel, render: (r) => lf.categories[r.category] },
+  const statCards: OperationStat[] = [
     {
-      key: "status",
-      header: t.common.status,
-      render: (r) => (
-        <Badge tone={lostFoundStatusTone(r.status)}>{lf.status[r.status]}</Badge>
-      ),
+      key: "found",
+      label: lf.stats.found,
+      value: stats.found,
+      icon: Package,
+      tone: "warning",
+      active: status === "found",
+      onFilter: () => applyStatusFilter("found"),
     },
     {
-      key: "found_at",
-      header: lf.foundAt,
-      render: (r) => formatDateTime(r.found_at, locale),
+      key: "stored",
+      label: lf.stats.stored,
+      value: stats.stored,
+      icon: Archive,
+      tone: "info",
+      active: status === "stored",
+      onFilter: () => applyStatusFilter("stored"),
     },
     {
-      key: "found_location",
-      header: lf.foundLocation,
-      render: (r) => r.found_location || r.room_number || "—",
+      key: "claimed",
+      label: lf.stats.claimed,
+      value: stats.claimed,
+      icon: HandCoins,
+      tone: "primary",
+      active: status === "claimed",
+      onFilter: () => applyStatusFilter("claimed"),
     },
     {
-      key: "guest_name",
-      header: lf.guest,
-      render: (r) => r.guest_name || "—",
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => {
-        if (r.status === "returned" || r.status === "disposed") {
-          if (!can("lost_found.close")) return <span className="muted small">—</span>;
-          return (
-            <div className="table__actions">
-              <Button size="sm" variant="secondary" onClick={() => setCloseItem(r)}>
-                {lf.close}
-              </Button>
-            </div>
-          );
-        }
-        if (r.status === "claimed") {
-          if (!can("lost_found.status_update")) {
-            return <span className="muted small">—</span>;
-          }
-          return (
-            <div className="table__actions">
-              <Button size="sm" onClick={() => setHandOver({ item: r, mode: "return" })}>
-                {lf.returnItem}
-              </Button>
-            </div>
-          );
-        }
-        if (r.status === "found" || r.status === "stored") {
-          if (!can("lost_found.status_update")) {
-            return <span className="muted small">—</span>;
-          }
-          return (
-            <div className="table__actions">
-              {r.status === "found" ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={Archive}
-                  loading={busyId === r.id}
-                  onClick={() =>
-                    run(r.id, () => setLostFoundStatus(r.id, "stored"), lf.storedMsg)
-                  }
-                >
-                  {lf.store}
-                </Button>
-              ) : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setHandOver({ item: r, mode: "claim" })}
-              >
-                {lf.claim}
-              </Button>
-              <Button size="sm" onClick={() => setHandOver({ item: r, mode: "return" })}>
-                {lf.returnItem}
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => setDisposeItem(r)}>
-                {lf.dispose}
-              </Button>
-            </div>
-          );
-        }
-        return <span className="muted small">—</span>;
-      },
+      key: "returned",
+      label: lf.stats.returned,
+      value: stats.returned,
+      icon: Undo2,
+      tone: "success",
+      active: status === "returned",
+      onFilter: () => applyStatusFilter("returned"),
     },
   ];
 
+  function renderCard(row: LostFoundItemListItem) {
+    const canStatus = can("lost_found.status_update");
+    const sensitive = isSensitiveCategory(row.category);
+
+    let primary: React.ComponentProps<typeof OperationCard>["primary"] = null;
+    if (row.status === "found" && canStatus) {
+      primary = {
+        label: lf.store,
+        icon: Archive,
+        loading: busyId === row.id,
+        onClick: () => run(row.id, () => setLostFoundStatus(row.id, "stored"), lf.storedMsg),
+      };
+    } else if ((row.status === "stored" || row.status === "claimed") && canStatus) {
+      primary = {
+        label: lf.returnItem,
+        icon: Undo2,
+        onClick: () => setHandOver({ item: row, mode: "return" }),
+      };
+    } else if ((row.status === "returned" || row.status === "disposed") && can("lost_found.close")) {
+      primary = {
+        label: lf.close,
+        icon: Check,
+        loading: busyId === row.id,
+        onClick: () => run(row.id, () => closeLostFoundItem(row.id), lf.closedMsg),
+      };
+    }
+
+    const menu: OperationMenuItem[] = [];
+    if ((row.status === "found" || row.status === "stored") && canStatus) {
+      menu.push({
+        key: "claim",
+        label: lf.claim,
+        icon: HandCoins,
+        onSelect: () => setHandOver({ item: row, mode: "claim" }),
+      });
+      if (row.status === "found") {
+        menu.push({
+          key: "return",
+          label: lf.returnItem,
+          icon: Undo2,
+          onSelect: () => setHandOver({ item: row, mode: "return" }),
+        });
+      }
+      menu.push({
+        key: "dispose",
+        label: lf.dispose,
+        icon: XCircle,
+        danger: true,
+        onSelect: () => setDisposeItem(row),
+      });
+    }
+
+    return (
+      <OperationCard
+        accent={lostFoundStatusTone(row.status)}
+        number={row.item_number}
+        title={row.title}
+        ariaLabel={`${lf.title} ${row.item_number}`}
+        moreLabel={t.operations.moreActions}
+        badges={
+          <>
+            <Badge tone={lostFoundStatusTone(row.status)} variant="filled">
+              {lf.status[row.status]}
+            </Badge>
+            <Badge tone="neutral">{lf.categories[row.category]}</Badge>
+            {sensitive ? (
+              <Badge tone="warning" variant="outline" icon={ShieldCheck}>
+                {lf.sensitive}
+              </Badge>
+            ) : null}
+          </>
+        }
+        facts={[
+          {
+            key: "foundLocation",
+            label: lf.foundLocation,
+            value: row.found_location || (row.room_number ? <bdi dir="ltr">{row.room_number}</bdi> : "—"),
+            icon: MapPin,
+          },
+          {
+            key: "foundAt",
+            label: lf.foundAt,
+            value: formatDateTime(row.found_at, locale),
+            icon: Clock,
+          },
+          {
+            key: "storedLocation",
+            label: lf.storedLocation,
+            value: row.stored_location || "—",
+            icon: Archive,
+          },
+          ...(row.guest_name
+            ? [{ key: "guest", label: lf.guest, value: row.guest_name, icon: User }]
+            : []),
+          ...(row.room_number
+            ? [
+                {
+                  key: "room",
+                  label: lf.room,
+                  value: <bdi dir="ltr">{row.room_number}</bdi>,
+                  icon: BedDouble,
+                },
+              ]
+            : []),
+          ...(row.returned_at
+            ? [
+                {
+                  key: "returned",
+                  label: lf.status.returned,
+                  value: formatDateTime(row.returned_at, locale),
+                  icon: Undo2,
+                },
+              ]
+            : []),
+        ]}
+        primary={primary}
+        menu={menu}
+      />
+    );
+  }
+
   return (
     <>
+      <StatCards stats={statCards} loading={loading} ariaLabel={lf.title} />
+
       <Card>
         <SectionHeader
           title={lf.title}
@@ -286,6 +393,7 @@ export function LostFoundTab() {
             </FormField>
           </FilterBar>
         </form>
+
         {loading ? <LoadingState label={t.common.loading} /> : null}
         {!loading && error ? (
           <ErrorState
@@ -300,12 +408,13 @@ export function LostFoundTab() {
             <EmptyState title={lf.empty} hint={lf.emptyHint} icon={PackageSearch} />
           ) : (
             <>
-              <DataTable
-                caption={lf.title}
-                columns={columns}
-                rows={rows}
-                rowKey={(r) => r.id}
-              />
+              <div className="op-grid" role="list" aria-label={lf.title}>
+                {rows.map((row) => (
+                  <div role="listitem" key={row.id}>
+                    {renderCard(row)}
+                  </div>
+                ))}
+              </div>
               <Pagination
                 page={page}
                 totalPages={totalPages}
@@ -325,7 +434,6 @@ export function LostFoundTab() {
 
       <CreateItemModal
         open={createOpen}
-        rooms={rooms}
         onClose={() => setCreateOpen(false)}
         onSaved={() => {
           setCreateOpen(false);
@@ -351,39 +459,24 @@ export function LostFoundTab() {
           load();
         }}
       />
-      <ConfirmDialog
-        open={closeItem !== null}
-        title={lf.close}
-        body={lf.closedMsg}
-        confirmLabel={lf.close}
-        cancelLabel={t.common.cancel}
-        closeLabel={t.common.close}
-        onClose={() => setCloseItem(null)}
-        onConfirm={async () => {
-          if (!closeItem) return;
-          try {
-            await closeLostFoundItem(closeItem.id);
-            notify(lf.closedMsg);
-            load();
-          } catch (err) {
-            notify(messageForError(err, t), "error");
-          } finally {
-            setCloseItem(null);
-          }
-        }}
-      />
     </>
   );
 }
 
-function CreateItemModal({
+/**
+ * Register a found item. Room uses the async room-options picker (§7); an
+ * optional linked guest ties it to a stay/guest for later handover.
+ */
+export function CreateItemModal({
   open,
-  rooms,
+  presetRoom,
+  presetRoomLabel,
   onClose,
   onSaved,
 }: {
   open: boolean;
-  rooms: Room[];
+  presetRoom?: number;
+  presetRoomLabel?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -396,13 +489,13 @@ function CreateItemModal({
 
   useEffect(() => {
     if (open) {
-      setForm({ title: "", description: "", category: "other" });
+      setForm({ title: "", description: "", category: "other", room: presetRoom ?? null });
       setError(null);
       listGuests({ page_size: 100 })
         .then((res) => setGuests(res.results))
         .catch(() => setGuests([]));
     }
-  }, [open]);
+  }, [open, presetRoom]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -419,7 +512,6 @@ function CreateItemModal({
     }
   }
 
-  const roomOptions = rooms.map((r) => ({ value: String(r.id), label: r.number }));
   const guestOptions = guests.map((g) => ({ value: String(g.id), label: g.full_name }));
   const categoryOptions = CATEGORIES.map((c) => ({ value: c, label: lf.categories[c] }));
 
@@ -477,23 +569,7 @@ function CreateItemModal({
             <Input
               id="lfc-sloc"
               value={form.stored_location ?? ""}
-              onChange={(e) =>
-                setForm((p) => ({ ...p, stored_location: e.target.value }))
-              }
-            />
-          </FormField>
-          <FormField label={lf.room} htmlFor="lfc-room">
-            <Select
-              id="lfc-room"
-              value={form.room ? String(form.room) : ""}
-              placeholder={lf.noRoom}
-              options={roomOptions}
-              onChange={(e) =>
-                setForm((p) => ({
-                  ...p,
-                  room: e.target.value ? Number(e.target.value) : null,
-                }))
-              }
+              onChange={(e) => setForm((p) => ({ ...p, stored_location: e.target.value }))}
             />
           </FormField>
           <FormField label={lf.guest} htmlFor="lfc-guest">
@@ -511,6 +587,18 @@ function CreateItemModal({
             />
           </FormField>
         </div>
+        <RoomOptionSelect
+          id="lfc-room"
+          label={lf.room}
+          value={form.room ?? null}
+          placeholder={lf.noRoom}
+          searchPlaceholder={t.operations.roomSearchPlaceholder}
+          loadMoreLabel={t.operations.loadMore}
+          loadingLabel={t.common.loading}
+          emptyLabel={t.operations.roomsEmpty}
+          selectedLabel={presetRoomLabel}
+          onChange={(next) => setForm((p) => ({ ...p, room: next }))}
+        />
         <FormField label={lf.notes} htmlFor="lfc-notes">
           <Input
             id="lfc-notes"
@@ -523,6 +611,14 @@ function CreateItemModal({
   );
 }
 
+/**
+ * Handover (claim / return). NORMAL categories require a recipient name plus a
+ * phone OR a linked guest. SENSITIVE categories (money / jewelry / documents)
+ * additionally require a proof type + reference — the proof fields are shown
+ * ONLY for sensitive items. The phone + proof reference are entered here (for an
+ * authorized user) and are never rendered on the card/list. A backend 422
+ * `claim_proof_required` surfaces as a clear translated error.
+ */
 function HandOverModal({
   state,
   onClose,
@@ -536,13 +632,21 @@ function HandOverModal({
   const lf = t.operations.lf;
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [proofType, setProofType] = useState<LostFoundClaimProofType>("identity_last4");
+  const [proofReference, setProofReference] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const item = state?.item ?? null;
+  const sensitive = item ? isSensitiveCategory(item.category) : false;
+  const hasLinkedGuest = item?.guest !== null && item?.guest !== undefined;
 
   useEffect(() => {
     if (state) {
       setName("");
       setPhone("");
+      setProofType("identity_last4");
+      setProofReference("");
       setError(null);
     }
   }, [state]);
@@ -550,10 +654,23 @@ function HandOverModal({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!state) return;
+    // NORMAL: recipient name is always required; a phone is required unless the
+    // item is tied to a linked guest (phone-OR-linked-guest).
+    if (!name.trim()) return setError(t.operations.errors.claimantRequired);
+    if (!phone.trim() && !hasLinkedGuest) return setError(t.operations.errors.claimantRequired);
+    if (sensitive && (!proofType || !proofReference.trim())) {
+      return setError(lf.proofRequired);
+    }
     setBusy(true);
     setError(null);
     try {
-      const body = { claimed_by_name: name.trim(), claimed_by_phone: phone.trim() };
+      const body: ClaimBody = {
+        claimed_by_name: name.trim(),
+        claimed_by_phone: phone.trim(),
+        ...(sensitive
+          ? { claim_proof_type: proofType, claim_proof_reference: proofReference.trim() }
+          : {}),
+      };
       if (state.mode === "claim") await claimLostFoundItem(state.item.id, body);
       else await returnLostFoundItem(state.item.id, body);
       onDone(state.mode);
@@ -565,6 +682,8 @@ function HandOverModal({
   }
 
   const isClaim = state?.mode === "claim";
+  const proofOptions = PROOF_TYPES.map((p) => ({ value: p, label: lf.proofTypes[p] }));
+
   return (
     <Modal
       open={state !== null}
@@ -585,11 +704,17 @@ function HandOverModal({
       <form id="lf-handover-form" className="stack" onSubmit={submit} noValidate>
         {error ? <Alert tone="error">{error}</Alert> : null}
         <p className="muted">{isClaim ? lf.claimHint : lf.returnHint}</p>
+        {hasLinkedGuest ? (
+          <Alert tone="info">
+            {lf.linkedGuest}
+            {item?.guest_name ? `: ${item.guest_name}` : ""}
+          </Alert>
+        ) : null}
         <div className="form-grid">
-          <FormField label={lf.claimedBy} htmlFor="lf-ho-name">
+          <FormField label={lf.recipientName} htmlFor="lf-ho-name">
             <Input id="lf-ho-name" value={name} onChange={(e) => setName(e.target.value)} />
           </FormField>
-          <FormField label={lf.claimedByPhone} htmlFor="lf-ho-phone">
+          <FormField label={lf.recipientPhone} htmlFor="lf-ho-phone">
             <Input
               id="lf-ho-phone"
               value={phone}
@@ -597,6 +722,31 @@ function HandOverModal({
             />
           </FormField>
         </div>
+        <p className="muted small">{lf.handoverContactHint}</p>
+        {sensitive ? (
+          <>
+            <Alert tone="warning">{lf.sensitiveHint}</Alert>
+            <div className="form-grid">
+              <FormField label={lf.proofTypeLabel} htmlFor="lf-ho-prooftype">
+                <Select
+                  id="lf-ho-prooftype"
+                  value={proofType}
+                  options={proofOptions}
+                  onChange={(e) =>
+                    setProofType(e.target.value as LostFoundClaimProofType)
+                  }
+                />
+              </FormField>
+              <FormField label={lf.proofReference} htmlFor="lf-ho-proofref">
+                <Input
+                  id="lf-ho-proofref"
+                  value={proofReference}
+                  onChange={(e) => setProofReference(e.target.value)}
+                />
+              </FormField>
+            </div>
+          </>
+        ) : null}
       </form>
     </Modal>
   );
