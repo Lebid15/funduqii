@@ -61,6 +61,7 @@ LOCAL_APPS = [
     "apps.guests",
     "apps.stays",
     "apps.finance",
+    "apps.guest_services",
     "apps.operations",
     "apps.staff",
     "apps.shifts",
