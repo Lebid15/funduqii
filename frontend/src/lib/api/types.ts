@@ -623,6 +623,19 @@ export interface Room {
   updated_at: string;
 }
 
+/** COMPACT, read-only room option for the operations-tab async-select
+ * dropdowns (`GET /rooms/options/?search=&page=`). Returns ONLY what a
+ * two-line dropdown needs — the id (value), number (label) and the resolved
+ * floor / room-type names — never the heavy Room detail. Served in a standard
+ * DRF `PaginatedResponse<RoomOption>` envelope so page 2+ is reachable (the
+ * old `listRooms({ page_size: 100 })` feed silently dropped rooms past 100). */
+export interface RoomOption {
+  id: number;
+  number: string;
+  floor_name: string;
+  room_type_name: string;
+}
+
 /* --- Rooms operational board (owner task) — READ-ONLY aggregation ---------- */
 
 /** Computed for DISPLAY only — `occupied`/`reserved` are derived from stays
@@ -1957,6 +1970,25 @@ export type HousekeepingStatus =
   | "completed"
   | "cancelled";
 
+/** The FOUR terminal service outcomes recorded when a cleaning task is
+ * completed. `come_back_later` is deliberately NOT here — it is a separate,
+ * non-terminal action (see `comeBackLaterHousekeepingTask`). Blank ("") until
+ * the task is completed. */
+export type HousekeepingServiceOutcome =
+  | "cleaned"
+  | "guest_refused"
+  | "do_not_disturb"
+  | "no_access";
+
+/** Compact housekeeping-only arrival hint for the cleaning card. Carries only
+ * presence + date/time — never the reservation number (a housekeeping-only
+ * role must not see the booking reference). */
+export interface HousekeepingUpcomingArrival {
+  has_upcoming: boolean;
+  arrival_date: string | null;
+  arrival_time: string | null;
+}
+
 export interface OperationStatusLogEntry {
   id: number;
   previous_status: string;
@@ -1966,7 +1998,10 @@ export interface OperationStatusLogEntry {
   created_at: string;
 }
 
-export interface HousekeepingTaskListItem {
+/** Fields shared by BOTH the housekeeping list row and the detail response
+ * (mirrors the overlap of the two backend serializers). The list adds the
+ * card-context fields; the detail adds the workflow/notes fields. */
+interface HousekeepingTaskBase {
   id: number;
   task_number: string;
   room: number | null;
@@ -1980,14 +2015,30 @@ export interface HousekeepingTaskListItem {
   requested_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /** Terminal service result; blank ("") until the task is completed. */
+  service_outcome: HousekeepingServiceOutcome | "";
 }
 
-export interface HousekeepingTask extends HousekeepingTaskListItem {
+export interface HousekeepingTaskListItem extends HousekeepingTaskBase {
+  /** Unit context for the cleaning CARD. Room-sourced fields carry a blank ""
+   * when the historical task has outlived its (SET_NULL) room; `floor_number`
+   * is the card's fallback label when `floor_name` is blank. */
+  room_type_name: string;
+  floor_name: string;
+  floor_number: string;
+  /** Derived from an in-house Stay (there is no `occupied` room status). */
+  is_occupied: boolean;
+  upcoming_arrival: HousekeepingUpcomingArrival;
+}
+
+export interface HousekeepingTask extends HousekeepingTaskBase {
   room_status: string;
   cancelled_at: string | null;
   cancellation_reason: string;
   notes: string;
-  internal_notes: string;
+  /** WP6 disclosure gate: ABSENT unless the caller can act on the record
+   * (housekeeping.update / .status_update). Fail-closed, so optional. */
+  internal_notes?: string;
   status_logs: OperationStatusLogEntry[];
   created_at: string;
   updated_at: string;
@@ -2000,7 +2051,13 @@ export interface ArrivalNotReadyRow {
   room_number: string;
   room_status: string;
   occupied: boolean;
-  reservation_number: string;
+  /** Confirmed arrival date (ISO), pinned to the hotel business date. Always
+   * present. */
+  arrival_date: string | null;
+  /** WP6 disclosure gate: the full booking reference is present ONLY for a
+   * caller who also holds `reservations.view`; ABSENT for a housekeeping-only
+   * role. Fail-closed, so optional. */
+  reservation_number?: string;
 }
 
 export type MaintenanceCategory =
@@ -2048,7 +2105,9 @@ export interface MaintenanceRequest extends MaintenanceRequestListItem {
   cancelled_at: string | null;
   cancellation_reason: string;
   resolution_notes: string;
-  internal_notes: string;
+  /** WP6 disclosure gate: ABSENT unless the caller can act on the record
+   * (maintenance.update / .status_update). Fail-closed, so optional. */
+  internal_notes?: string;
   status_logs: OperationStatusLogEntry[];
   created_at: string;
   updated_at: string;
@@ -2070,6 +2129,17 @@ export type LostFoundStatus =
   | "returned"
   | "disposed"
   | "closed";
+
+/** The KIND of ownership proof recorded when a SENSITIVE item (money / jewelry
+ * / documents) is claimed or returned (WP7). A small, closed set of
+ * non-sensitive markers — the proof VALUE lives in `claim_proof_reference`
+ * (bounded, permission-gated on read). Required by the backend for sensitive
+ * categories, else the API rejects with `claim_proof_required` (422). */
+export type LostFoundClaimProofType =
+  | "identity_last4"
+  | "receipt_reference"
+  | "ownership_description"
+  | "other";
 
 export interface LostFoundItemListItem {
   id: number;
@@ -2093,11 +2163,20 @@ export interface LostFoundItem extends LostFoundItemListItem {
   found_by_name: string;
   claimed_by_name: string;
   claimed_by_phone: string;
+  /** WP7 handover proof. The non-sensitive `claim_proof_type` marker is exposed
+   * to any caller who can read the detail; `claim_proof_reference` is the
+   * sensitive proof VALUE, present ONLY for a caller holding
+   * `lost_found.status_update` (fail-closed). Both optional (a non-sensitive
+   * item may have neither, and the reference is disclosure-gated). */
+  claim_proof_type?: LostFoundClaimProofType | "";
+  claim_proof_reference?: string;
   claimed_at: string | null;
   disposed_at: string | null;
   closed_at: string | null;
   notes: string;
-  internal_notes: string;
+  /** WP6 disclosure gate: ABSENT unless the caller can act on the record
+   * (lost_found.update / .status_update). Fail-closed, so optional. */
+  internal_notes?: string;
   status_logs: OperationStatusLogEntry[];
   created_at: string;
   updated_at: string;

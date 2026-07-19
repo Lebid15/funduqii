@@ -7,8 +7,10 @@
 import { hotelJson } from "./hotelFetch";
 import type {
   ArrivalNotReadyRow,
+  HousekeepingServiceOutcome,
   HousekeepingTask,
   HousekeepingTaskListItem,
+  LostFoundClaimProofType,
   LostFoundItem,
   LostFoundItemListItem,
   MaintenanceRequest,
@@ -117,10 +119,31 @@ export function completeHousekeepingTask(
   id: number,
   markRoomAvailable: boolean,
   note = "",
+  /** The terminal service result. Omitted => the backend defaults to
+   * "cleaned". `come_back_later` is NOT a valid outcome here — use
+   * `comeBackLaterHousekeepingTask` (a separate non-terminal action). */
+  serviceOutcome?: HousekeepingServiceOutcome,
 ): Promise<HousekeepingTask> {
   return hotelJson<HousekeepingTask>(`${B}/housekeeping/${id}/complete`, {
     method: "POST",
-    body: JSON.stringify({ mark_room_available: markRoomAvailable, note }),
+    body: JSON.stringify({
+      mark_room_available: markRoomAvailable,
+      note,
+      ...(serviceOutcome ? { service_outcome: serviceOutcome } : {}),
+    }),
+  });
+}
+
+/** Non-terminal "come back later" defer — the task STAYS active (no status /
+ * outcome change), only an optional note is recorded. Separate from
+ * completion on purpose. */
+export function comeBackLaterHousekeepingTask(
+  id: number,
+  body: { note?: string } = {},
+): Promise<HousekeepingTask> {
+  return hotelJson<HousekeepingTask>(`${B}/housekeeping/${id}/come-back-later`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 
@@ -342,6 +365,11 @@ export interface ClaimBody {
   claimed_by_name?: string;
   claimed_by_phone?: string;
   note?: string;
+  /** WP7 ownership proof. REQUIRED by the backend for SENSITIVE categories
+   * (money / jewelry / documents) — omitting it there is rejected with
+   * `claim_proof_required` (422). Optional for non-sensitive items. */
+  claim_proof_type?: LostFoundClaimProofType;
+  claim_proof_reference?: string;
 }
 
 export function claimLostFoundItem(
