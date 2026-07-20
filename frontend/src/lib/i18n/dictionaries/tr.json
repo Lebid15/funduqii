@@ -2886,7 +2886,9 @@
       "summary": "Özet",
       "empty": "Henüz vardiya yok",
       "emptyHint": "Başlamak için ilk vardiyayı açın.",
-      "searchPlaceholder": "Numara, kişi veya nota göre ara…"
+      "searchPlaceholder": "Numara, kişi veya nota göre ara…",
+      "noMatches": "Eşleşen vardiya yok",
+      "noMatchesHint": "Sonuçları genişletmek için aramayı veya filtreleri değiştirin."
     },
     "ho": {
       "title": "Vardiya devirleri",

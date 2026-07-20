@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ArrowLeftRight, Clock, Lock, PlayCircle, Printer } from "lucide-react";
+import { ArrowLeftRight, Clock, Inbox, Lock, PlayCircle, Printer } from "lucide-react";
 
 import {
   Alert,
@@ -24,7 +24,7 @@ import { messageForError } from "@/lib/api/errors";
 import type { Shift, ShiftCashSummary, ShiftStatement } from "@/lib/api/types";
 import { formatDateTime, shiftStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { HandoverFormModal } from "./HandoversTab";
+import { HandoverFormModal, HandoversDrawer } from "./HandoversTab";
 import { PrintModal } from "../finance/shared";
 
 export function CurrentShiftTab() {
@@ -39,6 +39,7 @@ export function CurrentShiftTab() {
   const [openModal, setOpenModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   const [handoverModal, setHandoverModal] = useState(false);
+  const [handoversDrawer, setHandoversDrawer] = useState(false);
   const [statement, setStatement] = useState<ShiftStatement | null>(null);
 
   async function openStatement(id: number) {
@@ -86,9 +87,19 @@ export function CurrentShiftTab() {
           title={c.none}
           hint={c.noneHint}
           action={
-            <Button icon={PlayCircle} onClick={() => setOpenModal(true)}>
-              {c.open}
-            </Button>
+            <div className="cluster">
+              <Button icon={PlayCircle} onClick={() => setOpenModal(true)}>
+                {c.open}
+              </Button>
+              {/* Incoming handovers can be accepted even with no open shift. */}
+              <Button
+                variant="secondary"
+                icon={Inbox}
+                onClick={() => setHandoversDrawer(true)}
+              >
+                {t.shifts.tabs.handovers}
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -133,6 +144,13 @@ export function CurrentShiftTab() {
             >
               {t.shifts.print.printStatement}
             </Button>
+            <Button
+              variant="ghost"
+              icon={Inbox}
+              onClick={() => setHandoversDrawer(true)}
+            >
+              {t.shifts.tabs.handovers}
+            </Button>
           </div>
         </Card>
       )}
@@ -171,6 +189,10 @@ export function CurrentShiftTab() {
         />
       ) : null}
       <ShiftStatementPrintModal statement={statement} onClose={() => setStatement(null)} />
+      <HandoversDrawer
+        open={handoversDrawer}
+        onClose={() => setHandoversDrawer(false)}
+      />
     </>
   );
 }

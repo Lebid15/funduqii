@@ -2886,7 +2886,9 @@
       "summary": "Summary",
       "empty": "No shifts yet",
       "emptyHint": "Open the first shift to start.",
-      "searchPlaceholder": "Search by number, person or notes…"
+      "searchPlaceholder": "Search by number, person or notes…",
+      "noMatches": "No matching shifts",
+      "noMatchesHint": "Adjust the search or filters to widen the results."
     },
     "ho": {
       "title": "Shift handovers",

@@ -1,14 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Clock, PlayCircle, Printer } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Ban,
+  CalendarDays,
+  ClipboardList,
+  Clock,
+  Coins,
+  Lock,
+  PlayCircle,
+  Printer,
+  Scale,
+  SearchX,
+  Wallet,
+} from "lucide-react";
 
 import {
   Alert,
   Badge,
   Button,
   Card,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -20,14 +31,18 @@ import {
   SectionHeader,
   Select,
   useToast,
-  type Column,
 } from "@/components/ui";
+import {
+  OperationCard,
+  type OperationFact,
+  type OperationMenuItem,
+  type OperationPrimaryAction,
+} from "@/components/hotel/operations/OperationCard";
 import { cancelShift, getShiftStatement, getShiftSummary, listShifts } from "@/lib/api/shifts";
 import { messageForError } from "@/lib/api/errors";
 import type { ShiftCashSummary, ShiftListItem, ShiftStatement, ShiftStatus } from "@/lib/api/types";
 import { formatDateTime, shiftStatusTone } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { useCurrentUser } from "@/lib/session/CurrentUserContext";
 import { CloseShiftModal, OpenShiftModal, ShiftStatementPrintModal } from "./CurrentShiftTab";
 
 const PAGE_SIZE = 25;
@@ -36,7 +51,6 @@ const STATUSES: ShiftStatus[] = ["open", "closed", "cancelled"];
 export function ShiftsTab() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
-  const me = useCurrentUser();
   const l = t.shifts.list;
 
   const [rows, setRows] = useState<ShiftListItem[]>([]);
@@ -48,6 +62,10 @@ export function ShiftsTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  // Flips true after the FIRST settled load — the initial load owns the full
+  // LoadingState/ErrorState; later fetches keep the cards mounted (a11y).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const [openModal, setOpenModal] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{
@@ -61,7 +79,14 @@ export function ShiftsTab() {
   } | null>(null);
   const [statementTarget, setStatementTarget] = useState<ShiftStatement | null>(null);
 
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
+
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -71,17 +96,48 @@ export function ShiftsTab() {
         status: status || undefined,
         business_date: date || undefined,
       });
+      if (seqRef.current !== seq) return;
       setRows(data.results);
       setCount(data.count);
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure keeps the cards + a non-blocking toast; the
+      // full ErrorState + retry is reserved for the initial load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, date, t]);
+  }, [page, query, status, date, t, notify]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // After an ACTION-triggered reload settles, restore focus to the stable
+  // results anchor if the acting control unmounted.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
   }, [load]);
 
   async function openSummary(row: ShiftListItem, forClose: boolean) {
@@ -105,69 +161,140 @@ export function ShiftsTab() {
     }
   }
 
+  const filtering = query !== "" || status !== "" || date !== "";
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const statusOptions = STATUSES.map((s) => ({ value: s, label: t.shifts.status[s] }));
 
-  const columns: Column<ShiftListItem>[] = [
-    { key: "shift_number", header: l.number },
-    { key: "business_date", header: l.businessDate },
-    { key: "responsible_name", header: l.responsible },
-    {
-      key: "status",
-      header: t.common.status,
-      render: (r) => (
-        <Badge tone={shiftStatusTone(r.status)}>{t.shifts.status[r.status]}</Badge>
-      ),
-    },
-    {
-      key: "opened_at",
-      header: l.openedAt,
-      render: (r) => formatDateTime(r.opened_at, locale),
-    },
-    { key: "opening_cash_amount", header: l.opening },
-    {
-      key: "actual_cash_amount",
-      header: l.actual,
-      render: (r) => r.actual_cash_amount ?? "—",
-    },
-    {
-      key: "cash_difference",
-      header: l.difference,
-      render: (r) =>
-        r.status === "closed" ? (
-          <Badge tone={r.cash_difference === "0.00" ? "success" : "warning"}>
-            {r.cash_difference}
-          </Badge>
-        ) : (
-          "—"
-        ),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => (
-        <div className="table__actions">
-          <Button size="sm" variant="secondary" onClick={() => openSummary(r, false)}>
-            {l.summary}
-          </Button>
-          <Button size="sm" variant="ghost" icon={Printer} onClick={() => openStatement(r)}>
-            {t.shifts.print.printStatement}
-          </Button>
-          {r.status === "open" ? (
-            <>
-              <Button size="sm" onClick={() => openSummary(r, true)}>
-                {t.shifts.current.close}
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => setCancelTarget(r)}>
-                {t.common.cancel}
-              </Button>
-            </>
-          ) : null}
-        </div>
-      ),
-    },
-  ];
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+
+  // DEBOUNCED settled-count live region (announce once the list stops moving).
+  const settledCount = !loading && hasLoadedOnce ? rows.length : null;
+  useEffect(() => {
+    if (settledCount === null) return;
+    const id = setTimeout(() => {
+      setAnnouncement(
+        settledCount === 0
+          ? t.operations.noResults
+          : t.operations.resultsCount.replace("{count}", String(settledCount)),
+      );
+    }, 450);
+    return () => clearTimeout(id);
+  }, [settledCount, t]);
+
+  function renderCard(row: ShiftListItem) {
+    const facts: OperationFact[] = [
+      { key: "date", label: l.businessDate, value: row.business_date, icon: CalendarDays },
+      {
+        key: "opened",
+        label: l.openedAt,
+        value: formatDateTime(row.opened_at, locale),
+        icon: Clock,
+      },
+    ];
+    if (row.closed_at) {
+      facts.push({
+        key: "closed",
+        label: l.closedAt,
+        value: formatDateTime(row.closed_at, locale),
+        icon: Lock,
+      });
+    }
+    facts.push(
+      {
+        key: "opening",
+        label: l.opening,
+        value: <bdi dir="ltr">{row.opening_cash_amount}</bdi>,
+        icon: Wallet,
+      },
+      {
+        key: "expected",
+        label: l.expected,
+        value: <bdi dir="ltr">{row.expected_cash_amount}</bdi>,
+        icon: Coins,
+      },
+      {
+        key: "actual",
+        label: l.actual,
+        value: <bdi dir="ltr">{row.actual_cash_amount ?? "—"}</bdi>,
+        icon: Coins,
+      },
+      {
+        key: "difference",
+        label: l.difference,
+        icon: Scale,
+        // The difference is only meaningful once the drawer is counted (closed):
+        // for an open/cancelled shift the server value carries no settled meaning.
+        value:
+          row.status === "closed" ? (
+            <Badge tone={row.cash_difference === "0.00" ? "success" : "warning"}>
+              {row.cash_difference}
+            </Badge>
+          ) : (
+            "—"
+          ),
+      },
+    );
+
+    const printItem: OperationMenuItem = {
+      key: "print",
+      label: t.shifts.print.printStatement,
+      icon: Printer,
+      onSelect: () => openStatement(row),
+    };
+
+    let primary: OperationPrimaryAction | null;
+    const menu: OperationMenuItem[] = [];
+    if (row.status === "open") {
+      // The one operational next step for an open shift is to close it.
+      primary = {
+        label: t.shifts.current.close,
+        icon: Lock,
+        onClick: () => openSummary(row, true),
+      };
+      menu.push(
+        {
+          key: "summary",
+          label: l.summary,
+          icon: ClipboardList,
+          onSelect: () => openSummary(row, false),
+        },
+        printItem,
+        {
+          key: "cancel",
+          label: t.common.cancel,
+          icon: Ban,
+          danger: true,
+          onSelect: () => setCancelTarget(row),
+        },
+      );
+    } else {
+      primary = {
+        label: l.summary,
+        icon: ClipboardList,
+        variant: "secondary",
+        onClick: () => openSummary(row, false),
+      };
+      menu.push(printItem);
+    }
+
+    return (
+      <OperationCard
+        accent={shiftStatusTone(row.status)}
+        number={row.shift_number}
+        title={<bdi>{row.responsible_name || "—"}</bdi>}
+        ariaLabel={`${l.title} ${row.shift_number}`}
+        moreLabel={t.operations.moreActions}
+        badges={
+          <Badge tone={shiftStatusTone(row.status)}>{t.shifts.status[row.status]}</Badge>
+        }
+        facts={facts}
+        primary={primary}
+        menu={menu}
+      />
+    );
+  }
 
   return (
     <>
@@ -184,7 +311,7 @@ export function ShiftsTab() {
           onSubmit={(e) => {
             e.preventDefault();
             setPage(1);
-            setQuery(search);
+            setQuery(search.trim());
           }}
         >
           <FilterBar>
@@ -221,21 +348,52 @@ export function ShiftsTab() {
             </FormField>
           </FilterBar>
         </form>
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
+
+        {/* STABLE polite live region — announces the settled result count. */}
+        <div className="sr-only" aria-live="polite" aria-atomic="true">
+          {announcement}
+        </div>
+
+        {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+        {showInitialError ? (
           <ErrorState
             title={t.states.errorTitle}
-            message={error}
+            message={error ?? ""}
             retryLabel={t.common.retry}
             onRetry={load}
           />
         ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={l.empty} hint={l.emptyHint} icon={Clock} />
-          ) : (
-            <>
-              <DataTable caption={l.title} columns={columns} rows={rows} rowKey={(r) => r.id} />
+        {!showInitialLoading && !showInitialError ? (
+          <div className="op-results" ref={resultsRef} tabIndex={-1} aria-label={l.title}>
+            <div className="op-results__status" role="status" aria-live="polite">
+              {backgroundRefreshing ? (
+                <span className="op-results__searching">
+                  <span className="spinner" aria-hidden="true" />
+                  <span>{t.operations.updating}</span>
+                </span>
+              ) : null}
+            </div>
+            {rows.length === 0 ? (
+              filtering ? (
+                <EmptyState title={l.noMatches} hint={l.noMatchesHint} icon={SearchX} />
+              ) : (
+                <EmptyState title={l.empty} hint={l.emptyHint} icon={Clock} />
+              )
+            ) : (
+              <div
+                className="op-grid"
+                role="list"
+                aria-label={l.title}
+                aria-busy={backgroundRefreshing}
+              >
+                {rows.map((row) => (
+                  <div role="listitem" key={row.id}>
+                    {renderCard(row)}
+                  </div>
+                ))}
+              </div>
+            )}
+            {rows.length > 0 || filtering ? (
               <Pagination
                 page={page}
                 totalPages={totalPages}
@@ -248,8 +406,8 @@ export function ShiftsTab() {
                     .replace("{total}", String(totalPages)),
                 }}
               />
-            </>
-          )
+            ) : null}
+          </div>
         ) : null}
       </Card>
 
@@ -259,7 +417,7 @@ export function ShiftsTab() {
         onDone={() => {
           setOpenModal(false);
           notify(t.shifts.msgs.opened);
-          load();
+          reloadAfterAction();
         }}
       />
       {closeTarget ? (
@@ -271,7 +429,7 @@ export function ShiftsTab() {
           onDone={() => {
             setCloseTarget(null);
             notify(t.shifts.msgs.closed);
-            load();
+            reloadAfterAction();
           }}
         />
       ) : null}
@@ -281,18 +439,14 @@ export function ShiftsTab() {
         onDone={() => {
           setCancelTarget(null);
           notify(t.shifts.msgs.cancelled);
-          load();
+          reloadAfterAction();
         }}
       />
-      <SummaryModal
-        state={summaryTarget}
-        onClose={() => setSummaryTarget(null)}
-      />
+      <SummaryModal state={summaryTarget} onClose={() => setSummaryTarget(null)} />
       <ShiftStatementPrintModal
         statement={statementTarget}
         onClose={() => setStatementTarget(null)}
       />
-      {me ? null : null}
     </>
   );
 }
