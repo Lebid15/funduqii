@@ -37,7 +37,11 @@ export interface CatalogListParams {
 export function listCatalog(
   params?: CatalogListParams,
 ): Promise<GuestExtraService[]> {
-  // The catalog list endpoint is NOT paginated (returns a plain array).
+  // CONTRACT: the catalog list endpoint is DELIBERATELY unpaginated
+  // (`pagination_class = None` server-side) and returns a PLAIN ARRAY, because
+  // the add-service picker needs the hotel's FULL active list in one shot — a
+  // paged picker would silently hide services past page 1. Do not "fix" this
+  // return type to PaginatedResponse.
   return hotelJson<GuestExtraService[]>(`${B}/catalog/${toQuery(params)}`);
 }
 
@@ -95,6 +99,13 @@ export function activateCatalogItem(id: number): Promise<GuestExtraService> {
 
 export interface FolioDirectoryParams {
   page?: number;
+  /**
+   * SERVER-side free-text filter over the hotel's in-house stays (guest name /
+   * room number). Filtering must stay server-side: the directory is paginated,
+   * so a client-side filter can only ever search the CURRENT page and a guest on
+   * page 3 would be unfindable from page 1.
+   */
+  search?: string;
 }
 
 export function listFolioDirectory(

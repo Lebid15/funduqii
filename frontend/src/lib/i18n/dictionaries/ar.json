@@ -3938,13 +3938,16 @@
     "searchPlaceholder": "ابحث باسم النزيل أو الغرفة",
     "empty": "لا يوجد نزلاء مقيمون",
     "emptyHint": "يظهر هنا النزلاء الذين سجّلوا الدخول لتتمكّن من إضافة الخدمات.",
+    "noMatches": "لا يوجد نزيل مطابق",
+    "noMatchesHint": "لا يوجد نزيل مقيم يطابق بحثك. جرّب اسمًا آخر أو رقم غرفة مختلفًا.",
+    "tablistLabel": "أقسام فوليو النزيل",
     "tabs": {
       "folio": "الفوليو",
       "catalog": "الخدمات والأسعار"
     },
     "stats": {
       "inHouse": "النزلاء المقيمون",
-      "withServices": "لديهم خدمات"
+      "withServices": "لديهم خدمات (في هذه الصفحة)"
     },
     "card": {
       "roomType": "نوع الوحدة",
@@ -3958,12 +3961,19 @@
       "addService": "إضافة خدمة",
       "viewServices": "عرض الخدمات",
       "more": "المزيد",
-      "serviceCount": "{count} خدمات"
+      "serviceCount": {
+        "zero": "لا خدمات",
+        "one": "خدمة واحدة",
+        "two": "خدمتان",
+        "few": "{count} خدمات",
+        "many": "{count} خدمة"
+      }
     },
     "addModal": {
       "title": "إضافة خدمة",
       "forGuest": "لـ {guest} —",
       "noCatalog": "لا توجد خدمات مفعّلة في الكتالوج. أضِف واحدة من الخدمات والأسعار أولًا.",
+      "catalogFailed": "تعذّر تحميل كتالوج الخدمات.",
       "service": "الخدمة",
       "selectService": "اختر خدمة",
       "serviceRequired": "اختر خدمة.",
@@ -3971,6 +3981,9 @@
       "quantityInvalid": "أدخل كمية أكبر من صفر.",
       "unitPrice": "سعر الوحدة",
       "priceInvalid": "أدخل سعر وحدة صحيحًا.",
+      "priceFixedHint": "سعر هذه الخدمة ثابت في الكتالوج.",
+      "priceNoPermissionHint": "تغيير السعر يتطلّب صلاحية إضافة الرسوم.",
+      "priceOverrideOffHint": "فعّل «تعديل السعر» لتتمكّن من تغييره.",
       "overrideLabel": "تعديل السعر",
       "reason": "السبب",
       "reasonPlaceholder": "لماذا يتم تغيير السعر؟",
@@ -3995,6 +4008,7 @@
       "statusVoided": "مُلغاة",
       "voidReason": "السبب",
       "voidedBy": "ألغاها",
+      "overrideReason": "سبب تعديل السعر",
       "actions": "إجراءات",
       "void": "إلغاء",
       "voidTitle": "إلغاء سطر خدمة",

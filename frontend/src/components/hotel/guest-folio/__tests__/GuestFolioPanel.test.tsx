@@ -91,6 +91,9 @@ import type {
   PaginatedResponse,
 } from "@/lib/api/types";
 import en from "@/lib/i18n/dictionaries/en.json";
+import ar from "@/lib/i18n/dictionaries/ar.json";
+import tr from "@/lib/i18n/dictionaries/tr.json";
+import { formatServiceCount } from "@/lib/format";
 import { GuestFolioPanel } from "../GuestFolioPanel";
 import { renderWithProviders } from "@/test-utils";
 
@@ -358,6 +361,131 @@ describe("add service", () => {
     await screen.findByText(g.errors.idempotencyConflict);
   });
 
+  /**
+   * A4 (financial): the key used to be minted INSIDE submit, so every attempt got
+   * a new one — which defeats the backend's idempotency protection entirely. The
+   * dangerous case is not the double-click (the `busy` guard covers that) but a
+   * NETWORK-FAILURE RETRY: the request commits, the response is lost, the user
+   * clicks again. With a fresh key that is a DUPLICATE CHARGE on a guest's folio.
+   */
+  it("REPLAYS the same idempotency_key after a failed submit (A4)", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    vi.mocked(addGuestService)
+      // Attempt 1: the response never arrives (may or may not have committed).
+      .mockRejectedValueOnce({ status: 503, code: "unavailable", message: "x" })
+      .mockResolvedValueOnce({} as never);
+    await openAddModal();
+
+    fireEvent.change(screen.getByLabelText(g.addModal.service), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: g.addModal.submit }));
+    await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(1));
+
+    // The user retries the SAME service/quantity.
+    fireEvent.click(screen.getByRole("button", { name: g.addModal.submit }));
+    await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(2));
+
+    const first = vi.mocked(addGuestService).mock.calls[0][1].idempotency_key;
+    const second = vi.mocked(addGuestService).mock.calls[1][1].idempotency_key;
+    expect(first).toBeTruthy();
+    // The retry must be a REPLAY, so the backend can collapse it.
+    expect(second).toBe(first);
+  });
+
+  it("mints a FRESH key for the next add attempt after a success", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    vi.mocked(addGuestService).mockResolvedValue({} as never);
+    await openAddModal();
+
+    fireEvent.change(screen.getByLabelText(g.addModal.service), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: g.addModal.submit }));
+    await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(1));
+    const firstKey = vi.mocked(addGuestService).mock.calls[0][1].idempotency_key;
+
+    // Re-open for a genuinely NEW posting.
+    fireEvent.click(await screen.findByRole("button", { name: g.card.addService }));
+    fireEvent.change(await screen.findByLabelText(g.addModal.service), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: g.addModal.submit }));
+    await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(addGuestService).mock.calls[1][1].idempotency_key).not.toBe(
+      firstKey,
+    );
+  });
+
+  it("asks the picker for ACTIVE services only", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    await openAddModal();
+    // A deactivated service is refused server-side — never offer it.
+    expect(listCatalog).toHaveBeenCalledWith({ is_active: true });
+  });
+
+  it("refetches the directory after a SUCCESSFUL add", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    vi.mocked(addGuestService).mockResolvedValue({} as never);
+    await openAddModal();
+    const before = vi.mocked(listFolioDirectory).mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText(g.addModal.service), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: g.addModal.submit }));
+
+    await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(1));
+    // The card's service count / totals are now stale — the list must reload.
+    await waitFor(() =>
+      expect(vi.mocked(listFolioDirectory).mock.calls.length).toBeGreaterThan(
+        before,
+      ),
+    );
+  });
+
+  /** B4: `.catch(() => setCatalog([]))` used to render a FAILED fetch as "no
+   * services in the catalogue" — indistinguishable from a real empty catalogue,
+   * with no way to retry. */
+  it("distinguishes a catalogue load FAILURE from an empty catalogue (B4)", async () => {
+    access.set(["service_orders.create"]);
+    vi.mocked(listFolioDirectory).mockResolvedValue(page([makeDirRow()]));
+    vi.mocked(listCatalog).mockRejectedValue({
+      status: 500,
+      code: "server_error",
+      message: "boom",
+    });
+    renderWithProviders(<GuestFolioPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: g.card.addService }));
+
+    await screen.findByText(g.addModal.catalogFailed);
+    expect(screen.queryByText(g.addModal.noCatalog)).toBeNull();
+    // Nothing is postable while the catalogue is unavailable.
+    expect(screen.getByRole("button", { name: g.addModal.submit })).toBeDisabled();
+
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    fireEvent.click(screen.getByRole("button", { name: en.common.retry }));
+    await screen.findByLabelText(g.addModal.service);
+    expect(screen.queryByText(g.addModal.catalogFailed)).toBeNull();
+  });
+
+  it("keeps submit disabled while the catalogue is genuinely empty", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([]);
+    await openAddModal();
+    expect(screen.getByText(g.addModal.noCatalog)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: g.addModal.submit })).toBeDisabled();
+  });
+
+  it("explains WHY the price is read-only for a fixed service (C2)", async () => {
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    await openAddModal();
+    fireEvent.change(screen.getByLabelText(g.addModal.service), {
+      target: { value: "10" },
+    });
+    expect(screen.getByText(g.addModal.priceFixedHint)).toBeInTheDocument();
+  });
+
   it("prevents a double-click from posting twice", async () => {
     vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
     // Never resolves -> the button stays busy/disabled after the first click.
@@ -371,6 +499,292 @@ describe("add service", () => {
     fireEvent.click(submit);
     fireEvent.click(submit);
     await waitFor(() => expect(addGuestService).toHaveBeenCalledTimes(1));
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// B1 — SERVER-side directory search                                            //
+// --------------------------------------------------------------------------- //
+
+describe("directory search (B1)", () => {
+  async function renderDirectory(rows = [makeDirRow()]) {
+    access.set(["service_orders.create"]);
+    vi.mocked(listFolioDirectory).mockResolvedValue(page(rows));
+    renderWithProviders(<GuestFolioPanel />);
+    await screen.findByText(rows[0].guest_name);
+    vi.mocked(listFolioDirectory).mockClear();
+    return screen.getByLabelText(en.common.search);
+  }
+
+  it("sends the term to the SERVER and resets to page 1", async () => {
+    const input = await renderDirectory();
+    fireEvent.change(input, { target: { value: "ahmed" } });
+
+    // Client-side filtering could only ever search the CURRENT page, so a guest
+    // on page 3 was unfindable from page 1.
+    await waitFor(
+      () =>
+        expect(listFolioDirectory).toHaveBeenCalledWith({
+          page: 1,
+          search: "ahmed",
+        }),
+      { timeout: 3000 },
+    );
+  });
+
+  it("debounces a burst of keystrokes into ONE request", async () => {
+    const input = await renderDirectory();
+    for (const value of ["a", "ah", "ahm", "ahme", "ahmed"]) {
+      fireEvent.change(input, { target: { value } });
+    }
+
+    await waitFor(
+      () =>
+        expect(listFolioDirectory).toHaveBeenCalledWith({
+          page: 1,
+          search: "ahmed",
+        }),
+      { timeout: 3000 },
+    );
+    expect(listFolioDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the param entirely when the box is cleared", async () => {
+    const input = await renderDirectory();
+    fireEvent.change(input, { target: { value: "ahmed" } });
+    await waitFor(() => expect(listFolioDirectory).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
+    vi.mocked(listFolioDirectory).mockClear();
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(
+      () =>
+        expect(listFolioDirectory).toHaveBeenCalledWith({
+          page: 1,
+          search: undefined,
+        }),
+      { timeout: 3000 },
+    );
+  });
+
+  it("uses a DISTINCT no-matches message, not 'no in-house guests'", async () => {
+    const input = await renderDirectory();
+    vi.mocked(listFolioDirectory).mockResolvedValue(
+      page<GuestFolioDirectoryRow>([], 0),
+    );
+    fireEvent.change(input, { target: { value: "zzzz" } });
+
+    await screen.findByText(g.noMatches, undefined, { timeout: 3000 });
+    // "No in-house guests" would be a lie while a filter is active.
+    expect(screen.queryByText(g.empty)).toBeNull();
+    // The way out stays available.
+    expect(input).toBeInTheDocument();
+  });
+
+  /**
+   * The old trap: filtering CLIENT-side left `page` untouched, so a user who
+   * filtered while on page 3 saw zero visible rows AND lost the Pagination
+   * controls (it was rendered inside the non-empty branch). Server-side search
+   * resets to page 1, so the filtered set is always entered from its first page.
+   */
+  it("resets to page 1 when a search starts, so no one is stranded on page N", async () => {
+    access.set(["service_orders.create"]);
+    vi.mocked(listFolioDirectory).mockResolvedValue(page([makeDirRow()], 60));
+    renderWithProviders(<GuestFolioPanel />);
+    await screen.findByText("Ali Hassan");
+
+    fireEvent.click(screen.getByRole("button", { name: en.pagination.next }));
+    await waitFor(() =>
+      expect(listFolioDirectory).toHaveBeenCalledWith({
+        page: 2,
+        search: undefined,
+      }),
+    );
+    vi.mocked(listFolioDirectory).mockClear();
+
+    fireEvent.change(screen.getByLabelText(en.common.search), {
+      target: { value: "ahmed" },
+    });
+    await waitFor(
+      () =>
+        expect(listFolioDirectory).toHaveBeenCalledWith({
+          page: 1,
+          search: "ahmed",
+        }),
+      { timeout: 3000 },
+    );
+  });
+
+  it("keeps Pagination mounted for a MULTI-page filtered result", async () => {
+    const input = await renderDirectory();
+    vi.mocked(listFolioDirectory).mockResolvedValue(page([makeDirRow()], 60));
+    fireEvent.change(input, { target: { value: "ali" } });
+
+    await waitFor(() => expect(listFolioDirectory).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
+    // Pagination is driven by the RESULT SET, not by "this render has rows".
+    expect(
+      await screen.findByRole("button", { name: en.pagination.next }),
+    ).toBeInTheDocument();
+  });
+
+  it("still says 'no in-house guests' for a genuinely empty, UNFILTERED list", async () => {
+    access.set(["service_orders.create"]);
+    vi.mocked(listFolioDirectory).mockResolvedValue(
+      page<GuestFolioDirectoryRow>([], 0),
+    );
+    renderWithProviders(<GuestFolioPanel />);
+
+    await screen.findByText(g.empty);
+    expect(screen.queryByText(g.noMatches)).toBeNull();
+    expect(screen.queryByRole("button", { name: en.pagination.next })).toBeNull();
+  });
+
+  /** B8: the announcement used to recompute on EVERY keystroke, firing five
+   * consecutive polite announcements while typing "ahmed". */
+  it("debounces the aria-live announcement while typing (B8)", async () => {
+    const input = await renderDirectory();
+    const live = screen.getByTestId("gf-results-announce");
+    const settled = live.textContent;
+
+    for (const value of ["a", "ah", "ahm", "ahme"]) {
+      fireEvent.change(input, { target: { value } });
+    }
+    // Nothing announced mid-burst — the previous text is left in place.
+    expect(live.textContent).toBe(settled);
+
+    fireEvent.change(input, { target: { value: "ahmed" } });
+    await waitFor(() => expect(listFolioDirectory).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
+    await waitFor(
+      () => expect(live.textContent).toBe(en.operations.resultsCount.replace("{count}", "1")),
+      { timeout: 3000 },
+    );
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// B7 — service-count pluralisation                                             //
+// --------------------------------------------------------------------------- //
+
+describe("service count pluralisation (B7)", () => {
+  it("renders a SINGULAR badge at 1 and a plural badge beyond", async () => {
+    access.set(["service_orders.create"]);
+    vi.mocked(listFolioDirectory).mockResolvedValue(
+      page([
+        makeDirRow({ stay_id: 1, guest_name: "One", room_number: "101", service_count: 1 }),
+        makeDirRow({ stay_id: 2, guest_name: "Two", room_number: "102", service_count: 2 }),
+        makeDirRow({ stay_id: 3, guest_name: "None", room_number: "103", service_count: 0 }),
+        makeDirRow({ stay_id: 4, guest_name: "Lots", room_number: "104", service_count: 12 }),
+      ]),
+    );
+    renderWithProviders(<GuestFolioPanel />);
+    await screen.findByText("One");
+
+    // Was "1 services" before the fix.
+    expect(screen.getByText(g.card.serviceCount.one)).toBeInTheDocument();
+    expect(screen.getByText(g.card.serviceCount.two)).toBeInTheDocument();
+    expect(screen.getByText(g.card.serviceCount.zero)).toBeInTheDocument();
+    expect(screen.getByText("12 services")).toBeInTheDocument();
+  });
+
+  it("selects the right ARABIC form for 1 / 2 / 3-10 / 11+", () => {
+    const d = ar as unknown as Dictionary;
+    const c = d.guestFolio.card.serviceCount;
+    // Arabic needs خدمة / خدمتان / خدمات / خدمة — "{count} خدمات" was wrong at
+    // 1, 2 and 11+.
+    expect(formatServiceCount(0, d, "ar")).toBe(c.zero);
+    expect(formatServiceCount(1, d, "ar")).toBe(c.one);
+    expect(formatServiceCount(2, d, "ar")).toBe(c.two);
+    expect(formatServiceCount(5, d, "ar")).toBe(
+      c.few.replace("{count}", new Intl.NumberFormat("ar").format(5)),
+    );
+    // 11+ goes BACK to the singular noun.
+    expect(formatServiceCount(11, d, "ar")).toBe(
+      c.many.replace("{count}", new Intl.NumberFormat("ar").format(11)),
+    );
+    // The 3-10 band is judged on the last two digits (103 behaves like 3).
+    expect(formatServiceCount(103, d, "ar")).toBe(
+      c.few.replace("{count}", new Intl.NumberFormat("ar").format(103)),
+    );
+  });
+
+  it("keeps Turkish invariant after a numeral", () => {
+    const d = tr as unknown as Dictionary;
+    const c = d.guestFolio.card.serviceCount;
+    expect(formatServiceCount(1, d, "tr")).toBe(c.one);
+    expect(formatServiceCount(9, d, "tr")).toBe(c.few.replace("{count}", "9"));
+    expect(formatServiceCount(11, d, "tr")).toBe(c.many.replace("{count}", "11"));
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// B6 — the complete WAI-ARIA tab pattern (implemented locally)                 //
+// --------------------------------------------------------------------------- //
+
+describe("tab a11y (B6)", () => {
+  beforeEach(() => {
+    access.set([], { isManager: true });
+    vi.mocked(listFolioDirectory).mockResolvedValue(page([makeDirRow()]));
+  });
+
+  it("wires tablist/tab/tabpanel with a roving tabindex", async () => {
+    renderWithProviders(<GuestFolioPanel />);
+
+    const tablist = await screen.findByRole("tablist");
+    expect(tablist).toHaveAttribute("aria-label", g.tablistLabel);
+
+    const folioTab = screen.getByRole("tab", { name: g.tabs.folio });
+    const catalogTab = screen.getByRole("tab", { name: g.tabs.catalog });
+    expect(folioTab).toHaveAttribute("aria-selected", "true");
+    // Roving tabindex: the whole tablist is ONE tab stop.
+    expect(folioTab).toHaveAttribute("tabindex", "0");
+    expect(catalogTab).toHaveAttribute("tabindex", "-1");
+    // Only the ACTIVE tab's panel is mounted, so only it may claim aria-controls.
+    expect(folioTab).toHaveAttribute("aria-controls", "gf-panel-folio");
+    expect(catalogTab).not.toHaveAttribute("aria-controls");
+
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("id", "gf-panel-folio");
+    expect(panel).toHaveAttribute("aria-labelledby", "gf-tab-folio");
+  });
+
+  it("moves with ArrowRight in LTR", async () => {
+    renderWithProviders(<GuestFolioPanel />);
+    const folioTab = await screen.findByRole("tab", { name: g.tabs.folio });
+
+    fireEvent.keyDown(folioTab, { key: "ArrowRight" });
+    expect(nav.replace).toHaveBeenCalledWith("/hotel/guest-folio?tab=catalog", {
+      scroll: false,
+    });
+  });
+
+  it("REVERSES the arrows in RTL (Arabic)", async () => {
+    renderWithProviders(<GuestFolioPanel />, { locale: "ar" });
+    const folioTab = await screen.findByRole("tab", {
+      name: ar.guestFolio.tabs.folio,
+    });
+
+    // In Arabic the visually-next tab sits to the LEFT.
+    fireEvent.keyDown(folioTab, { key: "ArrowLeft" });
+    expect(nav.replace).toHaveBeenCalledWith("/hotel/guest-folio?tab=catalog", {
+      scroll: false,
+    });
+  });
+
+  it("supports Home / End", async () => {
+    nav.tab = "catalog";
+    vi.mocked(listCatalog).mockResolvedValue([makeCatalogItem()]);
+    renderWithProviders(<GuestFolioPanel />);
+    const catalogTab = await screen.findByRole("tab", { name: g.tabs.catalog });
+
+    fireEvent.keyDown(catalogTab, { key: "Home" });
+    expect(nav.replace).toHaveBeenCalledWith("/hotel/guest-folio?tab=folio", {
+      scroll: false,
+    });
   });
 });
 
@@ -443,6 +857,52 @@ describe("view services + void", () => {
         initialCalls,
       ),
     );
+  });
+
+  /** B9: the VoidDialog restores focus to the Void button, then the reload
+   * re-renders the line as voided and that button unmounts — focus fell to
+   * document.body while the modal was still open. */
+  it("keeps focus INSIDE the modal after a void (B9)", async () => {
+    vi.mocked(listStayServiceLines)
+      .mockResolvedValueOnce([makeLine()])
+      .mockResolvedValue([
+        makeLine({ status: "voided", void_reason: "Wrong charge", voided_by: "Manager" }),
+      ]);
+    vi.mocked(voidCharge).mockResolvedValue({} as never);
+    await openViewModal();
+
+    await screen.findByText(g.viewModal.title);
+    fireEvent.click(screen.getByRole("button", { name: g.viewModal.void }));
+    const dialog = await screen.findByRole("dialog", {
+      name: g.viewModal.voidTitle,
+    });
+    fireEvent.change(within(dialog).getByLabelText(en.finance.void.reason), {
+      target: { value: "Wrong charge" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: g.viewModal.void }),
+    );
+
+    // The acting button is gone once the line is voided...
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: g.viewModal.void })).toBeNull(),
+    );
+    // ...so focus must land on the modal's stable anchor, never on <body>.
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(document.activeElement).not.toBeNull();
+  });
+
+  it("surfaces the variable-price override reason on a line", async () => {
+    vi.mocked(listStayServiceLines).mockResolvedValue([
+      makeLine({ price_override_reason: "Damaged minibar door" }),
+    ]);
+    await openViewModal();
+
+    await screen.findByText(g.viewModal.title);
+    expect(screen.getByText("Damaged minibar door")).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(g.viewModal.overrideReason)),
+    ).toBeInTheDocument();
   });
 
   it("hides the Void action without finance.charge_void", async () => {

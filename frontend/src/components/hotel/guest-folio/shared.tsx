@@ -8,10 +8,17 @@ import type {
 
 /**
  * Cosmetic permission gate — every API re-checks server-side regardless.
- * `null` (outside the hotel shell, e.g. the platform console) and the still-
- * loading state BOTH read as "allowed" so the UI never briefly hides a control
- * the user actually has. Money is additionally gated on the RESOLVED `finance.view`
- * (see `canSeeMoney`) so a hidden amount never flashes before the check settles.
+ *
+ * Two DIFFERENT cases, deliberately:
+ * - `access === null` (outside the hotel shell, e.g. the platform console) reads
+ *   as "allowed" — there is no hotel membership to check against.
+ * - Still LOADING reads as "denied" (fail-closed): `!access.loading && ...`. A
+ *   control therefore appears only once the permission check has RESOLVED, so a
+ *   user never sees an action flash into view and then vanish — or, worse, clicks
+ *   one they do not hold and eats a 403.
+ *
+ * Money is gated separately by `useCanSeeMoney` below, which resolves the single
+ * code `finance.view` rather than an any-of set.
  */
 export function useCan() {
   const access = useHotelAccess();

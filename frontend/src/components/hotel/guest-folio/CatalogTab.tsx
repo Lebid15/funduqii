@@ -170,6 +170,11 @@ export function CatalogTab() {
     },
   ];
 
+  // A mutation reloads the WHOLE list, so letting a sibling row stay clickable
+  // mid-flight invites a second write against data that is about to be replaced.
+  // `busyId` marks WHICH row is spinning; `mutating` locks every row.
+  const mutating = busyId !== null;
+
   if (canManage) {
     columns.push({
       key: "actions",
@@ -182,6 +187,7 @@ export function CatalogTab() {
               size="sm"
               variant="secondary"
               icon={Pencil}
+              disabled={mutating}
               onClick={() => setForm({ item })}
             >
               {t.common.edit}
@@ -193,6 +199,7 @@ export function CatalogTab() {
               variant="dangerSoft"
               icon={PowerOff}
               loading={busyId === item.id}
+              disabled={mutating}
               onClick={() =>
                 run(item.id, () => deactivateCatalogItem(item.id), c.deactivated)
               }
@@ -206,6 +213,7 @@ export function CatalogTab() {
               variant="secondary"
               icon={Power}
               loading={busyId === item.id}
+              disabled={mutating}
               onClick={() =>
                 run(item.id, () => activateCatalogItem(item.id), c.activated)
               }
@@ -222,6 +230,7 @@ export function CatalogTab() {
     { value: "active", label: c.filterActive },
     { value: "inactive", label: c.filterInactive },
   ];
+  const backgroundRefreshing = loading && hasLoadedOnce;
 
   return (
     <>
@@ -231,7 +240,11 @@ export function CatalogTab() {
           description={c.subtitle}
           actions={
             canCreate ? (
-              <Button icon={Plus} onClick={() => setForm({ item: null })}>
+              <Button
+                icon={Plus}
+                disabled={mutating}
+                onClick={() => setForm({ item: null })}
+              >
                 {c.create}
               </Button>
             ) : null
@@ -251,6 +264,18 @@ export function CatalogTab() {
           </FormField>
         </FilterBar>
 
+        {/* Changing the status filter refetches; without this the table simply
+            froze with stale rows and no signal (FolioDirectoryTab already had
+            it). Keeps the rows MOUNTED — a11y-safe background refresh. */}
+        <div className="op-results__status" role="status" aria-live="polite">
+          {backgroundRefreshing ? (
+            <span className="op-results__searching">
+              <span className="spinner" aria-hidden="true" />
+              <span>{t.operations.updating}</span>
+            </span>
+          ) : null}
+        </div>
+
         {loading && !hasLoadedOnce ? (
           <LoadingState label={t.common.loading} />
         ) : null}
@@ -266,12 +291,14 @@ export function CatalogTab() {
           items.length === 0 ? (
             <EmptyState title={c.empty} hint={c.emptyHint} />
           ) : (
-            <DataTable
-              columns={columns}
-              rows={items}
-              rowKey={(item) => item.id}
-              caption={c.title}
-            />
+            <div aria-busy={backgroundRefreshing}>
+              <DataTable
+                columns={columns}
+                rows={items}
+                rowKey={(item) => item.id}
+                caption={c.title}
+              />
+            </div>
           )
         ) : null}
       </Card>

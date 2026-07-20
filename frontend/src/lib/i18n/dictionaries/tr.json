@@ -3938,13 +3938,16 @@
     "searchPlaceholder": "Misafir veya oda ara",
     "empty": "Konaklayan misafir yok",
     "emptyHint": "Giriş yapmış misafirler burada görünür, böylece hizmet ekleyebilirsiniz.",
+    "noMatches": "Eşleşen misafir yok",
+    "noMatchesHint": "Aramanızla eşleşen konaklayan misafir yok. Farklı bir ad veya oda numarası deneyin.",
+    "tablistLabel": "Misafir folyosu bölümleri",
     "tabs": {
       "folio": "Folyo",
       "catalog": "Hizmetler ve fiyatlar"
     },
     "stats": {
       "inHouse": "Konaklayan misafirler",
-      "withServices": "Hizmeti olanlar"
+      "withServices": "Hizmeti olanlar (bu sayfada)"
     },
     "card": {
       "roomType": "Birim türü",
@@ -3958,12 +3961,19 @@
       "addService": "Hizmet ekle",
       "viewServices": "Hizmetleri gör",
       "more": "Daha fazla",
-      "serviceCount": "{count} hizmet"
+      "serviceCount": {
+        "zero": "Hizmet yok",
+        "one": "1 hizmet",
+        "two": "2 hizmet",
+        "few": "{count} hizmet",
+        "many": "{count} hizmet"
+      }
     },
     "addModal": {
       "title": "Hizmet ekle",
       "forGuest": "{guest} için —",
       "noCatalog": "Katalogda etkin hizmet yok. Önce Hizmetler ve fiyatlar bölümünden bir tane ekleyin.",
+      "catalogFailed": "Hizmet kataloğu yüklenemedi.",
       "service": "Hizmet",
       "selectService": "Bir hizmet seçin",
       "serviceRequired": "Bir hizmet seçin.",
@@ -3971,6 +3981,9 @@
       "quantityInvalid": "Sıfırdan büyük bir adet girin.",
       "unitPrice": "Birim fiyat",
       "priceInvalid": "Geçerli bir birim fiyat girin.",
+      "priceFixedHint": "Bu hizmetin katalog fiyatı sabittir.",
+      "priceNoPermissionHint": "Fiyatı değiştirmek finans ücret izni gerektirir.",
+      "priceOverrideOffHint": "Değiştirmek için “Fiyatı değiştir” seçeneğini açın.",
       "overrideLabel": "Fiyatı değiştir",
       "reason": "Gerekçe",
       "reasonPlaceholder": "Fiyat neden değiştiriliyor?",
@@ -3995,6 +4008,7 @@
       "statusVoided": "İptal edildi",
       "voidReason": "Gerekçe",
       "voidedBy": "İptal eden",
+      "overrideReason": "Fiyat değişikliği gerekçesi",
       "actions": "İşlemler",
       "void": "İptal et",
       "voidTitle": "Hizmet satırını iptal et",

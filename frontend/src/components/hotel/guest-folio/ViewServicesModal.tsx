@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Ban, Check, XCircle } from "lucide-react";
 
 import {
@@ -31,6 +37,17 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
  * settle, refund, close/reopen folio, void-whole-folio, invoice, adjustment,
  * discount, edit-room-charge or add-folio.
  */
+/**
+ * A voided line no longer counts toward the folio, so its amounts are struck
+ * through and muted rather than reading as live money. This is ADDITIVE to the
+ * explicit "Voided" badge + reason + actor already rendered in the status cell —
+ * never colour/decoration alone.
+ */
+function voidedTextStyle(line: GuestServiceLine): CSSProperties | undefined {
+  if (line.status !== "voided") return undefined;
+  return { textDecoration: "line-through", opacity: 0.65 };
+}
+
 export function ViewServicesModal({
   stay,
   canVoid,
@@ -54,6 +71,8 @@ export function ViewServicesModal({
   const [error, setError] = useState<string | null>(null);
   const [voidLine, setVoidLine] = useState<GuestServiceLine | null>(null);
   const seqRef = useRef(0);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
 
   const load = useCallback(async () => {
     if (stayId === null) return;
@@ -79,11 +98,25 @@ export function ViewServicesModal({
     }
   }, [open, load]);
 
+  // After a void-triggered reload settles, focus would otherwise be LOST: the
+  // VoidDialog restores focus to the Void button, then the reload re-renders that
+  // line as voided and the Void button unmounts, dropping focus to document.body
+  // while this modal is still open. Same restore pattern as FolioDirectoryTab.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      contentRef.current?.focus();
+    }
+  }, [lines, loading]);
+
   async function confirmVoid(reason: string) {
     if (!voidLine) return;
     // Reuse the EXISTING finance void-charge endpoint on the line's charge id.
     await voidCharge(voidLine.id, reason);
     setVoidLine(null);
+    restoreFocusRef.current = true;
     await load();
     onChanged();
   }
@@ -93,21 +126,39 @@ export function ViewServicesModal({
       key: "description",
       header: g.viewModal.item,
       render: (line) => (
-        <bdi>{line.service_name_snapshot || line.description}</bdi>
+        <div className="stack" style={{ gap: "0.2rem" }}>
+          <bdi style={voidedTextStyle(line)}>
+            {line.service_name_snapshot || line.description}
+          </bdi>
+          {/* A VARIABLE-priced line posted with a unit-price override carries the
+              mandatory reason it was changed — show it, otherwise the amount
+              looks unexplained next to the catalogue price. */}
+          {line.price_override_reason ? (
+            <span className="muted small">
+              {g.viewModal.overrideReason}: <bdi>{line.price_override_reason}</bdi>
+            </span>
+          ) : null}
+        </div>
       ),
     },
     {
       key: "quantity",
       header: g.viewModal.quantity,
       align: "end",
-      render: (line) => <bdi dir="ltr">{line.quantity}</bdi>,
+      render: (line) => (
+        <bdi dir="ltr" style={voidedTextStyle(line)}>
+          {line.quantity}
+        </bdi>
+      ),
     },
     {
       key: "unit_amount",
       header: g.viewModal.unitAmount,
       align: "end",
       render: (line) => (
-        <bdi dir="ltr">{formatMoney(line.unit_amount, line.currency, locale)}</bdi>
+        <bdi dir="ltr" style={voidedTextStyle(line)}>
+          {formatMoney(line.unit_amount, line.currency, locale)}
+        </bdi>
       ),
     },
     {
@@ -115,7 +166,9 @@ export function ViewServicesModal({
       header: g.viewModal.tax,
       align: "end",
       render: (line) => (
-        <bdi dir="ltr">{formatMoney(line.tax_amount, line.currency, locale)}</bdi>
+        <bdi dir="ltr" style={voidedTextStyle(line)}>
+          {formatMoney(line.tax_amount, line.currency, locale)}
+        </bdi>
       ),
     },
     {
@@ -123,7 +176,9 @@ export function ViewServicesModal({
       header: g.viewModal.total,
       align: "end",
       render: (line) => (
-        <bdi dir="ltr">{formatMoney(line.total_amount, line.currency, locale)}</bdi>
+        <bdi dir="ltr" style={voidedTextStyle(line)}>
+          {formatMoney(line.total_amount, line.currency, locale)}
+        </bdi>
       ),
     },
     {
@@ -198,7 +253,9 @@ export function ViewServicesModal({
           </Button>
         }
       >
-        <div className="stack">
+        {/* Stable focusable anchor: survives every reload, so focus always has
+            somewhere to land inside the modal when the acting control unmounts. */}
+        <div className="stack" ref={contentRef} tabIndex={-1}>
           {stay ? (
             <p className="muted small">
               {g.viewModal.forGuest.replace("{guest}", stay.guest_name)}{" "}

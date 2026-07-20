@@ -3938,13 +3938,16 @@
     "searchPlaceholder": "Search by guest or room",
     "empty": "No in-house guests",
     "emptyHint": "Checked-in guests will appear here so you can add services.",
+    "noMatches": "No matching guests",
+    "noMatchesHint": "No in-house guest matches your search. Try a different name or room number.",
+    "tablistLabel": "Guest folio sections",
     "tabs": {
       "folio": "Folio",
       "catalog": "Services & prices"
     },
     "stats": {
       "inHouse": "In-house guests",
-      "withServices": "With services"
+      "withServices": "With services (this page)"
     },
     "card": {
       "roomType": "Unit type",
@@ -3958,12 +3961,19 @@
       "addService": "Add service",
       "viewServices": "View services",
       "more": "More",
-      "serviceCount": "{count} services"
+      "serviceCount": {
+        "zero": "No services",
+        "one": "1 service",
+        "two": "2 services",
+        "few": "{count} services",
+        "many": "{count} services"
+      }
     },
     "addModal": {
       "title": "Add a service",
       "forGuest": "For {guest} —",
       "noCatalog": "No active services in the catalogue. Add one in Services & prices first.",
+      "catalogFailed": "The services catalogue could not be loaded.",
       "service": "Service",
       "selectService": "Choose a service",
       "serviceRequired": "Choose a service.",
@@ -3971,6 +3981,9 @@
       "quantityInvalid": "Enter a quantity greater than zero.",
       "unitPrice": "Unit price",
       "priceInvalid": "Enter a valid unit price.",
+      "priceFixedHint": "This service has a fixed catalogue price.",
+      "priceNoPermissionHint": "Changing the price needs the finance charge permission.",
+      "priceOverrideOffHint": "Turn on “Override the price” to change it.",
       "overrideLabel": "Override the price",
       "reason": "Reason",
       "reasonPlaceholder": "Why is the price being changed?",
@@ -3995,6 +4008,7 @@
       "statusVoided": "Voided",
       "voidReason": "Reason",
       "voidedBy": "Voided by",
+      "overrideReason": "Price change reason",
       "actions": "Actions",
       "void": "Void",
       "voidTitle": "Void service line",

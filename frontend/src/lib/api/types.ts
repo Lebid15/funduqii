@@ -3122,6 +3122,13 @@ export interface GuestServiceLine {
   status: PostingStatus;
   void_reason: string | null;
   voided_by: string | null;
+  /**
+   * The mandatory reason captured when a VARIABLE-priced service was posted with
+   * a unit-price override (`finance.charge_create` only). Absent/null for every
+   * catalogue-priced line. Optional here because the backend field lands with the
+   * parallel backend change — the UI renders it only when present.
+   */
+  price_override_reason?: string | null;
 }
 
 /** The FolioCharge snapshot created by POST stays/{id}/add/. */

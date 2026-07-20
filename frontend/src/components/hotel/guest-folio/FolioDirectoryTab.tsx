@@ -11,6 +11,7 @@ import {
   Lock,
   Plus,
   Receipt,
+  SearchX,
   Users,
   Wallet,
 } from "lucide-react";
@@ -37,7 +38,12 @@ import { StatCards, type OperationStat } from "@/components/hotel/operations/Sta
 import { listFolioDirectory } from "@/lib/api/guestServices";
 import { messageForError } from "@/lib/api/errors";
 import type { GuestFolioDirectoryRow } from "@/lib/api/types";
-import { folioStatusTone, formatDate, formatMoney } from "@/lib/format";
+import {
+  folioStatusTone,
+  formatDate,
+  formatMoney,
+  formatServiceCount,
+} from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
 import { AddServiceModal } from "./AddServiceModal";
@@ -56,7 +62,11 @@ export function FolioDirectoryTab() {
   const [rows, setRows] = useState<GuestFolioDirectoryRow[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
+  // `search` is what the user is typing; `appliedSearch` is what the SERVER is
+  // currently filtered by. Only the latter drives a request.
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [announcement, setAnnouncement] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Flips true after the FIRST settled load — the initial load owns the full
@@ -77,7 +87,13 @@ export function FolioDirectoryTab() {
     setLoading(true);
     setError(null);
     try {
-      const data = await listFolioDirectory({ page });
+      // SERVER-side filtering: the directory is paginated, so filtering the
+      // loaded page client-side made a guest on page 3 unfindable from page 1.
+      // Blank/absent `search` behaves exactly as an unfiltered list.
+      const data = await listFolioDirectory({
+        page,
+        search: appliedSearch || undefined,
+      });
       if (seqRef.current !== seq) return;
       setRows(data.results);
       setCount(data.count);
@@ -93,11 +109,23 @@ export function FolioDirectoryTab() {
     } finally {
       if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, t, notify]);
+  }, [page, appliedSearch, t, notify]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // DEBOUNCE the request (~350ms after typing stops) so a five-letter name is one
+  // round-trip, not five. Applying the term and resetting to page 1 in the SAME
+  // tick keeps it to a single render/fetch; the existing seq-guard above still
+  // discards any out-of-order response.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setAppliedSearch(search.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(id);
+  }, [search]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -122,15 +150,9 @@ export function FolioDirectoryTab() {
     return load();
   }, [load]);
 
-  // Client-side filter over the loaded page (the directory endpoint has no
-  // search param). Matches guest name or room number.
-  const query = search.trim().toLowerCase();
-  const visibleRows = query
-    ? rows.filter((row) =>
-        `${row.guest_name} ${row.room_number}`.toLowerCase().includes(query),
-      )
-    : rows;
-
+  // `rows` is already the SERVER-filtered page — no client-side narrowing (that
+  // would re-hide server matches on fields the client does not know about).
+  const filtering = appliedSearch !== "";
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const withServices = rows.filter((row) => row.service_count > 0).length;
 
@@ -154,12 +176,26 @@ export function FolioDirectoryTab() {
   const showInitialLoading = loading && !hasLoadedOnce;
   const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
   const backgroundRefreshing = loading && hasLoadedOnce;
-  const resultsAnnouncement =
-    !loading && hasLoadedOnce
-      ? visibleRows.length === 0
-        ? t.operations.noResults
-        : t.operations.resultsCount.replace("{count}", String(visibleRows.length))
-      : "";
+
+  // DEBOUNCED live-region text (B8). The announcement used to be recomputed on
+  // every keystroke, so typing "ahmed" fired five consecutive polite
+  // announcements at a screen-reader user. We now announce only once the result
+  // has SETTLED and stayed settled for ~450ms; the visible list stays fully
+  // responsive because it is not gated on this.
+  const settledCount = !loading && hasLoadedOnce ? rows.length : null;
+  useEffect(() => {
+    // Mid-flight: leave the previous announcement in place rather than clearing
+    // it (a clear is itself an announcement).
+    if (settledCount === null) return;
+    const id = setTimeout(() => {
+      setAnnouncement(
+        settledCount === 0
+          ? t.operations.noResults
+          : t.operations.resultsCount.replace("{count}", String(settledCount)),
+      );
+    }, 450);
+    return () => clearTimeout(id);
+  }, [settledCount, t]);
 
   function renderCard(row: GuestFolioDirectoryRow) {
     const showMoney = canSeeMoney && row.service_total !== undefined;
@@ -282,7 +318,7 @@ export function FolioDirectoryTab() {
               </Badge>
             ) : null}
             <Badge tone="neutral" variant="outline" icon={ClipboardList}>
-              {g.card.serviceCount.replace("{count}", String(row.service_count))}
+              {formatServiceCount(row.service_count, t, locale)}
             </Badge>
           </>
         }
@@ -324,7 +360,7 @@ export function FolioDirectoryTab() {
           aria-atomic="true"
           data-testid="gf-results-announce"
         >
-          {resultsAnnouncement}
+          {announcement}
         </div>
 
         {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
@@ -351,36 +387,51 @@ export function FolioDirectoryTab() {
                 </span>
               ) : null}
             </div>
-            {visibleRows.length === 0 ? (
-              <EmptyState title={g.empty} hint={g.emptyHint} icon={Users} />
-            ) : (
-              <>
-                <div
-                  className="op-grid"
-                  role="list"
-                  aria-label={g.title}
-                  aria-busy={backgroundRefreshing}
-                >
-                  {visibleRows.map((row) => (
-                    <div role="listitem" key={row.stay_id}>
-                      {renderCard(row)}
-                    </div>
-                  ))}
-                </div>
-                <Pagination
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={setPage}
-                  labels={{
-                    previous: t.pagination.previous,
-                    next: t.pagination.next,
-                    status: t.pagination.page
-                      .replace("{page}", String(page))
-                      .replace("{total}", String(totalPages)),
-                  }}
+            {rows.length === 0 ? (
+              // A search that matched nothing is NOT the same as an empty hotel;
+              // saying "No in-house guests" while a filter is active is simply
+              // untrue and hides the way out (clear the search).
+              filtering ? (
+                <EmptyState
+                  title={g.noMatches}
+                  hint={g.noMatchesHint}
+                  icon={SearchX}
                 />
-              </>
+              ) : (
+                <EmptyState title={g.empty} hint={g.emptyHint} icon={Users} />
+              )
+            ) : (
+              <div
+                className="op-grid"
+                role="list"
+                aria-label={g.title}
+                aria-busy={backgroundRefreshing}
+              >
+                {rows.map((row) => (
+                  <div role="listitem" key={row.stay_id}>
+                    {renderCard(row)}
+                  </div>
+                ))}
+              </div>
             )}
+            {/* Pagination stays MOUNTED whenever a filter is active, even on an
+                empty result — unmounting it used to strand a user who filtered
+                while on page N with no control to get back. It is hidden only
+                for a genuinely empty, unfiltered directory. */}
+            {rows.length > 0 || filtering ? (
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                labels={{
+                  previous: t.pagination.previous,
+                  next: t.pagination.next,
+                  status: t.pagination.page
+                    .replace("{page}", String(page))
+                    .replace("{total}", String(totalPages)),
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
       </Card>

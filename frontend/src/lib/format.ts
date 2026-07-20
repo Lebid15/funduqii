@@ -139,6 +139,34 @@ export function formatCapacity(
   return c.few.replace("{n}", num(base));
 }
 
+/**
+ * Localised "N services" phrase for the guest-folio card badge.
+ *
+ * Same precedent as {@link formatCapacity}, extended with the two forms Arabic
+ * needs beyond a `one/two/few` set: Arabic marks 3–10 (`few`, "خدمات") apart from
+ * 11+ (`many`, back to the singular noun "خدمة"), and 0 reads best as its own
+ * phrase rather than "0 خدمات". English and Turkish simply reuse the same string
+ * for `few`/`many` (Turkish takes no plural suffix after a numeral at all), so a
+ * single selector serves all three dictionaries.
+ *
+ * The 3–10 band is tested on `count % 100` because that is the Arabic rule
+ * (103 behaves like 3, 111 behaves like 11).
+ */
+export function formatServiceCount(
+  count: number,
+  t: Dictionary,
+  locale: Locale,
+): string {
+  const c = t.guestFolio.card.serviceCount;
+  if (count === 0) return c.zero;
+  if (count === 1) return c.one;
+  if (count === 2) return c.two;
+  const n = new Intl.NumberFormat(locale).format(count);
+  const rest = count % 100;
+  if (rest >= 3 && rest <= 10) return c.few.replace("{count}", n);
+  return c.many.replace("{count}", n);
+}
+
 export function reservationStatusTone(status: ReservationStatus): BadgeTone {
   switch (status) {
     case "confirmed":
