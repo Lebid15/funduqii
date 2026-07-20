@@ -2661,7 +2661,13 @@
       "deleteUserLabel": "Tamamen temizse kullanıcı hesabını da sil",
       "deleteConfirm": "Sil",
       "deletedMsg": "Üyelik silindi.",
-      "deletedWithUserMsg": "Üyelik ve kullanıcı hesabı silindi."
+      "deletedWithUserMsg": "Üyelik ve kullanıcı hesabı silindi.",
+      "contact": "İletişim",
+      "managerFullAccess": "Tam erişim",
+      "noMatches": "Eşleşen personel yok",
+      "noMatchesHint": "Farklı bir arama veya filtre deneyin.",
+      "more": "Daha fazla",
+      "managePermissions": "Yetkileri yönet"
     },
     "form": {
       "createTitle": "Yeni personel",
@@ -2677,10 +2683,15 @@
       "tempPassword": "Geçici parola",
       "tempPasswordHint": "Çalışana sistem dışında iletilir; bir daha gösterilmez.",
       "initialPermissions": "Başlangıç yetkileri (isteğe bağlı)",
-      "initialPermissionsHint": "Yetki matrisinden istediğiniz zaman değiştirebilirsiniz.",
+      "initialPermissionsHint": "Bu üyenin erişebileceği bölümleri verin. Personel kartından istediğiniz zaman değiştirebilirsiniz.",
       "nameRequired": "Ad soyad gereklidir.",
       "emailRequired": "Geçerli bir e-posta gereklidir.",
-      "passwordRequired": "En az 8 karakterlik bir parola gereklidir."
+      "passwordRequired": "En az 8 karakterlik bir parola gereklidir.",
+      "next": "İleri",
+      "back": "Geri",
+      "createSubmit": "Personeli oluştur",
+      "step1": "2 adımdan 1 · Bilgiler ve hesap",
+      "step2": "2 adımdan 2 · Yetkiler"
     },
     "matrix": {
       "title": "Yetki matrisi",
@@ -2696,7 +2707,9 @@
       "savedMsg": "Yetkiler güncellendi.",
       "grantedCount": "{count} verildi",
       "inactiveNote": "Bu üye devre dışı; yetkiler saklanır ama yeniden etkinleşene kadar etkisizdir.",
-      "selfCannotEdit": "Kendi yetkilerinizi düzenleyemezsiniz."
+      "selfCannotEdit": "Kendi yetkilerinizi düzenleyemezsiniz.",
+      "modalTitle": "Yetkileri yönet",
+      "forMember": "{name} için yetkiler"
     },
     "registry": {
       "title": "Yetki referansı",

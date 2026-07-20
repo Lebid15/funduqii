@@ -2661,7 +2661,13 @@
       "deleteUserLabel": "Also delete the user account if it is completely clean",
       "deleteConfirm": "Delete",
       "deletedMsg": "Membership deleted.",
-      "deletedWithUserMsg": "Membership and user account deleted."
+      "deletedWithUserMsg": "Membership and user account deleted.",
+      "contact": "Contact",
+      "managerFullAccess": "Full access",
+      "noMatches": "No matching staff",
+      "noMatchesHint": "Try a different search or filter.",
+      "more": "More",
+      "managePermissions": "Manage permissions"
     },
     "form": {
       "createTitle": "New staff member",
@@ -2677,10 +2683,15 @@
       "tempPassword": "Temporary password",
       "tempPasswordHint": "Delivered to the employee outside the system; never shown again.",
       "initialPermissions": "Initial permissions (optional)",
-      "initialPermissionsHint": "You can adjust them any time from the permissions matrix.",
+      "initialPermissionsHint": "Grant the sections this member may access. You can adjust them any time from the member's card.",
       "nameRequired": "A full name is required.",
       "emailRequired": "A valid email is required.",
-      "passwordRequired": "A password of at least 8 characters is required."
+      "passwordRequired": "A password of at least 8 characters is required.",
+      "next": "Next",
+      "back": "Back",
+      "createSubmit": "Create staff member",
+      "step1": "Step 1 of 2 · Details & account",
+      "step2": "Step 2 of 2 · Permissions"
     },
     "matrix": {
       "title": "Permissions matrix",
@@ -2696,7 +2707,9 @@
       "savedMsg": "Permissions updated.",
       "grantedCount": "{count} granted",
       "inactiveNote": "This member is deactivated; permissions remain stored but have no effect until reactivation.",
-      "selfCannotEdit": "You cannot edit your own permissions."
+      "selfCannotEdit": "You cannot edit your own permissions.",
+      "modalTitle": "Manage permissions",
+      "forMember": "Permissions for {name}"
     },
     "registry": {
       "title": "Permission reference",

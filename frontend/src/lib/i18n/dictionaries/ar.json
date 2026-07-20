@@ -2661,7 +2661,13 @@
       "deleteUserLabel": "احذف أيضًا حساب المستخدم إذا كان نظيفًا تمامًا",
       "deleteConfirm": "حذف",
       "deletedMsg": "تم حذف العضوية.",
-      "deletedWithUserMsg": "تم حذف العضوية وحساب المستخدم."
+      "deletedWithUserMsg": "تم حذف العضوية وحساب المستخدم.",
+      "contact": "التواصل",
+      "managerFullAccess": "وصول كامل",
+      "noMatches": "لا يوجد موظفون مطابقون",
+      "noMatchesHint": "جرّب بحثًا أو تصفية مختلفة.",
+      "more": "المزيد",
+      "managePermissions": "إدارة الصلاحيات"
     },
     "form": {
       "createTitle": "موظف جديد",
@@ -2677,10 +2683,15 @@
       "tempPassword": "كلمة مرور مؤقتة",
       "tempPasswordHint": "تُسلَّم للموظف خارج النظام؛ لن تُعرض مرة أخرى.",
       "initialPermissions": "صلاحيات أولية (اختياري)",
-      "initialPermissionsHint": "يمكنك تعديلها في أي وقت من مصفوفة الصلاحيات.",
+      "initialPermissionsHint": "امنح الأقسام التي يمكن لهذا العضو الوصول إليها. يمكنك تعديلها في أي وقت من بطاقة الموظف.",
       "nameRequired": "الاسم الكامل مطلوب.",
       "emailRequired": "بريد إلكتروني صالح مطلوب.",
-      "passwordRequired": "كلمة مرور من 8 أحرف على الأقل مطلوبة."
+      "passwordRequired": "كلمة مرور من 8 أحرف على الأقل مطلوبة.",
+      "next": "التالي",
+      "back": "رجوع",
+      "createSubmit": "إنشاء الموظف",
+      "step1": "الخطوة 1 من 2 · البيانات والحساب",
+      "step2": "الخطوة 2 من 2 · الصلاحيات"
     },
     "matrix": {
       "title": "مصفوفة الصلاحيات",
@@ -2696,7 +2707,9 @@
       "savedMsg": "تم تحديث الصلاحيات.",
       "grantedCount": "{count} ممنوحة",
       "inactiveNote": "هذا العضو معطّل؛ تبقى الصلاحيات محفوظة بلا مفعول حتى إعادة التفعيل.",
-      "selfCannotEdit": "لا يمكنك تعديل صلاحياتك أنت."
+      "selfCannotEdit": "لا يمكنك تعديل صلاحياتك أنت.",
+      "modalTitle": "إدارة الصلاحيات",
+      "forMember": "صلاحيات {name}"
     },
     "registry": {
       "title": "مرجع الصلاحيات",
