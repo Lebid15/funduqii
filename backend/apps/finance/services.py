@@ -46,6 +46,7 @@ from apps.common.exceptions import (
     VoidWindowOpen,
 )
 
+from .constants import ChargeSource
 from .models import (
     CREDIT_CHARGE_TYPES,
     ChargeType,
@@ -231,18 +232,128 @@ def _record_event(hotel, *, event_type, severity, title, message="", user=None,
 
 # --- Balance ----------------------------------------------------------------
 
+#: The SINGLE definition of "what counts toward a folio balance": only rows with
+#: this posting status contribute, a charge adds its ``total_amount`` and a
+#: payment subtracts its ``amount``. Both the per-folio ``folio_balance`` and the
+#: DB-aggregate finance overview (``aggregate_open_folio_balances``) filter on
+#: THIS constant and these field names, so the two derivations can never drift
+#: (a parity test locks the equivalence). Voided charges/payments (status
+#: ``VOIDED``) are excluded; posted negative adjustment/reversal rows ARE
+#: included and net the original out, exactly as intended.
+BALANCE_STATUS = PostingStatus.POSTED
+BALANCE_CHARGE_FIELD = "total_amount"
+BALANCE_PAYMENT_FIELD = "amount"
 
-def folio_balance(folio) -> dict:
-    """Re-derive a folio's totals from its posted charges and payments."""
-    charges = folio.charges.filter(status=PostingStatus.POSTED)
-    payments = folio.payments.filter(status=PostingStatus.POSTED)
-    total_charges = money(sum((c.total_amount for c in charges), ZERO))
-    total_payments = money(sum((p.amount for p in payments), ZERO))
+
+def _balance_dict(total_charges, total_payments) -> dict:
+    """Assemble the balance result from already-summed charge/payment totals —
+    the ONE arithmetic used by every balance derivation."""
+    total_charges = money(total_charges or ZERO)
+    total_payments = money(total_payments or ZERO)
     return {
         "total_charges": total_charges,
         "total_payments": total_payments,
         "balance": money(total_charges - total_payments),
     }
+
+
+def folio_balance(folio) -> dict:
+    """Re-derive ONE folio's totals from its posted charges and payments.
+
+    COST (C4 — do not misread this): each call issues TWO queries, ALWAYS.
+    ``.filter()`` on a related manager builds a fresh queryset and therefore
+    ALWAYS bypasses ``prefetch_related``'s cache, so prefetching the caller's
+    folios does NOT make this free — it merely fetches the same rows twice. (The
+    pre-P0 finance overview carried exactly that useless ``prefetch_related`` and
+    still cost 2N+3 queries.) Never call this in a loop over folios: use
+    ``aggregate_open_folio_balances``, which computes the SAME
+    ``BALANCE_STATUS``/field definition over the DB in a constant number of
+    queries, so the two derivations can never drift.
+    """
+    charges = folio.charges.filter(status=BALANCE_STATUS)
+    payments = folio.payments.filter(status=BALANCE_STATUS)
+    total_charges = sum((getattr(c, BALANCE_CHARGE_FIELD) for c in charges), ZERO)
+    total_payments = sum((getattr(p, BALANCE_PAYMENT_FIELD) for p in payments), ZERO)
+    return _balance_dict(total_charges, total_payments)
+
+
+def aggregate_open_folio_balances(folios, *, base_currency) -> dict:
+    """Finance-overview aggregation across a queryset of folios.
+
+    Reuses ``folio_balance``'s exact definition (``BALANCE_STATUS`` charges'
+    ``total_amount`` minus ``BALANCE_STATUS`` payments' ``amount``) but computes
+    it over the DB in a CONSTANT number of queries regardless of how many folios
+    are open — no per-folio query, so the endpoint has no N+1.
+
+    Currency is kept SEPARATE exactly as the previous per-folio loop did: only
+    folios whose ``currency`` equals ``base_currency`` contribute to the summed
+    ``outstanding`` / ``unpaid`` numbers (money is never added across
+    currencies); the rest are counted and their distinct currencies listed.
+
+    Returns ``{"outstanding": Decimal, "unpaid": int, "foreign_count": int,
+    "foreign_currencies": [str, ...]}``.
+    """
+    from django.db.models import Sum
+
+    # S3 — the base-currency folio set is passed to the DB as a SUBQUERY (an
+    # independent one, NOT correlated: it references no column of the outer
+    # query), never as a materialized python list of ids. Sending ``id__in=[...]``
+    # made the SQL text and the bind-parameter count grow linearly with the number
+    # of open folios (measured: ~129KB of SQL at 20k folios) and would hard-fail
+    # past PostgreSQL's 65535-parameter ceiling. ``.order_by()`` strips ``Folio``'s
+    # default ordering, which is meaningless — and on some backends illegal —
+    # inside an ``IN`` subquery.
+    base_folios = folios.filter(currency=base_currency).order_by()
+    base_ids_sq = base_folios.values("id")
+    # Two independent grouped sums (NOT one query joining both relations, which
+    # would fan out and multiply each side by the other's row count).
+    charge_totals = {
+        row["folio"]: row["t"]
+        for row in FolioCharge.objects.filter(
+            folio_id__in=base_ids_sq, status=BALANCE_STATUS
+        )
+        .values("folio")
+        .annotate(t=Sum(BALANCE_CHARGE_FIELD))
+    }
+    payment_totals = {
+        row["folio"]: row["t"]
+        for row in Payment.objects.filter(
+            folio_id__in=base_ids_sq, status=BALANCE_STATUS
+        )
+        .values("folio")
+        .annotate(t=Sum(BALANCE_PAYMENT_FIELD))
+    }
+    outstanding = ZERO
+    unpaid = 0
+    # PARITY: iterating the folios that actually have a posted charge or payment is
+    # equivalent to iterating every base-currency folio. A folio with neither
+    # contributes ``money(0) - money(0) == 0`` to ``outstanding`` and is not
+    # ``> 0``, so it can change neither number — it only cost a row to fetch.
+    for fid in charge_totals.keys() | payment_totals.keys():
+        balance = _balance_dict(
+            charge_totals.get(fid), payment_totals.get(fid)
+        )["balance"]
+        outstanding += balance
+        if balance > ZERO:
+            unpaid += 1
+    foreign = folios.exclude(currency=base_currency)
+    return {
+        "outstanding": money(outstanding),
+        "unpaid": unpaid,
+        "foreign_count": foreign.count(),
+        "foreign_currencies": sorted(
+            foreign.values_list("currency", flat=True).distinct()
+        ),
+    }
+
+
+def _assert_money_bound(*values) -> None:
+    """Reject any money value that would overflow a ``MONEY_KW`` column
+    (``abs`` at/above ``MONEY_MAX_ABS``) with a clean typed 400 instead of
+    letting it surface later as a DB ``NumericValueOutOfRange`` (500)."""
+    for value in values:
+        if abs(Decimal(value)) >= MONEY_MAX_ABS:
+            raise InvalidAmount({"field": "amount", "reason": "amount_too_large"})
 
 
 def compute_charge_totals(quantity, unit_amount, tax_rate, charge_type):
@@ -255,6 +366,8 @@ def compute_charge_totals(quantity, unit_amount, tax_rate, charge_type):
         raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
     if total == ZERO:
         raise InvalidAmount({"field": "total_amount", "reason": "must_not_be_zero"})
+    # Overflow guard on the normal charge path (quantity x unit_amount, + tax).
+    _assert_money_bound(amount, tax_amount, total)
     return amount, tax_amount, total
 
 
@@ -747,12 +860,21 @@ def reopen_folio(folio, *, reason, user=None) -> Folio:
 
 @transaction.atomic
 def add_charge(folio, *, charge_type, description, quantity, unit_amount,
-               tax_rate=ZERO, tax_amount=None, source="manual", user=None,
-               adjusts=None, room_night=None, record_event=True) -> FolioCharge:
+               tax_rate=ZERO, tax_amount=None, source=ChargeSource.MANUAL,
+               user=None, adjusts=None, room_night=None, record_event=True,
+               currency_snapshot=None, service_name_snapshot=None,
+               unit_price_snapshot=None, tax_rate_snapshot=None,
+               source_reference=None) -> FolioCharge:
     """Post a charge dated to the CURRENT open hotel business date (the
     caller never chooses the date — no back- or future-dating). ``room_night``
     is set only for a room-night charge and is the idempotency key enforced by
-    the partial unique index (folio + room_night)."""
+    the partial unique index (folio + room_night).
+
+    The ``*_snapshot`` / ``source_reference`` kwargs are OPTIONAL frozen
+    metadata (used by the guest extra-services flow) — when omitted they persist
+    as NULL, so every existing caller is unchanged. There is NO FK to any
+    catalog: a later rename/reprice cannot alter a posted charge's snapshot.
+    """
     # H1 revenue-integrity: this is the SINGLE creator of every FolioCharge, so it
     # is the one chokepoint that guarantees a ROOM charge can only ever be a
     # per-night charge. A ROOM charge without a ``room_night`` is never legitimate
@@ -782,6 +904,8 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
         total = money(amount + tax_amount)
         if total == ZERO:
             raise InvalidAmount({"field": "total_amount", "reason": "must_not_be_zero"})
+        # Same overflow guard as compute_charge_totals for the explicit-tax path.
+        _assert_money_bound(amount, tax_amount, total)
     charge = FolioCharge.objects.create(
         hotel=folio.hotel,
         folio=folio,
@@ -798,6 +922,15 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
         source=source,
         adjusts=adjusts,
         room_night=room_night,
+        currency_snapshot=currency_snapshot,
+        service_name_snapshot=service_name_snapshot,
+        unit_price_snapshot=(
+            money(unit_price_snapshot) if unit_price_snapshot is not None else None
+        ),
+        tax_rate_snapshot=(
+            Decimal(tax_rate_snapshot) if tax_rate_snapshot is not None else None
+        ),
+        source_reference=source_reference,
         created_by=_actor(user),
     )
     if record_event:
@@ -816,7 +949,7 @@ def add_charge(folio, *, charge_type, description, quantity, unit_amount,
 @transaction.atomic
 def post_room_account_charge(folio, *, description, quantity, unit_amount,
                             charge_type, tax_rate=ZERO,
-                            tax_amount=None, source="room_account",
+                            tax_amount=None, source=ChargeSource.ROOM_ACCOUNT,
                             user=None) -> FolioCharge:
     """Post an "on room account" item: the charge is added to the folio and
     left OWING. This is a thin, intent-revealing delegate to ``add_charge``.
@@ -850,7 +983,7 @@ def post_room_account_charge(folio, *, description, quantity, unit_amount,
 # the pre-checkout safety net, the manual ensure-room-charges endpoint, the daily
 # close (``post_due_room_charges_for_hotel`` in ``close_business_day``), and any
 # two CONCURRENT posters all converge on exactly one charge per night.
-ROOM_NIGHT_SOURCE = "stay_room"
+ROOM_NIGHT_SOURCE = ChargeSource.STAY_ROOM
 
 
 def _room_rate_for_night(stay, night):
@@ -1167,7 +1300,7 @@ def adjust_charge(charge, *, reason, user=None) -> FolioCharge:
             quantity=Decimal("1"),
             unit_amount=-charge.total_amount,
             tax_rate=ZERO,
-            source="adjustment",
+            source=ChargeSource.ADJUSTMENT,
             user=user,
             adjusts=charge,
             record_event=False,

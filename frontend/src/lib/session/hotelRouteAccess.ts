@@ -11,6 +11,7 @@ export const HOTEL_ROUTE_ACCESS: Record<string, string[]> = {
   "/hotel/reservations": ["reservations.view"],
   "/hotel/guests": ["guests.view"],
   "/hotel/finance": ["finance.view", "expenses.view"],
+  "/hotel/guest-folio": ["service_orders.create", "services.view", "finance.view"],
   "/hotel/services": ["services.view", "service_orders.view"],
   "/hotel/operations": ["housekeeping.view", "maintenance.view", "lost_found.view"],
   "/hotel/staff": ["staff.view"],

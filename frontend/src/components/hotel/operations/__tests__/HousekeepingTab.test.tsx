@@ -493,7 +493,19 @@ describe("HousekeepingTab — a11y M1 (non-destructive refetch + live region + f
     fireEvent.click(start);
 
     await screen.findByText("No housekeeping tasks");
+    // PRE-EXISTING FLAKY TEST STABILIZATION (test-only; no production change).
+    // The focus restore runs in an effect that fires AFTER the reload settles,
+    // so awaiting the empty-state text does NOT guarantee focus has moved yet.
+    // Asserting immediately raced that effect and failed roughly 1 run in 4.
+    // `waitFor` RETRIES the assertion — it does not weaken it: if focus never
+    // reaches the anchor, this still fails. The assertion is also STRONGER than
+    // before, pinning the anchor's identity and its focusability rather than the
+    // far weaker "focus is no longer on <body>".
+    const anchor = document.querySelector<HTMLElement>(".op-results");
+    expect(anchor).not.toBeNull();
+    const results = anchor as HTMLElement;
+    expect(results).toHaveAttribute("tabindex", "-1"); // a real programmatic target
+    await waitFor(() => expect(results).toHaveFocus());
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toHaveClass("op-results");
   });
 });

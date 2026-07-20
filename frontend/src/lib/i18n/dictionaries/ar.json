@@ -3931,5 +3931,150 @@
       "planNotAvailable": "لم تعد هذه الباقة متاحة لهذا الطلب.",
       "reasonRequired": "السبب مطلوب."
     }
+  },
+  "guestFolio": {
+    "title": "فوليو النزيل",
+    "subtitle": "أضِف الخدمات الإضافية إلى فوليو نزيل مقيم وأدِر كتالوج الخدمات.",
+    "searchPlaceholder": "ابحث باسم النزيل أو الغرفة",
+    "empty": "لا يوجد نزلاء مقيمون",
+    "emptyHint": "يظهر هنا النزلاء الذين سجّلوا الدخول لتتمكّن من إضافة الخدمات.",
+    "noMatches": "لا يوجد نزيل مطابق",
+    "noMatchesHint": "لا يوجد نزيل مقيم يطابق بحثك. جرّب اسمًا آخر أو رقم غرفة مختلفًا.",
+    "tablistLabel": "أقسام فوليو النزيل",
+    "tabs": {
+      "folio": "الفوليو",
+      "catalog": "الخدمات والأسعار"
+    },
+    "stats": {
+      "inHouse": "النزلاء المقيمون",
+      "withServices": "لديهم خدمات (في هذه الصفحة)"
+    },
+    "card": {
+      "roomType": "نوع الوحدة",
+      "floor": "الطابق",
+      "stayDates": "الإقامة",
+      "serviceTotal": "إجمالي الخدمات",
+      "balance": "الرصيد",
+      "paid": "المدفوع",
+      "financials": "المالية",
+      "detailsHidden": "تتطلّب التفاصيل المالية صلاحية مالية",
+      "addService": "إضافة خدمة",
+      "viewServices": "عرض الخدمات",
+      "more": "المزيد",
+      "serviceCount": {
+        "zero": "لا خدمات",
+        "one": "خدمة واحدة",
+        "two": "خدمتان",
+        "few": "{count} خدمات",
+        "many": "{count} خدمة"
+      }
+    },
+    "addModal": {
+      "title": "إضافة خدمة",
+      "forGuest": "لـ {guest} —",
+      "noCatalog": "لا توجد خدمات مفعّلة في الكتالوج. أضِف واحدة من الخدمات والأسعار أولًا.",
+      "catalogFailed": "تعذّر تحميل كتالوج الخدمات.",
+      "service": "الخدمة",
+      "selectService": "اختر خدمة",
+      "serviceRequired": "اختر خدمة.",
+      "quantity": "الكمية",
+      "quantityInvalid": "أدخل كمية أكبر من صفر.",
+      "unitPrice": "سعر الوحدة",
+      "priceInvalid": "أدخل سعر وحدة صحيحًا.",
+      "priceFixedHint": "سعر هذه الخدمة ثابت في الكتالوج.",
+      "priceNoPermissionHint": "تغيير السعر يتطلّب صلاحية إضافة الرسوم.",
+      "priceOverrideOffHint": "فعّل «تعديل السعر» لتتمكّن من تغييره.",
+      "overrideLabel": "تعديل السعر",
+      "reason": "السبب",
+      "reasonPlaceholder": "لماذا يتم تغيير السعر؟",
+      "previewTitle": "تقدير",
+      "previewTax": "الضريبة",
+      "previewTotal": "الإجمالي التقديري",
+      "previewHint": "تقدير — يحتسب الفوليو المبلغ النهائي.",
+      "submit": "الإضافة إلى الفوليو",
+      "added": "تمت إضافة الخدمة إلى الفوليو."
+    },
+    "viewModal": {
+      "title": "خدمات الفوليو",
+      "forGuest": "لـ {guest} —",
+      "item": "الخدمة",
+      "quantity": "الكمية",
+      "unitAmount": "الوحدة",
+      "tax": "الضريبة",
+      "total": "الإجمالي",
+      "staff": "أضافها",
+      "time": "الوقت",
+      "statusPosted": "مُسجَّلة",
+      "statusVoided": "مُلغاة",
+      "voidReason": "السبب",
+      "voidedBy": "ألغاها",
+      "overrideReason": "سبب تعديل السعر",
+      "actions": "إجراءات",
+      "void": "إلغاء",
+      "voidTitle": "إلغاء سطر خدمة",
+      "voidHint": "يُزيل الإلغاء هذا السطر من رصيد الفوليو. السبب مطلوب.",
+      "empty": "لا توجد خدمات على هذا الفوليو بعد",
+      "emptyHint": "ستُدرَج الخدمات التي تضيفها هنا.",
+      "voided": "تم إلغاء سطر الخدمة."
+    },
+    "catalog": {
+      "title": "الخدمات والأسعار",
+      "subtitle": "كتالوج الفندق للخدمات الإضافية التي تُحتسب على فواتير النزلاء.",
+      "create": "خدمة جديدة",
+      "createTitle": "خدمة جديدة",
+      "editTitle": "تعديل الخدمة",
+      "deactivate": "إلغاء التفعيل",
+      "deactivated": "تم إلغاء تفعيل الخدمة.",
+      "activate": "تفعيل",
+      "activated": "تم تفعيل الخدمة.",
+      "created": "تم إنشاء الخدمة.",
+      "updated": "تم تحديث الخدمة.",
+      "statusActive": "مفعّلة",
+      "statusInactive": "غير مفعّلة",
+      "filterActive": "مفعّلة",
+      "filterInactive": "غير مفعّلة",
+      "empty": "لا توجد خدمات بعد",
+      "emptyHint": "أنشئ خدمة لبدء احتساب الإضافات على الفواتير.",
+      "currencyPlaceholder": "مثال: USD",
+      "fields": {
+        "name": "الاسم",
+        "category": "الفئة",
+        "unitPrice": "سعر الوحدة",
+        "taxRate": "الضريبة",
+        "pricingMode": "التسعير",
+        "displayOrder": "الترتيب",
+        "status": "الحالة",
+        "description": "الوصف",
+        "currency": "العملة"
+      },
+      "categories": {
+        "laundry": "غسيل الملابس",
+        "parking": "مواقف السيارات",
+        "transport": "النقل",
+        "minibar": "الميني بار",
+        "extra_bed": "سرير إضافي",
+        "special_cleaning": "تنظيف خاص",
+        "damages": "أضرار",
+        "external_request": "طلب خارجي",
+        "other": "أخرى"
+      },
+      "pricingModes": {
+        "fixed": "ثابت",
+        "variable": "متغيّر"
+      },
+      "errors": {
+        "nameRequired": "اسم الخدمة مطلوب.",
+        "currencyInvalid": "يجب أن تكون العملة رمزًا من 3 أحرف.",
+        "priceInvalid": "لا يمكن أن يكون سعر الوحدة سالبًا.",
+        "taxInvalid": "يجب أن تكون الضريبة بين 0 و100.",
+        "orderInvalid": "لا يمكن أن يكون ترتيب العرض سالبًا.",
+        "duplicateName": "توجد خدمة بهذا الاسم بالفعل."
+      }
+    },
+    "errors": {
+      "idempotencyConflict": "تم إرسال هذه الخدمة مسبقًا. حدِّث الصفحة وراجع الفوليو قبل إعادة المحاولة.",
+      "serviceInactive": "هذه الخدمة غير مفعّلة ولا يمكن إضافتها.",
+      "reasonRequired": "السبب مطلوب لتغيير السعر."
+    }
   }
 }

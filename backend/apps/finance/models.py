@@ -210,7 +210,27 @@ class FolioCharge(models.Model):
     tax_amount = models.DecimalField(**MONEY_KW, default=ZERO)
     total_amount = models.DecimalField(**MONEY_KW, default=ZERO)
     charge_date = models.DateField()
-    source = models.CharField(max_length=16, blank=True, default="manual")
+    # Widened 16 -> 32 (migration 0010) so the canonical ``ChargeSource`` values
+    # fit — ``guest_extra_service`` is 19 chars. The historical column type is
+    # unchanged (still a CharField / varchar); only its max length grew. Values
+    # are the ``finance.constants.ChargeSource`` set (not bound as ``choices`` so
+    # legacy free-text markers like ``"legacy"`` remain valid).
+    source = models.CharField(max_length=32, blank=True, default="manual")
+    # --- Financial / historical snapshots (migration 0010) ------------------
+    # All NULLABLE/blank so every existing charge is valid unchanged (NULL). The
+    # guest extra-services flow fills these at posting time so a later catalog
+    # rename / reprice can NEVER alter what a posted charge recorded. There is
+    # deliberately NO FK to any guest_services model — these are a frozen text /
+    # decimal snapshot plus a loose ``source_reference`` (text or UUID string).
+    currency_snapshot = models.CharField(max_length=3, blank=True, null=True)
+    service_name_snapshot = models.CharField(max_length=255, blank=True, null=True)
+    unit_price_snapshot = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    tax_rate_snapshot = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True
+    )
+    source_reference = models.CharField(max_length=64, blank=True, null=True)
     # The stay night this charge settles (owner correction §24). Set ONLY for
     # room-night charges; it is the stable idempotency key (folio + room_night)
     # that a partial unique index enforces so no night is ever double-posted,

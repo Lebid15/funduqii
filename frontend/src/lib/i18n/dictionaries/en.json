@@ -3931,5 +3931,150 @@
       "planNotAvailable": "That plan is no longer available for this request.",
       "reasonRequired": "A reason is required."
     }
+  },
+  "guestFolio": {
+    "title": "Guest folio",
+    "subtitle": "Post extra services to an in-house guest's folio and manage the services catalogue.",
+    "searchPlaceholder": "Search by guest or room",
+    "empty": "No in-house guests",
+    "emptyHint": "Checked-in guests will appear here so you can add services.",
+    "noMatches": "No matching guests",
+    "noMatchesHint": "No in-house guest matches your search. Try a different name or room number.",
+    "tablistLabel": "Guest folio sections",
+    "tabs": {
+      "folio": "Folio",
+      "catalog": "Services & prices"
+    },
+    "stats": {
+      "inHouse": "In-house guests",
+      "withServices": "With services (this page)"
+    },
+    "card": {
+      "roomType": "Unit type",
+      "floor": "Floor",
+      "stayDates": "Stay",
+      "serviceTotal": "Services total",
+      "balance": "Balance",
+      "paid": "Paid",
+      "financials": "Financials",
+      "detailsHidden": "Financial details require a finance permission",
+      "addService": "Add service",
+      "viewServices": "View services",
+      "more": "More",
+      "serviceCount": {
+        "zero": "No services",
+        "one": "1 service",
+        "two": "2 services",
+        "few": "{count} services",
+        "many": "{count} services"
+      }
+    },
+    "addModal": {
+      "title": "Add a service",
+      "forGuest": "For {guest} —",
+      "noCatalog": "No active services in the catalogue. Add one in Services & prices first.",
+      "catalogFailed": "The services catalogue could not be loaded.",
+      "service": "Service",
+      "selectService": "Choose a service",
+      "serviceRequired": "Choose a service.",
+      "quantity": "Quantity",
+      "quantityInvalid": "Enter a quantity greater than zero.",
+      "unitPrice": "Unit price",
+      "priceInvalid": "Enter a valid unit price.",
+      "priceFixedHint": "This service has a fixed catalogue price.",
+      "priceNoPermissionHint": "Changing the price needs the finance charge permission.",
+      "priceOverrideOffHint": "Turn on “Override the price” to change it.",
+      "overrideLabel": "Override the price",
+      "reason": "Reason",
+      "reasonPlaceholder": "Why is the price being changed?",
+      "previewTitle": "Estimate",
+      "previewTax": "Tax",
+      "previewTotal": "Estimated total",
+      "previewHint": "An estimate — the folio calculates the final amount.",
+      "submit": "Add to folio",
+      "added": "Service added to the folio."
+    },
+    "viewModal": {
+      "title": "Folio services",
+      "forGuest": "For {guest} —",
+      "item": "Service",
+      "quantity": "Qty",
+      "unitAmount": "Unit",
+      "tax": "Tax",
+      "total": "Total",
+      "staff": "Added by",
+      "time": "When",
+      "statusPosted": "Posted",
+      "statusVoided": "Voided",
+      "voidReason": "Reason",
+      "voidedBy": "Voided by",
+      "overrideReason": "Price change reason",
+      "actions": "Actions",
+      "void": "Void",
+      "voidTitle": "Void service line",
+      "voidHint": "Voiding removes this line from the folio balance. A reason is required.",
+      "empty": "No services on this folio yet",
+      "emptyHint": "Services you add will be listed here.",
+      "voided": "Service line voided."
+    },
+    "catalog": {
+      "title": "Services & prices",
+      "subtitle": "The hotel's catalogue of extra services billed to guest folios.",
+      "create": "New service",
+      "createTitle": "New service",
+      "editTitle": "Edit service",
+      "deactivate": "Deactivate",
+      "deactivated": "Service deactivated.",
+      "activate": "Activate",
+      "activated": "Service activated.",
+      "created": "Service created.",
+      "updated": "Service updated.",
+      "statusActive": "Active",
+      "statusInactive": "Inactive",
+      "filterActive": "Active",
+      "filterInactive": "Inactive",
+      "empty": "No services yet",
+      "emptyHint": "Create a service to start billing extras to folios.",
+      "currencyPlaceholder": "e.g. USD",
+      "fields": {
+        "name": "Name",
+        "category": "Category",
+        "unitPrice": "Unit price",
+        "taxRate": "Tax",
+        "pricingMode": "Pricing",
+        "displayOrder": "Order",
+        "status": "Status",
+        "description": "Description",
+        "currency": "Currency"
+      },
+      "categories": {
+        "laundry": "Laundry",
+        "parking": "Parking",
+        "transport": "Transport",
+        "minibar": "Minibar",
+        "extra_bed": "Extra bed",
+        "special_cleaning": "Special cleaning",
+        "damages": "Damages",
+        "external_request": "External request",
+        "other": "Other"
+      },
+      "pricingModes": {
+        "fixed": "Fixed",
+        "variable": "Variable"
+      },
+      "errors": {
+        "nameRequired": "A service name is required.",
+        "currencyInvalid": "Currency must be a 3-letter code.",
+        "priceInvalid": "The unit price cannot be negative.",
+        "taxInvalid": "Tax must be between 0 and 100.",
+        "orderInvalid": "The display order cannot be negative.",
+        "duplicateName": "A service with this name already exists."
+      }
+    },
+    "errors": {
+      "idempotencyConflict": "This service was already submitted. Refresh and check the folio before retrying.",
+      "serviceInactive": "This service is inactive and cannot be added.",
+      "reasonRequired": "A reason is required to change the price."
+    }
   }
 }

@@ -33,6 +33,11 @@ class InsuranceSerializer(serializers.ModelSerializer):
 
 class FolioChargeSerializer(serializers.ModelSerializer):
     voided_by = serializers.SerializerMethodField()
+    # P7 — expose the creating staff member on the charge DTO (data already on
+    # the model). ``created_by`` mirrors the Payment/Expense convention (email);
+    # ``created_by_name`` is the display name for the itemized statement.
+    created_by = serializers.SerializerMethodField()
+    created_by_name = serializers.SerializerMethodField()
     adjusts_number = serializers.CharField(
         source="adjusts.charge_number", read_only=True, default=None
     )
@@ -43,12 +48,24 @@ class FolioChargeSerializer(serializers.ModelSerializer):
             "id", "charge_number", "type", "description", "quantity",
             "unit_amount", "amount", "tax_rate", "tax_amount", "total_amount",
             "charge_date", "source", "adjusts", "adjusts_number", "status",
+            # P7 enrichment + P2 frozen snapshots (NULL on historical charges).
+            "created_by", "created_by_name",
+            "currency_snapshot", "service_name_snapshot", "unit_price_snapshot",
+            "tax_rate_snapshot", "source_reference",
             "void_reason", "voided_at", "voided_by", "created_at",
         ]
         read_only_fields = fields
 
     def get_voided_by(self, obj):
         return obj.voided_by.email if obj.voided_by_id else None
+
+    def get_created_by(self, obj):
+        return obj.created_by.email if obj.created_by_id else None
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by_id:
+            return None
+        return obj.created_by.full_name or obj.created_by.email
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -279,6 +296,24 @@ class ChargeCreateSerializer(serializers.Serializer):
         if attrs.get("type") == ChargeType.ROOM:
             raise serializers.ValidationError(
                 {"type": "room_charges_are_system_generated"}
+            )
+        # P4 — the generic charge-create path posts DEBITS only. A credit
+        # correction (DISCOUNT / ADJUSTMENT) or any negative amount must go
+        # through the dedicated ``finance.adjust`` path (``adjust_charge``),
+        # which requires a reason, links to the original, is one-per-original,
+        # and writes a full audit event. Keeping credits off this path stops
+        # unaudited, unlinked, stackable negative postings.
+        if attrs.get("type") in (ChargeType.DISCOUNT, ChargeType.ADJUSTMENT):
+            raise serializers.ValidationError(
+                {"type": "credit_charges_go_through_adjust"}
+            )
+        if attrs.get("unit_amount") is not None and attrs["unit_amount"] < 0:
+            raise serializers.ValidationError(
+                {"unit_amount": "must_not_be_negative"}
+            )
+        if attrs.get("quantity") is not None and attrs["quantity"] < 0:
+            raise serializers.ValidationError(
+                {"quantity": "must_not_be_negative"}
             )
         return attrs
 

@@ -201,8 +201,26 @@ export function addCharge(folioId: number, body: ChargeBody): Promise<Folio> {
   return hotelJson<Folio>(`${B}/folios/${folioId}/charges`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export function voidCharge(id: number, reason: string): Promise<Folio> {
-  return hotelJson<Folio>(`${B}/charges/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
+/** Minimal acknowledgement returned to a caller WITHOUT `finance.view`.
+ * The full folio (balance, totals, payments) is money data, so the server only
+ * returns it to a finance reader — see the void-response gating in
+ * `apps/finance/views.py::ChargeVoidView`. */
+export interface ChargeVoidAck {
+  id: number;
+  charge_number: string;
+  status: string;
+  void_reason: string;
+  voided_by: string | null;
+  voided_at: string | null;
+}
+
+/** NOTE the union: the response SHAPE depends on the caller's permission. A
+ * `finance.charge_void` holder without `finance.view` — the guest-folio
+ * operational persona this closure introduced — receives `ChargeVoidAck`, not a
+ * `Folio`. Narrow before reading folio fields; do not assume `Folio`. (This was
+ * typed as `Promise<Folio>`, which lied for exactly that persona.) */
+export function voidCharge(id: number, reason: string): Promise<Folio | ChargeVoidAck> {
+  return hotelJson<Folio | ChargeVoidAck>(`${B}/charges/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
 export function adjustCharge(id: number, reason: string): Promise<Folio> {

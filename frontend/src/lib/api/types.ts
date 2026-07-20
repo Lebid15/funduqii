@@ -3043,3 +3043,118 @@ export interface NotificationsOverview {
   archived_count: number;
   recent_activity_count: number;
 }
+
+/* ==========================================================================
+ * GUEST-FOLIO-EXTRA-SERVICES-CLOSURE — extra-services catalog, in-house folio
+ * directory, per-stay service lines (mirror /api/v1/hotel/guest-services/).
+ *
+ * Money is gated SERVER-SIDE: the directory OMITS service_total / balance /
+ * total_payments / currency for a viewer WITHOUT finance.view (never zeroed),
+ * so those keys are optional here. The per-stay service lines are money-SAFE
+ * (they carry each line's own amounts but never the folio balance/payments).
+ * ======================================================================== */
+
+export type GuestServiceCategory =
+  | "laundry"
+  | "parking"
+  | "transport"
+  | "minibar"
+  | "extra_bed"
+  | "special_cleaning"
+  | "damages"
+  | "external_request"
+  | "other";
+
+export type GuestServicePricingMode = "fixed" | "variable";
+
+/** GET /guest-services/catalog/ row — the hotel's extra-services catalog entry.
+ * `is_active` is READ-ONLY on create/update (its own deactivate/activate route). */
+export interface GuestExtraService {
+  id: number;
+  name: string;
+  category: GuestServiceCategory;
+  description: string;
+  unit_price: string;
+  currency: string;
+  tax_rate: string;
+  pricing_mode: GuestServicePricingMode;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One in-house folio directory card. The four money keys are present ONLY for a
+ * finance.view viewer — the backend OMITS them entirely otherwise (never zeroed
+ * or nulled), so the UI must treat their absence as "hidden", not as zero. */
+export interface GuestFolioDirectoryRow {
+  stay_id: number;
+  guest_name: string;
+  room_number: string;
+  room_type_name: string;
+  floor_name: string;
+  floor_number: string | null;
+  check_in_date: string;
+  check_out_date: string;
+  folio_status: FolioStatus | null;
+  service_count: number;
+  service_total?: string;
+  balance?: string;
+  total_payments?: string;
+  currency?: string;
+}
+
+/** One folio SERVICE line item (money-SAFE — carries the line's OWN amounts, never
+ * the folio balance / payments). `id` is the FolioCharge id (void reuses it). */
+export interface GuestServiceLine {
+  id: number;
+  source: string;
+  description: string;
+  service_name_snapshot: string;
+  quantity: string;
+  unit_amount: string;
+  tax_rate: string;
+  tax_amount: string;
+  total_amount: string;
+  currency: string;
+  created_by: string | null;
+  created_at: string;
+  status: PostingStatus;
+  void_reason: string | null;
+  voided_by: string | null;
+  /**
+   * The mandatory reason captured when a VARIABLE-priced service was posted with
+   * a unit-price override (`finance.charge_create` only). Absent/null for every
+   * catalogue-priced line. Optional here because the backend field lands with the
+   * parallel backend change — the UI renders it only when present.
+   */
+  price_override_reason?: string | null;
+}
+
+/** The FolioCharge snapshot created by POST stays/{id}/add/. */
+export interface GuestServiceChargeSnapshot {
+  id: number;
+  charge_number: string;
+  type: ChargeType;
+  description: string;
+  quantity: string;
+  unit_amount: string;
+  amount: string;
+  tax_rate: string;
+  tax_amount: string;
+  total_amount: string;
+  currency_snapshot: string;
+  service_name_snapshot: string;
+  source: string;
+  status: PostingStatus;
+}
+
+/** POST stays/{id}/add/ result — the audit posting plus its created charge. */
+export interface GuestServicePostingResult {
+  id: number;
+  stay: number;
+  service: number;
+  idempotency_key: string;
+  created_at: string;
+  charge: GuestServiceChargeSnapshot;
+}

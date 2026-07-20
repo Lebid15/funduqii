@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -30,12 +31,34 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
 
+  // Auto-dismiss timers still in flight. They are tracked so they can be
+  // CLEARED on unmount: an un-cleared timer fires after the tree is gone and
+  // calls setState on an unmounted provider. In the app that is a wasted update;
+  // under jsdom it throws `ReferenceError: window is not defined` AFTER the test
+  // environment is torn down, which the runner reports as an unhandled error and
+  // turns into a non-zero exit code even though every test passed — a failure
+  // mode that reads as a false green when output is piped.
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
   const notify = useCallback((message: string, tone: ToastTone = "success") => {
     const id = nextId.current++;
     setToasts((current) => [...current, { id, tone, message }]);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
       setToasts((current) => current.filter((toast) => toast.id !== id));
     }, 4000);
+    timers.current.add(timer);
+  }, []);
+
+  useEffect(() => {
+    // Capture the Set itself: reading `timers.current` inside the cleanup would
+    // read it at unmount time, which is the same object here but is the pattern
+    // the exhaustive-deps rule warns about.
+    const pending = timers.current;
+    return () => {
+      pending.forEach(clearTimeout);
+      pending.clear();
+    };
   }, []);
 
   return (

@@ -25,6 +25,7 @@ from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
 from . import services
+from .constants import SERVICE_LINE_SOURCES
 from .models import (
     Expense,
     Folio,
@@ -97,6 +98,47 @@ def _hotel_header(hotel) -> dict:
 
 def _get(model, request, pk):
     return generics.get_object_or_404(model, pk=pk, hotel=request.hotel)
+
+
+def _statement_line_items(folio) -> list:
+    """P7 — itemize a folio's POSTED charges for the departure statement.
+
+    Reads only the already-prefetched ``folio.charges`` (no extra query) and
+    projects each posted line with its origin, quantity, unit price, tax, and
+    the staff member who posted it (NAME only — see C5 below).
+    ``is_service_line`` uses the central ``SERVICE_LINE_SOURCES`` allowlist so
+    guest extra-service and restaurant/café lines are flagged consistently.
+    """
+    items = []
+    for c in folio.charges.all():
+        if c.status != PostingStatus.POSTED:
+            continue
+        staff = None
+        if c.created_by_id:
+            # C5 — NAME ONLY. This document is printed and handed to the guest;
+            # a staff member with no full_name must degrade to null, never to
+            # their login email address.
+            staff = c.created_by.full_name or None
+        items.append(
+            {
+                "id": c.id,
+                "charge_number": c.charge_number,
+                "type": c.type,
+                "source": c.source,
+                "is_service_line": c.source in SERVICE_LINE_SOURCES,
+                "description": c.description,
+                "quantity": str(c.quantity),
+                "unit_price": str(c.unit_amount),
+                "tax_rate": str(c.tax_rate),
+                "tax_amount": str(c.tax_amount),
+                "total_amount": str(c.total_amount),
+                "charge_date": str(c.charge_date),
+                "staff": staff,
+                "service_name_snapshot": c.service_name_snapshot,
+                "source_reference": c.source_reference,
+            }
+        )
+    return items
 
 
 def _opt_decimal(data, field):
@@ -181,8 +223,11 @@ class FolioDetailView(generics.RetrieveUpdateAPIView):
         return [CanUpdate()] if self.request.method == "PATCH" else [CanView()]
 
     def get_queryset(self):
+        # ``charges__created_by`` is prefetched so the P7 DTO enrichment
+        # (created_by / staff name per charge line) does not add an N+1 on this
+        # single-folio detail response.
         return Folio.objects.filter(hotel=self.request.hotel).prefetch_related(
-            "charges", "payments"
+            "charges__created_by", "payments"
         )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
@@ -352,7 +397,38 @@ class FolioChargeCreateView(APIView):
         return Response(FolioSerializer(folio).data, status=status.HTTP_201_CREATED)
 
 
+def _void_ack(charge) -> dict:
+    """S2 — the money-SAFE acknowledgement for a caller who may VOID a charge but
+    may not READ the folio.
+
+    Carries ONLY the outcome of the caller's own action: which charge, its new
+    status, the reason, and who voided it when. Deliberately omits the folio,
+    its balance/total_charges/total_payments, the payments[] block (receipt
+    numbers, amounts, methods, payer names, staff emails) and every unrelated
+    charge on the folio."""
+    return {
+        "id": charge.id,
+        "charge_number": charge.charge_number,
+        "status": charge.status,
+        "void_reason": charge.void_reason or "",
+        "voided_by": getattr(charge.voided_by, "full_name", None),
+        "voided_at": charge.voided_at.isoformat() if charge.voided_at else None,
+    }
+
+
 class ChargeVoidView(APIView):
+    """POST charges/{id}/void/ — gated on ``finance.charge_void`` (UNCHANGED: who
+    may void is exactly who could before).
+
+    The RESPONSE BODY is separately gated on ``finance.view``. ``finance.charge_void``
+    is an operational correction right and is deliberately held by personas
+    (e.g. the guest-folio surface) that are NOT allowed to see folio money; before
+    this fix the endpoint returned the FULL ``FolioSerializer`` — balance, totals,
+    every payment with its receipt number/method/payer, and every unrelated charge
+    — making it the easiest way to recover exactly the data the guest-folio
+    surface omits by design. A caller WITH ``finance.view`` still receives the
+    identical full body, so the finance UI is untouched."""
+
     def get_permissions(self):
         return [CanChargeVoid()]
 
@@ -362,6 +438,9 @@ class ChargeVoidView(APIView):
         s = VoidSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         services.void_charge(charge, reason=s.validated_data["reason"], user=request.user)
+        if not has_hotel_permission(request.user, request.hotel, "finance.view"):
+            charge.refresh_from_db()
+            return Response(_void_ack(charge))
         return Response(FolioSerializer(charge.folio).data)
 
 
@@ -494,7 +573,9 @@ class FolioStatementView(APIView):
         folio = generics.get_object_or_404(
             Folio.objects.select_related(
                 "reservation", "guest", "stay", "stay__room"
-            ).prefetch_related("charges__adjusts", "payments__reverses"),
+            ).prefetch_related(
+                "charges__adjusts", "charges__created_by", "payments__reverses"
+            ),
             pk=pk,
             hotel=request.hotel,
         )
@@ -504,6 +585,14 @@ class FolioStatementView(APIView):
                 "document": "statement",
                 "hotel": _hotel_header(request.hotel),
                 "folio": FolioSerializer(folio).data,
+                # P7 — an itemized bill of the POSTED charge lines (source, qty,
+                # unit price, tax, and the staff who posted each). Restaurant /
+                # café (``service_order``) and guest extra-service
+                # (``guest_extra_service``) lines therefore appear here as
+                # first-class rows. This is additive metadata over the existing
+                # ``folio.charges`` — the departure page / checkout cycle and the
+                # final print are unchanged.
+                "line_items": _statement_line_items(folio),
                 "stay": (
                     {
                         "id": stay.id,
@@ -757,19 +846,18 @@ class FinanceOverviewView(APIView):
         today = get_business_date(hotel)
         hotel_currency = _hotel_header(hotel)["currency"]
         open_folios = Folio.objects.filter(hotel=hotel, status=FolioStatus.OPEN)
-        outstanding = ZERO
-        unpaid = 0
-        foreign_count = 0
-        foreign_currencies = set()
-        for folio in open_folios.prefetch_related("charges", "payments"):
-            if folio.currency != hotel_currency:
-                foreign_count += 1
-                foreign_currencies.add(folio.currency)
-                continue
-            bal = services.folio_balance(folio)["balance"]
-            outstanding += bal
-            if bal > ZERO:
-                unpaid += 1
+        # S1 — aggregate the open-folio balances in the DB (constant query count,
+        # no per-folio loop / N+1) REUSING the exact ``folio_balance`` definition
+        # so the overview can never drift from the per-folio number. Currency is
+        # kept separate: only base-currency folios feed ``outstanding``/``unpaid``;
+        # foreign-currency folios are counted + listed, never summed in.
+        agg = services.aggregate_open_folio_balances(
+            open_folios, base_currency=hotel_currency
+        )
+        outstanding = agg["outstanding"]
+        unpaid = agg["unpaid"]
+        foreign_count = agg["foreign_count"]
+        foreign_currencies = agg["foreign_currencies"]
         payments_today = Payment.objects.filter(
             Q(business_date=today) | Q(business_date__isnull=True, paid_at__date=today),
             hotel=hotel,
@@ -787,7 +875,7 @@ class FinanceOverviewView(APIView):
                 "unpaid_folios": unpaid,
                 "foreign_currency_folios": {
                     "count": foreign_count,
-                    "currencies": sorted(foreign_currencies),
+                    "currencies": foreign_currencies,
                 },
                 "payments_today": str(services.money(payments_today)),
                 "expenses_today": str(services.money(expenses_today)),
