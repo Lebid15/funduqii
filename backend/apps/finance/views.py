@@ -105,9 +105,9 @@ def _statement_line_items(folio) -> list:
 
     Reads only the already-prefetched ``folio.charges`` (no extra query) and
     projects each posted line with its origin, quantity, unit price, tax, and
-    the staff member who posted it. ``is_service_line`` uses the central
-    ``SERVICE_LINE_SOURCES`` allowlist so guest extra-service and
-    restaurant/café lines are flagged consistently.
+    the staff member who posted it (NAME only — see C5 below).
+    ``is_service_line`` uses the central ``SERVICE_LINE_SOURCES`` allowlist so
+    guest extra-service and restaurant/café lines are flagged consistently.
     """
     items = []
     for c in folio.charges.all():
@@ -115,7 +115,10 @@ def _statement_line_items(folio) -> list:
             continue
         staff = None
         if c.created_by_id:
-            staff = c.created_by.full_name or c.created_by.email
+            # C5 — NAME ONLY. This document is printed and handed to the guest;
+            # a staff member with no full_name must degrade to null, never to
+            # their login email address.
+            staff = c.created_by.full_name or None
         items.append(
             {
                 "id": c.id,
@@ -394,7 +397,38 @@ class FolioChargeCreateView(APIView):
         return Response(FolioSerializer(folio).data, status=status.HTTP_201_CREATED)
 
 
+def _void_ack(charge) -> dict:
+    """S2 — the money-SAFE acknowledgement for a caller who may VOID a charge but
+    may not READ the folio.
+
+    Carries ONLY the outcome of the caller's own action: which charge, its new
+    status, the reason, and who voided it when. Deliberately omits the folio,
+    its balance/total_charges/total_payments, the payments[] block (receipt
+    numbers, amounts, methods, payer names, staff emails) and every unrelated
+    charge on the folio."""
+    return {
+        "id": charge.id,
+        "charge_number": charge.charge_number,
+        "status": charge.status,
+        "void_reason": charge.void_reason or "",
+        "voided_by": getattr(charge.voided_by, "full_name", None),
+        "voided_at": charge.voided_at.isoformat() if charge.voided_at else None,
+    }
+
+
 class ChargeVoidView(APIView):
+    """POST charges/{id}/void/ — gated on ``finance.charge_void`` (UNCHANGED: who
+    may void is exactly who could before).
+
+    The RESPONSE BODY is separately gated on ``finance.view``. ``finance.charge_void``
+    is an operational correction right and is deliberately held by personas
+    (e.g. the guest-folio surface) that are NOT allowed to see folio money; before
+    this fix the endpoint returned the FULL ``FolioSerializer`` — balance, totals,
+    every payment with its receipt number/method/payer, and every unrelated charge
+    — making it the easiest way to recover exactly the data the guest-folio
+    surface omits by design. A caller WITH ``finance.view`` still receives the
+    identical full body, so the finance UI is untouched."""
+
     def get_permissions(self):
         return [CanChargeVoid()]
 
@@ -404,6 +438,9 @@ class ChargeVoidView(APIView):
         s = VoidSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         services.void_charge(charge, reason=s.validated_data["reason"], user=request.user)
+        if not has_hotel_permission(request.user, request.hotel, "finance.view"):
+            charge.refresh_from_db()
+            return Response(_void_ack(charge))
         return Response(FolioSerializer(charge.folio).data)
 
 

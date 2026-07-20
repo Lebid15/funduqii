@@ -107,6 +107,17 @@ def _normalize_quantity(quantity) -> Decimal:
     return qty
 
 
+def _override_applies(service, unit_price_override) -> bool:
+    """True when the client's ``unit_price_override`` will ACTUALLY be used, i.e.
+    the service is VARIABLE and a value was supplied. On a FIXED service a sent
+    price is silently ignored (the catalog wins), so no override applies and no
+    justification is recorded."""
+    return (
+        service.pricing_mode == PricingMode.VARIABLE
+        and unit_price_override is not None
+    )
+
+
 def _resolve_unit_price(service, unit_price_override, reason, *, user, hotel) -> Decimal:
     """The SERVER-side unit price for a posting.
 
@@ -118,7 +129,7 @@ def _resolve_unit_price(service, unit_price_override, reason, *, user, hotel) ->
     """
     from apps.finance.services import MONEY_MAX_ABS, money
 
-    if service.pricing_mode == PricingMode.VARIABLE and unit_price_override is not None:
+    if _override_applies(service, unit_price_override):
         if not has_hotel_permission(user, hotel, "finance.charge_create"):
             raise PermissionDenied()
         if not (reason or "").strip():
@@ -155,10 +166,12 @@ def add_guest_service_to_stay(
 
     Refuses (no side effect) when: the service/stay is cross-tenant, the service is
     inactive, the quantity is non-positive/too large, the stay is not in-house, the
-    folio is closed, the service currency differs from the folio currency, a FIXED
-    override is attempted without ``finance.charge_create``, or a variable override
-    lacks a reason. ``source`` is server-set to ``guest_extra_service``; there is
-    NO direct payment on this flow.
+    folio is closed, the service currency differs from the folio currency, a
+    VARIABLE-price override is attempted without ``finance.charge_create``, or a
+    VARIABLE override lacks a reason. NOTE (C4): a price sent for a FIXED service is
+    NOT a refusal — it is silently IGNORED and the catalog price is used, so it
+    needs neither the permission nor a reason. ``source`` is server-set to
+    ``guest_extra_service``; there is NO direct payment on this flow.
     """
     from apps.finance.constants import ChargeSource
     from apps.finance.models import ChargeType, FolioStatus
@@ -170,8 +183,6 @@ def add_guest_service_to_stay(
         raise CrossTenantReference({"field": "service"})
     if stay.hotel_id != hotel.id:
         raise CrossTenantReference({"field": "stay"})
-    if not service.is_active:
-        raise GuestServiceInactive({"service": service.pk})
 
     key = (idempotency_key or "").strip()
 
@@ -186,6 +197,14 @@ def add_guest_service_to_stay(
         if existing is not None:
             _assert_same_request(existing, request_fingerprint)
             return existing
+
+    # (B5) The is_active gate applies to NEW postings only and therefore runs
+    # AFTER the replay lookup — exactly like the in-house gate, which likewise
+    # only guards a new write. Checking it first made a legitimate retry of an
+    # ALREADY-COMMITTED request start failing the moment the catalog entry was
+    # deactivated, which would push a client into re-posting under a new key.
+    if not service.is_active:
+        raise GuestServiceInactive({"service": service.pk})
 
     qty = _normalize_quantity(quantity)
 
@@ -217,6 +236,12 @@ def add_guest_service_to_stay(
     # this flow never creates an orphan folio and never touches the general
     # folio-create contract (P5).
     folio = ensure_stay_folio(locked_stay, user=user)
+    # (C3) DEFENSIVE / CURRENTLY UNREACHABLE: ``ensure_stay_folio`` only ever
+    # returns an OPEN folio (it filters ``status=OPEN``, reuses only an open
+    # reservation folio, or creates a fresh one), so this branch cannot fire
+    # today. It is kept deliberately as a cheap invariant assertion so that a
+    # future change to the folio-resolution contract fails LOUDLY here instead of
+    # silently posting a charge onto a closed folio. Do not "clean it up".
     if folio.status != FolioStatus.OPEN:
         raise FolioClosed({"folio": folio.id, "status": folio.status})
 
@@ -266,6 +291,15 @@ def add_guest_service_to_stay(
                 folio_charge=charge,
                 idempotency_key=key,
                 request_fingerprint=request_fingerprint,
+                # (B3) Persist the justification that ``_resolve_unit_price``
+                # already made mandatory, so an overridden price leaves an audit
+                # trail instead of being validated and thrown away. Recorded ONLY
+                # where the override actually moved the money.
+                price_override_reason=(
+                    (reason or "").strip()
+                    if _override_applies(service, unit_price_override)
+                    else ""
+                ),
                 created_by=_actor(user),
             )
     except IntegrityError:
@@ -280,7 +314,7 @@ def add_guest_service_to_stay(
 # --- Folio directory (read-only, no N+1) -------------------------------------
 
 
-def guest_folio_directory_queryset(hotel):
+def guest_folio_directory_queryset(hotel, *, include_money: bool = True, search=""):
     """A fixed-query queryset of the hotel's IN-HOUSE stays for the folio directory
     (P6), annotated with the service line-item count/total and the folio
     balance/payments — all via correlated Subqueries so adding residents never adds
@@ -291,12 +325,34 @@ def guest_folio_directory_queryset(hotel):
     the finance SOURCE allowlist ``SERVICE_LINE_SOURCES`` (guest extra services +
     posted service orders) AND ``status == posted`` (voided rows EXCLUDED) — a
     SOURCE allowlist, NOT ``ChargeType``.
+
+    (B2) EVERY aggregate is scoped to the stay's ONE **OPEN** folio, never to all
+    of the stay's folios. ``unique_open_folio_per_stay`` constrains only OPEN
+    folios, so a stay may legitimately carry CLOSED folios alongside the open one;
+    summing across them produced a balance/total that (a) could mix two currencies
+    while the row displayed only the open folio's currency, and (b) disagreed with
+    the View-services modal, which lists the open folio alone. The displayed
+    ``folio_status`` / ``currency`` and every number now come from the SAME folio.
+
+    (C7) ``include_money=False`` omits the money subqueries from the SQL entirely
+    for a caller without ``finance.view`` (whose payload drops those keys anyway),
+    so the endpoint does no work it is not allowed to show.
+
+    (B1) ``search`` filters SERVER-SIDE, BEFORE pagination, on guest name OR room
+    number (case-insensitive), mirroring ``rooms.views.RoomOptionsView``. Blank or
+    absent behaves exactly as before. Both fields are forward FKs that are already
+    ``select_related`` here, so the filter reuses the SAME joins: it adds no query,
+    fans out no rows (hence no ``.distinct()`` is needed) and preserves the
+    no-N+1 property. Filtering before pagination is the point — a client-side
+    filter can only search the 25 rows of the current page, so a matching resident
+    on page 3 would look like "no results".
     """
     from django.db.models import (
         Count,
         DecimalField,
         IntegerField,
         OuterRef,
+        Q,
         Subquery,
         Sum,
         Value,
@@ -311,9 +367,14 @@ def guest_folio_directory_queryset(hotel):
     service_source_values = sorted(str(s) for s in SERVICE_LINE_SOURCES)
     dec = DecimalField(max_digits=14, decimal_places=2)
 
+    # (B2) ``folio__status=OPEN`` on EVERY aggregate — the same single folio the
+    # row's status/currency come from (at most one per stay by constraint).
     def _stay_charges(**extra):
         return FolioCharge.objects.filter(
-            folio__stay=OuterRef("pk"), status=PostingStatus.POSTED, **extra
+            folio__stay=OuterRef("pk"),
+            folio__status=FolioStatus.OPEN,
+            status=PostingStatus.POSTED,
+            **extra,
         ).values("folio__stay")
 
     service_count_sq = _stay_charges(source__in=service_source_values).annotate(
@@ -325,7 +386,9 @@ def guest_folio_directory_queryset(hotel):
     charges_total_sq = _stay_charges().annotate(t=Sum("total_amount")).values("t")
     payments_total_sq = (
         Payment.objects.filter(
-            folio__stay=OuterRef("pk"), status=PostingStatus.POSTED
+            folio__stay=OuterRef("pk"),
+            folio__status=FolioStatus.OPEN,
+            status=PostingStatus.POSTED,
         )
         .values("folio__stay")
         .annotate(t=Sum("amount"))
@@ -335,15 +398,31 @@ def guest_folio_directory_queryset(hotel):
         stay=OuterRef("pk"), status=FolioStatus.OPEN
     ).order_by("id")
 
-    return (
-        Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+    base = Stay.objects.filter(hotel=hotel, status=StayStatus.IN_HOUSE)
+    # (B1) Hotel scoping above is applied FIRST, so a search can never reach
+    # another tenant's resident.
+    term = (search or "").strip()
+    if term:
+        base = base.filter(
+            Q(primary_guest__full_name__icontains=term)
+            | Q(room__number__icontains=term)
+        )
+
+    qs = (
+        base
         .select_related(
             "room", "room__room_type", "room__floor", "primary_guest"
         )
         .annotate(
+            # Operational, money-free: shown to every directory reader.
             service_count=Coalesce(
                 Subquery(service_count_sq, output_field=IntegerField()), Value(0)
             ),
+            open_folio_status=Subquery(open_folio.values("status")[:1]),
+        )
+    )
+    if include_money:
+        qs = qs.annotate(
             service_total=Coalesce(
                 Subquery(service_total_sq, output_field=dec),
                 Value(ZERO, output_field=dec),
@@ -356,8 +435,6 @@ def guest_folio_directory_queryset(hotel):
                 Subquery(payments_total_sq, output_field=dec),
                 Value(ZERO, output_field=dec),
             ),
-            open_folio_status=Subquery(open_folio.values("status")[:1]),
             open_folio_currency=Subquery(open_folio.values("currency")[:1]),
         )
-        .order_by("room__number", "id")
-    )
+    return qs.order_by("room__number", "id")

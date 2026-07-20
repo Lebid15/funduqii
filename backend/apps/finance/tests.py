@@ -1737,7 +1737,15 @@ class ChargeSnapshotTests(APITestCase, ClosureMixin):
         self.assertIsNone(charge.tax_rate_snapshot)
         self.assertIsNone(charge.source_reference)
 
-    def test_snapshot_is_a_frozen_copy_not_a_reference(self):
+    def test_snapshot_fields_persist_exact_values(self):
+        """``add_charge`` stores the snapshot values it is HANDED, verbatim.
+
+        Scope note (A5): this asserts persistence only. It deliberately does NOT
+        claim to prove the frozen-copy invariant — proving that requires mutating
+        a real catalog row after posting, which finance cannot reference (the
+        layering rule). That invariant is owned by
+        ``apps.guest_services.tests.SnapshotImmutabilityTests``.
+        """
         name = "Spa session"
         price = Decimal("50.00")
         charge = fin.add_charge(
@@ -1745,10 +1753,6 @@ class ChargeSnapshotTests(APITestCase, ClosureMixin):
             unit_amount="50.00", service_name_snapshot=name,
             unit_price_snapshot=price, user=self.manager,
         )
-        # A later catalog rename / reprice changes the SOURCE values...
-        name = "Spa session (renamed)"
-        price = Decimal("75.00")
-        # ...the posted charge's snapshot is unchanged (a value copy, no FK).
         charge.refresh_from_db()
         self.assertEqual(charge.service_name_snapshot, "Spa session")
         self.assertEqual(charge.unit_price_snapshot, Decimal("50.00"))
@@ -1761,6 +1765,103 @@ class ChargeSnapshotTests(APITestCase, ClosureMixin):
         }
         self.assertNotIn("guest_services", related_apps)
         self.assertNotIn("guest_service", related_apps)
+
+
+class ChargeVoidResponseGatingTests(APITestCase, ClosureMixin):
+    """A3 (S2) — ``finance.charge_void`` alone must not become a back door onto
+    the folio's money.
+
+    ``charge_void`` is an operational correction right held by personas that are
+    deliberately denied ``finance.view`` (the guest-folio surface voids service
+    lines through exactly this endpoint). The response used to be the FULL
+    ``FolioSerializer``, handing such a caller the balance, the totals, every
+    payment with its receipt number / method / payer, and every unrelated charge
+    on the folio. WHO may void is unchanged; only the payload is gated."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.manager = add_member(
+            self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+        self.client.force_authenticate(self.manager)
+        self.folio = fin.create_folio(
+            self.hotel, customer_name="A", user=self.manager
+        )
+        self.target = fin.add_charge(
+            self.folio, charge_type="service", description="Laundry", quantity=1,
+            unit_amount="100.00", source=ChargeSource.GUEST_EXTRA_SERVICE,
+            user=self.manager,
+        )
+        # Money that must NEVER reach a non-finance voider.
+        fin.add_charge(
+            self.folio, charge_type="service", description="Unrelated spa",
+            quantity=1, unit_amount="250.00", user=self.manager,
+        )
+        fin.record_payment(
+            self.folio, amount=Decimal("60.00"), method="cash",
+            payer_name="Jane Payer", user=self.manager,
+        )
+
+    _MONEY_KEYS = (
+        "balance", "total_charges", "total_payments", "payments", "charges",
+        "deposits", "insurances", "customer_name",
+    )
+
+    def test_voider_without_finance_view_gets_a_minimal_ack_only(self):
+        voider = add_member(
+            self.hotel, "vo@x.com", perms=["finance.charge_void"]
+        )
+        self.client.force_authenticate(voider)
+        r = self.void_charge_api(self.target.id, reason="posted twice")
+        # The void still SUCCEEDS — the right itself is untouched.
+        self.assertEqual(r.status_code, 200, r.data)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.status, PostingStatus.VOIDED)
+
+        body = r.data
+        self.assertIsInstance(body, dict)
+        # It describes only the caller's own action...
+        self.assertEqual(body["id"], self.target.id)
+        self.assertEqual(body["status"], PostingStatus.VOIDED)
+        self.assertEqual(body["void_reason"], "posted twice")
+        self.assertIsNotNone(body["voided_at"])
+        # ...and leaks NOTHING about the folio's money.
+        for key in self._MONEY_KEYS:
+            self.assertNotIn(key, body, f"{key} leaked to a non-finance voider")
+        blob = str(body)
+        for secret in ("250.00", "60.00", "Jane Payer", "290.00", "Unrelated spa"):
+            self.assertNotIn(secret, blob, f"{secret} leaked to a non-finance voider")
+        # No staff email anywhere in the payload.
+        self.assertNotIn("@", blob)
+
+    def test_voider_with_finance_view_keeps_the_full_body(self):
+        """The finance UI is unaffected: same full FolioSerializer as before."""
+        staff = add_member(
+            self.hotel, "fv@x.com", perms=["finance.view", "finance.charge_void"]
+        )
+        self.client.force_authenticate(staff)
+        r = self.void_charge_api(self.target.id, reason="posted twice")
+        self.assertEqual(r.status_code, 200, r.data)
+        for key in ("balance", "charges", "payments"):
+            self.assertIn(key, r.data, f"{key} missing for a finance.view caller")
+        # The totals live INSIDE the ``balance`` block of FolioSerializer, never
+        # at the top level — assert them where they actually are.
+        for key in ("total_charges", "total_payments", "balance"):
+            self.assertIn(
+                key, r.data["balance"], f"{key} missing from the balance block"
+            )
+        # 350.00 charged - 100.00 voided - 60.00 paid = 190.00 outstanding.
+        self.assertEqual(r.data["balance"]["balance"], "190.00")
+        self.assertEqual(len(r.data["payments"]), 1)
+
+    def test_gating_is_on_the_body_not_on_the_right_to_void(self):
+        """A caller lacking charge_void is still 403 — unchanged."""
+        nobody = add_member(self.hotel, "nb@x.com", perms=["finance.view"])
+        self.client.force_authenticate(nobody)
+        r = self.void_charge_api(self.target.id, reason="nope")
+        self.assertEqual(r.status_code, 403)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.status, PostingStatus.POSTED)
 
 
 class ChargeCreateRestrictionTests(APITestCase, ClosureMixin):

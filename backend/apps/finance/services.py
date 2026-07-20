@@ -258,11 +258,17 @@ def _balance_dict(total_charges, total_payments) -> dict:
 
 
 def folio_balance(folio) -> dict:
-    """Re-derive a folio's totals from its posted charges and payments.
+    """Re-derive ONE folio's totals from its posted charges and payments.
 
-    Iterates the related managers in Python (so a prefetched folio incurs no
-    extra query); the finance overview reuses the SAME ``BALANCE_STATUS`` /
-    field definition via ``aggregate_open_folio_balances`` for its DB sums.
+    COST (C4 — do not misread this): each call issues TWO queries, ALWAYS.
+    ``.filter()`` on a related manager builds a fresh queryset and therefore
+    ALWAYS bypasses ``prefetch_related``'s cache, so prefetching the caller's
+    folios does NOT make this free — it merely fetches the same rows twice. (The
+    pre-P0 finance overview carried exactly that useless ``prefetch_related`` and
+    still cost 2N+3 queries.) Never call this in a loop over folios: use
+    ``aggregate_open_folio_balances``, which computes the SAME
+    ``BALANCE_STATUS``/field definition over the DB in a constant number of
+    queries, so the two derivations can never drift.
     """
     charges = folio.charges.filter(status=BALANCE_STATUS)
     payments = folio.payments.filter(status=BALANCE_STATUS)
@@ -289,15 +295,21 @@ def aggregate_open_folio_balances(folios, *, base_currency) -> dict:
     """
     from django.db.models import Sum
 
-    base_ids = list(
-        folios.filter(currency=base_currency).values_list("id", flat=True)
-    )
+    # S3 — the base-currency folio set is passed to the DB as a correlated
+    # SUBQUERY, never as a materialized python list of ids. Sending ``id__in=[...]``
+    # made the SQL text and the bind-parameter count grow linearly with the number
+    # of open folios (measured: ~129KB of SQL at 20k folios) and would hard-fail
+    # past PostgreSQL's 65535-parameter ceiling. ``.order_by()`` strips ``Folio``'s
+    # default ordering, which is meaningless — and on some backends illegal —
+    # inside an ``IN`` subquery.
+    base_folios = folios.filter(currency=base_currency).order_by()
+    base_ids_sq = base_folios.values("id")
     # Two independent grouped sums (NOT one query joining both relations, which
     # would fan out and multiply each side by the other's row count).
     charge_totals = {
         row["folio"]: row["t"]
         for row in FolioCharge.objects.filter(
-            folio_id__in=base_ids, status=BALANCE_STATUS
+            folio_id__in=base_ids_sq, status=BALANCE_STATUS
         )
         .values("folio")
         .annotate(t=Sum(BALANCE_CHARGE_FIELD))
@@ -305,14 +317,18 @@ def aggregate_open_folio_balances(folios, *, base_currency) -> dict:
     payment_totals = {
         row["folio"]: row["t"]
         for row in Payment.objects.filter(
-            folio_id__in=base_ids, status=BALANCE_STATUS
+            folio_id__in=base_ids_sq, status=BALANCE_STATUS
         )
         .values("folio")
         .annotate(t=Sum(BALANCE_PAYMENT_FIELD))
     }
     outstanding = ZERO
     unpaid = 0
-    for fid in base_ids:
+    # PARITY: iterating the folios that actually have a posted charge or payment is
+    # equivalent to iterating every base-currency folio. A folio with neither
+    # contributes ``money(0) - money(0) == 0`` to ``outstanding`` and is not
+    # ``> 0``, so it can change neither number — it only cost a row to fetch.
+    for fid in charge_totals.keys() | payment_totals.keys():
         balance = _balance_dict(
             charge_totals.get(fid), payment_totals.get(fid)
         )["balance"]

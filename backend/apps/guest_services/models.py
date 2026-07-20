@@ -106,6 +106,15 @@ class GuestExtraService(models.Model):
     class Meta:
         db_table = "guest_extra_services"
         ordering = ["display_order", "name", "id"]
+        indexes = [
+            # C9 — the catalog list is ALWAYS read per-hotel in this exact order
+            # (``display_order``, ``name``); without this composite index every
+            # request pays a full sort of the hotel's catalog.
+            models.Index(
+                fields=["hotel", "display_order", "name"],
+                name="gxs_hotel_order_name_idx",
+            ),
+        ]
         constraints = [
             # #12 — per-hotel uniqueness on the NORMALIZED name (case/space).
             models.UniqueConstraint(
@@ -203,6 +212,13 @@ class GuestServicePosting(models.Model):
     idempotency_key = models.CharField(max_length=64, blank=True, default="")
     # A stable sha256 hex over the salient request fields (see services.py).
     request_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    # B3 — the mandatory justification supplied when a VARIABLE service was posted
+    # at an OVERRIDDEN unit price. Blank for every ordinary posting (a FIXED
+    # service, or a variable service billed at the catalog price): the value is
+    # only meaningful where an override actually moved the money, and it is the
+    # audit counterpart of ``finance.adjust_charge``'s reason. Never client-
+    # readable except through the stay's service-lines row.
+    price_override_reason = models.CharField(max_length=255, blank=True, default="")
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

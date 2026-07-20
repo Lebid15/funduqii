@@ -566,6 +566,207 @@ class GuestFolioDirectoryTests(APITestCase):
         self.assertEqual(Decimal(row["total_payments"]), Decimal("0.00"))
         self.assertEqual(row["currency"], "USD")
 
+    # --- B2: every aggregate is scoped to the OPEN folio --------------------
+
+    def _stay_with_a_closed_and_an_open_folio(self):
+        """A stay carrying a CLOSED folio (with money on it) BESIDE its open one.
+
+        ``unique_open_folio_per_stay`` constrains OPEN folios only, so this state
+        is permitted by the schema. The close is done with a direct ``update()``
+        so the fixture builds the state without going through the check-out
+        preconditions (a zero balance would defeat the point of the test)."""
+        from apps.finance.services import record_payment
+
+        stay = self._resident(1)
+        closed = Folio.objects.get(stay=stay, status=FolioStatus.OPEN)
+        add_charge(
+            closed, charge_type=ChargeType.SERVICE, description="old svc",
+            quantity=1, unit_amount="500.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        record_payment(closed, amount=Decimal("200.00"), method="cash")
+        Folio.objects.filter(pk=closed.pk).update(status=FolioStatus.CLOSED)
+
+        open_folio = ensure_stay_folio(stay)
+        self.assertNotEqual(open_folio.pk, closed.pk)
+        add_charge(
+            open_folio, charge_type=ChargeType.SERVICE, description="new svc",
+            quantity=1, unit_amount="30.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        record_payment(open_folio, amount=Decimal("10.00"), method="cash")
+        return stay, closed, open_folio
+
+    def test_directory_row_reflects_only_the_open_folio(self):
+        stay, closed, open_folio = self._stay_with_a_closed_and_an_open_folio()
+        r = self._get(self.finance_user)
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        row = r.data["results"][0]
+        self.assertEqual(row["stay_id"], stay.id)
+        # ONLY the open folio: 1 service line of 30.00, paid 10.00 -> balance 20.00.
+        # (Across both folios it would have been 2 lines / 530.00 / 320.00.)
+        self.assertEqual(row["service_count"], 1)
+        self.assertEqual(Decimal(row["service_total"]), Decimal("30.00"))
+        self.assertEqual(Decimal(row["total_payments"]), Decimal("10.00"))
+        self.assertEqual(Decimal(row["balance"]), Decimal("20.00"))
+        # ...and the status/currency come from that SAME folio.
+        self.assertEqual(row["folio_status"], FolioStatus.OPEN)
+        self.assertEqual(row["currency"], open_folio.currency)
+
+    def test_directory_agrees_with_the_service_lines_modal(self):
+        """The card and the View-services modal must never disagree: the modal
+        lists the OPEN folio only, so the card's count must match it."""
+        stay, _closed, _open = self._stay_with_a_closed_and_an_open_folio()
+        self.client.force_authenticate(self.finance_user)
+        card = self.client.get(
+            reverse("guest_services:folio-directory"), **HDR(self.hotel)
+        ).data["results"][0]
+        modal = self.client.get(
+            reverse("guest_services:stay-service-lines", args=[stay.id]),
+            **HDR(self.hotel),
+        ).data
+        self.assertEqual(card["service_count"], len(modal))
+        self.assertEqual(
+            Decimal(card["service_total"]),
+            sum(Decimal(row["total_amount"]) for row in modal),
+        )
+
+    # --- B1: server-side search (guest name OR room number) -----------------
+
+    def test_search_matches_guest_name_and_room_number(self):
+        from apps.common.pagination import DefaultPagination
+
+        a = self._resident(1)  # room 201, "Guest 201"
+        b = self._resident(2)  # room 202, "Guest 202"
+        Guest.objects.filter(pk=a.primary_guest_id).update(full_name="Alice Walker")
+        Guest.objects.filter(pk=b.primary_guest_id).update(full_name="Bob Stone")
+        self.client.force_authenticate(self.finance_user)
+        url = reverse("guest_services:folio-directory")
+
+        def ids(**params):
+            r = self.client.get(url, params, **HDR(self.hotel))
+            self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
+            return [row["stay_id"] for row in r.data["results"]]
+
+        # By guest name, case-insensitive + partial.
+        self.assertEqual(ids(search="alice"), [a.id])
+        self.assertEqual(ids(search="WALK"), [a.id])
+        # By room number.
+        self.assertEqual(ids(search="202"), [b.id])
+        # No match -> empty, not everything.
+        self.assertEqual(ids(search="zzzz"), [])
+        # Blank / absent behaves exactly as today.
+        self.assertEqual(sorted(ids(search="")), sorted([a.id, b.id]))
+        self.assertEqual(sorted(ids(search="   ")), sorted([a.id, b.id]))
+        self.assertEqual(sorted(ids()), sorted([a.id, b.id]))
+        self.assertLessEqual(2, DefaultPagination.page_size)
+
+    def test_search_finds_a_stay_that_is_not_on_page_one(self):
+        """B1 — the whole point: filtering happens in the DB BEFORE pagination.
+
+        A client-side filter over page 1 could only ever see the first
+        ``page_size`` rows, so this resident would appear to not exist."""
+        from apps.common.pagination import DefaultPagination
+
+        page_size = DefaultPagination.page_size
+        # Fill more than one full page. Ordering is by room number, so a high
+        # room number is guaranteed to sort onto a later page.
+        for n in range(page_size + 3):
+            make_stay(
+                self.hotel, room_number=f"3{n:03d}", floor=self.floor,
+                room_type=self.rtype,
+            )
+        target = make_stay(
+            self.hotel, room_number="9999", floor=self.floor, room_type=self.rtype
+        )
+        Guest.objects.filter(pk=target.primary_guest_id).update(
+            full_name="Zenobia Farthing"
+        )
+        self.client.force_authenticate(self.finance_user)
+        url = reverse("guest_services:folio-directory")
+
+        # It is genuinely NOT on page 1.
+        page1 = self.client.get(url, **HDR(self.hotel)).data
+        self.assertEqual(len(page1["results"]), page_size)
+        self.assertNotIn(target.id, [row["stay_id"] for row in page1["results"]])
+
+        # ...yet a search from page 1 finds it, by name and by room number.
+        for term in ("zenobia", "9999"):
+            r = self.client.get(url, {"search": term}, **HDR(self.hotel))
+            self.assertEqual(r.status_code, status.HTTP_200_OK)
+            self.assertEqual(r.data["count"], 1, term)
+            self.assertEqual(r.data["results"][0]["stay_id"], target.id, term)
+
+    def test_search_is_hotel_scoped(self):
+        mine = self._resident(1)
+        Guest.objects.filter(pk=mine.primary_guest_id).update(full_name="Shared Name")
+        other = make_hotel(slug="other-search")
+        other_stay = make_stay(other, room_number="201")
+        Guest.objects.filter(pk=other_stay.primary_guest_id).update(
+            full_name="Shared Name"
+        )
+        self.client.force_authenticate(self.finance_user)
+        r = self.client.get(
+            reverse("guest_services:folio-directory"),
+            {"search": "Shared Name"},
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.data["count"], 1)
+        self.assertEqual(r.data["results"][0]["stay_id"], mine.id)
+
+    def test_search_does_not_introduce_an_n_plus_one(self):
+        for n in (1, 2, 3):
+            self._resident(n)
+        self.client.force_authenticate(self.finance_user)
+        url = reverse("guest_services:folio-directory")
+        with CaptureQueriesContext(connection) as ctx1:
+            r1 = self.client.get(url, {"search": "Guest"}, **HDR(self.hotel))
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        self.assertEqual(r1.data["count"], 3)
+        for n in (4, 5, 6):
+            self._resident(n)
+        with CaptureQueriesContext(connection) as ctx2:
+            r2 = self.client.get(url, {"search": "Guest"}, **HDR(self.hotel))
+        self.assertEqual(r2.data["count"], 6)
+        self.assertEqual(
+            len(ctx2.captured_queries), len(ctx1.captured_queries),
+            "the search path added a per-row query",
+        )
+        # A searched row still carries the same shape as an unsearched one.
+        self.assertEqual(
+            set(r2.data["results"][0]),
+            set(self.client.get(url, **HDR(self.hotel)).data["results"][0]),
+        )
+
+    def test_money_subqueries_are_skipped_without_finance_view(self):
+        """C7 — a caller without ``finance.view`` must not even PAY for the money
+        aggregates whose keys are stripped from its payload."""
+        self._stay_with_a_closed_and_an_open_folio()
+        op_user = add_member(self.hotel, "op-c7@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(op_user)
+        url = reverse("guest_services:folio-directory")
+        with CaptureQueriesContext(connection) as ctx:
+            r = self.client.get(url, **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        directory_sql = [
+            q["sql"] for q in ctx.captured_queries
+            if "stays" in q["sql"] and "guest_extra_service" in q["sql"]
+        ]
+        self.assertTrue(directory_sql, "directory query not captured")
+        for sql in directory_sql:
+            self.assertNotIn(
+                '"payments"', sql,
+                "the payments aggregate is still computed without finance.view",
+            )
+        # The finance caller DOES get it (the annotation is not dead code).
+        self.client.force_authenticate(self.finance_user)
+        with CaptureQueriesContext(connection) as ctx2:
+            self.client.get(url, **HDR(self.hotel))
+        self.assertTrue(
+            any('"payments"' in q["sql"] for q in ctx2.captured_queries),
+            "the payments aggregate vanished for a finance.view caller",
+        )
+
 
 # --- Access matrix (#7) -----------------------------------------------------
 
@@ -650,24 +851,50 @@ class CatalogAPITests(APITestCase):
         self._auth("services.view")
         r = self.client.get(self.list_url, **HDR(self.hotel))
         self.assertEqual(r.status_code, status.HTTP_200_OK)
-        names = [row["name"] for row in r.data["results"]]
+        # A1 — a PLAIN ARRAY, not a {count,next,previous,results} envelope.
+        names = [row["name"] for row in r.data]
         # Ordered by display_order.
         self.assertEqual(names, ["A svc", "B svc", "Old svc"])
         # Active filter.
         r_active = self.client.get(
             self.list_url + "?is_active=true", **HDR(self.hotel)
         )
-        active_names = [row["name"] for row in r_active.data["results"]]
+        active_names = [row["name"] for row in r_active.data]
         self.assertNotIn("Old svc", active_names)
         r_inactive = self.client.get(
             self.list_url + "?is_active=false", **HDR(self.hotel)
         )
-        self.assertEqual(
-            [row["name"] for row in r_inactive.data["results"]], ["Old svc"]
-        )
+        self.assertEqual([row["name"] for row in r_inactive.data], ["Old svc"])
         self.assertEqual(inactive.is_active, False)
 
-    def test_list_denied_without_services_view(self):
+    def test_catalog_list_is_a_plain_array(self):
+        """A1 CONTRACT — the picker must see EVERY active service.
+
+        The response is a LIST, never a paginated dict, and it is NOT truncated at
+        the global ``DefaultPagination.page_size``. Seeding one more than a full
+        page proves both at once: under the inherited pagination the last entries
+        were unreachable, so a service past the page boundary could never be added.
+        """
+        from apps.common.pagination import DefaultPagination
+
+        page_size = DefaultPagination.page_size
+        total = page_size + 5
+        for i in range(total):
+            make_service(
+                self.hotel, name=f"Svc {i:03d}", display_order=i, category="other"
+            )
+        self._auth("services.view")
+        r = self.client.get(self.list_url, **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(r.data, list)
+        self.assertNotIsInstance(r.data, dict)
+        for envelope_key in ("count", "next", "previous", "results"):
+            self.assertNotIn(envelope_key, r.data)
+        self.assertEqual(len(r.data), total)
+        # The entry PAST the page boundary is present (the whole point).
+        self.assertIn(f"Svc {total - 1:03d}", [row["name"] for row in r.data])
+
+    def test_list_denied_without_any_read_permission(self):
         self._auth("stays.view")
         r = self.client.get(self.list_url, **HDR(self.hotel))
         self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
@@ -799,7 +1026,7 @@ class CatalogAPITests(APITestCase):
         theirs = make_service(other, name="Theirs")
         self._auth("services.view", "services.update")
         r = self.client.get(self.list_url, **HDR(self.hotel))
-        names = [row["name"] for row in r.data["results"]]
+        names = [row["name"] for row in r.data]
         self.assertEqual(names, ["Mine"])
         # A cross-hotel detail is a 404.
         r2 = self.client.get(self._detail(theirs.id), **HDR(self.hotel))
@@ -814,6 +1041,388 @@ class CatalogAPITests(APITestCase):
         self.assertEqual(r_list.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertEqual(r_detail.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertTrue(GuestExtraService.objects.filter(pk=svc.pk).exists())
+
+
+# --- A2: the catalog must be readable by the persona that ADDS services -----
+
+
+class CatalogReadPersonaTests(AddServiceMixin, APITestCase):
+    """A2 — the catalog READ is the AddServiceModal's picker. Gating it on
+    ``services.view`` alone locked the primary operational persona
+    (``service_orders.create``) out of the very flow it is authorized to run."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.stay = make_stay(self.hotel)
+        self.service = make_service(self.hotel, name="Laundry", price="50.00")
+        self.list_url = reverse("guest_services:catalog-list")
+
+    def test_service_orders_create_only_can_list_catalog_and_add_end_to_end(self):
+        user = add_member(self.hotel, "so@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        # 1. The picker loads...
+        r = self.client.get(self.list_url, **HDR(self.hotel))
+        self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
+        self.assertIsInstance(r.data, list)
+        picked = [row for row in r.data if row["id"] == self.service.id]
+        self.assertEqual(len(picked), 1, "the service is missing from the picker")
+        # 2. ...the detail loads...
+        d = self.client.get(
+            reverse("guest_services:catalog-detail", args=[self.service.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(d.status_code, status.HTTP_200_OK)
+        # 3. ...and the service can actually be added (end to end).
+        add = self._add(
+            self.hotel, self.stay, service=picked[0]["id"], quantity="1"
+        )
+        self.assertEqual(add.status_code, status.HTTP_201_CREATED, add.data)
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+
+    def test_catalog_read_open_to_each_of_the_three_codes(self):
+        for code in ("service_orders.create", "services.view", "finance.view"):
+            user = add_member(self.hotel, f"cat-{code}@x.com", perms=(code,))
+            self.client.force_authenticate(user)
+            r = self.client.get(self.list_url, **HDR(self.hotel))
+            self.assertEqual(r.status_code, status.HTTP_200_OK, code)
+            d = self.client.get(
+                reverse("guest_services:catalog-detail", args=[self.service.id]),
+                **HDR(self.hotel),
+            )
+            self.assertEqual(d.status_code, status.HTTP_200_OK, code)
+
+    def test_catalog_writes_are_unchanged_by_the_widened_read(self):
+        """The widened READ must not widen CREATE / UPDATE / DEACTIVATE."""
+        user = add_member(self.hotel, "ro@x.com", perms=("service_orders.create",))
+        self.client.force_authenticate(user)
+        create = self.client.post(
+            self.list_url, {"name": "New", "currency": "USD"}, format="json",
+            **HDR(self.hotel),
+        )
+        self.assertEqual(create.status_code, status.HTTP_403_FORBIDDEN)
+        patch = self.client.patch(
+            reverse("guest_services:catalog-detail", args=[self.service.id]),
+            {"unit_price": "99.00"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(patch.status_code, status.HTTP_403_FORBIDDEN)
+        deact = self.client.post(
+            reverse("guest_services:catalog-deactivate", args=[self.service.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(deact.status_code, status.HTTP_403_FORBIDDEN)
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.unit_price, Decimal("50.00"))
+        self.assertTrue(self.service.is_active)
+        self.assertEqual(GuestExtraService.objects.count(), 1)
+
+
+# --- A5: the REAL snapshot-immutability invariant ---------------------------
+
+
+class SnapshotImmutabilityTests(AddServiceMixin, APITestCase):
+    """A5 — repricing/renaming the CATALOG must never move an ALREADY-POSTED
+    charge.
+
+    This lives here, not in ``apps.finance``, because proving it requires mutating
+    a real ``GuestExtraService`` row after posting — a dependency finance is
+    forbidden to have (``test_no_fk_from_charge_to_guest_services``). The finance
+    side can only assert that ``add_charge`` persists what it is handed; the
+    invariant itself is only observable from this layer."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(
+            self.hotel, "adder@x.com",
+            perms=("service_orders.create", "finance.charge_create", "finance.view"),
+        )
+        self.client.force_authenticate(self.user)
+        self.stay = make_stay(self.hotel)
+        self.service = make_service(
+            self.hotel, name="Spa session", price="50.00", tax="10.00"
+        )
+
+    def test_catalog_rename_reprice_and_retax_never_move_a_posted_charge(self):
+        r = self._add(self.hotel, self.stay, service=self.service.id, quantity="2")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        charge = FolioCharge.objects.get(source=ChargeSource.GUEST_EXTRA_SERVICE)
+        before = {
+            "unit_amount": charge.unit_amount,
+            "amount": charge.amount,
+            "tax_rate": charge.tax_rate,
+            "tax_amount": charge.tax_amount,
+            "total_amount": charge.total_amount,
+            "description": charge.description,
+            "service_name_snapshot": charge.service_name_snapshot,
+            "unit_price_snapshot": charge.unit_price_snapshot,
+            "tax_rate_snapshot": charge.tax_rate_snapshot,
+            "currency_snapshot": charge.currency_snapshot,
+        }
+        self.assertEqual(before["unit_price_snapshot"], Decimal("50.00"))
+        self.assertEqual(before["tax_rate_snapshot"], Decimal("10.00"))
+        self.assertEqual(before["total_amount"], Decimal("110.00"))
+
+        # MUTATE THE ACTUAL CATALOG ROW IN THE DB — rename AND reprice AND retax.
+        GuestExtraService.objects.filter(pk=self.service.pk).update(
+            name="Spa session (renamed)",
+            name_normalized="spa session (renamed)",
+            unit_price=Decimal("75.00"),
+            tax_rate=Decimal("25.00"),
+        )
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.unit_price, Decimal("75.00"))
+        self.assertEqual(self.service.tax_rate, Decimal("25.00"))
+        self.assertEqual(self.service.name, "Spa session (renamed)")
+
+        # The posted charge is UNCHANGED in every money and snapshot field.
+        charge.refresh_from_db()
+        for field, original in before.items():
+            self.assertEqual(
+                getattr(charge, field), original,
+                f"{field} moved when the catalog was repriced",
+            )
+        # ...and so is the folio balance derived from it.
+        from apps.finance.services import folio_balance
+
+        folio = Folio.objects.get(
+            hotel=self.hotel, stay=self.stay, status=FolioStatus.OPEN
+        )
+        self.assertEqual(folio_balance(folio)["balance"], Decimal("110.00"))
+
+    def test_deactivating_the_catalog_entry_does_not_touch_a_posted_charge(self):
+        r = self._add(self.hotel, self.stay, service=self.service.id, quantity="1")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        charge = FolioCharge.objects.get(source=ChargeSource.GUEST_EXTRA_SERVICE)
+        self.service.is_active = False
+        self.service.save(update_fields=["is_active", "updated_at"])
+        charge.refresh_from_db()
+        self.assertEqual(charge.total_amount, Decimal("55.00"))
+        self.assertEqual(charge.status, PostingStatus.POSTED)
+        self.assertEqual(charge.service_name_snapshot, "Spa session")
+
+
+# --- B3 / B5 / B10: override audit, replay ordering, bounds -----------------
+
+
+class VariablePriceAuditTests(AddServiceMixin, APITestCase):
+    """B3 — the mandatory justification for a variable-price override is PERSISTED
+    (it used to be validated and then discarded, leaving no audit trail)."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(
+            self.hotel, "adder@x.com",
+            perms=("service_orders.create", "finance.charge_create", "finance.view"),
+        )
+        self.client.force_authenticate(self.user)
+        self.stay = make_stay(self.hotel)
+        self.fixed = make_service(self.hotel, name="Laundry", price="50.00", tax="0.00")
+        # A NON-ZERO catalog price: a variable service billed without an override
+        # still has to produce a positive amount (add_charge rejects a zero total).
+        self.var = make_service(
+            self.hotel, name="Damage", pricing_mode=PricingMode.VARIABLE,
+            price="10.00", tax="0.00", category="damages",
+        )
+
+    def test_override_reason_is_persisted_on_the_posting(self):
+        r = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="120.00", reason="  Broken bedside lamp  ",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        posting = GuestServicePosting.objects.get()
+        self.assertEqual(posting.price_override_reason, "Broken bedside lamp")
+
+    def test_reason_not_stored_when_no_override_actually_applied(self):
+        # FIXED service: the sent price/reason are ignored, so nothing to audit.
+        r1 = self._add(
+            self.hotel, self.stay, service=self.fixed.id, quantity="1",
+            unit_price_override="999.00", reason="ignored on fixed",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        # VARIABLE service billed at the CATALOG price: no override, no reason.
+        r2 = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            reason="not an override",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED, r2.data)
+        self.assertEqual(
+            list(
+                GuestServicePosting.objects.values_list(
+                    "price_override_reason", flat=True
+                )
+            ),
+            ["", ""],
+        )
+
+    def test_override_reason_is_exposed_on_the_service_lines_row(self):
+        self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="120.00", reason="Broken lamp",
+        )
+        self._add(self.hotel, self.stay, service=self.fixed.id, quantity="1")
+        r = self.client.get(
+            reverse("guest_services:stay-service-lines", args=[self.stay.id]),
+            **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        by_name = {row["service_name_snapshot"]: row for row in r.data}
+        self.assertEqual(by_name["Damage"]["price_override_reason"], "Broken lamp")
+        # Stable shape: null (never missing) on an ordinary line.
+        self.assertIn("price_override_reason", by_name["Laundry"])
+        self.assertIsNone(by_name["Laundry"]["price_override_reason"])
+
+
+class ReplayAfterDeactivationTests(AddServiceMixin, APITestCase):
+    """B5 — a legitimate retry of an ALREADY-COMMITTED request must still replay
+    after the catalog entry is deactivated. The ``is_active`` gate guards NEW
+    postings only, so it runs after the idempotency fast path."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(
+            self.hotel, "adder@x.com", perms=("service_orders.create",)
+        )
+        self.client.force_authenticate(self.user)
+        self.stay = make_stay(self.hotel)
+        self.service = make_service(self.hotel, price="50.00", tax="0.00")
+
+    def test_replay_survives_deactivation_and_creates_nothing(self):
+        r1 = self._add(
+            self.hotel, self.stay, service=self.service.id, quantity="1",
+            idempotency_key="retry-me",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+
+        self.service.is_active = False
+        self.service.save(update_fields=["is_active", "updated_at"])
+
+        r2 = self._add(
+            self.hotel, self.stay, service=self.service.id, quantity="1",
+            idempotency_key="retry-me",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED, r2.data)
+        self.assertEqual(r2.data["id"], r1.data["id"])
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+        self.assertEqual(
+            FolioCharge.objects.filter(
+                source=ChargeSource.GUEST_EXTRA_SERVICE
+            ).count(),
+            1,
+        )
+
+    def test_a_new_key_on_a_deactivated_service_is_still_refused(self):
+        """The relaxation is scoped to REPLAY only — a genuinely new posting of a
+        deactivated service is still a 409 with no side effect."""
+        self.service.is_active = False
+        self.service.save(update_fields=["is_active", "updated_at"])
+        r = self._add(
+            self.hotel, self.stay, service=self.service.id, quantity="1",
+            idempotency_key="brand-new",
+        )
+        self.assertEqual(r.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(r.data["code"], "guest_service_inactive")
+        self.assertEqual(GuestServicePosting.objects.count(), 0)
+        self.assertEqual(FolioCharge.objects.count(), 0)
+
+
+class QuantityAndFingerprintBoundsTests(AddServiceMixin, APITestCase):
+    """B10 — the QA-identified gaps: the QUANTITY_MAX boundary and the exact
+    sensitivity of the idempotency fingerprint."""
+
+    def setUp(self):
+        self.hotel = make_hotel()
+        self.user = add_member(
+            self.hotel, "adder@x.com",
+            perms=("service_orders.create", "finance.charge_create", "finance.view"),
+        )
+        self.client.force_authenticate(self.user)
+        self.stay = make_stay(self.hotel)
+        self.cheap = make_service(self.hotel, name="Cheap", price="0.01", tax="0.00")
+        self.fixed = make_service(self.hotel, name="Laundry", price="50.00", tax="0.00")
+        self.var = make_service(
+            self.hotel, name="Damage", pricing_mode=PricingMode.VARIABLE,
+            price="10.00", tax="0.00", category="damages",
+        )
+
+    def test_quantity_at_max_is_accepted_and_above_max_is_refused(self):
+        from apps.guest_services.services import QUANTITY_MAX
+
+        # Reachable through the serializer (max_digits=8, decimal_places=2 ->
+        # 100000.00 fits) and accepted exactly AT the bound.
+        at_max = self._add(
+            self.hotel, self.stay, service=self.cheap.id, quantity=str(QUANTITY_MAX)
+        )
+        self.assertEqual(at_max.status_code, status.HTTP_201_CREATED, at_max.data)
+        charge = FolioCharge.objects.get(source=ChargeSource.GUEST_EXTRA_SERVICE)
+        self.assertEqual(charge.quantity, QUANTITY_MAX)
+        self.assertEqual(charge.total_amount, Decimal("1000.00"))
+
+        # One cent over the bound is refused, with NO second charge.
+        over = self._add(
+            self.hotel, self.stay, service=self.cheap.id,
+            quantity=str(QUANTITY_MAX + Decimal("0.01")),
+        )
+        self.assertEqual(over.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+
+    def test_fingerprint_sensitive_to_override_price_on_variable(self):
+        r1 = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="120.00", reason="broken lamp",
+            idempotency_key="k-var",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        r2 = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="500.00", reason="broken lamp",
+            idempotency_key="k-var",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_409_CONFLICT, r2.data)
+        self.assertEqual(r2.data["code"], "idempotency_key_conflict")
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+
+    def test_fingerprint_ignores_price_on_a_fixed_service(self):
+        """INTENTIONAL rule: a FIXED service ignores the client price, so the price
+        is excluded from the fingerprint and a differing one still REPLAYS."""
+        r1 = self._add(
+            self.hotel, self.stay, service=self.fixed.id, quantity="1",
+            unit_price_override="70.00", reason="", idempotency_key="k-fixed",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        r2 = self._add(
+            self.hotel, self.stay, service=self.fixed.id, quantity="1",
+            unit_price_override="999.00", reason="", idempotency_key="k-fixed",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED, r2.data)
+        self.assertEqual(r2.data["id"], r1.data["id"])
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+        # The catalog price won on both calls.
+        self.assertEqual(
+            FolioCharge.objects.get(
+                source=ChargeSource.GUEST_EXTRA_SERVICE
+            ).unit_amount,
+            Decimal("50.00"),
+        )
+
+    def test_fingerprint_sensitive_to_reason(self):
+        r1 = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="120.00", reason="broken lamp",
+            idempotency_key="k-reason",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        r2 = self._add(
+            self.hotel, self.stay, service=self.var.id, quantity="1",
+            unit_price_override="120.00", reason="stained carpet",
+            idempotency_key="k-reason",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_409_CONFLICT, r2.data)
+        self.assertEqual(r2.data["code"], "idempotency_key_conflict")
+        self.assertEqual(GuestServicePosting.objects.count(), 1)
+        # And the stored audit reason is the FIRST one (the replay changed nothing).
+        self.assertEqual(
+            GuestServicePosting.objects.get().price_override_reason, "broken lamp"
+        )
 
 
 # --- Per-stay service line items (operational, money-safe) ------------------

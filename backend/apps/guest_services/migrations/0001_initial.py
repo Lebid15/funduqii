@@ -48,6 +48,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('idempotency_key', models.CharField(blank=True, default='', max_length=64)),
                 ('request_fingerprint', models.CharField(blank=True, default='', max_length=64)),
+                ('price_override_reason', models.CharField(blank=True, default='', max_length=255)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='guest_service_postings_created', to=settings.AUTH_USER_MODEL)),
                 ('folio_charge', models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='finance.foliocharge')),
@@ -59,6 +60,10 @@ class Migration(migrations.Migration):
                 'db_table': 'guest_service_postings',
                 'ordering': ['-created_at', '-id'],
             },
+        ),
+        migrations.AddIndex(
+            model_name='guestextraservice',
+            index=models.Index(fields=['hotel', 'display_order', 'name'], name='gxs_hotel_order_name_idx'),
         ),
         migrations.AddConstraint(
             model_name='guestextraservice',

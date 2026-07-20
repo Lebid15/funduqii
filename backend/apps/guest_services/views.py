@@ -1,13 +1,25 @@
 """Guest extra-services API (mounted under /api/v1/hotel/guest-services/).
 
-Two endpoints only (the catalog is managed via the admin — deactivate, never
-delete):
+Seven routes (see ``urls.py``); the catalog is DEACTIVATED, never deleted, so
+there is no DELETE http method anywhere in this app:
 
+Operational
 - ``POST stays/{stay_id}/add/`` — post a catalog service to the stay's folio.
   Permission REUSE: ``service_orders.create``; a variable-price override
   additionally requires ``finance.charge_create`` (enforced in the service).
+- ``GET stays/{stay_id}/service-lines/`` — the stay's OPEN-folio SERVICE lines
+  (money-SAFE: no balance/payments). Any of the three read codes below.
 - ``GET folio-directory/`` — a compact, paginated, no-N+1 directory of in-house
   stays with the service line count/total and (finance.view only) money.
+
+Catalog ("Services & Prices")
+- ``GET catalog/`` — UNPAGINATED plain array (contract; see
+  :class:`CatalogListCreateView`). Readable with ANY of ``services.view`` /
+  ``service_orders.create`` / ``finance.view``.
+- ``POST catalog/`` — ``services.create``.
+- ``GET|PATCH catalog/{id}/`` — read as above; PATCH is ``services.update``.
+- ``POST catalog/{id}/deactivate/`` and ``POST catalog/{id}/activate/`` —
+  ``services.delete`` (deactivate, never delete).
 
 No new permission namespace; ``source`` is server-set; no direct payment.
 """
@@ -29,7 +41,7 @@ from apps.rbac.services import has_hotel_permission
 from apps.stays.models import Stay
 from apps.subscriptions.enforcement import ensure_hotel_operational
 
-from .models import GuestExtraService
+from .models import GuestExtraService, GuestServicePosting
 from .serializers import AddGuestServiceSerializer, GuestExtraServiceSerializer
 from .services import (
     add_guest_service_to_stay,
@@ -43,7 +55,6 @@ ZERO = Decimal("0.00")
 CanAddGuestService = HasHotelPermission("service_orders.create")
 
 # Catalog management reuses the existing services.* codes (NO new namespace).
-CanViewCatalog = HasHotelPermission("services.view")
 CanCreateCatalog = HasHotelPermission("services.create")
 CanUpdateCatalog = HasHotelPermission("services.update")
 # Deactivate/activate reuse services.delete (the catalog is deactivated, never
@@ -58,20 +69,35 @@ def _actor(user):
 _DUPLICATE_NAME_ERROR = {"name": "A service with this name already exists."}
 
 
-class CanViewGuestFolioDirectory(HasHotelMembership):
-    """ANY of ``service_orders.create`` / ``services.view`` / ``finance.view``
-    unlocks the directory (money fields inside are separately gated on
-    ``finance.view``). A plain permission-class ``|`` would break here because
-    ``BaseHotelPermission`` raises rather than returns False on a missing code
-    (mirrors ``operations.views.CanViewOperationsOverview``)."""
+#: The ONE operational read set for this surface. A user who may ADD a service
+#: (``service_orders.create``) must also be able to READ the catalog picker and
+#: the directory, otherwise the primary persona is 403'd out of its own flow.
+GUEST_SERVICE_READ_CODES = ("service_orders.create", "services.view", "finance.view")
+
+
+class AnyOfGuestServiceRead(HasHotelMembership):
+    """ANY of :data:`GUEST_SERVICE_READ_CODES` unlocks the read (money fields
+    inside are separately gated on ``finance.view``). A plain permission-class
+    ``|`` would break here because ``BaseHotelPermission`` raises rather than
+    returns False on a missing code (mirrors
+    ``operations.views.CanViewOperationsOverview``)."""
 
     def has_permission(self, request, view) -> bool:
         if not super().has_permission(request, view):
             return False
-        for code in ("service_orders.create", "services.view", "finance.view"):
+        for code in GUEST_SERVICE_READ_CODES:
             if has_hotel_permission(request.user, request.hotel, code):
                 return True
         raise PermissionDenied()
+
+
+#: Directory / service-lines reads (unchanged behaviour, renamed base).
+CanViewGuestFolioDirectory = AnyOfGuestServiceRead
+#: Catalog READS use the SAME any-of set: the AddServiceModal picker is driven by
+#: ``GET catalog/``, so gating it on ``services.view`` alone made the catalog
+#: unreadable for a ``service_orders.create`` holder and blocked adding a service
+#: entirely. Catalog WRITES are unchanged (services.create/update/delete).
+CanReadCatalog = AnyOfGuestServiceRead
 
 
 def _guard_write(request: Request) -> None:
@@ -188,18 +214,31 @@ def _directory_row(stay, *, can_see_finance: bool) -> dict:
 
 class GuestFolioDirectoryView(APIView):
     """GET guest-services/folio-directory/ — a compact, paginated, no-N+1
-    directory of in-house stays (built on the /stays/current/ pattern)."""
+    directory of in-house stays (built on the /stays/current/ pattern).
+
+    ``?search=`` (B1) filters SERVER-SIDE on guest name OR room number, applied
+    BEFORE pagination — same param name and semantics as ``GET /rooms/options/``.
+    A client-side filter over the current page could only ever search 25 rows and
+    would report "no results" for a resident sitting on page 2."""
 
     def get_permissions(self):
         return [CanViewGuestFolioDirectory()]
 
     def get(self, request: Request) -> Response:
-        qs = guest_folio_directory_queryset(request.hotel)
-        paginator = DefaultPagination()
-        page = paginator.paginate_queryset(qs, request, view=self)
         can_see_finance = has_hotel_permission(
             request.user, request.hotel, "finance.view"
         )
+        # C7 — do not compute money the caller may not see: without ``finance.view``
+        # the money subqueries are not even added to the SQL (they were previously
+        # computed and then stripped from the payload — no leak, but wasted work).
+        qs = guest_folio_directory_queryset(
+            request.hotel,
+            include_money=can_see_finance,
+            # B1 — ``?search=`` is applied in the DB, BEFORE pagination.
+            search=request.query_params.get("search") or "",
+        )
+        paginator = DefaultPagination()
+        page = paginator.paginate_queryset(qs, request, view=self)
         rows = [
             _directory_row(stay, can_see_finance=can_see_finance) for stay in page
         ]
@@ -213,7 +252,7 @@ def _user_name(user):
     return getattr(user, "full_name", None) if user is not None else None
 
 
-def _service_line_row(charge, *, folio_currency) -> dict:
+def _service_line_row(charge, *, folio_currency, override_reason=None) -> dict:
     """One folio SERVICE line item for the operational surface. Carries the line's
     OWN amounts (the point is to SHOW the service items) but NEVER the folio
     balance / payments / deposits / insurance. ``id`` is the ``FolioCharge`` id so
@@ -236,6 +275,10 @@ def _service_line_row(charge, *, folio_currency) -> dict:
         # Populated only for a voided line (stable shape: null otherwise).
         "void_reason": (charge.void_reason or None) if voided else None,
         "voided_by": _user_name(charge.voided_by) if voided else None,
+        # B3 — the mandatory justification captured when a VARIABLE service was
+        # posted at an overridden price (null for every ordinary line). Makes the
+        # override auditable on the operational surface, like adjust_charge's reason.
+        "price_override_reason": override_reason or None,
     }
 
 
@@ -266,13 +309,31 @@ class StayServiceLinesView(APIView):
         if folio is None:
             return Response([])
         source_values = sorted(str(s) for s in SERVICE_LINE_SOURCES)
-        charges = (
+        charges = list(
             FolioCharge.objects.filter(folio=folio, source__in=source_values)
             .select_related("created_by", "voided_by")
             .order_by("created_at", "id")
         )
+        # B3 — one CONSTANT extra query for the override reasons (never per line).
+        # Read guest_services -> finance ONLY: ``FolioCharge`` deliberately exposes
+        # no reverse accessor back here (``related_name="+"``), so the lookup goes
+        # forward from the posting side and the layering rule is preserved.
+        override_reasons = dict(
+            GuestServicePosting.objects.filter(
+                hotel=request.hotel, folio_charge_id__in=[c.id for c in charges]
+            )
+            .exclude(price_override_reason="")
+            .values_list("folio_charge_id", "price_override_reason")
+        )
         return Response(
-            [_service_line_row(c, folio_currency=folio.currency) for c in charges]
+            [
+                _service_line_row(
+                    c,
+                    folio_currency=folio.currency,
+                    override_reason=override_reasons.get(c.id),
+                )
+                for c in charges
+            ]
         )
 
 
@@ -280,16 +341,25 @@ class StayServiceLinesView(APIView):
 
 
 class CatalogListCreateView(generics.ListCreateAPIView):
-    """GET (``services.view``) list the hotel's catalog; POST (``services.create``)
-    add an entry. Supports ``?is_active=true|false`` filtering; ordered by
-    ``display_order`` then name. NO delete method here."""
+    """GET (any of :data:`GUEST_SERVICE_READ_CODES`) list the hotel's catalog;
+    POST (``services.create``) add an entry. Supports ``?is_active=true|false``
+    filtering; ordered by ``display_order`` then name. NO delete method here.
+
+    CONTRACT — the list response is a PLAIN ARRAY, never a
+    ``{count,next,previous,results}`` envelope (``pagination_class = None``). The
+    catalog is a bounded per-hotel picker list that the AddServiceModal must show
+    in FULL: under the global ``DefaultPagination`` the 26th active service would
+    be silently unreachable and could never be added. ``test_catalog_list_is_a_plain_array``
+    locks this shape.
+    """
 
     serializer_class = GuestExtraServiceSerializer
+    pagination_class = None
 
     def get_permissions(self):
         if self.request.method == "POST":
             return [CanCreateCatalog()]
-        return [CanViewCatalog()]
+        return [CanReadCatalog()]
 
     def get_queryset(self):
         qs = GuestExtraService.objects.filter(hotel=self.request.hotel)
@@ -313,15 +383,16 @@ class CatalogListCreateView(generics.ListCreateAPIView):
 
 
 class CatalogDetailView(generics.RetrieveUpdateAPIView):
-    """GET (``services.view``) one entry; PATCH (``services.update``) edit it.
-    No PUT, no DELETE (both -> 405). ``is_active`` is not editable here (use the
-    deactivate/activate endpoints, gated on ``services.delete``)."""
+    """GET (any of :data:`GUEST_SERVICE_READ_CODES`) one entry; PATCH
+    (``services.update``) edit it. No PUT, no DELETE (both -> 405). ``is_active``
+    is not editable here (use the deactivate/activate endpoints, gated on
+    ``services.delete``)."""
 
     serializer_class = GuestExtraServiceSerializer
     http_method_names = ["get", "patch", "head", "options"]
 
     def get_permissions(self):
-        return [CanUpdateCatalog()] if self.request.method == "PATCH" else [CanViewCatalog()]
+        return [CanUpdateCatalog()] if self.request.method == "PATCH" else [CanReadCatalog()]
 
     def get_queryset(self):
         return GuestExtraService.objects.filter(hotel=self.request.hotel)

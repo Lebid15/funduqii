@@ -1,4 +1,16 @@
-"""GUEST-FOLIO-EXTRA-SERVICES-CLOSURE — the check-out race (#10, PostgreSQL-only).
+"""GUEST-FOLIO-EXTRA-SERVICES-CLOSURE — the real races (#10/#5, PostgreSQL-only).
+
+Two two-connection proofs live here:
+
+1. :class:`AddServiceVsCheckoutRaceTests` — add-service vs check-out.
+2. :class:`SameKeyIdempotencyRaceTests` — two CONCURRENT adds sharing one
+   idempotency key (A6), the only way to actually execute the post-lock replay
+   path; sequentially the fast path always wins first and that code never runs.
+
+Both are meaningless on SQLite (no real multi-connection row locking) and skip
+there rather than report a false green.
+
+--- the check-out race (#10) -------------------------------------------------
 
 A REAL two-connection proof that adding a guest service and checking the stay out
 are ATOMIC with respect to each other. Both operations lock the STAY row FIRST
@@ -45,6 +57,13 @@ _PG_SKIP = (
     "PostgreSQL (row locking + savepoint rollback). SQLite serialises writers with "
     "a process-wide lock and has different threading semantics; skipped to avoid a "
     "false green on SQLite."
+)
+
+_PG_SKIP_IDEMPOTENCY = (
+    "The same-key idempotency race needs two REAL concurrent connections blocking "
+    "on one stay row (PostgreSQL). SQLite serialises writers process-wide, so the "
+    "two adds would simply run in sequence and the fast path would always win — "
+    "exactly the false green this test exists to eliminate."
 )
 
 
@@ -172,4 +191,136 @@ class AddServiceVsCheckoutRaceTests(TransactionTestCase):
         self.assertFalse(
             self.stay.status == StayStatus.CHECKED_OUT and postings == 1,
             "both add and check-out succeeded — a lost/stranded charge",
+        )
+
+
+class SameKeyIdempotencyRaceTests(TransactionTestCase):
+    """A6 — TWO CONCURRENT adds with the SAME idempotency_key and SAME fingerprint.
+
+    Why this test had to exist: the ``IntegrityError -> IdempotencyKeyConflict``
+    savepoint in ``add_guest_service_to_stay`` and the post-lock replay re-check
+    were both UNREACHABLE in the test suite. Run sequentially, the fast-path
+    lookup at the top of the service always finds the first posting and returns
+    before either branch can execute, so "idempotency is safe under concurrency"
+    was asserted by nothing at all.
+
+    Here both workers pass the fast path (neither has committed yet), then
+    serialize on the STAY row. The loser resumes AFTER the winner commits and —
+    under PostgreSQL's default READ COMMITTED isolation, which this project does
+    not override — its post-lock re-check sees the winner's committed posting and
+    returns it. INVARIANT: exactly ONE FolioCharge and exactly ONE
+    GuestServicePosting, both workers handed the SAME posting, no deadlock, and
+    no exception escapes at all (identical fingerprints are a legal replay, never
+    a conflict).
+    """
+
+    def setUp(self):
+        self.hotel = Hotel.objects.create(
+            name="Hotel", slug="gs-idem-race", status=HotelStatus.ACTIVE
+        )
+        self.user = User.objects.create_user(
+            email="gsidem@x.com", password="StrongPass!234", full_name="Idem"
+        )
+        HotelMembership.objects.create(
+            user=self.user, hotel=self.hotel,
+            membership_type=MembershipType.MANAGER, is_active=True,
+        )
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        floor = Floor.objects.create(hotel=self.hotel, name="G", number="0")
+        self.room = Room.objects.create(
+            hotel=self.hotel, floor=floor, room_type=self.rtype, number="101"
+        )
+        self.guest = Guest.objects.create(hotel=self.hotel, full_name="Guest One")
+        self.stay = Stay.objects.create(
+            hotel=self.hotel, room=self.room, primary_guest=self.guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=timezone.localdate(),
+            planned_check_out_date=timezone.localdate() + timedelta(days=2),
+            actual_check_in_at=timezone.now(),
+        )
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=self.stay,
+            start_date=self.stay.planned_check_in_date,
+            end_date=self.stay.planned_check_out_date,
+            nightly_rate="100.00", currency="USD", source="booking",
+        )
+        self.folio = ensure_stay_folio(self.stay, user=self.user)
+        self.service = GuestExtraService.objects.create(
+            hotel=self.hotel, name="Laundry", category="laundry",
+            unit_price="50.00", currency="USD", tax_rate="0.00",
+            pricing_mode=PricingMode.FIXED,
+        )
+
+    def _add_worker(self, barrier, results, index):
+        """Calls the REAL production service on this thread's own connection."""
+        try:
+            fp = build_request_fingerprint(
+                self.service, stay_id=self.stay.id, quantity=1
+            )
+            # Release both threads at the same instant so they genuinely contend.
+            barrier.wait(timeout=15)
+            posting = add_guest_service_to_stay(
+                self.hotel, stay=self.stay, service=self.service, quantity=1,
+                user=self.user, idempotency_key="same-key-race",
+                request_fingerprint=fp,
+            )
+            results[index] = ("ok", posting.pk)
+        except Exception as exc:  # noqa: BLE001 - a leaked error must be visible
+            results[index] = (type(exc).__name__, str(exc))
+        finally:
+            connections["default"].close()
+
+    def test_two_concurrent_adds_same_key_create_exactly_one_charge(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_IDEMPOTENCY)
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._add_worker, args=(barrier, results, 0)),
+            threading.Thread(target=self._add_worker, args=(barrier, results, 1)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        # No deadlock / no hang.
+        for t in threads:
+            self.assertFalse(t.is_alive(), f"a worker deadlocked or timed out: {results}")
+
+        # No unexpected exception type escaped — with identical fingerprints this
+        # is a legal replay, so BOTH calls must succeed.
+        for outcome in results:
+            self.assertIsNotNone(outcome, f"a worker produced no result: {results}")
+            self.assertEqual(outcome[0], "ok", f"unexpected failure: {results}")
+
+        # THE INVARIANT: one charge, one posting — never two, never zero.
+        postings = GuestServicePosting.objects.filter(
+            hotel=self.hotel, idempotency_key="same-key-race"
+        )
+        self.assertEqual(postings.count(), 1, f"idempotency lost: {results}")
+        self.assertEqual(
+            GuestServicePosting.objects.filter(stay=self.stay).count(), 1, results
+        )
+        svc_charges = FolioCharge.objects.filter(
+            folio=self.folio, source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        self.assertEqual(
+            svc_charges.count(), 1,
+            f"a duplicate or orphan charge survived the race: {results}",
+        )
+        # Both workers were handed the SAME posting (the loser replayed, it did
+        # not create a second one), and that charge is the posting's own charge.
+        posting = postings.get()
+        self.assertEqual(results[0][1], posting.pk, results)
+        self.assertEqual(results[1][1], posting.pk, results)
+        self.assertEqual(svc_charges.get().pk, posting.folio_charge_id)
+        # The charge is POSTED on the still-open folio (no rolled-back remnant).
+        self.assertEqual(svc_charges.get().status, PostingStatus.POSTED)
+        self.assertEqual(
+            Folio.objects.get(pk=self.folio.pk).status, FolioStatus.OPEN
         )
