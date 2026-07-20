@@ -1995,9 +1995,15 @@
     "title": "Services",
     "subtitle": "Restaurant, café and room-service orders that post to the guest folio.",
     "saved": "Saved successfully.",
+    "manageTables": "Manage tables",
+    "view": {
+      "label": "View",
+      "list": "List",
+      "board": "Prep board"
+    },
     "tabs": {
       "overview": "Overview",
-      "catalog": "Catalog",
+      "catalog": "Items & Prices",
       "tables": "Tables",
       "orders": "Orders",
       "board": "Preparation board"
@@ -2094,6 +2100,7 @@
       "postedYes": "Posted",
       "postedNo": "Not posted",
       "details": "Details",
+      "more": "More",
       "searchPlaceholder": "Search by order number…",
       "addOrder": "New order",
       "empty": "No orders yet",

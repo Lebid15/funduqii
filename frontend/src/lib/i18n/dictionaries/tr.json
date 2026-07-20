@@ -1995,9 +1995,15 @@
     "title": "Hizmetler",
     "subtitle": "Restoran, kafe ve oda servisi siparişleri; misafir foliosuna işlenir.",
     "saved": "Başarıyla kaydedildi.",
+    "manageTables": "Masaları yönet",
+    "view": {
+      "label": "Görünüm",
+      "list": "Liste",
+      "board": "Hazırlık panosu"
+    },
     "tabs": {
       "overview": "Genel bakış",
-      "catalog": "Katalog",
+      "catalog": "Ürünler ve Fiyatlar",
       "tables": "Masalar",
       "orders": "Siparişler",
       "board": "Hazırlık panosu"
@@ -2094,6 +2100,7 @@
       "postedYes": "İşlendi",
       "postedNo": "İşlenmedi",
       "details": "Detaylar",
+      "more": "Diğer",
       "searchPlaceholder": "Sipariş numarasıyla ara…",
       "addOrder": "Yeni sipariş",
       "empty": "Henüz sipariş yok",
