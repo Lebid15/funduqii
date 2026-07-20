@@ -197,12 +197,19 @@ class AddServiceVsCheckoutRaceTests(TransactionTestCase):
 class SameKeyIdempotencyRaceTests(TransactionTestCase):
     """A6 — TWO CONCURRENT adds with the SAME idempotency_key and SAME fingerprint.
 
-    Why this test had to exist: the ``IntegrityError -> IdempotencyKeyConflict``
-    savepoint in ``add_guest_service_to_stay`` and the post-lock replay re-check
-    were both UNREACHABLE in the test suite. Run sequentially, the fast-path
-    lookup at the top of the service always finds the first posting and returns
-    before either branch can execute, so "idempotency is safe under concurrency"
-    was asserted by nothing at all.
+    SCOPE — read this before trusting it: this test covers the POST-LOCK REPLAY
+    RE-CHECK, and ONLY that. It does NOT execute the
+    ``IntegrityError -> IdempotencyKeyConflict`` savepoint; both workers here
+    share one stay, so they serialize on that stay's row and the loser returns
+    from the re-check before it can ever reach the INSERT. Deleting the savepoint
+    entirely would leave this test green. That branch is covered separately by
+    ``CrossStayKeyReuseRaceTests`` below, where the workers touch DIFFERENT stays
+    and therefore never serialize.
+
+    Why this test had to exist: run sequentially, the fast-path lookup at the top
+    of the service always finds the first posting and returns before the re-check
+    can execute, so "idempotency is safe under concurrency" was asserted by
+    nothing at all.
 
     Here both workers pass the fast path (neither has committed yet), then
     serialize on the STAY row. The loser resumes AFTER the winner commits and —
@@ -324,3 +331,136 @@ class SameKeyIdempotencyRaceTests(TransactionTestCase):
         self.assertEqual(
             Folio.objects.get(pk=self.folio.pk).status, FolioStatus.OPEN
         )
+
+
+class CrossStayKeyReuseRaceTests(TransactionTestCase):
+    """The ``IntegrityError -> IdempotencyKeyConflict`` savepoint — the ONLY test
+    that actually executes it.
+
+    ``SameKeyIdempotencyRaceTests`` above cannot: its workers share a stay, so
+    they serialize on that row and the loser returns from the post-lock re-check
+    before reaching the INSERT. An independent review established that deleting
+    the savepoint would leave that test green — the branch had ZERO coverage
+    while a docstring claimed otherwise.
+
+    Here the same key is reused across TWO DIFFERENT stays. The workers lock
+    different stay rows, so they never serialize: BOTH clear the re-check (neither
+    has committed) and BOTH reach the posting INSERT. The partial unique
+    constraint on ``(hotel, idempotency_key)`` then fires for the loser, the
+    savepoint catches the ``IntegrityError`` and translates it into a clean
+    ``IdempotencyKeyConflict`` (HTTP 409).
+
+    THE INVARIANT THAT MATTERS: the loser must leave NOTHING behind. It had
+    already created its own ``FolioCharge`` before the posting INSERT failed, so
+    if the savepoint did not roll that back, a guest would be charged for a
+    service that has no posting and no audit trail — money moved with no record.
+    """
+
+    def setUp(self):
+        self.hotel = Hotel.objects.create(
+            name="Hotel", slug="gs-xstay-race", status=HotelStatus.ACTIVE
+        )
+        self.user = User.objects.create_user(
+            email="gsxstay@x.com", password="StrongPass!234", full_name="XStay"
+        )
+        HotelMembership.objects.create(
+            user=self.user, hotel=self.hotel,
+            membership_type=MembershipType.MANAGER, is_active=True,
+        )
+        self.rtype = RoomType.objects.create(
+            hotel=self.hotel, name="Standard", code="STD",
+            base_capacity=2, max_capacity=3, base_rate="100.00",
+        )
+        self.floor = Floor.objects.create(hotel=self.hotel, name="G", number="0")
+        self.service = GuestExtraService.objects.create(
+            hotel=self.hotel, name="Laundry", category="laundry",
+            unit_price="50.00", currency="USD", tax_rate="0.00",
+            pricing_mode=PricingMode.FIXED,
+        )
+        self.stays = [self._make_stay(101), self._make_stay(102)]
+        self.folios = [ensure_stay_folio(s, user=self.user) for s in self.stays]
+
+    def _make_stay(self, number):
+        room = Room.objects.create(
+            hotel=self.hotel, floor=self.floor, room_type=self.rtype,
+            number=str(number),
+        )
+        guest = Guest.objects.create(hotel=self.hotel, full_name=f"Guest {number}")
+        stay = Stay.objects.create(
+            hotel=self.hotel, room=room, primary_guest=guest,
+            status=StayStatus.IN_HOUSE,
+            planned_check_in_date=timezone.localdate(),
+            planned_check_out_date=timezone.localdate() + timedelta(days=2),
+            actual_check_in_at=timezone.now(),
+        )
+        StayRatePeriod.objects.create(
+            hotel=self.hotel, stay=stay,
+            start_date=stay.planned_check_in_date,
+            end_date=stay.planned_check_out_date,
+            nightly_rate="100.00", currency="USD", source="booking",
+        )
+        return stay
+
+    def _add_worker(self, barrier, results, index):
+        stay = self.stays[index]
+        try:
+            fp = build_request_fingerprint(
+                self.service, stay_id=stay.id, quantity=1
+            )
+            barrier.wait(timeout=15)
+            posting = add_guest_service_to_stay(
+                self.hotel, stay=stay, service=self.service, quantity=1,
+                user=self.user, idempotency_key="reused-across-stays",
+                request_fingerprint=fp,
+            )
+            results[index] = ("ok", posting.pk)
+        except Exception as exc:  # noqa: BLE001 - a leaked error must be visible
+            results[index] = (type(exc).__name__, str(exc))
+        finally:
+            connections["default"].close()
+
+    def test_key_reused_across_stays_yields_one_posting_and_no_orphan_charge(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_PG_SKIP_IDEMPOTENCY)
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+        threads = [
+            threading.Thread(target=self._add_worker, args=(barrier, results, 0)),
+            threading.Thread(target=self._add_worker, args=(barrier, results, 1)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for t in threads:
+            self.assertFalse(t.is_alive(), f"a worker deadlocked: {results}")
+        for outcome in results:
+            self.assertIsNotNone(outcome, f"a worker produced no result: {results}")
+
+        # Exactly one winner and one clean 409 — never two winners, and never a
+        # raw IntegrityError leaking out of the service.
+        kinds = sorted(o[0] for o in results)
+        self.assertEqual(
+            kinds, ["IdempotencyKeyConflict", "ok"],
+            f"expected one winner + one clean conflict, got: {results}",
+        )
+
+        # One posting for the key, across BOTH stays.
+        postings = GuestServicePosting.objects.filter(
+            hotel=self.hotel, idempotency_key="reused-across-stays"
+        )
+        self.assertEqual(postings.count(), 1, f"idempotency lost: {results}")
+
+        # THE POINT: the loser rolled its own charge back. Exactly ONE service
+        # charge exists across BOTH folios — no orphan on the losing stay.
+        charges = FolioCharge.objects.filter(
+            folio__in=self.folios, source=ChargeSource.GUEST_EXTRA_SERVICE
+        )
+        self.assertEqual(
+            charges.count(), 1,
+            f"the loser left an orphan charge behind — a guest was charged with "
+            f"no posting and no audit trail: {results}",
+        )
+        self.assertEqual(charges.get().pk, postings.get().folio_charge_id)

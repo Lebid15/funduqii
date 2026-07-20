@@ -295,8 +295,9 @@ def aggregate_open_folio_balances(folios, *, base_currency) -> dict:
     """
     from django.db.models import Sum
 
-    # S3 — the base-currency folio set is passed to the DB as a correlated
-    # SUBQUERY, never as a materialized python list of ids. Sending ``id__in=[...]``
+    # S3 — the base-currency folio set is passed to the DB as a SUBQUERY (an
+    # independent one, NOT correlated: it references no column of the outer
+    # query), never as a materialized python list of ids. Sending ``id__in=[...]``
     # made the SQL text and the bind-parameter count grow linearly with the number
     # of open folios (measured: ~129KB of SQL at 20k folios) and would hard-fail
     # past PostgreSQL's 65535-parameter ceiling. ``.order_by()`` strips ``Folio``'s

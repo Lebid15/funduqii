@@ -1829,7 +1829,11 @@ class ChargeVoidResponseGatingTests(APITestCase, ClosureMixin):
         for key in self._MONEY_KEYS:
             self.assertNotIn(key, body, f"{key} leaked to a non-finance voider")
         blob = str(body)
-        for secret in ("250.00", "60.00", "Jane Payer", "290.00", "Unrelated spa"):
+        # "190.00" is the outstanding balance AFTER this void — i.e. the single
+        # most sensitive number the old full-folio response handed back. It was
+        # missing from this list while "290.00" (a value this fixture never
+        # produces) sat here as a dead witness.
+        for secret in ("250.00", "60.00", "190.00", "Jane Payer", "Unrelated spa"):
             self.assertNotIn(secret, blob, f"{secret} leaked to a non-finance voider")
         # No staff email anywhere in the payload.
         self.assertNotIn("@", blob)

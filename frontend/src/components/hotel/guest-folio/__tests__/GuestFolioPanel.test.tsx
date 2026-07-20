@@ -887,9 +887,14 @@ describe("view services + void", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: g.viewModal.void })).toBeNull(),
     );
-    // ...so focus must land on the modal's stable anchor, never on <body>.
-    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
-    expect(document.activeElement).not.toBeNull();
+    // ...so focus must land on the modal's own stable anchor.
+    //
+    // This previously asserted only `activeElement !== document.body`, which any
+    // focused element ANYWHERE on the page would satisfy — the assertion was
+    // weaker than the name of the test. Assert containment in the modal itself.
+    const modal = screen.getByRole("dialog");
+    await waitFor(() => expect(modal).toContainElement(document.activeElement));
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("surfaces the variable-price override reason on a line", async () => {

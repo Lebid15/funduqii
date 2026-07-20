@@ -613,10 +613,30 @@ class GuestFolioDirectoryTests(APITestCase):
         self.assertEqual(row["folio_status"], FolioStatus.OPEN)
         self.assertEqual(row["currency"], open_folio.currency)
 
-    def test_directory_agrees_with_the_service_lines_modal(self):
-        """The card and the View-services modal must never disagree: the modal
-        lists the OPEN folio only, so the card's count must match it."""
-        stay, _closed, _open = self._stay_with_a_closed_and_an_open_folio()
+    def test_directory_counts_posted_lines_while_the_modal_also_shows_voided(self):
+        """Card vs modal: they agree on the OPEN folio, but NOT line-for-line.
+
+        The card is a MONETARY summary, so it counts/sums POSTED lines only
+        (a voided line moved no money). The modal is an OPERATIONAL log, so it
+        also lists VOIDED lines — struck through, with the reason and who did it
+        — because staff need to see that a mistake was made and corrected.
+
+        The earlier version of this test asserted ``count == len(modal)`` and
+        called that "must never disagree". That held only because the fixture
+        contained no voided line: it was a consistency proxy that would have
+        passed even if BOTH sides drifted together, and it documented a rule the
+        product does not follow. This asserts the real contract instead: the card
+        equals the POSTED SUBSET of what the modal shows.
+        """
+        stay, _closed, open_folio = self._stay_with_a_closed_and_an_open_folio()
+        # Post a SECOND service line on the open folio, then void it.
+        voided = add_charge(
+            open_folio, charge_type=ChargeType.SERVICE, description="Mistake",
+            quantity=1, unit_amount="15.00", tax_rate="0.00",
+            source=ChargeSource.GUEST_EXTRA_SERVICE,
+        )
+        void_charge(voided, reason="posted twice", user=self.finance_user)
+
         self.client.force_authenticate(self.finance_user)
         card = self.client.get(
             reverse("guest_services:folio-directory"), **HDR(self.hotel)
@@ -625,10 +645,25 @@ class GuestFolioDirectoryTests(APITestCase):
             reverse("guest_services:stay-service-lines", args=[stay.id]),
             **HDR(self.hotel),
         ).data
-        self.assertEqual(card["service_count"], len(modal))
+
+        posted = [r for r in modal if r["status"] == PostingStatus.POSTED]
+        voided_rows = [r for r in modal if r["status"] == PostingStatus.VOIDED]
+        # The modal genuinely carries the voided line — otherwise this test would
+        # silently degrade into the weak version it replaces.
+        self.assertEqual(len(voided_rows), 1, modal)
+        self.assertEqual(voided_rows[0]["void_reason"], "posted twice")
+
+        # The card equals the POSTED subset, and is strictly smaller than the log.
+        self.assertEqual(card["service_count"], len(posted))
+        self.assertLess(card["service_count"], len(modal))
         self.assertEqual(
             Decimal(card["service_total"]),
-            sum(Decimal(row["total_amount"]) for row in modal),
+            sum(Decimal(row["total_amount"]) for row in posted),
+        )
+        # The voided line's money is excluded from the card's total.
+        self.assertNotIn(
+            Decimal("15.00"),
+            [Decimal(card["service_total"])],
         )
 
     # --- B1: server-side search (guest name OR room number) -----------------
@@ -888,8 +923,12 @@ class CatalogAPITests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertIsInstance(r.data, list)
         self.assertNotIsInstance(r.data, dict)
-        for envelope_key in ("count", "next", "previous", "results"):
-            self.assertNotIn(envelope_key, r.data)
+        # (There was a loop here asserting ``assertNotIn("count", r.data)`` etc.
+        # It could never fail: r.data is a list of dicts, so comparing it against
+        # the STRING "count" is always False. The three assertions that remain
+        # pin the contract from three independent directions — type, exact
+        # length, and the presence of the entry past the page boundary — and each
+        # of them genuinely breaks if pagination is re-introduced.)
         self.assertEqual(len(r.data), total)
         # The entry PAST the page boundary is present (the whole point).
         self.assertIn(f"Svc {total - 1:03d}", [row["name"] for row in r.data])
