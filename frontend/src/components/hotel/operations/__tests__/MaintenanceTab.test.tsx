@@ -371,7 +371,18 @@ describe("MaintenanceTab — a11y M1 (non-destructive refetch + live region + fo
     fireEvent.click(start);
 
     await screen.findByText("No maintenance requests");
+    // PRE-EXISTING FLAKY TEST STABILIZATION (test-only; no production change).
+    // The focus restore runs in an effect guarded on `loading`, which is cleared
+    // in a separate `finally` — so the empty-state text can paint a commit
+    // BEFORE focus moves. Asserting immediately raced that effect.
+    // `waitFor` retries the assertion; it does not weaken it. The check is also
+    // stronger than before: it pins the anchor's identity and its focusability
+    // rather than merely proving focus left <body>.
+    const anchor = document.querySelector<HTMLElement>(".op-results");
+    expect(anchor).not.toBeNull();
+    const results = anchor as HTMLElement;
+    expect(results).toHaveAttribute("tabindex", "-1"); // a real programmatic target
+    await waitFor(() => expect(results).toHaveFocus());
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toHaveClass("op-results");
   });
 });
