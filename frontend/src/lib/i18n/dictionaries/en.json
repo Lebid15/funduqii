@@ -1910,7 +1910,15 @@
       "reverseConfirm": "Post reversal",
       "reverseHint": "This creates a full reversal voucher linked to the original.",
       "reversalOf": "Reversal of voucher",
-      "reversedBy": "Reversed by voucher"
+      "reversedBy": "Reversed by voucher",
+      "more": "More",
+      "employee": "Recorded by",
+      "cancel": "Cancel expense",
+      "cancelHint": "The expense voucher will be cancelled and your reason recorded.",
+      "cancelled": "Expense cancelled",
+      "autoNote": "The employee, time, business date and shift are recorded automatically by the system.",
+      "noMatches": "No matching expenses",
+      "noMatchesHint": "Try a different search or category."
     },
     "void": {
       "title": "Void record",

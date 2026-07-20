@@ -1910,7 +1910,15 @@
       "reverseConfirm": "Ters kaydı işle",
       "reverseHint": "Orijinaline bağlı tam bir ters kayıt fişi oluşturur.",
       "reversalOf": "Ters kaydedilen fiş",
-      "reversedBy": "Ters kaydeden fiş"
+      "reversedBy": "Ters kaydeden fiş",
+      "more": "Daha fazla",
+      "employee": "Kaydeden",
+      "cancel": "Masrafı iptal et",
+      "cancelHint": "Masraf fişi iptal edilecek ve gerekçeniz kaydedilecektir.",
+      "cancelled": "Masraf iptal edildi",
+      "autoNote": "Personel, saat, işlem tarihi ve vardiya sistem tarafından otomatik olarak kaydedilir.",
+      "noMatches": "Eşleşen masraf yok",
+      "noMatchesHint": "Farklı bir arama veya kategori deneyin."
     },
     "void": {
       "title": "Kaydı iptal et",
