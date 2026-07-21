@@ -338,8 +338,10 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
     ).toHaveLength(1);
 
     // Step the quantity up, then re-add the SAME item — it merges (still one line).
+    // Adding clears the item search (owner correction #7: results hide after each
+    // add), so re-type to bring the result back before clicking it again.
     fireEvent.click(screen.getByRole("button", { name: "Increase quantity" }));
-    fireEvent.click(screen.getByRole("button", { name: /Espresso/ }));
+    await selectItem();
     expect(
       screen.getAllByRole("button", { name: "Increase quantity" }),
     ).toHaveLength(1);

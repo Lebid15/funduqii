@@ -901,6 +901,14 @@ export function OrderCreateModal({
     dropRoomAccountIfUnlinked();
   }
 
+  // Selecting a resident clears the query so the results list hides — the chosen
+  // stay is reflected in the summary and the pressed chip; type again to change it.
+  function pickStay(next: Stay) {
+    setSelectedStay(next);
+    setResidentQuery("");
+    setResidentMatches([]);
+  }
+
   function toggleChargeToRoom(on: boolean) {
     setChargeToRoom(on);
     if (!on) {
@@ -940,6 +948,9 @@ export function OrderCreateModal({
       }
       return [...prev, { service_item: item.id, quantity: "1", notes: "" }];
     });
+    // Clear the item search so its results list hides after adding (the added line
+    // now lives in the aside); type again to add another item.
+    setItemQuery("");
   }
 
   function setLineQty(itemId: number, quantity: number) {
@@ -1224,7 +1235,7 @@ export function OrderCreateModal({
                   type="button"
                   className="svc-result"
                   aria-pressed={selected}
-                  onClick={() => (selected ? unlinkStay() : setSelectedStay(s))}
+                  onClick={() => (selected ? unlinkStay() : pickStay(s))}
                 >
                   <span className="svc-result__main">
                     <span className="svc-result__name">
@@ -1252,18 +1263,10 @@ export function OrderCreateModal({
       size="full"
       preventClose={busy}
       footer={
-        result ? (
-          <Button onClick={onClose}>{t.common.close}</Button>
-        ) : (
-          <>
-            <Button variant="secondary" onClick={onClose} disabled={busy}>
-              {t.common.cancel}
-            </Button>
-            <Button form="svc-order-form" type="submit" loading={busy} disabled={!canCreate}>
-              {t.services.orders.submit}
-            </Button>
-          </>
-        )
+        // The create form has NO footer (owner: "no huge footer") — its Create +
+        // Cancel now live pinned in the aside. Only the terminal SUCCESS state keeps
+        // a footer Close, so that state is preserved byte-for-byte.
+        result ? <Button onClick={onClose}>{t.common.close}</Button> : undefined
       }
     >
       {result ? (
@@ -1509,79 +1512,6 @@ export function OrderCreateModal({
                     )}
                   </>
                 )}
-
-                <div className="stack-tight">
-                  <span className="field__label">{t.services.orders.selectedItems}</span>
-                  {lines.length === 0 ? (
-                    <p className="muted small">{t.services.orders.noLines}</p>
-                  ) : (
-                    <div className="svc-lines">
-                      {lines.map((line) => {
-                        const item = lineItem(line.service_item);
-                        if (!item) return null;
-                        const qty = Number(line.quantity) || 1;
-                        const lineTotal = Number(item.unit_price) * qty;
-                        return (
-                          <div className="svc-line" key={line.service_item}>
-                            <span className="svc-line__main">
-                              <span className="svc-line__name">{item.name}</span>
-                              <span className="svc-line__meta">{item.category_name}</span>
-                            </span>
-                            <span
-                              className="svc-stepper"
-                              role="group"
-                              aria-label={t.services.orders.quantity}
-                            >
-                              <IconButton
-                                icon={Minus}
-                                label={t.services.orders.decreaseQty}
-                                type="button"
-                                disabled={qty <= 1}
-                                onClick={() => setLineQty(item.id, qty - 1)}
-                              />
-                              <span className="svc-stepper__value" aria-live="polite">
-                                <bdi dir="ltr">{qty}</bdi>
-                              </span>
-                              <IconButton
-                                icon={Plus}
-                                label={t.services.orders.increaseQty}
-                                type="button"
-                                onClick={() => setLineQty(item.id, qty + 1)}
-                              />
-                            </span>
-                            <span className="svc-line__prices">
-                              <span className="svc-line__meta">
-                                {t.services.orders.unitPrice}:{" "}
-                                <bdi dir="ltr">
-                                  {formatMoney(item.unit_price, item.currency, locale)}
-                                </bdi>
-                              </span>
-                              <strong>
-                                <bdi dir="ltr">
-                                  {formatMoney(lineTotal, item.currency, locale)}
-                                </bdi>
-                              </strong>
-                            </span>
-                            <span className="svc-line__note">
-                              <Input
-                                aria-label={`${t.services.orders.lineNotes} · ${item.name}`}
-                                value={line.notes ?? ""}
-                                placeholder={t.services.orders.lineNotes}
-                                onChange={(e) => setLineNote(item.id, e.target.value)}
-                              />
-                            </span>
-                            <IconButton
-                              icon={Trash2}
-                              label={t.services.orders.removeLine}
-                              type="button"
-                              onClick={() => removeItem(item.id)}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               </section>
 
               {/* (4) Payment method — three choice cards (room account only when a
@@ -1715,56 +1645,152 @@ export function OrderCreateModal({
               </section>
             </div>
 
-            {/* (5) Order summary — sticky on desktop, after payment on mobile. */}
+            {/* (5) Aside — selected items (scrolls on overflow) above a PINNED
+                order summary + Create/Cancel. Fills the column on desktop so the
+                modal itself never scrolls; drops below the form on mobile. */}
             <aside className="svc-order__aside">
-              <Card className="stack">
-                <span className="svc-section__title">{t.services.orders.summarySection}</span>
-                <div className="stack-tight">
-                  <SvcSummaryRow label={t.services.outlet} value={t.services.outlets[outlet]} />
-                  <SvcSummaryRow
-                    label={t.services.orderType}
-                    value={t.services.orderTypes[source]}
-                  />
-                  <SvcSummaryRow label={sourceLocationLabel} value={sourceLocationValue} />
-                  <SvcSummaryRow
-                    label={t.services.orders.itemCount}
-                    value={<bdi dir="ltr">{estimate.count}</bdi>}
-                  />
-                </div>
-                <div className="stack-tight">
-                  <SvcSummaryRow
-                    label={t.services.orders.subtotal}
-                    value={<bdi dir="ltr">{money(estimate.subtotal)}</bdi>}
-                  />
-                  <SvcSummaryRow
-                    label={t.services.orders.tax}
-                    value={<bdi dir="ltr">{money(estimate.tax)}</bdi>}
-                  />
-                </div>
-                <div className="stack-tight" aria-live="polite">
-                  <span className="field__label">{t.services.orders.estimatedTotal}</span>
-                  <span className="svc-total">
-                    <bdi dir="ltr">{money(estimate.total)}</bdi>
-                  </span>
-                  <span className="muted small">{t.services.orders.estimatedTotalHint}</span>
-                </div>
-                <div className="stack-tight">
-                  <SvcSummaryRow label={t.services.orders.paymentMethod} value={paymentLabel} />
-                  {(paymentMethod === "cash" || paymentMethod === "electronic") &&
-                  hasReceived ? (
+              <div className="svc-order__items">
+                <span className="field__label">{t.services.orders.selectedItems}</span>
+                {lines.length === 0 ? (
+                  <p className="muted small">{t.services.orders.noLines}</p>
+                ) : (
+                  <div className="svc-lines">
+                    {lines.map((line) => {
+                      const item = lineItem(line.service_item);
+                      if (!item) return null;
+                      const qty = Number(line.quantity) || 1;
+                      const lineTotal = Number(item.unit_price) * qty;
+                      return (
+                        <div className="svc-line" key={line.service_item}>
+                          <span className="svc-line__main">
+                            <span className="svc-line__name">{item.name}</span>
+                            <span className="svc-line__meta">{item.category_name}</span>
+                          </span>
+                          <span
+                            className="svc-stepper"
+                            role="group"
+                            aria-label={t.services.orders.quantity}
+                          >
+                            <IconButton
+                              icon={Minus}
+                              label={t.services.orders.decreaseQty}
+                              type="button"
+                              disabled={qty <= 1}
+                              onClick={() => setLineQty(item.id, qty - 1)}
+                            />
+                            <span className="svc-stepper__value" aria-live="polite">
+                              <bdi dir="ltr">{qty}</bdi>
+                            </span>
+                            <IconButton
+                              icon={Plus}
+                              label={t.services.orders.increaseQty}
+                              type="button"
+                              onClick={() => setLineQty(item.id, qty + 1)}
+                            />
+                          </span>
+                          <span className="svc-line__prices">
+                            <span className="svc-line__meta">
+                              {t.services.orders.unitPrice}:{" "}
+                              <bdi dir="ltr">
+                                {formatMoney(item.unit_price, item.currency, locale)}
+                              </bdi>
+                            </span>
+                            <strong>
+                              <bdi dir="ltr">
+                                {formatMoney(lineTotal, item.currency, locale)}
+                              </bdi>
+                            </strong>
+                          </span>
+                          <span className="svc-line__note">
+                            <Input
+                              aria-label={`${t.services.orders.lineNotes} · ${item.name}`}
+                              value={line.notes ?? ""}
+                              placeholder={t.services.orders.lineNotes}
+                              onChange={(e) => setLineNote(item.id, e.target.value)}
+                            />
+                          </span>
+                          <IconButton
+                            icon={Trash2}
+                            label={t.services.orders.removeLine}
+                            type="button"
+                            onClick={() => removeItem(item.id)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="svc-order__foot">
+                <Card className="stack">
+                  <span className="svc-section__title">{t.services.orders.summarySection}</span>
+                  <div className="stack-tight">
+                    <SvcSummaryRow label={t.services.outlet} value={t.services.outlets[outlet]} />
                     <SvcSummaryRow
-                      label={t.services.orders.amountReceivedLabel}
-                      value={<bdi dir="ltr">{money(receivedNum)}</bdi>}
+                      label={t.services.orderType}
+                      value={t.services.orderTypes[source]}
                     />
-                  ) : null}
-                  {paymentMethod === "cash" && change !== null ? (
+                    <SvcSummaryRow label={sourceLocationLabel} value={sourceLocationValue} />
                     <SvcSummaryRow
-                      label={t.services.orders.change}
-                      value={<bdi dir="ltr">{money(change)}</bdi>}
+                      label={t.services.orders.itemCount}
+                      value={<bdi dir="ltr">{estimate.count}</bdi>}
                     />
-                  ) : null}
+                  </div>
+                  <div className="stack-tight">
+                    <SvcSummaryRow
+                      label={t.services.orders.subtotal}
+                      value={<bdi dir="ltr">{money(estimate.subtotal)}</bdi>}
+                    />
+                    <SvcSummaryRow
+                      label={t.services.orders.tax}
+                      value={<bdi dir="ltr">{money(estimate.tax)}</bdi>}
+                    />
+                  </div>
+                  <div className="stack-tight" aria-live="polite">
+                    <span className="field__label">{t.services.orders.estimatedTotal}</span>
+                    <span className="svc-total">
+                      <bdi dir="ltr">{money(estimate.total)}</bdi>
+                    </span>
+                    <span className="muted small">{t.services.orders.estimatedTotalHint}</span>
+                  </div>
+                  <div className="stack-tight">
+                    <SvcSummaryRow label={t.services.orders.paymentMethod} value={paymentLabel} />
+                    {(paymentMethod === "cash" || paymentMethod === "electronic") &&
+                    hasReceived ? (
+                      <SvcSummaryRow
+                        label={t.services.orders.amountReceivedLabel}
+                        value={<bdi dir="ltr">{money(receivedNum)}</bdi>}
+                      />
+                    ) : null}
+                    {paymentMethod === "cash" && change !== null ? (
+                      <SvcSummaryRow
+                        label={t.services.orders.change}
+                        value={<bdi dir="ltr">{money(change)}</bdi>}
+                      />
+                    ) : null}
+                  </div>
+                </Card>
+
+                <div className="svc-order__actions">
+                  <Button
+                    form="svc-order-form"
+                    type="submit"
+                    loading={busy}
+                    disabled={!canCreate}
+                  >
+                    {t.services.orders.submit}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={onClose}
+                    disabled={busy}
+                  >
+                    {t.common.cancel}
+                  </Button>
                 </div>
-              </Card>
+              </div>
             </aside>
           </div>
         </form>

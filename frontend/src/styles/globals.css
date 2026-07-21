@@ -6193,40 +6193,131 @@ a {
  * A large single-page form: a wide main column + a sticky summary sidebar on
  * desktop; a single column with the summary after payment on mobile. Built only
  * from the existing token vocabulary — no separate design language. */
+/* CREATE-ORDER form must show ENTIRELY in the window with NO modal scroll (owner:
+ * "no internal scrollbar in normal use"). Scoped ONLY to this form's modal via
+ * :has() so the SHARED base .modal (90dvh + overflow-y:auto) is never touched. The
+ * modal is fixed-height + clipped; the form fills it; and only inner areas — the
+ * selected-items list, the search results, and (as a safety net) the main column —
+ * may scroll, and only on genuine overflow. */
+.modal:has(.svc-order) {
+  max-height: 96dvh;
+  height: 96dvh;
+  overflow: hidden;
+}
+.modal:has(.svc-order) .modal__body {
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+.modal:has(.svc-order) #svc-order-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .svc-order {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 20rem;
-  gap: var(--space-6);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: var(--space-4);
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .svc-order__main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-3);
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
 }
+/* Aside fills its column as a flex column: selected items grow + scroll on
+ * overflow, while the summary + Create/Cancel actions stay pinned at the bottom —
+ * so the modal itself never scrolls even with many items. */
 .svc-order__aside {
-  position: sticky;
-  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   min-width: 0;
+  min-height: 0;
 }
+.svc-order__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.svc-order__items .svc-lines {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
+}
+.svc-order__foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.svc-order__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.svc-order__actions > * {
+  flex: 1 1 0;
+}
+
+/* Compact fields SCOPED to the create form (never the global Input/Select). Only
+ * the VERTICAL padding shrinks, so the Select's arrow inline-end space survives. */
+.svc-order .input,
+.svc-order .select,
+.svc-order .textarea {
+  padding-block: 0.45rem;
+}
+.svc-order .field {
+  gap: var(--space-1);
+}
+
 @media (max-width: 760px) {
   .svc-order {
     grid-template-columns: 1fr;
+    flex: 0 0 auto;
   }
-  /* Summary drops below payment (DOM order) and stops sticking on mobile. */
-  .svc-order__aside {
-    position: static;
+  /* On phones the modal is a full-screen sheet with ONE natural scroll: the
+   * columns stack and NOTHING gets its own inner scrollbar box. */
+  .modal:has(.svc-order) {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+  .modal:has(.svc-order) .modal__body {
+    overflow: visible;
+    flex: 1 1 auto;
+  }
+  .modal:has(.svc-order) #svc-order-form {
+    flex: 0 0 auto;
+  }
+  .svc-order__main,
+  .svc-order__aside,
+  .svc-order__items,
+  .svc-order__items .svc-lines {
+    overflow: visible;
+    min-height: 0;
+    flex: 0 0 auto;
+    padding-inline-end: 0;
   }
 }
 
 .svc-section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 .svc-section__title {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
   color: var(--color-fg);
 }
@@ -6269,20 +6360,26 @@ a {
   outline-offset: 2px;
 }
 
-/* Choice cards (order source, payment method). */
+/* Choice cards (order source, payment method) — a tight horizontal row of small
+ * equal cards. Flex (not fixed 3-col grid) so a 2-option payment set fills the row
+ * evenly too; wraps on very narrow widths. */
 .svc-choices {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.svc-choices > .svc-choice {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .svc-choice {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-4);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   text-align: start;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
   color: var(--color-fg);
   font: inherit;
@@ -6317,18 +6414,20 @@ a {
 }
 .svc-choice__title {
   font-weight: var(--font-weight-semibold);
-}
-.svc-choice__desc {
   font-size: var(--font-size-sm);
-  color: var(--color-fg-muted);
+}
+/* Descriptions hide to keep the source/payment cards small in a horizontal row
+ * (owner: "the description may shrink/hide") — the icon + title stay explanatory. */
+.svc-choice__desc {
+  display: none;
 }
 
 /* Search results (residents, tables, catalog items). */
 .svc-results {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  max-height: 18rem;
+  gap: var(--space-1);
+  max-height: 13rem;
   overflow-y: auto;
   padding: var(--space-2);
   border: 1px solid var(--color-border-subtle);
@@ -6381,27 +6480,28 @@ a {
   white-space: nowrap;
 }
 
-/* Added order lines. */
+/* Added order lines — compact single dense rows in the aside (name · qty stepper
+ * · line total · remove); the per-item note wraps below as a small affordance. */
 .svc-lines {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 .svc-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3) var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--color-surface);
 }
 .svc-line__main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex: 1 1 10rem;
+  gap: 0;
+  flex: 1 1 7rem;
   min-width: 0;
 }
 .svc-line__name {
