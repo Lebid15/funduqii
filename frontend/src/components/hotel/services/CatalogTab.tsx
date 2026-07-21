@@ -36,6 +36,7 @@ import {
   type ServiceCategoryBody,
   type ServiceItemBody,
 } from "@/lib/api/services";
+import { getSettings } from "@/lib/api/hotel";
 import { messageForError } from "@/lib/api/errors";
 import type { ServiceCategory, ServiceItem, ServiceOutlet } from "@/lib/api/types";
 import { formatMoney } from "@/lib/format";
@@ -65,6 +66,25 @@ export function CatalogTab() {
   const [itemModal, setItemModal] = useState<{ open: boolean; edit: ServiceItem | null }>({ open: false, edit: null });
   const [deleteCat, setDeleteCat] = useState<ServiceCategory | null>(null);
   const [deleteItem, setDeleteItem] = useState<ServiceItem | null>(null);
+
+  // D1a — every item is priced in the hotel BASE currency; the item modal shows
+  // it as a fixed chip and saves it on the item so an order never sees a bare
+  // price. A failed/absent settings read leaves it blank (the field then shows a
+  // neutral placeholder and the backend still normalizes an empty currency to base).
+  const [baseCurrency, setBaseCurrency] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((s) => {
+        if (!cancelled) setBaseCurrency((s.default_currency || "").toUpperCase());
+      })
+      .catch(() => {
+        // Cosmetic — the price field still saves; the backend normalizes currency.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,7 +124,6 @@ export function CatalogTab() {
       header: t.services.outlet,
       render: (r) => <Badge tone="neutral">{t.services.outlets[r.outlet]}</Badge>,
     },
-    { key: "code", header: t.services.catalog.categoryCode, render: (r) => r.code || "—" },
     { key: "item_count", header: t.services.catalog.itemCount },
     {
       key: "is_active",
@@ -277,6 +296,7 @@ export function CatalogTab() {
         edit={itemModal.edit}
         categories={categories}
         enabledOutlets={enabledOutlets}
+        baseCurrency={baseCurrency}
         onClose={() => setItemModal({ open: false, edit: null })}
         onSaved={() => {
           setItemModal({ open: false, edit: null });
@@ -354,11 +374,10 @@ function CategoryModal({
     if (open) {
       setForm(
         edit
-          ? { name: edit.name, code: edit.code, description: edit.description, is_active: edit.is_active }
+          ? { name: edit.name, description: edit.description, is_active: edit.is_active }
           : {
               outlet: enabledOutlets[0] ?? "restaurant",
               name: "",
-              code: "",
               description: "",
               is_active: true,
             },
@@ -420,9 +439,6 @@ function CategoryModal({
           <FormField label={t.services.catalog.categoryName} htmlFor="c-name">
             <Input id="c-name" value={form.name ?? ""} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
           </FormField>
-          <FormField label={t.services.catalog.categoryCode} htmlFor="c-code">
-            <Input id="c-code" value={form.code ?? ""} onChange={(e) => setForm((p) => ({ ...p, code: e.target.value }))} />
-          </FormField>
         </div>
         <FormField label={t.services.catalog.categoryDescription} htmlFor="c-desc">
           <Input id="c-desc" value={form.description ?? ""} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
@@ -443,6 +459,7 @@ function ItemModal({
   edit,
   categories,
   enabledOutlets,
+  baseCurrency,
   onClose,
   onSaved,
 }: {
@@ -450,6 +467,8 @@ function ItemModal({
   edit: ServiceItem | null;
   categories: ServiceCategory[];
   enabledOutlets: ServiceOutlet[];
+  /** The hotel base currency (D1a) — fixed onto every item; never user-chosen. */
+  baseCurrency: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -471,7 +490,6 @@ function ItemModal({
           ? {
               category: edit.category,
               name: edit.name,
-              code: edit.code,
               description: edit.description,
               unit_price: edit.unit_price,
               tax_rate: edit.tax_rate,
@@ -481,7 +499,6 @@ function ItemModal({
           : {
               category: categories.filter((c) => enabledOutlets.includes(c.outlet))[0]?.id,
               name: "",
-              code: "",
               description: "",
               unit_price: "",
               tax_rate: "0",
@@ -505,9 +522,13 @@ function ItemModal({
     }
     setBusy(true);
     setError(null);
+    // D1a — pin the item to the hotel base currency so its price is never bare
+    // and an order (which asserts item.currency == base) always accepts it. When
+    // the base could not be read, omit it (the backend normalizes empty → base).
+    const body: ServiceItemBody = baseCurrency ? { ...form, currency: baseCurrency } : form;
     try {
-      if (edit) await updateServiceItem(edit.id, form);
-      else await createServiceItem(form);
+      if (edit) await updateServiceItem(edit.id, body);
+      else await createServiceItem(body);
       onSaved();
     } catch (err) {
       setError(messageForError(err, t));
@@ -551,11 +572,17 @@ function ItemModal({
           <FormField label={t.services.catalog.price} htmlFor="i-price">
             <Input id="i-price" type="number" step="0.01" min="0" value={form.unit_price ?? ""} onChange={(e) => set("unit_price", e.target.value)} />
           </FormField>
+          <FormField label={t.services.catalog.currency} htmlFor="i-currency" hint={t.services.catalog.currencyBaseHint}>
+            {/* D1a — currency is FIXED to the hotel base; shown as a read-only chip
+                so no bare price is entered and the item saves with currency == base. */}
+            <div className="cluster" id="i-currency">
+              <Badge tone="neutral" variant="outline">
+                <bdi dir="ltr">{baseCurrency || t.common.notAvailable}</bdi>
+              </Badge>
+            </div>
+          </FormField>
           <FormField label={t.services.catalog.taxRate} htmlFor="i-tax">
             <Input id="i-tax" type="number" step="0.01" min="0" value={form.tax_rate ?? ""} onChange={(e) => set("tax_rate", e.target.value)} />
-          </FormField>
-          <FormField label={t.services.catalog.itemCode} htmlFor="i-code">
-            <Input id="i-code" value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} />
           </FormField>
         </div>
         <FormField label={t.services.catalog.itemDescription} htmlFor="i-desc">

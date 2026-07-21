@@ -399,7 +399,11 @@ class OrderTests(APITestCase, ServicesMixin):
         self.assertEqual(res.data["order_number"], "ORD00001")
         self.assertEqual(res.data["totals"], {
             "subtotal": "110.00", "tax_total": "8.00", "total": "118.00",
+            "currency": "USD",
         })
+        # D1a — the order and every line snapshot the hotel base currency.
+        self.assertEqual(res.data["currency"], "USD")
+        self.assertTrue(all(i["currency"] == "USD" for i in res.data["items"]))
         self.assertEqual(res.data["status"], "submitted")
 
     def test_quantity_validation(self):
@@ -600,11 +604,18 @@ class PostingTests(APITestCase, ServicesMixin):
         self.assertEqual(res.data["code"], "order_already_posted")
         self.assertEqual(FolioCharge.objects.count(), 1)
 
-    def test_posting_undelivered_rejected(self):
+    def test_posting_undelivered_now_succeeds_and_stays_new(self):
+        # Owner-approved official cycle: settlement no longer requires DELIVERED.
+        # A NEW (submitted) room order posts to the folio and STAYS submitted;
+        # delivery is a later, card-only action.
+        from apps.services.models import OrderSettlement
+
         oid = self.create_order(stay=self.stay.id).data["id"]
         res = self.post_order(oid)
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "order_not_postable")
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)  # still NEW
 
     def test_posting_cancelled_rejected(self):
         oid = self.create_order(stay=self.stay.id).data["id"]
@@ -1139,11 +1150,15 @@ class DirectSettlementTests(ClosureBase):
         self.assertEqual(data["status"], "delivered")
         self.assertFalse(data["is_posted"])
 
-    def test_requires_delivered(self):
+    def test_settle_on_new_order_succeeds_and_stays_new(self):
+        # Owner-approved official cycle: settlement no longer requires DELIVERED —
+        # a NEW (submitted) order settles directly and STAYS submitted.
         oid = self.create_order().data["id"]
         res = self.settle_direct(oid)
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "order_not_postable")
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)
 
     def test_xor_paid_order_cannot_be_posted(self):
         oid = self._delivered(stay=self.stay.id)
@@ -1374,3 +1389,1030 @@ class ClosureActivityTests(ClosureBase):
         }
         missing = expected - self._types()
         self.assertFalse(missing, missing)
+
+
+# --------------------------------------------------------------------------- #
+# Restaurant/café OPERATIONAL CLOSURE — currency, cash capture, idempotency,    #
+# returns & exchanges                                                          #
+# --------------------------------------------------------------------------- #
+
+from apps.finance.models import ChargeType, PaymentMethod
+from apps.finance.services import create_folio as _create_folio
+from apps.services.models import (
+    OrderSettlement,
+    ReturnKind,
+    ServiceOrderItem as _ServiceOrderItem,
+    ServiceOrderReturn,
+    ServiceOrderReturnItem,
+)
+
+
+class CurrencyMatchTests(ClosureBase):
+    """D1a — the base currency is the single service currency (no FX)."""
+
+    def test_order_and_lines_snapshot_base_currency(self):
+        res = self.create_order(stay=self.stay.id)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["currency"], "USD")
+        self.assertTrue(all(i["currency"] == "USD" for i in res.data["items"]))
+        order = ServiceOrder.objects.get(pk=res.data["id"])
+        self.assertEqual(order.currency, "USD")
+        self.assertTrue(
+            all(li.currency == "USD" for li in order.items.all())
+        )
+
+    def test_item_in_foreign_currency_rejected_on_create(self):
+        # An item explicitly saved in a non-base currency is refused (no FX).
+        self.item.currency = "EUR"
+        self.item.save(update_fields=["currency"])
+        res = self.create_order(stay=self.stay.id)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "currency_mismatch")
+        self.assertEqual(ServiceOrder.objects.count(), 0)
+
+    def test_empty_item_currency_normalized_to_base(self):
+        # The catalog item currency is blank (the historically-dead field) — it is
+        # normalized to the base and snapshotted, never rejected.
+        self.assertEqual(self.item.currency, "")
+        res = self.create_order(stay=self.stay.id)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["items"][0]["currency"], "USD")
+
+    def test_post_to_folio_currency_mismatch_rejected(self):
+        # The stay's folio carries a DIFFERENT (agreed) currency than the order's
+        # base — posting must reject rather than silently FX-convert.
+        _create_folio(
+            self.hotel, stay=self.stay, guest=self.stay.primary_guest,
+            agreed_currency="EUR",
+        )
+        oid = self.create_order(stay=self.stay.id).data["id"]
+        self.deliver(oid)
+        res = self.post_order(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "folio_currency_mismatch")
+        # No charge posted, order still unsettled.
+        self.assertEqual(FolioCharge.objects.count(), 0)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).settlement, OrderSettlement.UNSETTLED
+        )
+
+
+class DirectSettlementCaptureTests(ClosureBase):
+    """D2a — capture amount_received + change (services-side); the Payment stays
+    the exact total."""
+
+    def _delivered(self, **kw):
+        oid = self.create_order(**kw).data["id"]
+        self.deliver(oid)
+        return oid
+
+    def _settle(self, oid, **body):
+        body.setdefault("method", "cash")
+        return self.client.post(
+            reverse("services:order-settle-direct", args=[oid]),
+            body, format="json", **HDR(self.hotel),
+        )
+
+    def test_records_received_and_change(self):
+        oid = self._delivered()  # 88.00 order
+        res = self._settle(
+            oid, amount_received="100.00", reference="TXN-9",
+        )
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(str(order.amount_received), "100.00")
+        self.assertEqual(str(order.change_given), "12.00")
+        self.assertEqual(order.settlement_reference, "TXN-9")
+        self.assertEqual(order.settlement_method, "cash")
+        # The finance Payment records the EXACT total, not the tender.
+        payment = Payment.objects.get(pk=order.settlement_payment_id)
+        self.assertEqual(str(payment.amount), "88.00")
+        self.assertEqual(payment.reference, "TXN-9")
+
+    def test_short_cash_tender_rejected_with_no_side_effect(self):
+        oid = self._delivered()
+        folios_before = Folio.objects.count()
+        res = self._settle(oid, amount_received="50.00")
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "insufficient_cash_received")
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.UNSETTLED)
+        self.assertIsNone(order.amount_received)
+        self.assertEqual(Folio.objects.count(), folios_before)
+        self.assertEqual(Payment.objects.count(), 0)
+
+    def test_electronic_without_received_ok(self):
+        oid = self._delivered()
+        res = self._settle(oid, method="card")
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertIsNone(order.amount_received)
+        self.assertIsNone(order.change_given)
+        self.assertEqual(order.settlement_method, "card")
+        self.assertEqual(
+            str(Payment.objects.get(pk=order.settlement_payment_id).amount), "88.00"
+        )
+
+
+class SettleIdempotencyTests(ClosureBase):
+    """D5 — settle-direct + post-to-folio idempotency."""
+
+    def _delivered(self, **kw):
+        kw.setdefault("stay", self.stay.id)
+        oid = self.create_order(**kw).data["id"]
+        self.deliver(oid)
+        return oid
+
+    def _settle(self, oid, **body):
+        body.setdefault("method", "cash")
+        return self.client.post(
+            reverse("services:order-settle-direct", args=[oid]),
+            body, format="json", **HDR(self.hotel),
+        )
+
+    def test_same_key_same_body_moves_money_once(self):
+        oid = self._delivered()
+        first = self._settle(oid, idempotency_key="K1", amount_received="100.00")
+        self.assertEqual(first.status_code, 200)
+        second = self._settle(oid, idempotency_key="K1", amount_received="100.00")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.data["id"], second.data["id"])
+        # Exactly ONE payment / ONE transient folio despite the replay.
+        self.assertEqual(Payment.objects.count(), 1)
+        self.assertEqual(
+            Folio.objects.filter(service_orders__id=oid).count(), 1
+        )
+
+    def test_same_key_different_body_conflicts_no_side_effect(self):
+        oid = self._delivered()
+        self.assertEqual(
+            self._settle(oid, idempotency_key="K2", amount_received="100.00").status_code,
+            200,
+        )
+        payments_before = Payment.objects.count()
+        conflict = self._settle(oid, idempotency_key="K2", amount_received="90.00")
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.data["code"], "idempotency_key_conflict")
+        self.assertEqual(Payment.objects.count(), payments_before)
+
+    def test_folio_post_idempotent_same_key(self):
+        oid = self._delivered()
+        r1 = self.client.post(
+            reverse("services:order-post-to-folio", args=[oid]),
+            {"idempotency_key": "P1"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r1.status_code, 200)
+        r2 = self.client.post(
+            reverse("services:order-post-to-folio", args=[oid]),
+            {"idempotency_key": "P1"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r2.status_code, 200)
+        # One service charge only (the replay returned the same order).
+        self.assertEqual(
+            FolioCharge.objects.filter(source="service_order").count(), 1
+        )
+
+
+class ReturnBase(ClosureBase):
+    """Helpers for return/exchange tests. The manager inherits finance.refund."""
+
+    def _return(self, oid, *, kind="return", items, reason="customer changed mind",
+                method=None, amount_received=None, reference="", idempotency_key="",
+                hotel=None):
+        body = {"kind": kind, "reason": reason, "items": items}
+        if method:
+            body["method"] = method
+        if amount_received is not None:
+            body["amount_received"] = amount_received
+        if reference:
+            body["reference"] = reference
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+        return self.client.post(
+            reverse("services:order-return", args=[oid]),
+            body, format="json", **HDR(hotel or self.hotel),
+        )
+
+    def _folio_order(self, **kw):
+        """A delivered order posted to the stay's OPEN folio (FOLIO settlement)."""
+        kw.setdefault("stay", self.stay.id)
+        res = self.create_order(**kw)
+        oid = res.data["id"]
+        lines = res.data["items"]
+        self.deliver(oid)
+        self.assertEqual(self.post_order(oid).status_code, 200)
+        return oid, lines
+
+    def _direct_order(self, **kw):
+        res = self.create_order(**kw)
+        oid = res.data["id"]
+        lines = res.data["items"]
+        self.deliver(oid)
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+        return oid, lines
+
+
+class RoomReturnTests(ReturnBase):
+    """D3a — a ROOM (settlement=FOLIO) return counter-posts a credit on the
+    guest's OPEN folio (reuse of finance ``add_charge`` in its reversal shape).
+    See the report: a partial/repeatable proportional credit — void_charge /
+    adjust_charge are whole-charge, once-only, and cannot express it."""
+
+    def test_full_return_credits_open_folio(self):
+        oid, lines = self._folio_order()  # 88.00
+        order = ServiceOrder.objects.get(pk=oid)
+        folio_id = order.folio_id
+        self.assertEqual(str(folio_balance(order.folio)["balance"]), "88.00")
+        res = self._return(
+            oid, items=[{"original_item": lines[0]["id"], "quantity": "2"}]
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        # A credit ADJUSTMENT counter-charge on the SAME open folio.
+        credit = FolioCharge.objects.get(pk=ret.reversal_charge_id)
+        self.assertEqual(credit.folio_id, folio_id)
+        self.assertEqual(credit.type, ChargeType.ADJUSTMENT)
+        self.assertEqual(credit.source, "order_return")
+        self.assertEqual(str(credit.total_amount), "-88.00")
+        self.assertEqual(credit.status, PostingStatus.POSTED)
+        # Folio balance net to zero — the returned amount matches to the cent.
+        self.assertEqual(
+            str(folio_balance(Folio.objects.get(pk=folio_id))["balance"]), "0.00"
+        )
+        # Append-only + void-not-delete: the ORIGINAL posted charge is untouched.
+        order.refresh_from_db()
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+        self.assertEqual(
+            FolioCharge.objects.get(pk=order.posted_charge_id).status,
+            PostingStatus.POSTED,
+        )
+        self.assertEqual(ServiceOrderReturnItem.objects.filter(service_return=ret).count(), 1)
+
+    def test_return_when_guest_folio_closed_uses_transient_refund(self):
+        # Owner ruling: a ROOM return on a checked-out guest whose folio is CLOSED
+        # must NOT be refused — it refunds via a NEW transient folio (like DIRECT),
+        # leaving the original closed folio untouched.
+        from apps.finance.services import close_folio, record_payment
+
+        oid, lines = self._folio_order()  # 88.00 posted to the guest's OPEN folio
+        order = ServiceOrder.objects.get(pk=oid)
+        guest_folio = Folio.objects.get(pk=order.folio_id)
+        # Simulate the guest checking out: settle + CLOSE the guest folio.
+        record_payment(
+            guest_folio, amount=Decimal("88.00"), method="cash", user=self.manager
+        )
+        close_folio(guest_folio, user=self.manager)
+        guest_folio.refresh_from_db()
+        self.assertEqual(guest_folio.status, FolioStatus.CLOSED)
+        guest_charges_before = list(
+            FolioCharge.objects.filter(folio=guest_folio)
+            .order_by("id")
+            .values_list("pk", "total_amount", "status")
+        )
+
+        res = self._return(
+            oid, items=[{"original_item": lines[0]["id"], "quantity": "2"}],
+            method="cash",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        # A NEW transient refund folio — NOT the guest's closed folio.
+        self.assertIsNotNone(ret.refund_folio_id)
+        self.assertNotEqual(ret.refund_folio_id, guest_folio.id)
+        refund_folio = Folio.objects.get(pk=ret.refund_folio_id)
+        self.assertEqual(refund_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(refund_folio)["balance"]), "0.00")
+        self.assertEqual(
+            str(Payment.objects.get(pk=ret.refund_payment_id).amount), "-88.00"
+        )
+        credit = FolioCharge.objects.get(pk=ret.reversal_charge_id)
+        self.assertEqual(credit.folio_id, refund_folio.id)
+        self.assertEqual(str(credit.total_amount), "-88.00")
+        # The ORIGINAL closed guest folio is byte-for-byte untouched (append-only).
+        guest_folio.refresh_from_db()
+        self.assertEqual(guest_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(guest_folio)["balance"]), "0.00")
+        self.assertEqual(
+            list(
+                FolioCharge.objects.filter(folio=guest_folio)
+                .order_by("id")
+                .values_list("pk", "total_amount", "status")
+            ),
+            guest_charges_before,
+        )
+        order.refresh_from_db()
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+
+    def test_partial_then_exceed_remaining(self):
+        oid, lines = self._folio_order()  # item x2
+        line_id = lines[0]["id"]
+        first = self._return(oid, items=[{"original_item": line_id, "quantity": "1"}])
+        self.assertEqual(first.status_code, 201)
+        credit = FolioCharge.objects.get(
+            pk=first.data["return"]["reversal_charge"]
+        )
+        self.assertEqual(str(credit.total_amount), "-44.00")
+        # A second return of the remaining 1 is allowed.
+        second = self._return(oid, items=[{"original_item": line_id, "quantity": "1"}])
+        self.assertEqual(second.status_code, 201)
+        # A third exceeds what remains.
+        third = self._return(oid, items=[{"original_item": line_id, "quantity": "1"}])
+        self.assertEqual(third.status_code, 400)
+        self.assertEqual(third.data["code"], "invalid_return_composition")
+
+    def test_return_requires_delivered_and_settled(self):
+        oid = self.create_order(stay=self.stay.id).data["id"]
+        line = ServiceOrder.objects.get(pk=oid).items.first()
+        res = self._return(oid, items=[{"original_item": line.id, "quantity": "1"}])
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_returnable")
+
+    def test_reason_required(self):
+        oid, lines = self._folio_order()
+        res = self._return(
+            oid, items=[{"original_item": lines[0]["id"], "quantity": "1"}], reason=" "
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "return_reason_required")
+
+    def test_permission_finance_refund_required(self):
+        oid, lines = self._folio_order()
+        body_items = [{"original_item": lines[0]["id"], "quantity": "1"}]
+        staff = add_member(
+            self.hotel, "noref@x.com",
+            perms=["service_orders.view", "service_orders.post_to_folio"],
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(
+            self._return(oid, items=body_items).status_code, 403
+        )
+        refunder = add_member(self.hotel, "ref@x.com", perms=["finance.refund"])
+        self.client.force_authenticate(refunder)
+        self.assertEqual(self._return(oid, items=body_items).status_code, 201)
+
+
+class DirectReturnTests(ReturnBase):
+    """D3a — a DIRECT return opens a NEW transient refund folio + a NEGATIVE
+    payment; the ORIGINAL closed folio is never reopened or altered."""
+
+    def test_new_refund_folio_negative_payment_original_untouched(self):
+        oid, lines = self._direct_order()  # 88.00, transient folio closed
+        order = ServiceOrder.objects.get(pk=oid)
+        original_folio = Folio.objects.get(pk=order.folio_id)
+        original_charge = FolioCharge.objects.get(pk=order.posted_charge_id)
+        original_payment = Payment.objects.get(pk=order.settlement_payment_id)
+        self.assertEqual(original_folio.status, FolioStatus.CLOSED)
+
+        res = self._return(
+            oid, items=[{"original_item": lines[0]["id"], "quantity": "2"}],
+            method="cash",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        # A NEW transient refund folio, closed at zero.
+        self.assertIsNotNone(ret.refund_folio_id)
+        self.assertNotEqual(ret.refund_folio_id, original_folio.id)
+        refund_folio = Folio.objects.get(pk=ret.refund_folio_id)
+        self.assertEqual(refund_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(refund_folio)["balance"]), "0.00")
+        # A NEGATIVE payment (money out) for the returned amount.
+        refund_payment = Payment.objects.get(pk=ret.refund_payment_id)
+        self.assertEqual(str(refund_payment.amount), "-88.00")
+        # The credit reversal charge lives on the NEW folio (not the original).
+        credit = FolioCharge.objects.get(pk=ret.reversal_charge_id)
+        self.assertEqual(credit.folio_id, refund_folio.id)
+        self.assertEqual(str(credit.total_amount), "-88.00")
+
+        # The ORIGINAL closed folio is byte-for-byte untouched.
+        original_folio.refresh_from_db()
+        original_charge.refresh_from_db()
+        original_payment.refresh_from_db()
+        self.assertEqual(original_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(original_charge.total_amount), "88.00")
+        self.assertEqual(original_charge.status, PostingStatus.POSTED)
+        self.assertEqual(str(original_payment.amount), "88.00")
+        self.assertEqual(
+            str(folio_balance(original_folio)["balance"]), "0.00"
+        )
+        # XOR still holds: the order is still DIRECT-settled.
+        order.refresh_from_db()
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+
+
+class ExchangeTests(ReturnBase):
+    """D3a — exchanges move ONLY the net delta; snapshots are frozen."""
+
+    def test_exchange_same_no_money(self):
+        oid, lines = self._folio_order()  # item x2 = 88 on the folio
+        order = ServiceOrder.objects.get(pk=oid)
+        charges_before = FolioCharge.objects.filter(folio=order.folio).count()
+        res = self._return(
+            oid, kind="exchange_same",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        self.assertIsNone(ret.delta_charge_id)
+        self.assertIsNone(ret.delta_payment_id)
+        # No new charge on the folio; the snapshot records both legs.
+        self.assertEqual(
+            FolioCharge.objects.filter(folio=order.folio).count(), charges_before
+        )
+        item = ServiceOrderReturnItem.objects.get(service_return=ret)
+        self.assertEqual(item.replacement_item_id, self.item.id)
+        self.assertEqual(str(item.replacement_total_amount), "44.00")
+
+    def test_exchange_higher_collects_delta_on_folio(self):
+        # Order a Tea (10) posted to the folio, then exchange it for a Burger (44).
+        oid, lines = self._folio_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]
+        )
+        order = ServiceOrder.objects.get(pk=oid)
+        res = self._return(
+            oid, kind="exchange_higher",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        delta = FolioCharge.objects.get(pk=ret.delta_charge_id)
+        self.assertEqual(delta.type, ChargeType.SERVICE)
+        self.assertEqual(str(delta.total_amount), "34.00")
+        # Folio now reflects the Burger's value (10 original + 34 delta).
+        self.assertEqual(
+            str(folio_balance(order.folio)["balance"]), "44.00"
+        )
+
+    def test_exchange_lower_refunds_delta_on_folio(self):
+        oid, lines = self._folio_order(
+            items=[{"service_item": self.item.id, "quantity": "1"}]  # 44
+        )
+        order = ServiceOrder.objects.get(pk=oid)
+        res = self._return(
+            oid, kind="exchange_lower",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item2.id, "replacement_quantity": "1",  # 10
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        delta = FolioCharge.objects.get(pk=ret.delta_charge_id)
+        self.assertEqual(delta.type, ChargeType.ADJUSTMENT)
+        self.assertEqual(str(delta.total_amount), "-34.00")
+        self.assertEqual(str(folio_balance(order.folio)["balance"]), "10.00")
+
+    def test_exchange_higher_direct_collects_on_new_folio(self):
+        oid, lines = self._direct_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        res = self._return(
+            oid, kind="exchange_higher", method="cash",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        collect_folio = Folio.objects.get(pk=ret.refund_folio_id)
+        self.assertEqual(collect_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(collect_folio)["balance"]), "0.00")
+        self.assertEqual(str(Payment.objects.get(pk=ret.delta_payment_id).amount), "34.00")
+        self.assertEqual(str(FolioCharge.objects.get(pk=ret.delta_charge_id).total_amount), "34.00")
+
+    def test_exchange_higher_direct_cash_capture(self):
+        # D2a consistency — a CASH delta collection captures received + change on
+        # the ServiceOrderReturn; the finance Payment records the EXACT delta.
+        oid, lines = self._direct_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        order = ServiceOrder.objects.get(pk=oid)
+        original_folio = Folio.objects.get(pk=order.folio_id)
+        original_charge = FolioCharge.objects.get(pk=order.posted_charge_id)
+        res = self._return(
+            oid, kind="exchange_higher", method="cash", amount_received="50.00",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        # Delta = 44 - 10 = 34; tender 50 -> change 16.
+        self.assertEqual(str(ret.amount_received), "50.00")
+        self.assertEqual(str(ret.change_given), "16.00")
+        self.assertEqual(res.data["return"]["amount_received"], "50.00")
+        self.assertEqual(res.data["return"]["change_given"], "16.00")
+        # The Payment records the EXACT delta (not the tender).
+        self.assertEqual(str(Payment.objects.get(pk=ret.delta_payment_id).amount), "34.00")
+        collect_folio = Folio.objects.get(pk=ret.refund_folio_id)
+        self.assertEqual(collect_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(collect_folio)["balance"]), "0.00")
+        # The ORIGINAL closed transient folio + charge are untouched.
+        original_folio.refresh_from_db()
+        original_charge.refresh_from_db()
+        self.assertEqual(original_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(original_charge.total_amount), "10.00")
+        order.refresh_from_db()
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+
+    def test_exchange_higher_direct_short_tender_rejected(self):
+        oid, lines = self._direct_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        payments_before = Payment.objects.count()
+        folios_before = Folio.objects.count()
+        res = self._return(
+            oid, kind="exchange_higher", method="cash", amount_received="20.00",  # < 34
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "insufficient_cash_received")
+        # No side effect: no return, no collect folio, no payment.
+        self.assertEqual(ServiceOrderReturn.objects.filter(order_id=oid).count(), 0)
+        self.assertEqual(Payment.objects.count(), payments_before)
+        self.assertEqual(Folio.objects.count(), folios_before)
+
+    def test_exchange_kind_mismatch_rejected(self):
+        oid, lines = self._folio_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        # Claiming "higher" while the replacement is cheaper is refused.
+        res = self._return(
+            oid, kind="exchange_higher",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item2.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "invalid_return_composition")
+
+
+class ReturnIdempotencyTests(ReturnBase):
+    """D5 — return idempotency."""
+
+    def test_same_key_creates_one_return(self):
+        oid, lines = self._folio_order()
+        body = {
+            "kind": "return", "reason": "x",
+            "items": [{"original_item": lines[0]["id"], "quantity": "1"}],
+            "idempotency_key": "R1",
+        }
+        first = self.client.post(
+            reverse("services:order-return", args=[oid]), body,
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(first.status_code, 201)
+        second = self.client.post(
+            reverse("services:order-return", args=[oid]), body,
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(first.data["return"]["id"], second.data["return"]["id"])
+        self.assertEqual(ServiceOrderReturn.objects.filter(order_id=oid).count(), 1)
+        self.assertEqual(
+            FolioCharge.objects.filter(source="order_return").count(), 1
+        )
+
+    def test_same_key_different_body_conflicts(self):
+        oid, lines = self._folio_order()
+        base = {
+            "kind": "return",
+            "items": [{"original_item": lines[0]["id"], "quantity": "1"}],
+            "idempotency_key": "R2",
+        }
+        ok = self.client.post(
+            reverse("services:order-return", args=[oid]),
+            {**base, "reason": "first reason"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(ok.status_code, 201)
+        conflict = self.client.post(
+            reverse("services:order-return", args=[oid]),
+            {**base, "reason": "totally different reason"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.data["code"], "idempotency_key_conflict")
+        self.assertEqual(ServiceOrderReturn.objects.filter(order_id=oid).count(), 1)
+
+
+# --------------------------------------------------------------------------- #
+# PR #55 owner-approved changes — C1..C8 (targeted)                            #
+# --------------------------------------------------------------------------- #
+
+from apps.services.models import Outlet, OrderType  # noqa: E402
+
+
+class SettleCurrencyGuardTests(ClosureBase):
+    """C1 — settle_order_direct carries the SAME currency guard as folio posting:
+    a base-currency change between order creation and direct settlement is
+    rejected (no silent FX), never settled/printed under a mismatched label."""
+
+    def _delivered(self, **kw):
+        oid = self.create_order(**kw).data["id"]
+        self.deliver(oid)
+        return oid
+
+    def test_direct_settle_rejected_on_base_currency_change(self):
+        oid = self._delivered()  # order.currency snapshot == USD
+        HotelSettings.objects.update_or_create(
+            hotel=self.hotel, defaults={"default_currency": "EUR"}
+        )
+        folios_before = Folio.objects.count()
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "folio_currency_mismatch")
+        self.assertEqual(res.data["details"]["reason"], "order_folio_currency_mismatch")
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.UNSETTLED)
+        # No side effect: no transient folio, no payment.
+        self.assertEqual(Folio.objects.count(), folios_before)
+        self.assertEqual(Payment.objects.count(), 0)
+
+    def test_direct_settle_ok_when_currency_unchanged(self):
+        oid = self._delivered()
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+
+
+class CancelAfterDeliveredTests(ClosureBase):
+    """C3 — cancellation is a PRE-DELIVERY action only. A delivered order (or one
+    of its lines) is never cancelled, even while still unsettled; the sanctioned
+    post-delivery correction is a RETURN."""
+
+    def _delivered(self, **kw):
+        res = self.create_order(**kw)
+        oid = res.data["id"]
+        line_id = res.data["items"][0]["id"]
+        self.deliver(oid)
+        return oid, line_id
+
+    def test_cancel_order_blocked_after_delivered(self):
+        oid, _ = self._delivered()
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.UNSETTLED)  # still unsettled
+        res = self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": "changed mind"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.DELIVERED
+        )
+
+    def test_cancel_line_blocked_after_delivered(self):
+        oid, line_id = self._delivered()
+        res = self.cancel_item(oid, line_id)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+
+    def test_cancel_still_allowed_before_delivery(self):
+        res = self.create_order()
+        oid = res.data["id"]  # submitted, not delivered
+        cancel = self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": "changed mind"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(cancel.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+
+
+class DirectCustomerOrderTests(ClosureBase):
+    """C4 — a walk-in DIRECT customer is a standalone order source: no table, no
+    stay. It settles by direct payment only and can never post to a folio."""
+
+    def _direct_body(self, **over):
+        body = {
+            "order_type": "direct",
+            "outlet": "restaurant",
+            "customer_name": "Walk-in Ali",
+            "items": [{"service_item": self.item.id, "quantity": "2"}],
+        }
+        body.update(over)
+        return body
+
+    def _create_direct(self, **over):
+        return self.client.post(
+            reverse("services:order-list"), self._direct_body(**over),
+            format="json", **HDR(self.hotel),
+        )
+
+    def test_create_direct_customer_no_table_no_stay(self):
+        res = self._create_direct()
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["order_type"], "direct")
+        self.assertIsNone(res.data["table"])
+        self.assertIsNone(res.data["stay"])
+        self.assertEqual(res.data["customer_name"], "Walk-in Ali")
+        order = ServiceOrder.objects.get(pk=res.data["id"])
+        self.assertEqual(order.order_type, OrderType.DIRECT)
+        self.assertIsNone(order.table_id)
+        self.assertIsNone(order.stay_id)
+        self.assertIsNone(order.room_id)
+
+    def test_direct_customer_settles_direct(self):
+        oid = self._create_direct().data["id"]
+        self.deliver(oid)
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).settlement, OrderSettlement.DIRECT
+        )
+
+    def test_direct_customer_cannot_post_to_folio(self):
+        oid = self._create_direct().data["id"]
+        self.deliver(oid)
+        res = self.post_order(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_postable")
+
+    def test_direct_customer_rejects_table(self):
+        res = self._create_direct(table=self.make_table().id)
+        self.assertEqual(res.status_code, 400)  # InvalidOrderComposition
+        self.assertEqual(res.data["details"]["reason"], "table_not_allowed")
+
+    def test_direct_customer_rejects_stay(self):
+        res = self._create_direct(stay=self.stay.id)
+        self.assertEqual(res.status_code, 400)  # InvalidOrderComposition
+        self.assertEqual(res.data["details"]["reason"], "stay_not_allowed")
+
+
+class SettlementReferenceVisibilityTests(ReturnBase):
+    """C2 — settlement_reference (an electronic payment reference) is exposed only
+    to a user holding finance.view; it is blanked for everyone else."""
+
+    def _settled_with_reference(self):
+        oid = self.create_order().data["id"]
+        self.deliver(oid)
+        res = self.client.post(
+            reverse("services:order-settle-direct", args=[oid]),
+            {"method": "card", "reference": "SECRET-REF-9"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200)
+        return oid
+
+    def test_finance_view_sees_reference(self):
+        oid = self._settled_with_reference()  # manager holds finance.view
+        res = self.client.get(
+            reverse("services:order-detail", args=[oid]), **HDR(self.hotel)
+        )
+        self.assertEqual(res.data["settlement_reference"], "SECRET-REF-9")
+
+    def test_without_finance_view_reference_hidden(self):
+        oid = self._settled_with_reference()
+        staff = add_member(self.hotel, "noref@x.com", perms=["service_orders.view"])
+        self.client.force_authenticate(staff)
+        res = self.client.get(
+            reverse("services:order-detail", args=[oid]), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        # The field stays present (stable contract) but the value is blanked.
+        self.assertIn("settlement_reference", res.data)
+        self.assertEqual(res.data["settlement_reference"], "")
+
+
+class ReturnSnapshotImmutabilityTests(ReturnBase):
+    """C6 — a return's frozen line snapshot survives a LATER catalog reprice (the
+    return records values at return time; it never re-reads the live item)."""
+
+    def test_return_item_snapshot_survives_reprice(self):
+        oid, lines = self._direct_order()  # item 40.00 x2
+        line = lines[0]
+        res = self._return(
+            oid, items=[{"original_item": line["id"], "quantity": "1"}],
+        )
+        self.assertEqual(res.status_code, 201)
+        ri = ServiceOrderReturnItem.objects.get(service_return__order_id=oid)
+        self.assertEqual(str(ri.unit_price), "40.00")
+        # Reprice + rename the catalog item AFTER the return.
+        self.item.unit_price = Decimal("999.00")
+        self.item.name = "Renamed"
+        self.item.save(update_fields=["unit_price", "name"])
+        ri.refresh_from_db()
+        self.assertEqual(str(ri.unit_price), "40.00")
+        self.assertEqual(ri.item_name, "Burger")
+        self.assertEqual(str(ri.total_amount), "44.00")  # 40 + 10% tax
+
+    def test_exchange_replacement_snapshot_survives_reprice(self):
+        oid, lines = self._direct_order()
+        line = lines[0]
+        res = self._return(
+            oid, kind="exchange_higher",
+            items=[{
+                "original_item": line["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "2",
+            }],
+            method="cash", amount_received="100.00",
+        )
+        self.assertEqual(res.status_code, 201)
+        ri = ServiceOrderReturnItem.objects.get(service_return__order_id=oid)
+        self.assertEqual(str(ri.replacement_unit_price), "40.00")
+        self.item.unit_price = Decimal("999.00")
+        self.item.save(update_fields=["unit_price"])
+        ri.refresh_from_db()
+        self.assertEqual(str(ri.replacement_unit_price), "40.00")
+
+
+class ReportingRefundSemanticsTests(ReturnBase):
+    """C8 — reporting keeps GROSS sales, reports REFUNDS separately, and exposes
+    NET = gross - refunds, clearly labeled. Verified via the shared refund helper
+    and the daily-close restaurant block."""
+
+    def test_outlet_refunds_helper_gross_and_net(self):
+        from apps.services.services import outlet_refunds
+
+        oid, lines = self._direct_order()  # restaurant, 40.00 x2, +10% tax
+        self._return(oid, items=[{"original_item": lines[0]["id"], "quantity": "1"}])
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        # Tax-inclusive (daily-close basis): 44.00; tax-exclusive: 40.00.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=True),
+            Decimal("44.00"),
+        )
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=False),
+            Decimal("40.00"),
+        )
+        # A different outlet has no refunds.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.CAFE, gross=True), Decimal("0.00")
+        )
+
+    def test_exchange_lower_counts_only_the_delta_as_refund(self):
+        from apps.services.services import outlet_refunds
+
+        oid, lines = self._direct_order()  # item 40.00 x2
+        # Exchange 1 unit (40.00) for the cheaper item2 (10.00) -> refund delta.
+        self._return(
+            oid, kind="exchange_lower",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item2.id, "replacement_quantity": "1",
+            }],
+        )
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        # item 40 (+10% = 44) returned, item2 10 (+0% = 10) replacement -> delta 34 incl tax.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=True),
+            Decimal("34.00"),
+        )
+
+    def test_daily_close_block_reports_gross_refunds_net(self):
+        from apps.shifts.services import _restaurant_block
+
+        oid, lines = self._direct_order()  # gross direct sale 88.00
+        self._return(oid, items=[{"original_item": lines[0]["id"], "quantity": "1"}])
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        block = _restaurant_block(self.hotel, bd)
+        self.assertEqual(block["restaurant_sales"], "88.00")     # gross unchanged
+        self.assertEqual(block["restaurant_refunds"], "44.00")   # separate
+        self.assertEqual(block["restaurant_net"], "44.00")       # gross - refunds
+
+
+# --------------------------------------------------------------------------- #
+# OWNER CORRECTION — official cycle create -> settle (stays NEW) + cancel-reversal
+# --------------------------------------------------------------------------- #
+
+
+class CreateSettleNewCycleTests(ClosureBase):
+    """Owner-approved official cycle: an order is SETTLED at creation and STAYS
+    NEW (submitted); delivery is a later, card-only action. Settlement no longer
+    requires DELIVERED."""
+
+    def test_direct_settle_on_new_order_stays_new(self):
+        oid = self.create_order().data["id"]  # submitted (NEW), never delivered
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)  # still NEW
+        self.assertIsNotNone(order.settlement_payment_id)
+
+    def test_post_to_folio_on_new_room_order_stays_new(self):
+        oid = self.create_order(stay=self.stay.id).data["id"]  # NEW room order
+        res = self.post_order(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)
+
+    def test_new_settled_order_can_still_be_delivered_from_card(self):
+        oid = self.create_order().data["id"]
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+        res = self.deliver(oid)  # deliver AFTER settle, from the card
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.DELIVERED
+        )
+
+
+class CancelWithReversalTests(ReturnBase):
+    """Owner: cancelling a SETTLED order BEFORE delivery REVERSES the money
+    (through finance, void-not-delete); a DELIVERED order is never cancelled; an
+    UNSETTLED cancel moves no money."""
+
+    def _cancel(self, oid, reason="customer left", hotel=None):
+        return self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": reason}, format="json", **HDR(hotel or self.hotel),
+        )
+
+    def test_cancel_direct_settled_new_order_refunds(self):
+        oid = self.create_order().data["id"]  # NEW table order (restaurant)
+        self.assertEqual(self.settle_direct(oid).status_code, 200)  # DIRECT, still NEW
+        payments_before = Payment.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.status, OrderStatus.CANCELLED)
+        # A reversing (negative) refund payment was created on a NEW transient folio.
+        self.assertEqual(Payment.objects.count(), payments_before + 1)
+        refund = Payment.objects.order_by("-id").first()
+        self.assertLess(refund.amount, Decimal("0.00"))
+
+    def test_cancel_folio_settled_new_order_credits(self):
+        oid = self.create_order(stay=self.stay.id).data["id"]  # NEW room order
+        self.assertEqual(self.post_order(oid).status_code, 200)  # FOLIO, still NEW
+        charges_before = FolioCharge.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+        # A credit counter-charge reverses the posted charge on the guest folio.
+        self.assertEqual(FolioCharge.objects.count(), charges_before + 1)
+        credit = FolioCharge.objects.order_by("-id").first()
+        self.assertLess(credit.total_amount, Decimal("0.00"))
+
+    def test_cancel_after_delivered_blocked(self):
+        oid = self.create_order().data["id"]
+        self.settle_direct(oid)
+        self.deliver(oid)  # delivered
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+
+    def test_cancel_reversal_requires_finance_refund(self):
+        oid = self.create_order().data["id"]
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+        staff = add_member(
+            self.hotel, "cxl@x.com",
+            perms=["service_orders.cancel", "service_orders.view"],  # no finance.refund
+        )
+        self.client.force_authenticate(staff)
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.SUBMITTED
+        )  # not cancelled
+
+    def test_double_cancel_no_double_refund(self):
+        oid = self.create_order().data["id"]
+        self.settle_direct(oid)
+        self.assertEqual(self._cancel(oid).status_code, 200)
+        payments_after_first = Payment.objects.count()
+        second = self._cancel(oid)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["code"], "order_not_editable")
+        self.assertEqual(second.data["details"]["reason"], "already_cancelled")
+        self.assertEqual(Payment.objects.count(), payments_after_first)  # no 2nd refund
+
+    def test_unsettled_cancel_moves_no_money(self):
+        oid = self.create_order().data["id"]  # NEW, unsettled
+        payments_before = Payment.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+        self.assertEqual(Payment.objects.count(), payments_before)  # no refund
+
+    def test_daily_close_excludes_cancelled_settled_order(self):
+        from apps.shifts.services import _restaurant_block
+
+        oid = self.create_order().data["id"]  # restaurant table order
+        self.settle_direct(oid)  # DIRECT settled, still NEW
+        bd = ServiceOrder.objects.get(pk=oid).business_date
+        before = _restaurant_block(self.hotel, bd)
+        self.assertNotEqual(before["restaurant_sales"], "0.00")  # counts before cancel
+        self.assertEqual(self._cancel(oid).status_code, 200)
+        after = _restaurant_block(self.hotel, bd)
+        # A cancelled+reversed order is not a completed sale.
+        self.assertEqual(after["restaurant_sales"], "0.00")

@@ -731,32 +731,53 @@ def _restaurant_block(hotel, business_date):
         OrderSettlement, OrderStatus, Outlet, ServiceOrder,
     )
 
+    # C8 — the shared refund aggregation (tax-inclusive here, matching the
+    # tax-inclusive gross below), so gross / refunds / net stay coherent.
+    from apps.services.services import outlet_refunds
+
     def outlet_sales(outlet):
+        """GROSS sales for the outlet on this business date — settlement-time
+        totals (folio charges + direct payments), NOT netted of refunds. The
+        refund and net figures are reported separately below (C8)."""
+        # A CANCELLED settled order was reversed (owner cancel-with-reversal) —
+        # it is not a completed sale, so it is excluded from GROSS (the reports
+        # analytics engine already excludes cancelled the same way).
         folio_q = ServiceOrder.objects.filter(
             hotel=hotel, outlet=outlet, settlement=OrderSettlement.FOLIO,
             posted_at__date=business_date,
-        ).select_related("posted_charge")
+        ).exclude(status=OrderStatus.CANCELLED).select_related("posted_charge")
         direct_q = ServiceOrder.objects.filter(
             hotel=hotel, outlet=outlet, settlement=OrderSettlement.DIRECT,
             settled_at__date=business_date,
-        ).select_related("settlement_payment")
+        ).exclude(status=OrderStatus.CANCELLED).select_related("settlement_payment")
         folio_total = sum(
             (money(o.posted_charge.total_amount) for o in folio_q if o.posted_charge), ZERO
         )
         direct_total = sum(
             (money(o.settlement_payment.amount) for o in direct_q if o.settlement_payment), ZERO
         )
-        return str(money(folio_total + direct_total))
+        return money(folio_total + direct_total)
+
+    rest_gross = outlet_sales(Outlet.RESTAURANT)
+    cafe_gross = outlet_sales(Outlet.CAFE)
+    rest_refunds = outlet_refunds(hotel, business_date, Outlet.RESTAURANT, gross=True)
+    cafe_refunds = outlet_refunds(hotel, business_date, Outlet.CAFE, gross=True)
 
     direct = ServiceOrder.objects.filter(
         hotel=hotel, settlement=OrderSettlement.DIRECT, settled_at__date=business_date
-    ).select_related("settlement_payment")
+    ).exclude(status=OrderStatus.CANCELLED).select_related("settlement_payment")
     folio = ServiceOrder.objects.filter(
         hotel=hotel, settlement=OrderSettlement.FOLIO, posted_at__date=business_date
-    ).select_related("posted_charge")
+    ).exclude(status=OrderStatus.CANCELLED).select_related("posted_charge")
     return {
-        "restaurant_sales": outlet_sales(Outlet.RESTAURANT),
-        "cafe_sales": outlet_sales(Outlet.CAFE),
+        # C8 — GROSS sales (settlement-time), REFUNDS (returns + lower-exchange
+        # deltas), and NET = gross − refunds, each labeled and reported apart.
+        "restaurant_sales": str(rest_gross),
+        "cafe_sales": str(cafe_gross),
+        "restaurant_refunds": str(rest_refunds),
+        "cafe_refunds": str(cafe_refunds),
+        "restaurant_net": str(money(rest_gross - rest_refunds)),
+        "cafe_net": str(money(cafe_gross - cafe_refunds)),
         "direct_settlements": {
             "count": direct.count(),
             "total": str(money(sum(
@@ -950,6 +971,11 @@ def _totals_from(sections):
         "expenses_non_cash_total": e["non_cash_total"],
         "restaurant_sales": r["restaurant_sales"],
         "cafe_sales": r["cafe_sales"],
+        # C8 — refunds and net carried into the close totals alongside gross.
+        "restaurant_refunds": r.get("restaurant_refunds", "0.00"),
+        "cafe_refunds": r.get("cafe_refunds", "0.00"),
+        "restaurant_net": r.get("restaurant_net", r["restaurant_sales"]),
+        "cafe_net": r.get("cafe_net", r["cafe_sales"]),
         "shifts_count": sh["closed_shifts_count"] + sh["cancelled_shifts_count"],
         "expected_cash_total": sh["expected_cash_total"],
         "actual_cash_total": sh["actual_cash_total"],

@@ -1074,6 +1074,59 @@ class LastActiveItemNotCancellable(FunduqiiAPIException):
     default_code = "last_active_item_not_cancellable"
 
 
+# --- Restaurant & café (operational-closure round) ---------------------------
+
+
+class ServiceCurrencyMismatch(FunduqiiAPIException):
+    """A catalog item (or exchange replacement) carries a currency other than the
+    hotel BASE currency (D1a). A service order runs entirely in the single base
+    currency — there is no FX — so an item explicitly saved in a different
+    currency is refused. An EMPTY item currency is treated as "unset" and
+    normalized to the base (never a mismatch). ``details`` carries the neutral
+    ``item`` / ``item_currency`` / ``base_currency`` markers."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "This item's currency does not match the hotel base currency."
+    default_code = "currency_mismatch"
+
+
+class InsufficientCashReceived(FunduqiiAPIException):
+    """A DIRECT cash settlement was tendered with an amount smaller than the order
+    total — a short tender that cannot produce a non-negative change (D2a)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The amount received is less than the order total."
+    default_code = "insufficient_cash_received"
+
+
+class OrderNotReturnable(FunduqiiAPIException):
+    """A return/exchange requires a DELIVERED, SETTLED order that is not already
+    fully returned. ``details.reason`` is a neutral marker (``not_delivered`` /
+    ``not_settled`` / ``cancelled`` / ``no_folio``)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This order cannot be returned or exchanged in its current state."
+    default_code = "order_not_returnable"
+
+
+class InvalidReturnComposition(FunduqiiAPIException):
+    """The return/exchange lines are not valid for the order: an unknown or
+    cancelled line, a quantity above what remains, a missing/surplus replacement,
+    or a delta whose sign does not match the requested exchange kind.
+    ``details.reason`` is a neutral marker; it never carries money values beyond
+    what the caller already sent."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "The return composition is not valid for this order."
+    default_code = "invalid_return_composition"
+
+
+class ReturnReasonRequired(FunduqiiAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = "A reason is required for a return or exchange."
+    default_code = "return_reason_required"
+
+
 # --- Platform owner panel / subscription enforcement (Phase 16) -------------
 
 

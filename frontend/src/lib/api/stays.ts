@@ -39,8 +39,15 @@ export function listStays(
   return hotelJson<PaginatedResponse<Stay>>(`/stays${toQuery(params)}`);
 }
 
-export function listCurrentResidents(): Promise<PaginatedResponse<Stay>> {
-  return hotelJson<PaginatedResponse<Stay>>("/stays/current");
+export function listCurrentResidents(
+  search?: string,
+): Promise<PaginatedResponse<Stay>> {
+  const q = (search ?? "").trim();
+  // Server-side search (order-form room picker): only matching in-house stays.
+  // Absent search keeps the full in-house list (front desk / housekeeping).
+  return hotelJson<PaginatedResponse<Stay>>(
+    `/stays/current${q ? `?search=${encodeURIComponent(q)}` : ""}`,
+  );
 }
 
 export function listArrivalsToday(): Promise<Reservation[]> {

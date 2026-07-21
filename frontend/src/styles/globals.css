@@ -6188,3 +6188,553 @@ a {
 .op-menu__item--danger .icon {
   color: var(--color-danger);
 }
+
+/* --- Service order create form (RESTAURANT-CAFETERIA-OPERATIONAL-CLOSURE) ---
+ * A large single-page form: a wide main column + a sticky summary sidebar on
+ * desktop; a single column with the summary after payment on mobile. Built only
+ * from the existing token vocabulary — no separate design language. */
+/* CREATE-ORDER form must show ENTIRELY in the window with NO modal scroll (owner:
+ * "no internal scrollbar in normal use"). Scoped ONLY to this form's modal via
+ * :has() so the SHARED base .modal (90dvh + overflow-y:auto) is never touched. The
+ * modal is fixed-height + clipped; the form fills it; and only inner areas — the
+ * selected-items list, the search results, and (as a safety net) the main column —
+ * may scroll, and only on genuine overflow. */
+.modal:has(.svc-order) {
+  max-height: 96dvh;
+  height: 96dvh;
+  overflow: hidden;
+}
+.modal:has(.svc-order) .modal__body {
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+.modal:has(.svc-order) #svc-order-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.svc-order {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: var(--space-4);
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.svc-order__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
+}
+/* Aside fills its column as a flex column: selected items grow + scroll on
+ * overflow, while the summary + Create/Cancel actions stay pinned at the bottom —
+ * so the modal itself never scrolls even with many items. */
+.svc-order__aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.svc-order__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.svc-order__items .svc-lines {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
+}
+.svc-order__foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.svc-order__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.svc-order__actions > * {
+  flex: 1 1 0;
+}
+
+/* Compact TABLE source: a one-line picker (select → chip) + a single row for the
+ * customer name / resident toggle, so TABLE mode is no taller than ROOM/DIRECT. */
+.svc-table-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.svc-table-source__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+.svc-table-source__row .svc-grow {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.svc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  align-self: flex-start;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: var(--radius-lg);
+}
+.svc-chip__text {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Compact fields SCOPED to the create form (never the global Input/Select). Only
+ * the VERTICAL padding shrinks, so the Select's arrow inline-end space survives. */
+.svc-order .input,
+.svc-order .select,
+.svc-order .textarea {
+  padding-block: 0.45rem;
+}
+.svc-order .field {
+  gap: var(--space-1);
+}
+
+@media (max-width: 760px) {
+  .svc-order {
+    grid-template-columns: 1fr;
+    flex: 0 0 auto;
+  }
+  /* On phones the modal is a full-screen sheet with ONE natural scroll: the
+   * columns stack and NOTHING gets its own inner scrollbar box. */
+  .modal:has(.svc-order) {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+  .modal:has(.svc-order) .modal__body {
+    overflow: visible;
+    flex: 1 1 auto;
+  }
+  .modal:has(.svc-order) #svc-order-form {
+    flex: 0 0 auto;
+  }
+  .svc-order__main,
+  .svc-order__aside,
+  .svc-order__items,
+  .svc-order__items .svc-lines {
+    overflow: visible;
+    min-height: 0;
+    flex: 0 0 auto;
+    padding-inline-end: 0;
+  }
+}
+
+/* --- Service order DETAILS (view-only) window ------------------------------
+ * A compact, WIDE, view-only surface (owner points 2, 3, 8-10): a two-column
+ * grid — items + totals on the MAIN column, a single info card on the SIDE.
+ * No-scroll sizing MIRRORS the create form and is scoped to THIS modal via
+ * :has(), so the shared base .modal (90dvh + overflow-y:auto) is never touched.
+ * The modal is fixed-height + clipped; the layout fills it; and only the items
+ * list scrolls, and only on genuine overflow — never the whole modal. */
+.modal:has(.svc-detail) {
+  max-height: 90dvh;
+  height: 90dvh;
+  overflow: hidden;
+}
+.modal:has(.svc-detail) .modal__body {
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+.svc-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  gap: var(--space-4);
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.svc-detail__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto; /* safety net only */
+  padding-inline-end: var(--space-1);
+}
+.svc-detail__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* The ONLY scroll region in normal use: many items scroll here, never the modal. */
+.svc-detail__lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
+}
+.svc-detail__foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.svc-detail__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Compact read-only item line: name + qty×price·tax on the start, total on the
+ * end — flex so it WRAPS instead of forcing a horizontal scrollbar. */
+.svc-detail__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.svc-detail__line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.svc-detail__line-name {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.svc-detail__line-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.svc-detail__line-total {
+  white-space: nowrap;
+}
+/* Emphasised grand total below the compact subtotal/tax rows. */
+.svc-detail__grand {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+@media (max-width: 760px) {
+  .svc-detail {
+    grid-template-columns: 1fr;
+    flex: 0 0 auto;
+  }
+  /* Full-screen sheet with ONE natural scroll: columns stack and NOTHING gets
+   * its own inner scrollbar box (mirrors the create-form mobile block). */
+  .modal:has(.svc-detail) {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+  .modal:has(.svc-detail) .modal__body {
+    overflow: visible;
+    flex: 1 1 auto;
+  }
+  .svc-detail__main,
+  .svc-detail__side,
+  .svc-detail__items,
+  .svc-detail__lines {
+    overflow: visible;
+    min-height: 0;
+    flex: 0 0 auto;
+    padding-inline-end: 0;
+  }
+  /* The who/where info card reads first on a phone. */
+  .svc-detail__side {
+    order: -1;
+  }
+}
+
+.svc-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.svc-section__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-fg);
+}
+.svc-section__desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+
+/* Segmented control (two-way outlet switch). */
+.svc-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+.svc-segmented__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background var(--transition-base), color var(--transition-base);
+}
+.svc-segmented__option[aria-checked="true"] {
+  background: var(--color-surface);
+  color: var(--color-primary-active);
+  box-shadow: var(--shadow-xs);
+}
+.svc-segmented__option:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Choice cards (order source, payment method) — a tight horizontal row of small
+ * equal cards. Flex (not fixed 3-col grid) so a 2-option payment set fills the row
+ * evenly too; wraps on very narrow widths. */
+.svc-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.svc-choices > .svc-choice {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.svc-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  text-align: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition-base), background var(--transition-base),
+    box-shadow var(--transition-base);
+}
+.svc-choice:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-xs);
+}
+.svc-choice[aria-checked="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow: var(--shadow-sm);
+}
+.svc-choice:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.svc-choice__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--color-primary);
+}
+.svc-choice__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.svc-choice__title {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+}
+/* Descriptions hide to keep the source/payment cards small in a horizontal row
+ * (owner: "the description may shrink/hide") — the icon + title stay explanatory. */
+.svc-choice__desc {
+  display: none;
+}
+
+/* Search results (residents, tables, catalog items). */
+.svc-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 13rem;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+.svc-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  text-align: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--transition-base), border-color var(--transition-base);
+}
+.svc-result:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+.svc-result[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.svc-result:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.svc-result__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.svc-result__name {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.svc-result__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.svc-result__price {
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+/* Added order lines — compact single dense rows in the aside (name · qty stepper
+ * · line total · remove); the per-item note wraps below as a small affordance. */
+.svc-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.svc-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.svc-line__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1 1 7rem;
+  min-width: 0;
+}
+.svc-line__name {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.svc-line__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.svc-line__prices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: end;
+}
+.svc-line__note {
+  flex: 1 1 100%;
+}
+
+/* Quantity stepper. */
+.svc-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.svc-stepper__value {
+  min-width: 2.5ch;
+  text-align: center;
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Summary rows + the prominent final total / change. */
+.svc-sumrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.svc-sumrow__value {
+  font-weight: var(--font-weight-semibold);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+.svc-total {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-fg);
+}
+.svc-change {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-primary-active);
+}
+
+/* Success state header. */
+.svc-success {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.svc-success__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}

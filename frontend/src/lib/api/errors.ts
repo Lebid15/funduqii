@@ -142,8 +142,18 @@ export function messageForError(error: unknown, t: Dictionary): string {
     // reconciled with the folio/hotel currency (conflicting_line_currencies /
     // missing_line_currency / existing_folio_currency). One operational message —
     // no amounts — covers every reason; check-in is blocked and no folio is created.
-    case "folio_currency_mismatch":
-      return t.frontDesk.errors.folioCurrencyMismatch;
+    case "folio_currency_mismatch": {
+      // The SAME code covers two guards: check-in currency reconciliation and
+      // the restaurant order→folio post guard (`order_folio_currency_mismatch`).
+      // Branch on the stable reason so the message is actionable in context.
+      const reason =
+        error.details && typeof error.details === "object"
+          ? (error.details as { reason?: string }).reason
+          : undefined;
+      return reason === "order_folio_currency_mismatch"
+        ? t.services.errors.orderFolioCurrencyMismatch
+        : t.frontDesk.errors.folioCurrencyMismatch;
+    }
     case "guest_blocked":
       return t.guests.errors.blocked;
     case "block_reason_required":
@@ -244,6 +254,17 @@ export function messageForError(error: unknown, t: Dictionary): string {
       return t.services.errors.lastItemNotCancellable;
     case "invalid_order_composition":
       return t.services.errors.invalidComposition;
+    // Restaurant/café operational closure — direct cash capture + returns.
+    case "currency_mismatch":
+      return t.services.errors.currencyMismatch;
+    case "insufficient_cash_received":
+      return t.services.errors.insufficientCash;
+    case "order_not_returnable":
+      return t.services.errors.notReturnable;
+    case "invalid_return_composition":
+      return t.services.errors.invalidReturn;
+    case "return_reason_required":
+      return t.services.errors.returnReasonRequired;
     case "invalid_operation_status_transition":
       return t.operations.errors.invalidTransition;
     case "operation_not_editable":

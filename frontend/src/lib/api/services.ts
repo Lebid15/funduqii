@@ -14,10 +14,27 @@ import type {
   ServiceItem,
   ServiceOrder,
   ServiceOrderListItem,
+  ServiceOrderReturn,
   ServiceOutlet,
+  ServiceReturnKind,
   ServiceTicket,
   ServicesOverview,
 } from "./types";
+
+/**
+ * Mint a fresh idempotency key for ONE money-moving attempt (settle / return).
+ *
+ * FINANCIAL SAFETY: mint the key ONCE per attempt (when the sub-dialog opens),
+ * REUSE it across every retry, and regenerate it only AFTER a success — never
+ * inside the submit handler. A stable key is what makes a network-failure retry
+ * safe: replaying the same key either returns the original result (identical
+ * payload) or fails closed with a 409 `idempotency_key_conflict` (edited
+ * payload) — never a second charge/payment. A per-submit key defeats it. Mirrors
+ * the guest-folio AddServiceModal pattern.
+ */
+export function mintIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
 
 function toQuery(params?: object): string {
   if (!params) return "";
@@ -53,7 +70,7 @@ export function listServiceCategories(params?: {
 export type ServiceCategoryBody = Partial<
   Pick<
     ServiceCategory,
-    "outlet" | "name" | "code" | "description" | "sort_order" | "is_active"
+    "outlet" | "name" | "description" | "sort_order" | "is_active"
   >
 >;
 
@@ -101,7 +118,6 @@ export type ServiceItemBody = Partial<
     ServiceItem,
     | "category"
     | "name"
-    | "code"
     | "description"
     | "unit_price"
     | "currency"
@@ -217,7 +233,7 @@ export interface ServiceOrderLineInput {
 }
 
 export interface ServiceOrderCreateBody {
-  order_type: "room" | "table";
+  order_type: "room" | "table" | "direct";
   outlet: ServiceOutlet;
   stay?: number | null;
   table?: number | null;
@@ -273,10 +289,17 @@ export function cancelServiceOrder(id: number, reason: string): Promise<ServiceO
   });
 }
 
-export function postServiceOrderToFolio(id: number): Promise<ServiceOrder> {
+/** Post a delivered, stay-linked order to the guest folio (once only). The
+ * optional `settlement_key` is the reused idempotency key (see
+ * {@link mintIdempotencyKey}); the backend already accepts it and returns the
+ * original posting on replay, so a retry never posts a second charge. */
+export function postServiceOrderToFolio(
+  id: number,
+  body?: { settlement_key?: string },
+): Promise<ServiceOrder> {
   return hotelJson<ServiceOrder>(`${B}/orders/${id}/post-to-folio`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(body ?? {}),
   });
 }
 
@@ -292,14 +315,65 @@ export function cancelServiceOrderItem(
   });
 }
 
-/** Direct payment (cash register cycle) — financially closes the order. */
+/** Direct payment (cash register cycle) — financially closes the order.
+ *
+ * `amount_received` (a decimal string) is an OPTIONAL cash tender; the backend
+ * rejects a short tender and computes `change_given`. `reference` is an optional
+ * electronic reference passed to the receipt. `settlement_key` is the reused
+ * idempotency key (see {@link mintIdempotencyKey}). The finance Payment always
+ * records the exact server-derived total; these only annotate the order. */
+export interface ServiceOrderSettleDirectBody {
+  method: PaymentMethod;
+  amount_received?: string;
+  reference?: string;
+  settlement_key?: string;
+}
+
 export function settleServiceOrderDirect(
   id: number,
-  method: PaymentMethod,
+  body: ServiceOrderSettleDirectBody,
 ): Promise<ServiceOrder> {
   return hotelJson<ServiceOrder>(`${B}/orders/${id}/settle-direct`, {
     method: "POST",
-    body: JSON.stringify({ method }),
+    body: JSON.stringify(body),
+  });
+}
+
+/** ONE returned line of a return/exchange request. `replacement_item` is sent
+ * only for an exchange (its quantity defaults server-side to the returned qty). */
+export interface ServiceReturnItemInput {
+  original_item: number;
+  quantity: string;
+  replacement_item?: number | null;
+  replacement_quantity?: string | null;
+}
+
+/** Return / exchange a delivered, settled order (gated `finance.refund`). The
+ * server computes and verifies the delta sign against `kind`. `method`/
+ * `amount_received`/`reference` carry a DIRECT order's money movement. */
+export interface ServiceOrderReturnBody {
+  kind: ServiceReturnKind;
+  reason: string;
+  items: ServiceReturnItemInput[];
+  method?: PaymentMethod | null;
+  amount_received?: string | null;
+  reference?: string;
+  idempotency_key?: string;
+}
+
+/** POST /orders/{id}/return returns BOTH the new return and the refreshed order. */
+export interface ServiceOrderReturnResult {
+  return: ServiceOrderReturn;
+  order: ServiceOrder;
+}
+
+export function returnServiceOrder(
+  id: number,
+  body: ServiceOrderReturnBody,
+): Promise<ServiceOrderReturnResult> {
+  return hotelJson<ServiceOrderReturnResult>(`${B}/orders/${id}/return`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

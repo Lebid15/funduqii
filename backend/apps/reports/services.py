@@ -782,9 +782,21 @@ def _restaurant_live(hotel, d):
             ServiceOrderItem.objects.filter(order_id__in=ids).aggregate(t=Sum("total_amount"))["t"] or 0
         )
 
+    # C8 — refunds on the SAME tax-exclusive basis as _outlet_net, so
+    # net = gross − refunds is coherent for this analytics engine.
+    from apps.services.services import outlet_refunds
+
+    rest_sales = _outlet_net(hotel, d, Outlet.RESTAURANT)
+    cafe_sales = _outlet_net(hotel, d, Outlet.CAFE)
+    rest_refunds = outlet_refunds(hotel, d, Outlet.RESTAURANT, gross=False)
+    cafe_refunds = outlet_refunds(hotel, d, Outlet.CAFE, gross=False)
     return {
-        "restaurant_sales": _outlet_net(hotel, d, Outlet.RESTAURANT),
-        "cafe_sales": _outlet_net(hotel, d, Outlet.CAFE),
+        "restaurant_sales": rest_sales,
+        "cafe_sales": cafe_sales,
+        "restaurant_refunds": rest_refunds,
+        "cafe_refunds": cafe_refunds,
+        "restaurant_net": money(rest_sales - rest_refunds),
+        "cafe_net": money(cafe_sales - cafe_refunds),
         "direct_count": direct.count(),
         "direct_total": total(direct),
         "folio_count": folio.count(),
@@ -879,6 +891,12 @@ def _snap_restaurant(section):
     return {
         "restaurant_sales": _D(section.get("restaurant_sales")),
         "cafe_sales": _D(section.get("cafe_sales")),
+        # C8 — refunds/net from the stored snapshot; old snapshots without them
+        # fall back to 0 refunds and net = gross.
+        "restaurant_refunds": _D(section.get("restaurant_refunds")),
+        "cafe_refunds": _D(section.get("cafe_refunds")),
+        "restaurant_net": _D(section.get("restaurant_net", section.get("restaurant_sales"))),
+        "cafe_net": _D(section.get("cafe_net", section.get("cafe_sales"))),
         "direct_count": (section.get("direct_settlements") or {}).get("count", 0) or 0,
         "direct_total": _D((section.get("direct_settlements") or {}).get("total")),
         "folio_count": (section.get("folio_postings") or {}).get("count", 0) or 0,
@@ -1022,6 +1040,9 @@ def _mv_zero(*, with_category=False):
 def _rest_zero():
     return {
         "restaurant_sales": ZERO, "cafe_sales": ZERO,
+        # C8 — refunds/net accumulate alongside gross.
+        "restaurant_refunds": ZERO, "cafe_refunds": ZERO,
+        "restaurant_net": ZERO, "cafe_net": ZERO,
         "direct_count": 0, "direct_total": ZERO,
         "folio_count": 0, "folio_total": ZERO,
         "open_orders": 0, "cancelled_orders": 0,
@@ -1042,7 +1063,9 @@ def _mv_add(acc, block, *, with_category=False):
 
 
 def _rest_add(acc, block):
-    for k in ("restaurant_sales", "cafe_sales", "direct_total", "folio_total"):
+    for k in ("restaurant_sales", "cafe_sales", "restaurant_refunds",
+              "cafe_refunds", "restaurant_net", "cafe_net",
+              "direct_total", "folio_total"):
         acc[k] = money(acc[k] + block[k])
     for k in ("direct_count", "folio_count", "open_orders", "cancelled_orders"):
         acc[k] += block[k]
@@ -1198,6 +1221,11 @@ def restaurant_cafe_report(hotel, date_from, date_to) -> dict:
         "source_status": agg["source_status"],
         "restaurant_sales": str(r["restaurant_sales"]),
         "cafe_sales": str(r["cafe_sales"]),
+        # C8 — gross sales above; refunds and net = gross − refunds, labeled.
+        "restaurant_refunds": str(r["restaurant_refunds"]),
+        "cafe_refunds": str(r["cafe_refunds"]),
+        "restaurant_net": str(r["restaurant_net"]),
+        "cafe_net": str(r["cafe_net"]),
         "direct_settlements": {"count": r["direct_count"], "total": str(r["direct_total"])},
         "folio_postings": {"count": r["folio_count"], "total": str(r["folio_total"])},
         "open_orders_count": r["open_orders"],

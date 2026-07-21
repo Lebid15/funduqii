@@ -1745,9 +1745,16 @@ export interface FolioStatement {
  * ======================================================================== */
 
 export type ServiceOutlet = "restaurant" | "cafe";
-export type ServiceOrderType = "room" | "table";
+export type ServiceOrderType = "room" | "table" | "direct";
 export type ServiceOrderSettlement = "unsettled" | "direct" | "folio";
 export type RestaurantTableStatus = "available" | "out_of_service";
+/** A return (money back) or one of three exchange shapes. The SERVER computes
+ * and verifies the delta sign, so the recorded kind always matches the money. */
+export type ServiceReturnKind =
+  | "return"
+  | "exchange_same"
+  | "exchange_higher"
+  | "exchange_lower";
 export type ServiceOrderStatus =
   | "draft"
   | "submitted"
@@ -1817,6 +1824,9 @@ export interface ServiceOrderItem {
   item_name: string;
   quantity: string;
   unit_price: string;
+  /** Frozen per-line currency snapshot (the hotel base at order time). Blank
+   * only on legacy lines created before the field existed. */
+  currency: string;
   tax_rate: string;
   amount: string;
   tax_amount: string;
@@ -1851,6 +1861,9 @@ export interface ServiceOrderListItem {
   table_number: string;
   customer_name: string;
   business_date: string | null;
+  /** The order's single settlement currency (hotel base). Blank only on legacy
+   * rows created before the field existed. */
+  currency: string;
   ordered_at: string;
   requested_delivery_time: string | null;
   delivered_at: string | null;
@@ -1864,6 +1877,49 @@ export interface ServiceOrderTotals {
   subtotal: string;
   tax_total: string;
   total: string;
+  /** The order currency (hotel base). Always present on a fetched order. */
+  currency: string;
+}
+
+/** ONE returned line of a return/exchange, with its optional paired
+ * replacement (present only on an exchange). All money is a snapshot. */
+export interface ServiceOrderReturnItem {
+  id: number;
+  original_item: number;
+  item_name: string;
+  quantity: string;
+  unit_price: string;
+  currency: string;
+  tax_rate: string;
+  amount: string;
+  tax_amount: string;
+  total_amount: string;
+  replacement_item: number | null;
+  replacement_name: string;
+  replacement_quantity: string | null;
+  replacement_unit_price: string | null;
+  replacement_currency: string;
+  replacement_tax_rate: string | null;
+  replacement_amount: string | null;
+  replacement_tax_amount: string | null;
+  replacement_total_amount: string | null;
+}
+
+/** An append-only return/exchange against a delivered, settled order. The five
+ * nullable finance links carry the money story (all resolved server-side). */
+export interface ServiceOrderReturn {
+  id: number;
+  return_number: string;
+  kind: ServiceReturnKind;
+  reason: string;
+  business_date: string | null;
+  reversal_charge: number | null;
+  refund_payment: number | null;
+  refund_folio: number | null;
+  delta_charge: number | null;
+  delta_payment: number | null;
+  created_at: string;
+  items: ServiceOrderReturnItem[];
 }
 
 export interface ServiceOrder {
@@ -1880,6 +1936,9 @@ export interface ServiceOrder {
   table_number: string;
   customer_name: string;
   business_date: string | null;
+  /** The order's single settlement currency (hotel base). Blank only on legacy
+   * rows created before the field existed. */
+  currency: string;
   guest_name: string;
   folio: number | null;
   folio_number: string;
@@ -1897,7 +1956,14 @@ export interface ServiceOrder {
   settled_at: string | null;
   settlement_payment: number | null;
   settlement_receipt: string;
+  /** DIRECT-settlement cash capture (present only on a direct settlement). */
+  settlement_method: string;
+  amount_received: string | null;
+  change_given: string | null;
+  settlement_reference: string;
   items: ServiceOrderItem[];
+  /** Append-only return/exchange history (money-safe, resolved server-side). */
+  returns: ServiceOrderReturn[];
   totals: ServiceOrderTotals;
   status_logs: ServiceOrderStatusLogEntry[];
   created_at: string;
@@ -1928,6 +1994,8 @@ export interface ServiceTicket {
     outlet: ServiceOutlet;
     status: ServiceOrderStatus;
     settlement: ServiceOrderSettlement;
+    /** The order currency (hotel base) — money on the guest check is shown with it. */
+    currency: string;
     room_number: string;
     table_number: string;
     customer_name: string;
