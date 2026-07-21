@@ -2139,6 +2139,7 @@
       "cancelTitle": "Cancel order",
       "cancelReason": "Cancellation reason",
       "cancelConfirm": "Confirm cancellation",
+      "cancelReversalWarning": "This order is already paid — cancelling it will reverse the payment (refund / credit).",
       "postToFolio": "Post to folio",
       "postConfirmTitle": "Post to folio",
       "postConfirmBody": "The order total will be added to the guest folio as one charge. This can only happen once.",

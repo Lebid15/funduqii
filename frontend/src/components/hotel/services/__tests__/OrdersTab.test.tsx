@@ -389,18 +389,16 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
     ).not.toBeInTheDocument();
   });
 
-  it("a full CASH create fires create → deliver → settle, in order", async () => {
+  it("a full CASH create fires create → settle and does NOT deliver (order stays NEW)", async () => {
     vi.mocked(listServiceItems).mockResolvedValue(
       page([serviceItem({ id: 1, name: "Espresso", unit_price: "8.00", tax_rate: "0" })]),
     );
+    // Official cycle: the order is settled at creation and STAYS submitted (NEW).
     vi.mocked(createServiceOrder).mockResolvedValue(
       serviceOrder({ id: 10, status: "submitted" }),
     );
-    vi.mocked(setServiceOrderStatus).mockResolvedValue(
-      serviceOrder({ id: 10, status: "delivered" }),
-    );
     vi.mocked(settleServiceOrderDirect).mockResolvedValue(
-      serviceOrder({ id: 10, status: "delivered" }),
+      serviceOrder({ id: 10, status: "submitted", settlement: "direct" }),
     );
 
     renderWithProviders(
@@ -421,9 +419,6 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
       outlet: "restaurant",
     });
     await waitFor(() =>
-      expect(setServiceOrderStatus).toHaveBeenCalledWith(10, "delivered"),
-    );
-    await waitFor(() =>
       expect(settleServiceOrderDirect).toHaveBeenCalledWith(
         10,
         expect.objectContaining({
@@ -433,5 +428,7 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
         }),
       ),
     );
+    // Deliver is NOT part of the create form — it is a later, card-only action.
+    expect(setServiceOrderStatus).not.toHaveBeenCalled();
   });
 });

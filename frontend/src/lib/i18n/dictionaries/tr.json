@@ -2139,6 +2139,7 @@
       "cancelTitle": "Siparişi iptal et",
       "cancelReason": "İptal nedeni",
       "cancelConfirm": "İptali onayla",
+      "cancelReversalWarning": "Bu sipariş zaten ödendi — iptal etmek ödemeyi geri alır (iade / alacak).",
       "postToFolio": "Folioya işle",
       "postConfirmTitle": "Folioya işle",
       "postConfirmBody": "Sipariş toplamı misafir foliosuna tek ücret olarak eklenecek. Bu yalnızca bir kez yapılabilir.",

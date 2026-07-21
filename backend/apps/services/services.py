@@ -453,37 +453,62 @@ def change_status(order: ServiceOrder, *, new_status, user=None, note="") -> Ser
 
 @transaction.atomic
 def cancel_order(order: ServiceOrder, *, reason, user=None) -> ServiceOrder:
-    """Cancel an UNSETTLED order (reason mandatory, terminal). Cancelling
-    derives the table free again. A settled order is never cancelled here —
-    corrections are finance-side only."""
+    """Cancel an order BEFORE delivery (reason mandatory, terminal). Cancelling
+    frees the table again.
+
+    Owner-approved official cycle: an order is SETTLED at creation and stays NEW,
+    so a cancellation before delivery must REVERSE the settled money — through
+    finance only, void-not-delete: a DIRECT settlement is refunded via a NEW
+    transient refund folio (negative payment); a FOLIO settlement is credit-
+    counter-posted on the guest's open folio (or a transient refund folio when it
+    is closed). Both reuse the exact mechanism the RETURN flow uses. A DELIVERED
+    order is never cancelled — after delivery the sanctioned correction is a
+    RETURN/exchange. An UNSETTLED order cancels with no money movement."""
     if not (reason or "").strip():
         raise CancellationReasonRequired()
+    reason = reason.strip()
     order = ServiceOrder.objects.select_for_update().get(pk=order.pk)
-    if order.is_posted or order.settlement != OrderSettlement.UNSETTLED:
-        # A settled order's money already lives in finance; corrections are
-        # finance-side — never a service-side cancellation.
-        raise OrderNotEditable({"reason": "settled", "settlement": order.settlement})
-    if order.status == OrderStatus.DELIVERED:
-        # C3 (owner decision) — cancellation is a PRE-DELIVERY action only. A
-        # delivered order is never cancelled, even when still unsettled; any
-        # correction after delivery goes through settle + RETURN, never a cancel.
-        raise OrderNotEditable({"reason": "already_delivered", "status": order.status})
     if order.status == OrderStatus.CANCELLED:
         raise OrderNotEditable({"reason": "already_cancelled"})
+    if order.status == OrderStatus.DELIVERED:
+        # Cancellation is a PRE-DELIVERY action only (owner). After delivery the
+        # correction is a RETURN/exchange, never a service-side cancel.
+        raise OrderNotEditable({"reason": "already_delivered", "status": order.status})
+    settled = order.is_posted or order.settlement != OrderSettlement.UNSETTLED
+    if settled:
+        # Reverse the FULL settled amount to the customer through finance (the
+        # same refund/credit path the RETURN flow uses), then cancel. The
+        # original settlement rows are preserved (void-not-delete); the reversal
+        # is a separate, append-only finance transaction. The status→CANCELLED
+        # transition under the row lock is the once-only guard: a concurrent /
+        # replayed cancel re-reads CANCELLED and refuses (no double refund).
+        payer = (
+            order.customer_name
+            or (order.stay.primary_guest.full_name if order.stay else "")
+            or f"Order {order.order_number}"
+        )
+        total = order_totals(order)["total"]
+        _refund_amount(
+            order,
+            amount=total,
+            reason=f"Cancellation: {reason}"[:255],
+            payer=payer,
+            user=user,
+        )
     previous = order.status
     order.status = OrderStatus.CANCELLED
-    order.cancellation_reason = reason.strip()
+    order.cancellation_reason = reason
     order.cancelled_at = timezone.now()
     order.cancelled_by = _actor(user)
     order.updated_by = _actor(user)
     order.save()
-    _log(order, previous, OrderStatus.CANCELLED, user, reason.strip())
+    _log(order, previous, OrderStatus.CANCELLED, user, reason)
     _record(
         order.hotel,
         event_type="service_order.cancelled",
         severity="warning",
         title=f"Order {order.order_number} cancelled",
-        message=reason.strip(),
+        message=(f"{reason} · settlement reversed" if settled else reason),
         user=user,
         obj=order,
     )
@@ -690,8 +715,10 @@ def _require_settleable(order: ServiceOrder) -> dict:
         raise OrderAlreadySettled({"order": order.id})
     if order.status == OrderStatus.CANCELLED:
         raise OrderNotPostable({"reason": "cancelled"})
-    if order.status != OrderStatus.DELIVERED:
-        raise OrderNotPostable({"reason": "not_delivered", "status": order.status})
+    # Owner-approved official cycle: an order is settled at creation and STAYS
+    # "new" — delivery is a later, card-only action. So settlement no longer
+    # requires DELIVERED; it requires only an open (non-cancelled), unsettled
+    # order with a positive total. (Delivery never gates the money.)
     totals = order_totals(order)
     if totals["total"] <= ZERO:
         raise OrderNotPostable({"reason": "zero_total"})

@@ -492,6 +492,21 @@ class OrderCancelView(APIView):
     def post(self, request: Request, pk: int) -> Response:
         _guard_write(request)
         order = _get(ServiceOrder, request, pk)
+        # A SETTLED, UNDELIVERED order's cancellation REVERSES money (a refund/
+        # credit), so it additionally requires finance.refund. An unsettled cancel
+        # moves no money; a DELIVERED order is rejected outright by the service
+        # (already_delivered) regardless of permission, so it is not gated here.
+        settled = order.is_posted or order.settlement != OrderSettlement.UNSETTLED
+        if settled and order.status != OrderStatus.DELIVERED:
+            from rest_framework.exceptions import PermissionDenied
+
+            from apps.rbac.services import has_hotel_permission
+
+            if not has_hotel_permission(request.user, request.hotel, "finance.refund"):
+                raise PermissionDenied(
+                    "Cancelling a settled order reverses money and requires the "
+                    "finance.refund permission."
+                )
         serializer = OrderCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = services.cancel_order(

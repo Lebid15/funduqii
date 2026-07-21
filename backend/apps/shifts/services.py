@@ -739,14 +739,17 @@ def _restaurant_block(hotel, business_date):
         """GROSS sales for the outlet on this business date — settlement-time
         totals (folio charges + direct payments), NOT netted of refunds. The
         refund and net figures are reported separately below (C8)."""
+        # A CANCELLED settled order was reversed (owner cancel-with-reversal) —
+        # it is not a completed sale, so it is excluded from GROSS (the reports
+        # analytics engine already excludes cancelled the same way).
         folio_q = ServiceOrder.objects.filter(
             hotel=hotel, outlet=outlet, settlement=OrderSettlement.FOLIO,
             posted_at__date=business_date,
-        ).select_related("posted_charge")
+        ).exclude(status=OrderStatus.CANCELLED).select_related("posted_charge")
         direct_q = ServiceOrder.objects.filter(
             hotel=hotel, outlet=outlet, settlement=OrderSettlement.DIRECT,
             settled_at__date=business_date,
-        ).select_related("settlement_payment")
+        ).exclude(status=OrderStatus.CANCELLED).select_related("settlement_payment")
         folio_total = sum(
             (money(o.posted_charge.total_amount) for o in folio_q if o.posted_charge), ZERO
         )
@@ -762,10 +765,10 @@ def _restaurant_block(hotel, business_date):
 
     direct = ServiceOrder.objects.filter(
         hotel=hotel, settlement=OrderSettlement.DIRECT, settled_at__date=business_date
-    ).select_related("settlement_payment")
+    ).exclude(status=OrderStatus.CANCELLED).select_related("settlement_payment")
     folio = ServiceOrder.objects.filter(
         hotel=hotel, settlement=OrderSettlement.FOLIO, posted_at__date=business_date
-    ).select_related("posted_charge")
+    ).exclude(status=OrderStatus.CANCELLED).select_related("posted_charge")
     return {
         # C8 — GROSS sales (settlement-time), REFUNDS (returns + lower-exchange
         # deltas), and NET = gross − refunds, each labeled and reported apart.

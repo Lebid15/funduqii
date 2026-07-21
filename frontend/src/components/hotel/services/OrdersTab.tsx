@@ -433,7 +433,9 @@ export function OrdersTab() {
         onSelect: () => openDetailWith(r.id, "return"),
       });
     }
-    if (r.settlement === "unsettled" && r.status !== "cancelled") {
+    // Cancel is a PRE-DELIVERY action (any NEW order). A settled order's cancel
+    // REVERSES money, so it also needs finance.refund; an unsettled cancel does not.
+    if (isOpenStatus(r.status) && (r.settlement === "unsettled" || can("finance.refund"))) {
       menu.push({
         key: "cancel",
         label: t.services.orders.cancel,
@@ -1097,12 +1099,12 @@ export function OrderCreateModal({
           notes: "",
           items: lines,
         });
-        // Never re-create on a retry — deliver/settle resume against this order.
+        // Never re-create on a retry — the settle step resumes against this order.
         createdOrderRef.current = order;
       }
-      if (order.status !== "delivered") {
-        order = await setServiceOrderStatus(order.id, "delivered");
-      }
+      // Owner-approved OFFICIAL cycle: create → settle, and the order STAYS NEW.
+      // Delivery is NOT part of this form — it is a later, card-only action. The
+      // backend permits settling a NEW (undelivered) order.
       if (paymentMethod === "cash" || paymentMethod === "electronic") {
         order = await settleServiceOrderDirect(order.id, {
           method: paymentMethod === "cash" ? "cash" : electronicMethod,
@@ -1898,7 +1900,12 @@ function OrderDetailsModal({
   ];
 
   const canAdvance = isOpenStatus(order.status);
-  const canCancel = order.settlement === "unsettled" && order.status !== "cancelled";
+  // Cancel is a PRE-DELIVERY action for any NEW order. A settled order's cancel
+  // REVERSES money (refund/credit) and additionally needs finance.refund.
+  const cancelReversesMoney = order.settlement !== "unsettled" || order.is_posted;
+  const canCancel =
+    isOpenStatus(order.status) &&
+    (!cancelReversesMoney || can("finance.refund"));
   const canPost =
     order.status === "delivered" &&
     order.settlement === "unsettled" &&
@@ -2055,6 +2062,9 @@ function OrderDetailsModal({
         }
       >
         <div className="stack">
+          {cancelReversesMoney ? (
+            <Alert tone="warning">{t.services.orders.cancelReversalWarning}</Alert>
+          ) : null}
           <FormField label={t.services.orders.cancelReason} htmlFor="o-cancel-reason">
             <Textarea id="o-cancel-reason" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
           </FormField>

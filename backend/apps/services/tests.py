@@ -604,11 +604,18 @@ class PostingTests(APITestCase, ServicesMixin):
         self.assertEqual(res.data["code"], "order_already_posted")
         self.assertEqual(FolioCharge.objects.count(), 1)
 
-    def test_posting_undelivered_rejected(self):
+    def test_posting_undelivered_now_succeeds_and_stays_new(self):
+        # Owner-approved official cycle: settlement no longer requires DELIVERED.
+        # A NEW (submitted) room order posts to the folio and STAYS submitted;
+        # delivery is a later, card-only action.
+        from apps.services.models import OrderSettlement
+
         oid = self.create_order(stay=self.stay.id).data["id"]
         res = self.post_order(oid)
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "order_not_postable")
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)  # still NEW
 
     def test_posting_cancelled_rejected(self):
         oid = self.create_order(stay=self.stay.id).data["id"]
@@ -1143,11 +1150,15 @@ class DirectSettlementTests(ClosureBase):
         self.assertEqual(data["status"], "delivered")
         self.assertFalse(data["is_posted"])
 
-    def test_requires_delivered(self):
+    def test_settle_on_new_order_succeeds_and_stays_new(self):
+        # Owner-approved official cycle: settlement no longer requires DELIVERED —
+        # a NEW (submitted) order settles directly and STAYS submitted.
         oid = self.create_order().data["id"]
         res = self.settle_direct(oid)
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "order_not_postable")
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)
 
     def test_xor_paid_order_cannot_be_posted(self):
         oid = self._delivered(stay=self.stay.id)
@@ -2272,3 +2283,136 @@ class ReportingRefundSemanticsTests(ReturnBase):
         self.assertEqual(block["restaurant_sales"], "88.00")     # gross unchanged
         self.assertEqual(block["restaurant_refunds"], "44.00")   # separate
         self.assertEqual(block["restaurant_net"], "44.00")       # gross - refunds
+
+
+# --------------------------------------------------------------------------- #
+# OWNER CORRECTION — official cycle create -> settle (stays NEW) + cancel-reversal
+# --------------------------------------------------------------------------- #
+
+
+class CreateSettleNewCycleTests(ClosureBase):
+    """Owner-approved official cycle: an order is SETTLED at creation and STAYS
+    NEW (submitted); delivery is a later, card-only action. Settlement no longer
+    requires DELIVERED."""
+
+    def test_direct_settle_on_new_order_stays_new(self):
+        oid = self.create_order().data["id"]  # submitted (NEW), never delivered
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)  # still NEW
+        self.assertIsNotNone(order.settlement_payment_id)
+
+    def test_post_to_folio_on_new_room_order_stays_new(self):
+        oid = self.create_order(stay=self.stay.id).data["id"]  # NEW room order
+        res = self.post_order(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.FOLIO)
+        self.assertEqual(order.status, OrderStatus.SUBMITTED)
+
+    def test_new_settled_order_can_still_be_delivered_from_card(self):
+        oid = self.create_order().data["id"]
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+        res = self.deliver(oid)  # deliver AFTER settle, from the card
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.DELIVERED
+        )
+
+
+class CancelWithReversalTests(ReturnBase):
+    """Owner: cancelling a SETTLED order BEFORE delivery REVERSES the money
+    (through finance, void-not-delete); a DELIVERED order is never cancelled; an
+    UNSETTLED cancel moves no money."""
+
+    def _cancel(self, oid, reason="customer left", hotel=None):
+        return self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": reason}, format="json", **HDR(hotel or self.hotel),
+        )
+
+    def test_cancel_direct_settled_new_order_refunds(self):
+        oid = self.create_order().data["id"]  # NEW table order (restaurant)
+        self.assertEqual(self.settle_direct(oid).status_code, 200)  # DIRECT, still NEW
+        payments_before = Payment.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.status, OrderStatus.CANCELLED)
+        # A reversing (negative) refund payment was created on a NEW transient folio.
+        self.assertEqual(Payment.objects.count(), payments_before + 1)
+        refund = Payment.objects.order_by("-id").first()
+        self.assertLess(refund.amount, Decimal("0.00"))
+
+    def test_cancel_folio_settled_new_order_credits(self):
+        oid = self.create_order(stay=self.stay.id).data["id"]  # NEW room order
+        self.assertEqual(self.post_order(oid).status_code, 200)  # FOLIO, still NEW
+        charges_before = FolioCharge.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+        # A credit counter-charge reverses the posted charge on the guest folio.
+        self.assertEqual(FolioCharge.objects.count(), charges_before + 1)
+        credit = FolioCharge.objects.order_by("-id").first()
+        self.assertLess(credit.total_amount, Decimal("0.00"))
+
+    def test_cancel_after_delivered_blocked(self):
+        oid = self.create_order().data["id"]
+        self.settle_direct(oid)
+        self.deliver(oid)  # delivered
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+
+    def test_cancel_reversal_requires_finance_refund(self):
+        oid = self.create_order().data["id"]
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+        staff = add_member(
+            self.hotel, "cxl@x.com",
+            perms=["service_orders.cancel", "service_orders.view"],  # no finance.refund
+        )
+        self.client.force_authenticate(staff)
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.SUBMITTED
+        )  # not cancelled
+
+    def test_double_cancel_no_double_refund(self):
+        oid = self.create_order().data["id"]
+        self.settle_direct(oid)
+        self.assertEqual(self._cancel(oid).status_code, 200)
+        payments_after_first = Payment.objects.count()
+        second = self._cancel(oid)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["code"], "order_not_editable")
+        self.assertEqual(second.data["details"]["reason"], "already_cancelled")
+        self.assertEqual(Payment.objects.count(), payments_after_first)  # no 2nd refund
+
+    def test_unsettled_cancel_moves_no_money(self):
+        oid = self.create_order().data["id"]  # NEW, unsettled
+        payments_before = Payment.objects.count()
+        res = self._cancel(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+        self.assertEqual(Payment.objects.count(), payments_before)  # no refund
+
+    def test_daily_close_excludes_cancelled_settled_order(self):
+        from apps.shifts.services import _restaurant_block
+
+        oid = self.create_order().data["id"]  # restaurant table order
+        self.settle_direct(oid)  # DIRECT settled, still NEW
+        bd = ServiceOrder.objects.get(pk=oid).business_date
+        before = _restaurant_block(self.hotel, bd)
+        self.assertNotEqual(before["restaurant_sales"], "0.00")  # counts before cancel
+        self.assertEqual(self._cancel(oid).status_code, 200)
+        after = _restaurant_block(self.hotel, bd)
+        # A cancelled+reversed order is not a completed sale.
+        self.assertEqual(after["restaurant_sales"], "0.00")
