@@ -26,8 +26,6 @@ import {
   Eye,
   FileInput,
   HandCoins,
-  LayoutGrid,
-  List,
   Minus,
   PackageCheck,
   Plus,
@@ -115,7 +113,6 @@ import {
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { PrintModal } from "../finance/shared";
-import { BoardTab } from "./BoardTab";
 import { TablesTab } from "./TablesTab";
 import { useEnabledOutlets } from "./useOutlets";
 
@@ -129,8 +126,8 @@ type OrderIntent =
   | "receipt"
   | "return";
 
-/** The list is shown as cards; the prep board is folded in as a view MODE. */
-type OrdersView = "list" | "board";
+/** Orders are shown in ONE view only — cards (owner correction: the prep-board
+ * view and the list/board toggle were removed). */
 
 /** VISIBLE cycle collapse (RESTAURANT-CAFETERIA-OPERATIONAL-CLOSURE): the surface
  * has exactly two operational states — OPEN (draft/submitted/preparing/ready, all
@@ -199,7 +196,6 @@ export function OrdersTab() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   // Prep board is now a VIEW MODE inside Orders; table management is a modal.
-  const [view, setView] = useState<OrdersView>("list");
   const [tablesOpen, setTablesOpen] = useState(false);
 
   const [creating, setCreating] = useState(false);
@@ -476,8 +472,7 @@ export function OrdersTab() {
           }}
         >
           <FilterBar>
-            {view === "list" ? (
-              <>
+            <>
                 <FormField label={t.common.search} htmlFor="ord-search">
                   <Input id="ord-search" value={search} placeholder={t.services.orders.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
                 </FormField>
@@ -499,31 +494,8 @@ export function OrdersTab() {
                     onChange={(e) => { setPage(1); setSettlementFilter(e.target.value); }}
                   />
                 </FormField>
-              </>
-            ) : null}
+            </>
             <div className="filter-bar__actions cluster">
-              <div className="cluster" role="group" aria-label={t.services.view.label}>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={view === "list" ? "primary" : "secondary"}
-                  icon={List}
-                  aria-pressed={view === "list"}
-                  onClick={() => setView("list")}
-                >
-                  {t.services.view.list}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={view === "board" ? "primary" : "secondary"}
-                  icon={LayoutGrid}
-                  aria-pressed={view === "board"}
-                  onClick={() => setView("board")}
-                >
-                  {t.services.view.board}
-                </Button>
-              </div>
               {canManageTables ? (
                 <Button type="button" variant="secondary" icon={Armchair} onClick={() => setTablesOpen(true)}>
                   {t.services.manageTables}
@@ -535,10 +507,7 @@ export function OrdersTab() {
         </form>
       </Card>
 
-      {view === "board" ? (
-        <BoardTab />
-      ) : (
-        <>
+      <>
           {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
           {showInitialError ? (
             <ErrorState title={t.states.errorTitle} message={error ?? ""} retryLabel={t.common.retry} onRetry={load} />
@@ -584,7 +553,6 @@ export function OrdersTab() {
             </div>
           ) : null}
         </>
-      )}
 
       <Modal
         open={tablesOpen}
