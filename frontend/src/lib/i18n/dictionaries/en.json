@@ -2923,6 +2923,7 @@
     },
     "dc": {
       "title": "Daily close",
+      "subtitle": "Review the business day's totals and exceptions, then close it. Closing is final and advances the business date.",
       "businessDate": "Business date",
       "prepare": "Prepare snapshot",
       "close": "Close day",

@@ -2923,6 +2923,7 @@
     },
     "dc": {
       "title": "Gün kapanışı",
+      "subtitle": "İş gününün toplamlarını ve istisnaları gözden geçirin, ardından günü kapatın. Kapatma nihaidir ve iş tarihini ilerletir.",
       "businessDate": "İş tarihi",
       "prepare": "Özet hazırla",
       "close": "Günü kapat",

@@ -40,7 +40,7 @@ import { formatDateTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { PrintModal } from "../finance/shared";
 
-export function DailyCloseTab() {
+export function DailyClosePanel() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const d = t.shifts.dc;
