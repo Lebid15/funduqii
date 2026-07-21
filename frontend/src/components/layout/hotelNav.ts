@@ -73,7 +73,7 @@ export function hotelNavItems(t: Dictionary): HotelNavItem[] {
       access: ["shifts.view"],
     },
     {
-      href: "/hotel/shifts?tab=dailyClose",
+      href: "/hotel/daily-close",
       label: t.sidebar.dailyClose,
       icon: CalendarClock,
       access: ["daily_close.view"],

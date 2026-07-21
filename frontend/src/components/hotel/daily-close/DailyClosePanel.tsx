@@ -40,7 +40,7 @@ import { formatDateTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { PrintModal } from "../finance/shared";
 
-export function DailyCloseTab() {
+export function DailyClosePanel() {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const d = t.shifts.dc;
@@ -191,7 +191,9 @@ export function DailyCloseTab() {
   return (
     <>
       <Card>
-        <SectionHeader title={d.title} />
+        {/* The page-level PageHeader already titles this page; a second identical
+            SectionHeader here (a leftover from when this was a shifts tab) just
+            printed the title twice. Dropped. */}
         <FilterBar>
           <FormField label={d.notes} htmlFor="dc-notes">
             <Input

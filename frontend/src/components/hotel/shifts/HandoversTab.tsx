@@ -1,15 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ArrowLeftRight, Plus, Printer, Send } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import {
+  ArrowLeftRight,
+  CalendarClock,
+  Clock,
+  Plus,
+  Printer,
+  Send,
+  Undo2,
+  UserRound,
+} from "lucide-react";
 
 import {
   Alert,
   Badge,
   Button,
-  Card,
   ConfirmDialog,
-  DataTable,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -19,11 +32,15 @@ import {
   Modal,
   Pagination,
   PrintDocumentLayout,
-  SectionHeader,
   Select,
   useToast,
-  type Column,
 } from "@/components/ui";
+import {
+  OperationCard,
+  type OperationFact,
+  type OperationMenuItem,
+  type OperationPrimaryAction,
+} from "@/components/hotel/operations/OperationCard";
 import {
   acceptHandover,
   cancelHandover,
@@ -51,7 +68,21 @@ import { PrintModal } from "../finance/shared";
 const PAGE_SIZE = 25;
 const STATUSES: HandoverStatus[] = ["draft", "submitted", "accepted", "rejected", "cancelled"];
 
-export function HandoversTab() {
+/**
+ * Shift-handover lifecycle re-homed OFF the top-level tab bar into a lightweight
+ * drawer (operations-simplification wave): a modal that lists handovers as
+ * cards and keeps EVERY status action — create/submit/accept/reject/cancel —
+ * plus the reprintable voucher. All the guards (recipient-only accept, reason
+ * required to reject/cancel) stay server-side; this surface only calls the
+ * unchanged endpoints. Opened from the Current-shift tab.
+ */
+export function HandoversDrawer({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
   const { t, locale } = useI18n();
   const { notify } = useToast();
   const h = t.shifts.ho;
@@ -65,12 +96,22 @@ export function HandoversTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  // Flips true after the FIRST settled load — the initial load owns the full
+  // LoadingState/ErrorState; later fetches keep the cards mounted (a11y).
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [acceptTarget, setAcceptTarget] = useState<ShiftHandoverListItem | null>(null);
   const [rejectTarget, setRejectTarget] = useState<ShiftHandoverListItem | null>(null);
   const [cancelTarget, setCancelTarget] = useState<ShiftHandoverListItem | null>(null);
   const [voucher, setVoucher] = useState<HandoverVoucher | null>(null);
+
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
 
   async function openVoucher(row: ShiftHandoverListItem) {
     try {
@@ -81,6 +122,7 @@ export function HandoversTab() {
   }
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -89,17 +131,49 @@ export function HandoversTab() {
         search: query || undefined,
         status: status || undefined,
       });
+      if (seqRef.current !== seq) return;
       setRows(data.results);
       setCount(data.count);
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // BACKGROUND refetch failure keeps the cards + a non-blocking toast; the
+      // full ErrorState + retry is reserved for the initial load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, status, t]);
+  }, [page, query, status, t, notify]);
+
+  // Fetch only while the drawer is open; reopening refreshes to the latest.
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
 
   useEffect(() => {
-    load();
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // After an ACTION-triggered reload settles, restore focus to the stable
+  // results anchor if the acting control unmounted.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
   }, [load]);
 
   async function run(id: number, action: () => Promise<unknown>, msg: string) {
@@ -107,7 +181,7 @@ export function HandoversTab() {
     try {
       await action();
       notify(msg);
-      await load();
+      await reloadAfterAction();
     } catch (err) {
       notify(messageForError(err, t), "error");
     } finally {
@@ -115,139 +189,236 @@ export function HandoversTab() {
     }
   }
 
+  const filtering = query !== "" || status !== "";
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const statusOptions = STATUSES.map((s) => ({ value: s, label: t.shifts.hoStatus[s] }));
 
-  const columns: Column<ShiftHandoverListItem>[] = [
-    { key: "handover_number", header: h.number },
-    { key: "from_shift_number", header: h.fromShift },
-    { key: "to_user_name", header: h.toUser },
-    {
-      key: "status",
-      header: t.common.status,
-      render: (r) => (
-        <Badge tone={handoverStatusTone(r.status)}>{t.shifts.hoStatus[r.status]}</Badge>
-      ),
-    },
-    {
-      key: "created_at",
-      header: t.common.createdAt,
-      render: (r) => formatDateTime(r.created_at, locale),
-    },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => (
-        <div className="table__actions">
-          <Button size="sm" variant="ghost" icon={Printer} onClick={() => openVoucher(r)}>
-            {t.shifts.print.printVoucher}
-          </Button>
-          {r.status === "draft" ? (
-            <>
-              <Button
-                size="sm"
-                icon={Send}
-                loading={busyId === r.id}
-                onClick={() => run(r.id, () => submitHandover(r.id), h.submittedMsg)}
-              >
-                {h.submit}
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => setCancelTarget(r)}>
-                {t.common.cancel}
-              </Button>
-            </>
-          ) : null}
-          {r.status === "submitted" ? (
-            <>
-              <Button size="sm" onClick={() => setAcceptTarget(r)}>
-                {h.accept}
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setRejectTarget(r)}>
-                {h.reject}
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => setCancelTarget(r)}>
-                {t.common.cancel}
-              </Button>
-            </>
-          ) : null}
-        </div>
-      ),
-    },
-  ];
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
+
+  // DEBOUNCED settled-count live region (announce once the list stops moving).
+  const settledCount = !loading && hasLoadedOnce ? rows.length : null;
+  useEffect(() => {
+    if (settledCount === null) return;
+    const id = setTimeout(() => {
+      setAnnouncement(
+        settledCount === 0
+          ? t.operations.noResults
+          : t.operations.resultsCount.replace("{count}", String(settledCount)),
+      );
+    }, 450);
+    return () => clearTimeout(id);
+  }, [settledCount, t]);
+
+  function renderCard(row: ShiftHandoverListItem) {
+    const facts: OperationFact[] = [
+      {
+        key: "fromShift",
+        label: h.fromShift,
+        value: <bdi dir="ltr">{row.from_shift_number || "—"}</bdi>,
+        icon: Clock,
+      },
+      {
+        key: "toUser",
+        label: h.toUser,
+        value: <bdi>{row.to_user_name || "—"}</bdi>,
+        icon: UserRound,
+      },
+      {
+        key: "createdAt",
+        label: t.common.createdAt,
+        value: formatDateTime(row.created_at, locale),
+        icon: CalendarClock,
+      },
+    ];
+
+    const printItem: OperationMenuItem = {
+      key: "print",
+      label: t.shifts.print.printVoucher,
+      icon: Printer,
+      onSelect: () => openVoucher(row),
+    };
+
+    let primary: OperationPrimaryAction | null = null;
+    const menu: OperationMenuItem[] = [];
+
+    if (row.status === "draft") {
+      primary = {
+        label: h.submit,
+        icon: Send,
+        loading: busyId === row.id,
+        onClick: () => run(row.id, () => submitHandover(row.id), h.submittedMsg),
+      };
+      menu.push(printItem, {
+        key: "cancel",
+        label: t.common.cancel,
+        icon: Undo2,
+        danger: true,
+        onSelect: () => setCancelTarget(row),
+      });
+    } else if (row.status === "submitted") {
+      primary = {
+        label: h.accept,
+        onClick: () => setAcceptTarget(row),
+      };
+      menu.push(
+        {
+          key: "reject",
+          label: h.reject,
+          onSelect: () => setRejectTarget(row),
+        },
+        printItem,
+        {
+          key: "cancel",
+          label: t.common.cancel,
+          icon: Undo2,
+          danger: true,
+          onSelect: () => setCancelTarget(row),
+        },
+      );
+    } else {
+      // Terminal (accepted/rejected/cancelled): nothing to act on but the voucher.
+      primary = {
+        label: t.shifts.print.printVoucher,
+        icon: Printer,
+        onClick: () => openVoucher(row),
+      };
+    }
+
+    return (
+      <OperationCard
+        accent={handoverStatusTone(row.status)}
+        number={row.handover_number}
+        title={<bdi>{row.to_user_name || row.handover_number}</bdi>}
+        ariaLabel={`${h.title} ${row.handover_number}`}
+        moreLabel={t.operations.moreActions}
+        badges={
+          <Badge tone={handoverStatusTone(row.status)}>
+            {t.shifts.hoStatus[row.status]}
+          </Badge>
+        }
+        facts={facts}
+        primary={primary}
+        menu={menu}
+      />
+    );
+  }
 
   return (
     <>
-      <Card>
-        <SectionHeader
-          title={h.title}
-          actions={
+      <Modal
+        open={open}
+        onClose={onClose}
+        title={h.title}
+        closeLabel={t.common.close}
+        size="xl"
+        footer={
+          <Button variant="secondary" onClick={onClose}>
+            {t.common.close}
+          </Button>
+        }
+      >
+        <div className="stack">
+          <div className="cluster cluster--end">
             <Button icon={Plus} onClick={() => setCreateOpen(true)}>
               {h.create}
             </Button>
-          }
-        />
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setPage(1);
-            setQuery(search);
-          }}
-        >
-          <FilterBar>
-            <FormField label={t.common.search} htmlFor="ho-search">
-              <Input
-                id="ho-search"
-                value={search}
-                placeholder={h.searchPlaceholder}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </FormField>
-            <FormField label={t.common.status} htmlFor="ho-status">
-              <Select
-                id="ho-status"
-                value={status}
-                placeholder={t.common.all}
-                options={statusOptions}
-                onChange={(e) => {
-                  setPage(1);
-                  setStatus(e.target.value);
-                }}
-              />
-            </FormField>
-          </FilterBar>
-        </form>
-        {loading ? <LoadingState label={t.common.loading} /> : null}
-        {!loading && error ? (
-          <ErrorState
-            title={t.states.errorTitle}
-            message={error}
-            retryLabel={t.common.retry}
-            onRetry={load}
-          />
-        ) : null}
-        {!loading && !error ? (
-          rows.length === 0 ? (
-            <EmptyState title={h.empty} hint={h.emptyHint} icon={ArrowLeftRight} />
-          ) : (
-            <>
-              <DataTable caption={h.title} columns={columns} rows={rows} rowKey={(r) => r.id} />
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                labels={{
-                  previous: t.pagination.previous,
-                  next: t.pagination.next,
-                  status: t.pagination.page
-                    .replace("{page}", String(page))
-                    .replace("{total}", String(totalPages)),
-                }}
-              />
-            </>
-          )
-        ) : null}
-      </Card>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setPage(1);
+              setQuery(search.trim());
+            }}
+          >
+            <FilterBar>
+              <FormField label={t.common.search} htmlFor="ho-search">
+                <Input
+                  id="ho-search"
+                  value={search}
+                  placeholder={h.searchPlaceholder}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </FormField>
+              <FormField label={t.common.status} htmlFor="ho-status">
+                <Select
+                  id="ho-status"
+                  value={status}
+                  placeholder={t.common.all}
+                  options={statusOptions}
+                  onChange={(e) => {
+                    setPage(1);
+                    setStatus(e.target.value);
+                  }}
+                />
+              </FormField>
+            </FilterBar>
+          </form>
+
+          {/* STABLE polite live region — announces the settled result count. */}
+          <div className="sr-only" aria-live="polite" aria-atomic="true">
+            {announcement}
+          </div>
+
+          {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+          {showInitialError ? (
+            <ErrorState
+              title={t.states.errorTitle}
+              message={error ?? ""}
+              retryLabel={t.common.retry}
+              onRetry={load}
+            />
+          ) : null}
+          {!showInitialLoading && !showInitialError ? (
+            <div className="op-results" ref={resultsRef} tabIndex={-1} aria-label={h.title}>
+              <div className="op-results__status" role="status" aria-live="polite">
+                {backgroundRefreshing ? (
+                  <span className="op-results__searching">
+                    <span className="spinner" aria-hidden="true" />
+                    <span>{t.operations.updating}</span>
+                  </span>
+                ) : null}
+              </div>
+              {rows.length === 0 ? (
+                filtering ? (
+                  <EmptyState title={t.operations.noResults} icon={ArrowLeftRight} />
+                ) : (
+                  <EmptyState title={h.empty} hint={h.emptyHint} icon={ArrowLeftRight} />
+                )
+              ) : (
+                <div
+                  className="op-grid"
+                  role="list"
+                  aria-label={h.title}
+                  aria-busy={backgroundRefreshing}
+                >
+                  {rows.map((row) => (
+                    <div role="listitem" key={row.id}>
+                      {renderCard(row)}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {rows.length > 0 || filtering ? (
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page
+                      .replace("{page}", String(page))
+                      .replace("{total}", String(totalPages)),
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </Modal>
 
       <HandoverFormModal
         open={createOpen}
@@ -255,7 +426,7 @@ export function HandoversTab() {
         onSaved={() => {
           setCreateOpen(false);
           notify(h.createdMsg);
-          load();
+          reloadAfterAction();
         }}
       />
       <ConfirmDialog
@@ -271,7 +442,7 @@ export function HandoversTab() {
           try {
             await acceptHandover(acceptTarget.id);
             notify(h.acceptedMsg);
-            load();
+            reloadAfterAction();
           } catch (err) {
             notify(messageForError(err, t), "error");
           } finally {
@@ -289,7 +460,7 @@ export function HandoversTab() {
           await rejectHandover(id, reason);
           notify(h.rejectedMsg);
           setRejectTarget(null);
-          load();
+          reloadAfterAction();
         }}
       />
       <ReasonModal
@@ -302,7 +473,7 @@ export function HandoversTab() {
           await cancelHandover(id, reason);
           notify(h.cancelledMsg);
           setCancelTarget(null);
-          load();
+          reloadAfterAction();
         }}
       />
       <HandoverVoucherPrintModal voucher={voucher} onClose={() => setVoucher(null)} />

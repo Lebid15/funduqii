@@ -1,14 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useQuickAction } from "@/lib/useQuickAction";
 import {
+  Armchair,
   BellRing,
   ChefHat,
   ClipboardList,
+  Clock,
+  Coins,
+  Eye,
   FileInput,
   HandCoins,
+  LayoutGrid,
+  List,
   PackageCheck,
   Plus,
   Printer,
@@ -41,6 +47,12 @@ import {
   type Column,
 } from "@/components/ui";
 import {
+  OperationCard,
+  type OperationFact,
+  type OperationMenuItem,
+  type OperationPrimaryAction,
+} from "@/components/hotel/operations/OperationCard";
+import {
   cancelServiceOrder,
   cancelServiceOrderItem,
   createServiceOrder,
@@ -67,6 +79,7 @@ import type {
   ServiceOrderItem,
   ServiceOrderListItem,
   ServiceOrderSettlement,
+  ServiceOrderStatus,
   ServiceOutlet,
   ServiceTicket,
   Stay,
@@ -80,7 +93,24 @@ import {
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useHotelAccess } from "@/lib/session/HotelAccessContext";
 import { PrintModal } from "../finance/shared";
+import { BoardTab } from "./BoardTab";
+import { TablesTab } from "./TablesTab";
 import { useEnabledOutlets } from "./useOutlets";
+
+/** Which sub-flow of OrderDetailsModal a "More" menu item should pre-open. */
+type OrderIntent = "post" | "settle" | "cancel" | "kot" | "guest_check" | "receipt";
+
+/** The list is shown as cards; the prep board is folded in as a view MODE. */
+type OrdersView = "list" | "board";
+
+/** State-driven single primary action for an order card (kitchen advance). */
+const STATUS_ADVANCE: Partial<
+  Record<ServiceOrderStatus, { next: ServiceOrderStatus; labelKey: "markPreparing" | "markReady" | "markDelivered"; icon: typeof ChefHat }>
+> = {
+  submitted: { next: "preparing", labelKey: "markPreparing", icon: ChefHat },
+  preparing: { next: "ready", labelKey: "markReady", icon: BellRing },
+  ready: { next: "delivered", labelKey: "markDelivered", icon: PackageCheck },
+};
 
 const PAGE_SIZE = 25;
 const ORDER_TYPES = ["room", "table"] as const;
@@ -107,8 +137,9 @@ function settlementTone(settlement: ServiceOrderSettlement): "neutral" | "succes
 }
 
 export function OrdersTab() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { notify } = useToast();
+  const can = useCan();
 
   const [rows, setRows] = useState<ServiceOrderListItem[]>([]);
   const [count, setCount] = useState(0);
@@ -121,13 +152,29 @@ export function OrdersTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  // Prep board is now a VIEW MODE inside Orders; table management is a modal.
+  const [view, setView] = useState<OrdersView>("list");
+  const [tablesOpen, setTablesOpen] = useState(false);
 
   const [creating, setCreating] = useState(false);
   // Topbar quick action: ?action=new opens the EXISTING order modal once.
   useQuickAction("new", () => setCreating(true));
   const [detail, setDetail] = useState<ServiceOrder | null>(null);
+  const [detailAction, setDetailAction] = useState<OrderIntent | null>(null);
+  const [advancingId, setAdvancingId] = useState<number | null>(null);
+
+  const loadedOnceRef = useRef(false);
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
+
+  const canManageTables = can("services.tables_manage");
 
   const load = useCallback(async () => {
+    const seq = (seqRef.current += 1);
     setLoading(true);
     setError(null);
     try {
@@ -139,24 +186,73 @@ export function OrdersTab() {
         outlet: outletFilter || undefined,
         settlement: settlementFilter || undefined,
       });
+      if (seqRef.current !== seq) return;
       setRows(data.results);
       setCount(data.count);
+      loadedOnceRef.current = true;
+      setHasLoadedOnce(true);
     } catch (err) {
-      setError(messageForError(err, t));
+      if (seqRef.current !== seq) return;
+      const message = messageForError(err, t);
+      // Background refetch failure keeps the cards + a non-blocking toast; the
+      // full ErrorState + retry is reserved for the very first load.
+      if (loadedOnceRef.current) notify(message, "error");
+      else setError(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seqRef.current === seq) setLoading(false);
     }
-  }, [page, query, statusFilter, typeFilter, outletFilter, settlementFilter, t]);
+  }, [page, query, statusFilter, typeFilter, outletFilter, settlementFilter, t, notify]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function openDetail(id: number) {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // After an action-triggered reload settles, restore focus to the stable
+  // results anchor if the acting control (e.g. a card that changed status and
+  // moved between filters) unmounted.
+  useEffect(() => {
+    if (loading || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || !active.isConnected) {
+      resultsRef.current?.focus();
+    }
+  }, [rows, loading]);
+
+  const reloadAfterAction = useCallback(() => {
+    restoreFocusRef.current = true;
+    return load();
+  }, [load]);
+
+  // Card "More" items open the SINGLE reused OrderDetailsModal, pre-triggered to
+  // the requested sub-flow — no order-mutation logic is duplicated here.
+  async function openDetailWith(id: number, action: OrderIntent | null) {
     try {
-      setDetail(await getServiceOrder(id));
+      const full = await getServiceOrder(id);
+      setDetailAction(action);
+      setDetail(full);
     } catch (err) {
       notify(messageForError(err, t), "error");
+    }
+  }
+
+  async function advanceStatus(r: ServiceOrderListItem, next: ServiceOrderStatus) {
+    setAdvancingId(r.id);
+    try {
+      await setServiceOrderStatus(r.id, next);
+      notify(t.services.saved);
+      await reloadAfterAction();
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    } finally {
+      setAdvancingId(null);
     }
   }
 
@@ -172,43 +268,149 @@ export function OrdersTab() {
     label: t.services.settlement[s],
   }));
 
-  const columns: Column<ServiceOrderListItem>[] = [
-    { key: "order_number", header: t.services.orders.number },
-    {
-      key: "outlet",
-      header: t.services.outlet,
-      render: (r) => t.services.outlets[r.outlet],
-    },
-    {
-      key: "order_type",
-      header: t.services.orderType,
-      render: (r) =>
-        `${t.services.orderTypes[r.order_type]} ${r.room_number || r.table_number || ""}`.trim(),
-    },
-    {
-      key: "status",
-      header: t.common.status,
-      render: (r) => <Badge tone={serviceOrderStatusTone(r.status)}>{t.services.status[r.status]}</Badge>,
-    },
-    {
-      key: "settlement",
-      header: t.services.settlementLabel,
-      render: (r) => (
-        <Badge tone={settlementTone(r.settlement)}>{t.services.settlement[r.settlement]}</Badge>
-      ),
-    },
-    { key: "total", header: t.services.orders.total, render: (r) => (r.total ? r.total : "—") },
-    {
-      key: "actions",
-      header: t.common.actions,
-      align: "end",
-      render: (r) => (
-        <Button size="sm" variant="secondary" onClick={() => openDetail(r.id)}>
-          {t.services.orders.details}
-        </Button>
-      ),
-    },
-  ];
+  function renderCard(r: ServiceOrderListItem) {
+    const location =
+      r.order_type === "room" ? (
+        <span>
+          {t.services.orders.room} <bdi dir="ltr">{r.room_number || "—"}</bdi>
+        </span>
+      ) : (
+        <span>
+          {t.services.orders.table} <bdi dir="ltr">{r.table_number || "—"}</bdi>
+        </span>
+      );
+
+    const facts: OperationFact[] = [
+      {
+        key: "orderedAt",
+        label: t.services.orders.orderedAt,
+        value: formatDateTime(r.ordered_at, locale),
+        icon: Clock,
+      },
+      {
+        key: "total",
+        label: t.services.orders.total,
+        value: <bdi dir="ltr">{r.total ?? "—"}</bdi>,
+        icon: Coins,
+      },
+    ];
+    if (r.order_type === "table" && r.customer_name) {
+      facts.push({
+        key: "customer",
+        label: t.services.orders.customerName,
+        value: r.customer_name,
+      });
+    }
+
+    // ONE state-driven primary: the kitchen status advance. Terminal states
+    // (delivered/cancelled) have no advance, so the primary opens Details.
+    const advance = STATUS_ADVANCE[r.status];
+    let primary: OperationPrimaryAction | null;
+    if (advance) {
+      primary = {
+        label: t.services.orders[advance.labelKey],
+        icon: advance.icon,
+        loading: advancingId === r.id,
+        onClick: () => advanceStatus(r, advance.next),
+      };
+    } else {
+      primary = {
+        label: t.services.orders.details,
+        icon: Eye,
+        variant: "secondary",
+        onClick: () => openDetailWith(r.id, null),
+      };
+    }
+
+    const menu: OperationMenuItem[] = [
+      {
+        key: "details",
+        label: t.services.orders.details,
+        icon: Eye,
+        onSelect: () => openDetailWith(r.id, null),
+      },
+    ];
+    const isPostable =
+      r.status === "delivered" &&
+      r.settlement === "unsettled" &&
+      !r.is_posted &&
+      r.stay !== null;
+    if (isPostable) {
+      menu.push({
+        key: "post",
+        label: t.services.orders.postToFolio,
+        icon: FileInput,
+        onSelect: () => openDetailWith(r.id, "post"),
+      });
+    }
+    if (
+      r.status === "delivered" &&
+      r.settlement === "unsettled" &&
+      can("service_orders.settle_direct")
+    ) {
+      menu.push({
+        key: "settle",
+        label: t.services.orders.directPayment,
+        icon: HandCoins,
+        onSelect: () => openDetailWith(r.id, "settle"),
+      });
+    }
+    menu.push({
+      key: "kot",
+      label: t.services.ticket.title,
+      icon: Printer,
+      onSelect: () => openDetailWith(r.id, "kot"),
+    });
+    menu.push({
+      key: "guest_check",
+      label: t.services.ticket.guestCheckTitle,
+      icon: Printer,
+      onSelect: () => openDetailWith(r.id, "guest_check"),
+    });
+    if (r.settlement === "direct") {
+      menu.push({
+        key: "receipt",
+        label: t.services.orders.printReceipt,
+        icon: ReceiptText,
+        onSelect: () => openDetailWith(r.id, "receipt"),
+      });
+    }
+    if (r.settlement === "unsettled" && r.status !== "cancelled") {
+      menu.push({
+        key: "cancel",
+        label: t.services.orders.cancel,
+        icon: XCircle,
+        danger: true,
+        onSelect: () => openDetailWith(r.id, "cancel"),
+      });
+    }
+
+    return (
+      <OperationCard
+        accent={serviceOrderStatusTone(r.status)}
+        number={r.order_number}
+        title={location}
+        ariaLabel={`${t.services.tabs.orders} ${r.order_number}`}
+        moreLabel={t.services.orders.more}
+        badges={
+          <>
+            <Badge tone={serviceOrderStatusTone(r.status)}>{t.services.status[r.status]}</Badge>
+            <Badge tone={settlementTone(r.settlement)}>{t.services.settlement[r.settlement]}</Badge>
+            <Badge tone="neutral" variant="outline">
+              {t.services.outlets[r.outlet]}
+            </Badge>
+          </>
+        }
+        facts={facts}
+        primary={primary}
+        menu={menu}
+      />
+    );
+  }
+
+  const showInitialLoading = loading && !hasLoadedOnce;
+  const showInitialError = !showInitialLoading && !hasLoadedOnce && error !== null;
+  const backgroundRefreshing = loading && hasLoadedOnce;
 
   return (
     <>
@@ -221,62 +423,128 @@ export function OrdersTab() {
           }}
         >
           <FilterBar>
-            <FormField label={t.common.search} htmlFor="ord-search">
-              <Input id="ord-search" value={search} placeholder={t.services.orders.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
-            </FormField>
-            <FormField label={t.common.status} htmlFor="ord-status">
-              <Select id="ord-status" value={statusFilter} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatusFilter(e.target.value); }} />
-            </FormField>
-            <FormField label={t.services.orderType} htmlFor="ord-type">
-              <Select id="ord-type" value={typeFilter} placeholder={t.common.all} options={typeOptions} onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }} />
-            </FormField>
-            <FormField label={t.services.outlet} htmlFor="ord-outlet">
-              <Select id="ord-outlet" value={outletFilter} placeholder={t.common.all} options={outletOptions} onChange={(e) => { setPage(1); setOutletFilter(e.target.value); }} />
-            </FormField>
-            <FormField label={t.services.settlementLabel} htmlFor="ord-settlement">
-              <Select
-                id="ord-settlement"
-                value={settlementFilter}
-                placeholder={t.common.all}
-                options={settlementOptions}
-                onChange={(e) => { setPage(1); setSettlementFilter(e.target.value); }}
-              />
-            </FormField>
+            {view === "list" ? (
+              <>
+                <FormField label={t.common.search} htmlFor="ord-search">
+                  <Input id="ord-search" value={search} placeholder={t.services.orders.searchPlaceholder} onChange={(e) => setSearch(e.target.value)} />
+                </FormField>
+                <FormField label={t.common.status} htmlFor="ord-status">
+                  <Select id="ord-status" value={statusFilter} placeholder={t.common.all} options={statusOptions} onChange={(e) => { setPage(1); setStatusFilter(e.target.value); }} />
+                </FormField>
+                <FormField label={t.services.orderType} htmlFor="ord-type">
+                  <Select id="ord-type" value={typeFilter} placeholder={t.common.all} options={typeOptions} onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }} />
+                </FormField>
+                <FormField label={t.services.outlet} htmlFor="ord-outlet">
+                  <Select id="ord-outlet" value={outletFilter} placeholder={t.common.all} options={outletOptions} onChange={(e) => { setPage(1); setOutletFilter(e.target.value); }} />
+                </FormField>
+                <FormField label={t.services.settlementLabel} htmlFor="ord-settlement">
+                  <Select
+                    id="ord-settlement"
+                    value={settlementFilter}
+                    placeholder={t.common.all}
+                    options={settlementOptions}
+                    onChange={(e) => { setPage(1); setSettlementFilter(e.target.value); }}
+                  />
+                </FormField>
+              </>
+            ) : null}
             <div className="filter-bar__actions cluster">
+              <div className="cluster" role="group" aria-label={t.services.view.label}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={view === "list" ? "primary" : "secondary"}
+                  icon={List}
+                  aria-pressed={view === "list"}
+                  onClick={() => setView("list")}
+                >
+                  {t.services.view.list}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={view === "board" ? "primary" : "secondary"}
+                  icon={LayoutGrid}
+                  aria-pressed={view === "board"}
+                  onClick={() => setView("board")}
+                >
+                  {t.services.view.board}
+                </Button>
+              </div>
+              {canManageTables ? (
+                <Button type="button" variant="secondary" icon={Armchair} onClick={() => setTablesOpen(true)}>
+                  {t.services.manageTables}
+                </Button>
+              ) : null}
               <Button icon={Plus} onClick={() => setCreating(true)}>{t.services.orders.addOrder}</Button>
             </div>
           </FilterBar>
         </form>
       </Card>
 
-      {loading ? <LoadingState label={t.common.loading} /> : null}
-      {!loading && error ? (
-        <ErrorState title={t.states.errorTitle} message={error} retryLabel={t.common.retry} onRetry={load} />
-      ) : null}
-      {!loading && !error ? (
-        rows.length === 0 ? (
-          <EmptyState
-            title={t.services.orders.empty}
-            hint={t.services.orders.emptyHint}
-            icon={ClipboardList}
-            action={<Button icon={Plus} onClick={() => setCreating(true)}>{t.services.orders.addOrder}</Button>}
-          />
-        ) : (
-          <>
-            <DataTable caption={t.services.tabs.orders} columns={columns} rows={rows} rowKey={(r) => r.id} />
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPageChange={setPage}
-              labels={{
-                previous: t.pagination.previous,
-                next: t.pagination.next,
-                status: t.pagination.page.replace("{page}", String(page)).replace("{total}", String(totalPages)),
-              }}
-            />
-          </>
-        )
-      ) : null}
+      {view === "board" ? (
+        <BoardTab />
+      ) : (
+        <>
+          {showInitialLoading ? <LoadingState label={t.common.loading} /> : null}
+          {showInitialError ? (
+            <ErrorState title={t.states.errorTitle} message={error ?? ""} retryLabel={t.common.retry} onRetry={load} />
+          ) : null}
+          {!showInitialLoading && !showInitialError ? (
+            <div className="op-results" ref={resultsRef} tabIndex={-1} aria-label={t.services.tabs.orders}>
+              <div className="op-results__status" role="status" aria-live="polite">
+                {backgroundRefreshing ? (
+                  <span className="op-results__searching">
+                    <span className="spinner" aria-hidden="true" />
+                    <span>{t.operations.updating}</span>
+                  </span>
+                ) : null}
+              </div>
+              {rows.length === 0 ? (
+                <EmptyState
+                  title={t.services.orders.empty}
+                  hint={t.services.orders.emptyHint}
+                  icon={ClipboardList}
+                  action={<Button icon={Plus} onClick={() => setCreating(true)}>{t.services.orders.addOrder}</Button>}
+                />
+              ) : (
+                <div className="op-grid" role="list" aria-label={t.services.tabs.orders} aria-busy={backgroundRefreshing}>
+                  {rows.map((r) => (
+                    <div role="listitem" key={r.id}>
+                      {renderCard(r)}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {rows.length > 0 ? (
+                <Pagination
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  labels={{
+                    previous: t.pagination.previous,
+                    next: t.pagination.next,
+                    status: t.pagination.page.replace("{page}", String(page)).replace("{total}", String(totalPages)),
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
+
+      <Modal
+        open={tablesOpen}
+        onClose={() => setTablesOpen(false)}
+        title={t.services.manageTables}
+        closeLabel={t.common.close}
+        size="xl"
+      >
+        {/* Reuses the whole table-management surface (CRUD + out-of-service +
+            launch-order) with zero duplicated logic. Same services.tables_manage
+            gating applies inside. */}
+        <TablesTab />
+      </Modal>
 
       <OrderCreateModal
         open={creating}
@@ -285,12 +553,17 @@ export function OrdersTab() {
           setCreating(false);
           notify(t.services.saved);
           load();
+          setDetailAction(null);
           setDetail(order);
         }}
       />
       <OrderDetailsModal
         order={detail}
-        onClose={() => setDetail(null)}
+        initialAction={detailAction}
+        onClose={() => {
+          setDetail(null);
+          setDetailAction(null);
+        }}
         onChanged={(order) => {
           setDetail(order);
           load();
@@ -561,10 +834,13 @@ export function OrderCreateModal({
 
 function OrderDetailsModal({
   order,
+  initialAction = null,
   onClose,
   onChanged,
 }: {
   order: ServiceOrder | null;
+  /** When the modal is opened from a card "More" item, pre-open this sub-flow. */
+  initialAction?: OrderIntent | null;
   onClose: () => void;
   onChanged: (order: ServiceOrder) => void;
 }) {
@@ -582,6 +858,10 @@ function OrderDetailsModal({
   const [ticket, setTicket] = useState<ServiceTicket | null>(null);
   const [receipt, setReceipt] = useState<{ hotel: HotelHeader; payment: Payment } | null>(null);
 
+  // Reset every sub-dialog whenever a DIFFERENT order is opened, then honour the
+  // requested open-intent once. Keyed on order id (a same-id refetch via
+  // onChanged never re-fires the intent). All sub-flows below already exist —
+  // the intent only drives which one auto-opens, so nothing is duplicated.
   useEffect(() => {
     setCancelOpen(false);
     setCancelReason("");
@@ -590,7 +870,31 @@ function OrderDetailsModal({
     setItemCancelReason("");
     setSettleOpen(false);
     setSettleMethod("cash");
-  }, [order?.id]);
+    setTicket(null);
+    setReceipt(null);
+    if (!order || !initialAction) return;
+    switch (initialAction) {
+      case "post":
+        setPostConfirm(true);
+        break;
+      case "settle":
+        setSettleOpen(true);
+        break;
+      case "cancel":
+        setCancelOpen(true);
+        break;
+      case "kot":
+        void openTicket("kot");
+        break;
+      case "guest_check":
+        void openTicket("guest_check");
+        break;
+      case "receipt":
+        void openReceipt();
+        break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire the open-intent once per opened order
+  }, [order?.id, initialAction]);
 
   if (!order) return null;
 
