@@ -191,7 +191,9 @@ export function DailyClosePanel() {
   return (
     <>
       <Card>
-        <SectionHeader title={d.title} />
+        {/* The page-level PageHeader already titles this page; a second identical
+            SectionHeader here (a leftover from when this was a shifts tab) just
+            printed the title twice. Dropped. */}
         <FilterBar>
           <FormField label={d.notes} htmlFor="dc-notes">
             <Input

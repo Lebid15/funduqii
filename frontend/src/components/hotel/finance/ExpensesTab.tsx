@@ -266,7 +266,12 @@ export function ExpensesTab() {
     if (r.status === "posted" && can("expenses.update")) {
       menu.push({ key: "edit", label: e.edit, icon: Pencil, onSelect: () => setEditTarget(r) });
     }
-    if (r.status === "posted" && (can("expenses.void") || can("expenses.reverse"))) {
+    // Show "Cancel expense" on a faithful union of the two original gates: void
+    // was offered on any posted row, but reverse was NOT offered on a row that is
+    // itself a reversal or has already been reversed. Preserving that guard keeps
+    // a reverse-only user from clicking a cancel the backend can only reject.
+    const canReverseThis = can("expenses.reverse") && r.reverses === null && !r.reversed_by_number;
+    if (r.status === "posted" && (can("expenses.void") || canReverseThis)) {
       menu.push({ key: "cancel", label: e.cancel, icon: Ban, danger: true, onSelect: () => setCancelTarget(r) });
     }
 
