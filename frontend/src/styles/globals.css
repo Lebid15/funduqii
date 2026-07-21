@@ -6270,6 +6270,40 @@ a {
   flex: 1 1 0;
 }
 
+/* Compact TABLE source: a one-line picker (select → chip) + a single row for the
+ * customer name / resident toggle, so TABLE mode is no taller than ROOM/DIRECT. */
+.svc-table-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.svc-table-source__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+.svc-table-source__row .svc-grow {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.svc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  align-self: flex-start;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: var(--radius-lg);
+}
+.svc-chip__text {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
 /* Compact fields SCOPED to the create form (never the global Input/Select). Only
  * the VERTICAL padding shrinks, so the Select's arrow inline-end space survives. */
 .svc-order .input,

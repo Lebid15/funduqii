@@ -2154,6 +2154,7 @@
       "directPaymentConfirmAction": "تأكيد الدفع",
       "printReceipt": "طباعة الإيصال",
       "noTablesAvailable": "لا توجد طاولات متاحة لهذا المنفذ.",
+      "tableSelectPlaceholder": "اختر طاولة",
       "estimatedTotal": "الإجمالي التقديري",
       "estimatedTotalHint": "معاينة فقط — يحتسب النظام الإجمالي النهائي عند حفظ الطلب.",
       "residentSearchPlaceholder": "ابحث برقم الغرفة أو اسم النزيل…",

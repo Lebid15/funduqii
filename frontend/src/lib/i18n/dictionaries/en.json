@@ -2154,6 +2154,7 @@
       "directPaymentConfirmAction": "Confirm payment",
       "printReceipt": "Print receipt",
       "noTablesAvailable": "No free tables for this outlet.",
+      "tableSelectPlaceholder": "Choose a table",
       "estimatedTotal": "Estimated total",
       "estimatedTotalHint": "A preview — the system calculates the final total when the order is saved.",
       "residentSearchPlaceholder": "Search by room number or guest name…",

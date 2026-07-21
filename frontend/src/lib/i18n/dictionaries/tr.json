@@ -2154,6 +2154,7 @@
       "directPaymentConfirmAction": "Ödemeyi onayla",
       "printReceipt": "Makbuzu yazdır",
       "noTablesAvailable": "Bu birim için boş masa yok.",
+      "tableSelectPlaceholder": "Bir masa seçin",
       "estimatedTotal": "Tahmini toplam",
       "estimatedTotalHint": "Bir önizleme — nihai toplamı sistem, sipariş kaydedildiğinde hesaplar.",
       "residentSearchPlaceholder": "Oda numarası veya misafir adıyla ara…",

@@ -1383,71 +1383,78 @@ export function OrderCreateModal({
                 ) : null}
 
                 {source === "table" ? (
-                  <div className="stack">
-                    {tables.length === 0 ? (
-                      <p className="muted small">{t.services.orders.noTablesAvailable}</p>
+                  <div className="svc-table-source">
+                    {/* Compact one-line picker: a select until a table is chosen,
+                        then a small chip with a Change/clear button — never a tall
+                        list, so TABLE mode is no taller than ROOM / DIRECT. */}
+                    {tableId === null ? (
+                      <FormField label={t.services.orders.tablesLabel} htmlFor="o-table-select">
+                        <Select
+                          id="o-table-select"
+                          value=""
+                          placeholder={
+                            tables.length === 0
+                              ? t.services.orders.noTablesAvailable
+                              : t.services.orders.tableSelectPlaceholder
+                          }
+                          options={tables.map((row) => ({
+                            value: String(row.id),
+                            label: `${t.services.orders.table} ${row.number}${row.name ? " · " + row.name : ""} — ${t.services.tables.capacity} ${row.capacity}`,
+                          }))}
+                          onChange={(e) => setTableId(e.target.value ? Number(e.target.value) : null)}
+                        />
+                      </FormField>
                     ) : (
-                      <div
-                        className="svc-results"
-                        role="group"
-                        aria-label={t.services.orders.tablesLabel}
-                      >
-                        {tables.map((row) => {
-                          const selected = row.id === tableId;
-                          return (
-                            <button
-                              key={row.id}
-                              type="button"
-                              className="svc-result"
-                              aria-pressed={selected}
-                              onClick={() => setTableId(selected ? null : row.id)}
-                            >
-                              <span className="svc-result__main">
-                                <span className="svc-result__name">
-                                  {t.services.orders.table} <bdi dir="ltr">{row.number}</bdi>
-                                  {row.name ? ` · ${row.name}` : ""}
-                                </span>
-                                <span className="svc-result__meta">
-                                  {t.services.tables.capacity}:{" "}
-                                  <bdi dir="ltr">{row.capacity}</bdi>
-                                </span>
-                              </span>
-                              {selected ? <Icon icon={CheckCircle2} /> : null}
-                            </button>
-                          );
-                        })}
+                      <div className="svc-chip">
+                        <span className="svc-chip__text">
+                          {t.services.orders.table} <bdi dir="ltr">{selectedTable?.number}</bdi>
+                          {selectedTable?.name ? ` · ${selectedTable.name}` : ""}
+                          {" — "}
+                          {t.services.tables.capacity} <bdi dir="ltr">{selectedTable?.capacity}</bdi>
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setTableId(null)}
+                        >
+                          {t.services.orders.change}
+                        </Button>
                       </div>
                     )}
-                    <Switch
-                      id="o-charge-room"
-                      checked={chargeToRoom}
-                      onChange={toggleChargeToRoom}
-                      label={t.services.orders.residentToggle}
-                    />
-                    {chargeToRoom ? (
-                      <div className="stack">
-                        <FormField
-                          label={t.common.search}
-                          htmlFor="o-resident-search-t"
-                          hint={t.services.orders.residentSearchNote}
-                        >
-                          <Input
-                            id="o-resident-search-t"
-                            value={residentQuery}
-                            placeholder={t.services.orders.residentSearchPlaceholder}
-                            onChange={(e) => setResidentQuery(e.target.value)}
-                          />
-                        </FormField>
-                        {residentResults()}
+
+                    {/* Customer name + "resident" toggle on ONE compact row. When
+                        resident is on, the name field is REPLACED by the smart stay
+                        search in the same space (no extra vertical stack). */}
+                    <div className="svc-table-source__row">
+                      <div className="svc-grow">
+                        {chargeToRoom ? (
+                          <FormField label={t.common.search} htmlFor="o-resident-search-t">
+                            <Input
+                              id="o-resident-search-t"
+                              value={residentQuery}
+                              placeholder={t.services.orders.residentSearchPlaceholder}
+                              onChange={(e) => setResidentQuery(e.target.value)}
+                            />
+                          </FormField>
+                        ) : (
+                          <FormField label={t.services.orders.customerName} htmlFor="o-customer">
+                            <Input
+                              id="o-customer"
+                              value={customerName}
+                              onChange={(e) => setCustomerName(e.target.value)}
+                            />
+                          </FormField>
+                        )}
                       </div>
-                    ) : null}
-                    <FormField label={t.services.orders.customerName} htmlFor="o-customer">
-                      <Input
-                        id="o-customer"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
+                      <Switch
+                        id="o-charge-room"
+                        checked={chargeToRoom}
+                        onChange={toggleChargeToRoom}
+                        label={t.services.orders.residentToggle}
                       />
-                    </FormField>
+                    </div>
+                    {chargeToRoom ? residentResults() : null}
                   </div>
                 ) : null}
 

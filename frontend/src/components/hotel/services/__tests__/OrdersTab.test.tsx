@@ -291,6 +291,29 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
     expect(screen.queryByPlaceholderText(RESIDENT_SEARCH)).toBeNull();
   });
 
+  it("table mode uses a compact select → chip (no tall table list)", async () => {
+    vi.mocked(listTables).mockResolvedValue(
+      page([
+        {
+          id: 7,
+          outlet: "restaurant",
+          number: "7",
+          name: "",
+          capacity: 4,
+          status: "available",
+          is_occupied: false,
+        } as never,
+      ]),
+    );
+    open();
+    fireEvent.click(await screen.findByRole("radio", { name: /Table/ }));
+    // A compact ONE-LINE select (labelled "Available tables"), not a list of cards.
+    const select = await screen.findByLabelText("Available tables");
+    fireEvent.change(select, { target: { value: "7" } });
+    // After selecting, the table collapses to a small chip with a Change button.
+    expect(await screen.findByRole("button", { name: "Change" })).toBeInTheDocument();
+  });
+
   it("3) choosing Direct customer hides room + table (+ stay)", async () => {
     open();
     fireEvent.click(await screen.findByRole("radio", { name: /Direct customer/ }));
