@@ -769,8 +769,6 @@ export function OrderCreateModal({
   );
 
   const [paymentMethod, setPaymentMethod] = useState<PayMethod>("cash");
-  const [electronicMethod, setElectronicMethod] = useState<PaymentMethod>("card");
-  const [reference, setReference] = useState("");
   const [amountReceived, setAmountReceived] = useState("");
 
   // The hotel BASE currency (D1a) — the order's single currency once created; used
@@ -803,8 +801,6 @@ export function OrderCreateModal({
     setLines([]);
     setItemSnapshots(new Map());
     setPaymentMethod("cash");
-    setElectronicMethod("card");
-    setReference("");
     setAmountReceived("");
     setError(null);
     setResult(null);
@@ -924,7 +920,6 @@ export function OrderCreateModal({
   function changePaymentMethod(next: PayMethod) {
     setPaymentMethod(next);
     setAmountReceived("");
-    setReference("");
   }
 
   // Add an item from the search results: MERGE a duplicate into the SAME line
@@ -1063,7 +1058,7 @@ export function OrderCreateModal({
     paymentMethod === "cash"
       ? t.finance.methods.cash
       : paymentMethod === "electronic"
-        ? t.finance.methods[electronicMethod]
+        ? t.finance.methods.electronic
         : t.services.orders.payRoomAccount;
 
   // The summary's "who / where" row adapts to the chosen source.
@@ -1150,13 +1145,12 @@ export function OrderCreateModal({
       if (paymentMethod === "cash" || paymentMethod === "electronic") {
         // amount_received travels for BOTH shapes now (owner corrections 6-8): the
         // cash tender (may exceed the total → change) or the electronic amount,
-        // which is validated to EQUAL the total (change 0). Reference stays
-        // electronic-only; method is "cash" or the chosen electronic method.
+        // which is validated to EQUAL the total (change 0). Electronic no longer
+        // captures a sub-method or reference (owner) — it settles as the generic
+        // "electronic" method; the reference field is not sent from the client.
         order = await settleServiceOrderDirect(order.id, {
-          method: paymentMethod === "cash" ? "cash" : electronicMethod,
+          method: paymentMethod === "cash" ? "cash" : "electronic",
           amount_received: amountReceived,
-          reference:
-            paymentMethod === "electronic" ? reference.trim() || undefined : undefined,
           settlement_key: settleKey,
         });
       } else {
@@ -1597,29 +1591,6 @@ export function OrderCreateModal({
                         value={amountReceived}
                         invalid={electronicMismatch}
                         onChange={(e) => setAmountReceived(e.target.value)}
-                      />
-                    </FormField>
-                    <FormField label={t.services.orders.electronicMethod} htmlFor="o-emethod">
-                      <Select
-                        id="o-emethod"
-                        value={electronicMethod}
-                        options={ELECTRONIC_METHODS.map((m) => ({
-                          value: m,
-                          label: t.finance.methods[m],
-                        }))}
-                        onChange={(e) => setElectronicMethod(e.target.value as PaymentMethod)}
-                      />
-                    </FormField>
-                    <FormField
-                      label={t.services.orders.reference}
-                      htmlFor="o-ref"
-                      className="form-grid__full"
-                    >
-                      <Input
-                        id="o-ref"
-                        value={reference}
-                        placeholder={t.services.orders.referencePlaceholder}
-                        onChange={(e) => setReference(e.target.value)}
                       />
                     </FormField>
                   </div>

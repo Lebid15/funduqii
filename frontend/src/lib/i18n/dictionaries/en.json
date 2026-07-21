@@ -2190,7 +2190,6 @@
       "summarySection": "Order summary",
       "itemCount": "Items",
       "amountDue": "Amount due",
-      "electronicMethod": "Electronic method",
       "payRoomAccount": "On room account",
       "payCashDesc": "Take cash now and give change.",
       "payElectronicDesc": "Card, transfer or other electronic method.",
