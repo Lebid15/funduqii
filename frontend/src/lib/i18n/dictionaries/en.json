@@ -2044,7 +2044,8 @@
     "orderType": "Order type",
     "orderTypes": {
       "room": "Room",
-      "table": "Table"
+      "table": "Table",
+      "direct": "Direct customer"
     },
     "settlementLabel": "Settlement",
     "settlement": {
@@ -2180,6 +2181,8 @@
       },
       "selectItems": "Items to return",
       "remaining": "Remaining: {qty}",
+      "qtyPositive": "Quantity must be greater than zero.",
+      "qtyExceedsRemaining": "Cannot exceed remaining ({qty}).",
       "quantity": "Return qty",
       "replacement": "Replacement item",
       "replacementQty": "Replacement qty",

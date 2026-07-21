@@ -1745,7 +1745,7 @@ export interface FolioStatement {
  * ======================================================================== */
 
 export type ServiceOutlet = "restaurant" | "cafe";
-export type ServiceOrderType = "room" | "table";
+export type ServiceOrderType = "room" | "table" | "direct";
 export type ServiceOrderSettlement = "unsettled" | "direct" | "folio";
 export type RestaurantTableStatus = "available" | "out_of_service";
 /** A return (money back) or one of three exchange shapes. The SERVER computes

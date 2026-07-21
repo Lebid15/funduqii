@@ -439,7 +439,7 @@ class OrderListCreateView(generics.ListCreateAPIView):
             items_data=refs["items_data"] or [],
         )
         return Response(
-            ServiceOrderSerializer(order).data, status=status.HTTP_201_CREATED
+            ServiceOrderSerializer(order, context={"request": request}).data, status=status.HTTP_201_CREATED
         )
 
 
@@ -449,7 +449,7 @@ class OrderDetailView(APIView):
 
     def get(self, request: Request, pk: int) -> Response:
         order = _get(ServiceOrder, request, pk)
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
     def patch(self, request: Request, pk: int) -> Response:
         _guard_write(request)
@@ -466,7 +466,7 @@ class OrderDetailView(APIView):
         order = services.update_order(
             order, user=request.user, items_data=refs["items_data"], **meta
         )
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 class OrderStatusView(APIView):
@@ -483,7 +483,7 @@ class OrderStatusView(APIView):
             user=request.user,
             note=serializer.validated_data.get("note", ""),
         )
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 class OrderCancelView(APIView):
@@ -497,7 +497,7 @@ class OrderCancelView(APIView):
         order = services.cancel_order(
             order, reason=serializer.validated_data["reason"], user=request.user
         )
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 class OrderPostToFolioView(APIView):
@@ -517,7 +517,7 @@ class OrderPostToFolioView(APIView):
             order, user=request.user,
             settlement_key=key, settlement_fingerprint=fingerprint,
         )
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 class OrderSettleDirectView(APIView):
@@ -548,7 +548,7 @@ class OrderSettleDirectView(APIView):
             settlement_key=d.get("idempotency_key", ""),
             settlement_fingerprint=fingerprint,
         )
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 def _resolve_return_items(request: Request, order, items: list) -> list:
@@ -613,7 +613,7 @@ class OrderReturnView(APIView):
         return Response(
             {
                 "return": ServiceOrderReturnSerializer(ret).data,
-                "order": ServiceOrderSerializer(order).data,
+                "order": ServiceOrderSerializer(order, context={"request": request}).data,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -637,7 +637,7 @@ class OrderItemCancelView(APIView):
             item, reason=serializer.validated_data["reason"], user=request.user
         )
         order.refresh_from_db()
-        return Response(ServiceOrderSerializer(order).data)
+        return Response(ServiceOrderSerializer(order, context={"request": request}).data)
 
 
 class OrderTicketView(APIView):

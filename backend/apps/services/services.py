@@ -328,6 +328,14 @@ def create_order(hotel, *, user=None, order_type, outlet, stay=None, table=None,
         if stay is not None:
             stay = _require_stay_in_house(hotel, stay, lock=False)
             room = stay.room
+    elif order_type == OrderType.DIRECT:
+        # A walk-in DIRECT customer: no table, no stay, no room. It settles by
+        # direct payment only — folio posting requires a stay, so it is naturally
+        # barred from ever posting to a folio.
+        if table is not None:
+            raise InvalidOrderComposition({"reason": "table_not_allowed"})
+        if stay is not None:
+            raise InvalidOrderComposition({"reason": "stay_not_allowed"})
     else:
         raise InvalidOrderComposition({"reason": "unknown_order_type"})
 
@@ -364,6 +372,8 @@ def create_order(hotel, *, user=None, order_type, outlet, stay=None, table=None,
     where = (
         f"room {room.number}" if (room and order_type == OrderType.ROOM)
         else f"table {table.number}" if table
+        else f"direct: {order.customer_name}" if order_type == OrderType.DIRECT and order.customer_name
+        else "direct customer" if order_type == OrderType.DIRECT
         else "—"
     )
     _record(
@@ -453,6 +463,11 @@ def cancel_order(order: ServiceOrder, *, reason, user=None) -> ServiceOrder:
         # A settled order's money already lives in finance; corrections are
         # finance-side — never a service-side cancellation.
         raise OrderNotEditable({"reason": "settled", "settlement": order.settlement})
+    if order.status == OrderStatus.DELIVERED:
+        # C3 (owner decision) — cancellation is a PRE-DELIVERY action only. A
+        # delivered order is never cancelled, even when still unsettled; any
+        # correction after delivery goes through settle + RETURN, never a cancel.
+        raise OrderNotEditable({"reason": "already_delivered", "status": order.status})
     if order.status == OrderStatus.CANCELLED:
         raise OrderNotEditable({"reason": "already_cancelled"})
     previous = order.status
@@ -484,6 +499,10 @@ def cancel_order_item(item: ServiceOrderItem, *, reason, user=None) -> ServiceOr
     order = ServiceOrder.objects.select_for_update().get(pk=item.order_id)
     if order.is_posted or order.settlement != OrderSettlement.UNSETTLED:
         raise OrderAlreadySettled({"order": order.id})
+    if order.status == OrderStatus.DELIVERED:
+        # C3 (owner decision) — no line cancellation after delivery either; the
+        # sanctioned post-delivery correction is a RETURN, not a cancel.
+        raise OrderNotEditable({"reason": "already_delivered", "status": order.status})
     if order.status == OrderStatus.CANCELLED:
         raise OrderNotEditable({"reason": "already_cancelled"})
     item = ServiceOrderItem.objects.select_for_update().get(pk=item.pk)
@@ -844,6 +863,22 @@ def settle_order_direct(order: ServiceOrder, *, method, user=None,
     totals = _require_settleable(order)
     total = totals["total"]
 
+    # C1 (owner decision) — symmetric currency guard. The transient folio is
+    # minted in the hotel's CURRENT base currency; the order carries its
+    # creation-time currency snapshot. A base-currency change between creation
+    # and direct settlement must be rejected, never settled/printed under a
+    # mismatched label (no silent FX) — mirrors the guard on post_order_to_folio.
+    order_currency = (order.currency or _base_currency(order.hotel)).strip().upper()
+    base_currency = (_base_currency(order.hotel) or "").strip().upper()
+    if order_currency != base_currency:
+        raise FolioCurrencyMismatch(
+            {
+                "reason": "order_folio_currency_mismatch",
+                "order_currency": order_currency,
+                "folio_currency": base_currency,
+            }
+        )
+
     received = money(amount_received) if amount_received is not None else None
     change = None
     if received is not None:
@@ -948,6 +983,32 @@ def _returned_quantity(item: ServiceOrderItem) -> Decimal:
         q=Sum("quantity")
     )
     return money(agg["q"]) if agg["q"] is not None else ZERO
+
+
+def outlet_refunds(hotel, business_date, outlet, *, gross: bool = True) -> Decimal:
+    """C8 — total money REFUNDED to customers for one outlet on a business date:
+    the sum of RETURN line totals plus each exchange_lower's (absolute) refunded
+    delta. Money OUT only — exchange_higher COLLECTIONS are not refunds and
+    exchange_same moves nothing. ``gross=True`` sums tax-inclusive line totals
+    (the daily-close ``restaurant_sales`` basis); ``gross=False`` sums tax-
+    exclusive amounts (the analytics net-of-tax basis). Reported so a reader can
+    read gross sales and refunds separately and derive net = gross − refunds."""
+    base = "total_amount" if gross else "amount"
+    rep = "replacement_total_amount" if gross else "replacement_amount"
+    items = ServiceOrderReturnItem.objects.filter(
+        hotel=hotel,
+        service_return__business_date=business_date,
+        service_return__order__outlet=outlet,
+    )
+    # A plain RETURN refunds the full returned line value.
+    ret_total = items.filter(
+        service_return__kind=ReturnKind.RETURN
+    ).aggregate(t=Sum(base))["t"] or ZERO
+    # An EXCHANGE_LOWER refunds only the (absolute) delta = returned − replacement.
+    lower = items.filter(service_return__kind=ReturnKind.EXCHANGE_LOWER)
+    lower_ret = lower.aggregate(t=Sum(base))["t"] or ZERO
+    lower_rep = lower.aggregate(t=Sum(rep))["t"] or ZERO
+    return money(ret_total + (lower_ret - lower_rep))
 
 
 def _reusable_open_folio(order: ServiceOrder):

@@ -2044,7 +2044,8 @@
     "orderType": "Sipariş türü",
     "orderTypes": {
       "room": "Oda",
-      "table": "Masa"
+      "table": "Masa",
+      "direct": "Doğrudan müşteri"
     },
     "settlementLabel": "Kapanış",
     "settlement": {
@@ -2180,6 +2181,8 @@
       },
       "selectItems": "İade edilecek ürünler",
       "remaining": "Kalan: {qty}",
+      "qtyPositive": "Adet sıfırdan büyük olmalı.",
+      "qtyExceedsRemaining": "Kalanı aşamaz ({qty}).",
       "quantity": "İade adedi",
       "replacement": "Yerine gelen ürün",
       "replacementQty": "Yeni ürün adedi",

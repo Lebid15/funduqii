@@ -404,6 +404,26 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # C2 (owner decision) — settlement_reference is an electronic-payment
+        # reference and therefore finance-sensitive: expose it ONLY to a user
+        # holding finance.view. Fail closed — with no request/hotel context, or
+        # without the permission, the value is blanked (the field stays present
+        # so the client contract is stable).
+        if data.get("settlement_reference"):
+            request = self.context.get("request")
+            user = getattr(request, "user", None)
+            hotel = getattr(request, "hotel", None)
+            allowed = False
+            if user is not None and hotel is not None:
+                from apps.rbac.services import has_hotel_permission
+
+                allowed = has_hotel_permission(user, hotel, "finance.view")
+            if not allowed:
+                data["settlement_reference"] = ""
+        return data
+
     def get_totals(self, order):
         from .services import _base_currency, order_totals
 

@@ -84,6 +84,7 @@ import type {
   ServiceOrderListItem,
   ServiceOrderSettlement,
   ServiceOrderStatus,
+  ServiceOrderType,
   ServiceOutlet,
   ServiceReturnKind,
   ServiceTicket,
@@ -125,7 +126,7 @@ function isOpenStatus(status: ServiceOrderStatus): boolean {
 }
 
 const PAGE_SIZE = 25;
-const ORDER_TYPES = ["room", "table"] as const;
+const ORDER_TYPES = ["room", "table", "direct"] as const;
 const STATUSES = ["submitted", "preparing", "ready", "delivered", "cancelled"] as const;
 const PAYMENT_METHODS: PaymentMethod[] = [
   "cash",
@@ -630,7 +631,7 @@ export function OrderCreateModal({
 }) {
   const { t, locale } = useI18n();
   const enabledOutlets = useEnabledOutlets();
-  const [orderType, setOrderType] = useState<"room" | "table">("room");
+  const [orderType, setOrderType] = useState<ServiceOrderType>("room");
   const [outlet, setOutlet] = useState<ServiceOutlet>("restaurant");
   const [stayId, setStayId] = useState<number | null>(null);
   const [tableId, setTableId] = useState<number | null>(null);
@@ -718,9 +719,11 @@ export function OrderCreateModal({
       const order = await createServiceOrder({
         order_type: orderType,
         outlet,
-        stay: stayId || null,
+        // A DIRECT order never carries a stay or table.
+        stay: orderType === "direct" ? null : stayId || null,
         table: orderType === "table" ? tableId : null,
-        customer_name: orderType === "table" ? customerName.trim() : "",
+        customer_name:
+          orderType === "table" || orderType === "direct" ? customerName.trim() : "",
         requested_delivery_time: requestedTime || null,
         notes,
         items: lines,
@@ -807,8 +810,11 @@ export function OrderCreateModal({
               value={orderType}
               options={typeOptions}
               onChange={(e) => {
-                setOrderType(e.target.value as "room" | "table");
+                const next = e.target.value as ServiceOrderType;
+                setOrderType(next);
                 setTableId(null);
+                // A DIRECT (walk-in) order has no table and no stay.
+                if (next === "direct") setStayId(null);
               }}
             />
           </FormField>
@@ -833,30 +839,36 @@ export function OrderCreateModal({
               />
             </FormField>
           ) : null}
-          <FormField
-            label={t.common.search}
-            htmlFor="o-resident-search"
-            hint={t.services.orders.residentSearchNote}
-          >
-            <Input
-              id="o-resident-search"
-              value={residentQuery}
-              placeholder={t.services.orders.residentSearchPlaceholder}
-              onChange={(e) => setResidentQuery(e.target.value)}
-            />
-          </FormField>
-          <FormField label={t.services.orders.stay} htmlFor="o-stay">
-            {/* A table order may link a resident stay (room-linked path) so it can
-                later post to that guest's folio; leaving it blank is a walk-in. */}
-            <Select
-              id="o-stay"
-              value={stayId ? String(stayId) : ""}
-              placeholder={orderType === "room" ? t.common.required : t.services.orders.walkIn}
-              options={stayOptions}
-              onChange={(e) => setStayId(e.target.value ? Number(e.target.value) : null)}
-            />
-          </FormField>
-          {orderType === "table" ? (
+          {/* A DIRECT (walk-in) order has no stay link at all — hide resident
+              search and the stay picker; only a customer name is captured. */}
+          {orderType !== "direct" ? (
+            <>
+              <FormField
+                label={t.common.search}
+                htmlFor="o-resident-search"
+                hint={t.services.orders.residentSearchNote}
+              >
+                <Input
+                  id="o-resident-search"
+                  value={residentQuery}
+                  placeholder={t.services.orders.residentSearchPlaceholder}
+                  onChange={(e) => setResidentQuery(e.target.value)}
+                />
+              </FormField>
+              <FormField label={t.services.orders.stay} htmlFor="o-stay">
+                {/* A table order may link a resident stay (room-linked path) so it
+                    can later post to that guest's folio; leaving it blank is a walk-in. */}
+                <Select
+                  id="o-stay"
+                  value={stayId ? String(stayId) : ""}
+                  placeholder={orderType === "room" ? t.common.required : t.services.orders.walkIn}
+                  options={stayOptions}
+                  onChange={(e) => setStayId(e.target.value ? Number(e.target.value) : null)}
+                />
+              </FormField>
+            </>
+          ) : null}
+          {orderType === "table" || orderType === "direct" ? (
             <FormField label={t.services.orders.customerName} htmlFor="o-customer">
               <Input
                 id="o-customer"
@@ -1206,7 +1218,11 @@ function OrderDetailsModal({
               ...(order.settlement === "direct" && order.change_given
                 ? [{ label: t.services.orders.change, value: formatMoney(order.change_given, order.currency, locale) }]
                 : []),
-              ...(order.settlement === "direct" && order.settlement_reference
+              // C2 — settlement_reference is finance-sensitive: shown only with
+              // finance.view (the server also blanks it otherwise — defense in depth).
+              ...(order.settlement === "direct" &&
+              order.settlement_reference &&
+              can("finance.view")
                 ? [{ label: t.services.orders.reference, value: order.settlement_reference }]
                 : []),
               ...(order.folio_number
@@ -1717,6 +1733,20 @@ function ReturnExchangeModal({
     returnTotal += amt + (amt * Number(r.line.tax_rate)) / 100;
   }
 
+  // C7 — client-side quantity guard (UX): a selected line's quantity must be
+  // positive and must not exceed its remaining returnable quantity. The server
+  // still enforces this (invalid_return_composition); this only gives instant,
+  // per-line feedback instead of a round-trip error.
+  function lineQtyError(lineId: number, remaining: number): string | null {
+    if (!(lineId in sel)) return null;
+    const q = Number(sel[lineId]);
+    if (!Number.isFinite(q) || q <= 0) return t.services.returns.qtyPositive;
+    if (q > remaining + 0.00001)
+      return t.services.returns.qtyExceedsRemaining.replace("{qty}", String(remaining));
+    return null;
+  }
+  const overReturn = returnable.some((r) => lineQtyError(r.line.id, r.remaining) !== null);
+
   const replacement = catalog.find((i) => i.id === replacementId) ?? null;
   const repQtyNum = Number(replacementQty);
   let replacementTotal = 0;
@@ -1767,6 +1797,7 @@ function ReturnExchangeModal({
     reason.trim() !== "" &&
     !exchangeOneLine &&
     !needsReplacement &&
+    !overReturn &&
     !shortCash;
 
   async function submit(event: FormEvent) {
@@ -1858,6 +1889,7 @@ function ReturnExchangeModal({
                       label={t.services.returns.quantity}
                       htmlFor={`r-qty-${r.line.id}`}
                       hint={t.services.returns.remaining.replace("{qty}", String(r.remaining))}
+                      error={lineQtyError(r.line.id, r.remaining) ?? undefined}
                     >
                       <Input
                         id={`r-qty-${r.line.id}`}

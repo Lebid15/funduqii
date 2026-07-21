@@ -1994,3 +1994,281 @@ class ReturnIdempotencyTests(ReturnBase):
         self.assertEqual(conflict.status_code, 409)
         self.assertEqual(conflict.data["code"], "idempotency_key_conflict")
         self.assertEqual(ServiceOrderReturn.objects.filter(order_id=oid).count(), 1)
+
+
+# --------------------------------------------------------------------------- #
+# PR #55 owner-approved changes — C1..C8 (targeted)                            #
+# --------------------------------------------------------------------------- #
+
+from apps.services.models import Outlet, OrderType  # noqa: E402
+
+
+class SettleCurrencyGuardTests(ClosureBase):
+    """C1 — settle_order_direct carries the SAME currency guard as folio posting:
+    a base-currency change between order creation and direct settlement is
+    rejected (no silent FX), never settled/printed under a mismatched label."""
+
+    def _delivered(self, **kw):
+        oid = self.create_order(**kw).data["id"]
+        self.deliver(oid)
+        return oid
+
+    def test_direct_settle_rejected_on_base_currency_change(self):
+        oid = self._delivered()  # order.currency snapshot == USD
+        HotelSettings.objects.update_or_create(
+            hotel=self.hotel, defaults={"default_currency": "EUR"}
+        )
+        folios_before = Folio.objects.count()
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "folio_currency_mismatch")
+        self.assertEqual(res.data["details"]["reason"], "order_folio_currency_mismatch")
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.UNSETTLED)
+        # No side effect: no transient folio, no payment.
+        self.assertEqual(Folio.objects.count(), folios_before)
+        self.assertEqual(Payment.objects.count(), 0)
+
+    def test_direct_settle_ok_when_currency_unchanged(self):
+        oid = self._delivered()
+        self.assertEqual(self.settle_direct(oid).status_code, 200)
+
+
+class CancelAfterDeliveredTests(ClosureBase):
+    """C3 — cancellation is a PRE-DELIVERY action only. A delivered order (or one
+    of its lines) is never cancelled, even while still unsettled; the sanctioned
+    post-delivery correction is a RETURN."""
+
+    def _delivered(self, **kw):
+        res = self.create_order(**kw)
+        oid = res.data["id"]
+        line_id = res.data["items"][0]["id"]
+        self.deliver(oid)
+        return oid, line_id
+
+    def test_cancel_order_blocked_after_delivered(self):
+        oid, _ = self._delivered()
+        order = ServiceOrder.objects.get(pk=oid)
+        self.assertEqual(order.settlement, OrderSettlement.UNSETTLED)  # still unsettled
+        res = self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": "changed mind"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.DELIVERED
+        )
+
+    def test_cancel_line_blocked_after_delivered(self):
+        oid, line_id = self._delivered()
+        res = self.cancel_item(oid, line_id)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_editable")
+        self.assertEqual(res.data["details"]["reason"], "already_delivered")
+
+    def test_cancel_still_allowed_before_delivery(self):
+        res = self.create_order()
+        oid = res.data["id"]  # submitted, not delivered
+        cancel = self.client.post(
+            reverse("services:order-cancel", args=[oid]),
+            {"reason": "changed mind"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(cancel.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).status, OrderStatus.CANCELLED
+        )
+
+
+class DirectCustomerOrderTests(ClosureBase):
+    """C4 — a walk-in DIRECT customer is a standalone order source: no table, no
+    stay. It settles by direct payment only and can never post to a folio."""
+
+    def _direct_body(self, **over):
+        body = {
+            "order_type": "direct",
+            "outlet": "restaurant",
+            "customer_name": "Walk-in Ali",
+            "items": [{"service_item": self.item.id, "quantity": "2"}],
+        }
+        body.update(over)
+        return body
+
+    def _create_direct(self, **over):
+        return self.client.post(
+            reverse("services:order-list"), self._direct_body(**over),
+            format="json", **HDR(self.hotel),
+        )
+
+    def test_create_direct_customer_no_table_no_stay(self):
+        res = self._create_direct()
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["order_type"], "direct")
+        self.assertIsNone(res.data["table"])
+        self.assertIsNone(res.data["stay"])
+        self.assertEqual(res.data["customer_name"], "Walk-in Ali")
+        order = ServiceOrder.objects.get(pk=res.data["id"])
+        self.assertEqual(order.order_type, OrderType.DIRECT)
+        self.assertIsNone(order.table_id)
+        self.assertIsNone(order.stay_id)
+        self.assertIsNone(order.room_id)
+
+    def test_direct_customer_settles_direct(self):
+        oid = self._create_direct().data["id"]
+        self.deliver(oid)
+        res = self.settle_direct(oid)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            ServiceOrder.objects.get(pk=oid).settlement, OrderSettlement.DIRECT
+        )
+
+    def test_direct_customer_cannot_post_to_folio(self):
+        oid = self._create_direct().data["id"]
+        self.deliver(oid)
+        res = self.post_order(oid)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "order_not_postable")
+
+    def test_direct_customer_rejects_table(self):
+        res = self._create_direct(table=self.make_table().id)
+        self.assertEqual(res.status_code, 400)  # InvalidOrderComposition
+        self.assertEqual(res.data["details"]["reason"], "table_not_allowed")
+
+    def test_direct_customer_rejects_stay(self):
+        res = self._create_direct(stay=self.stay.id)
+        self.assertEqual(res.status_code, 400)  # InvalidOrderComposition
+        self.assertEqual(res.data["details"]["reason"], "stay_not_allowed")
+
+
+class SettlementReferenceVisibilityTests(ReturnBase):
+    """C2 — settlement_reference (an electronic payment reference) is exposed only
+    to a user holding finance.view; it is blanked for everyone else."""
+
+    def _settled_with_reference(self):
+        oid = self.create_order().data["id"]
+        self.deliver(oid)
+        res = self.client.post(
+            reverse("services:order-settle-direct", args=[oid]),
+            {"method": "card", "reference": "SECRET-REF-9"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200)
+        return oid
+
+    def test_finance_view_sees_reference(self):
+        oid = self._settled_with_reference()  # manager holds finance.view
+        res = self.client.get(
+            reverse("services:order-detail", args=[oid]), **HDR(self.hotel)
+        )
+        self.assertEqual(res.data["settlement_reference"], "SECRET-REF-9")
+
+    def test_without_finance_view_reference_hidden(self):
+        oid = self._settled_with_reference()
+        staff = add_member(self.hotel, "noref@x.com", perms=["service_orders.view"])
+        self.client.force_authenticate(staff)
+        res = self.client.get(
+            reverse("services:order-detail", args=[oid]), **HDR(self.hotel)
+        )
+        self.assertEqual(res.status_code, 200)
+        # The field stays present (stable contract) but the value is blanked.
+        self.assertIn("settlement_reference", res.data)
+        self.assertEqual(res.data["settlement_reference"], "")
+
+
+class ReturnSnapshotImmutabilityTests(ReturnBase):
+    """C6 — a return's frozen line snapshot survives a LATER catalog reprice (the
+    return records values at return time; it never re-reads the live item)."""
+
+    def test_return_item_snapshot_survives_reprice(self):
+        oid, lines = self._direct_order()  # item 40.00 x2
+        line = lines[0]
+        res = self._return(
+            oid, items=[{"original_item": line["id"], "quantity": "1"}],
+        )
+        self.assertEqual(res.status_code, 201)
+        ri = ServiceOrderReturnItem.objects.get(service_return__order_id=oid)
+        self.assertEqual(str(ri.unit_price), "40.00")
+        # Reprice + rename the catalog item AFTER the return.
+        self.item.unit_price = Decimal("999.00")
+        self.item.name = "Renamed"
+        self.item.save(update_fields=["unit_price", "name"])
+        ri.refresh_from_db()
+        self.assertEqual(str(ri.unit_price), "40.00")
+        self.assertEqual(ri.item_name, "Burger")
+        self.assertEqual(str(ri.total_amount), "44.00")  # 40 + 10% tax
+
+    def test_exchange_replacement_snapshot_survives_reprice(self):
+        oid, lines = self._direct_order()
+        line = lines[0]
+        res = self._return(
+            oid, kind="exchange_higher",
+            items=[{
+                "original_item": line["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "2",
+            }],
+            method="cash", amount_received="100.00",
+        )
+        self.assertEqual(res.status_code, 201)
+        ri = ServiceOrderReturnItem.objects.get(service_return__order_id=oid)
+        self.assertEqual(str(ri.replacement_unit_price), "40.00")
+        self.item.unit_price = Decimal("999.00")
+        self.item.save(update_fields=["unit_price"])
+        ri.refresh_from_db()
+        self.assertEqual(str(ri.replacement_unit_price), "40.00")
+
+
+class ReportingRefundSemanticsTests(ReturnBase):
+    """C8 — reporting keeps GROSS sales, reports REFUNDS separately, and exposes
+    NET = gross - refunds, clearly labeled. Verified via the shared refund helper
+    and the daily-close restaurant block."""
+
+    def test_outlet_refunds_helper_gross_and_net(self):
+        from apps.services.services import outlet_refunds
+
+        oid, lines = self._direct_order()  # restaurant, 40.00 x2, +10% tax
+        self._return(oid, items=[{"original_item": lines[0]["id"], "quantity": "1"}])
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        # Tax-inclusive (daily-close basis): 44.00; tax-exclusive: 40.00.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=True),
+            Decimal("44.00"),
+        )
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=False),
+            Decimal("40.00"),
+        )
+        # A different outlet has no refunds.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.CAFE, gross=True), Decimal("0.00")
+        )
+
+    def test_exchange_lower_counts_only_the_delta_as_refund(self):
+        from apps.services.services import outlet_refunds
+
+        oid, lines = self._direct_order()  # item 40.00 x2
+        # Exchange 1 unit (40.00) for the cheaper item2 (10.00) -> refund delta.
+        self._return(
+            oid, kind="exchange_lower",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item2.id, "replacement_quantity": "1",
+            }],
+        )
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        # item 40 (+10% = 44) returned, item2 10 (+0% = 10) replacement -> delta 34 incl tax.
+        self.assertEqual(
+            outlet_refunds(self.hotel, bd, Outlet.RESTAURANT, gross=True),
+            Decimal("34.00"),
+        )
+
+    def test_daily_close_block_reports_gross_refunds_net(self):
+        from apps.shifts.services import _restaurant_block
+
+        oid, lines = self._direct_order()  # gross direct sale 88.00
+        self._return(oid, items=[{"original_item": lines[0]["id"], "quantity": "1"}])
+        bd = ServiceOrderReturn.objects.get(order_id=oid).business_date
+        block = _restaurant_block(self.hotel, bd)
+        self.assertEqual(block["restaurant_sales"], "88.00")     # gross unchanged
+        self.assertEqual(block["restaurant_refunds"], "44.00")   # separate
+        self.assertEqual(block["restaurant_net"], "44.00")       # gross - refunds

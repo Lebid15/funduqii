@@ -2044,7 +2044,8 @@
     "orderType": "نوع الطلب",
     "orderTypes": {
       "room": "غرفة",
-      "table": "طاولة"
+      "table": "طاولة",
+      "direct": "عميل مباشر"
     },
     "settlementLabel": "التسوية",
     "settlement": {
@@ -2180,6 +2181,8 @@
       },
       "selectItems": "الأصناف المراد إرجاعها",
       "remaining": "المتبقّي: {qty}",
+      "qtyPositive": "يجب أن تكون الكمية أكبر من صفر.",
+      "qtyExceedsRemaining": "لا يمكن تجاوز المتبقّي ({qty}).",
       "quantity": "كمية الإرجاع",
       "replacement": "الصنف البديل",
       "replacementQty": "كمية البديل",

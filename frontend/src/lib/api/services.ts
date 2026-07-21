@@ -234,7 +234,7 @@ export interface ServiceOrderLineInput {
 }
 
 export interface ServiceOrderCreateBody {
-  order_type: "room" | "table";
+  order_type: "room" | "table" | "direct";
   outlet: ServiceOutlet;
   stay?: number | null;
   table?: number | null;

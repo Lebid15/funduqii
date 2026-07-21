@@ -150,12 +150,14 @@ class OrderSource(models.TextChoices):
 
 
 class OrderType(models.TextChoices):
-    """The two order shapes (final closure): a ROOM order lives on an
-    in-house stay; a TABLE order lives on an outlet table (guest-linked or
-    external customer)."""
+    """The order shapes (final closure): a ROOM order lives on an in-house
+    stay; a TABLE order lives on an outlet table (guest-linked or external
+    customer); a DIRECT order is a walk-in direct customer with NO table and
+    NO stay (settled by direct payment only — it can never post to a folio)."""
 
     ROOM = "room", "Room"
     TABLE = "table", "Table"
+    DIRECT = "direct", "Direct customer"
 
 
 class OrderSettlement(models.TextChoices):
