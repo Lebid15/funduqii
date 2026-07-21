@@ -5,8 +5,6 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useQuickAction } from "@/lib/useQuickAction";
 import {
   Armchair,
-  BellRing,
-  ChefHat,
   ClipboardList,
   Clock,
   Coins,
@@ -20,6 +18,7 @@ import {
   Printer,
   ReceiptText,
   Trash2,
+  Undo2,
   XCircle,
 } from "lucide-react";
 
@@ -42,6 +41,7 @@ import {
   PrintDocumentLayout,
   Select,
   StatusSummaryCard,
+  Switch,
   Textarea,
   useToast,
   type Column,
@@ -61,12 +61,16 @@ import {
   listServiceItems,
   listServiceOrders,
   listTables,
+  mintIdempotencyKey,
   postServiceOrderToFolio,
+  returnServiceOrder,
   setServiceOrderStatus,
   settleServiceOrderDirect,
   type ServiceOrderLineInput,
+  type ServiceReturnItemInput,
 } from "@/lib/api/services";
 import { getReceipt } from "@/lib/api/finance";
+import { getSettings } from "@/lib/api/hotel";
 import { listCurrentResidents } from "@/lib/api/stays";
 import { messageForError } from "@/lib/api/errors";
 import type {
@@ -81,6 +85,7 @@ import type {
   ServiceOrderSettlement,
   ServiceOrderStatus,
   ServiceOutlet,
+  ServiceReturnKind,
   ServiceTicket,
   Stay,
 } from "@/lib/api/types";
@@ -98,19 +103,26 @@ import { TablesTab } from "./TablesTab";
 import { useEnabledOutlets } from "./useOutlets";
 
 /** Which sub-flow of OrderDetailsModal a "More" menu item should pre-open. */
-type OrderIntent = "post" | "settle" | "cancel" | "kot" | "guest_check" | "receipt";
+type OrderIntent =
+  | "post"
+  | "settle"
+  | "cancel"
+  | "kot"
+  | "guest_check"
+  | "receipt"
+  | "return";
 
 /** The list is shown as cards; the prep board is folded in as a view MODE. */
 type OrdersView = "list" | "board";
 
-/** State-driven single primary action for an order card (kitchen advance). */
-const STATUS_ADVANCE: Partial<
-  Record<ServiceOrderStatus, { next: ServiceOrderStatus; labelKey: "markPreparing" | "markReady" | "markDelivered"; icon: typeof ChefHat }>
-> = {
-  submitted: { next: "preparing", labelKey: "markPreparing", icon: ChefHat },
-  preparing: { next: "ready", labelKey: "markReady", icon: BellRing },
-  ready: { next: "delivered", labelKey: "markDelivered", icon: PackageCheck },
-};
+/** VISIBLE cycle collapse (RESTAURANT-CAFETERIA-OPERATIONAL-CLOSURE): the surface
+ * has exactly two operational states — OPEN (draft/submitted/preparing/ready, all
+ * treated as "new") and terminal (delivered/cancelled). An open order's primary
+ * action is "Mark delivered" (the backend accepts submitted→delivered directly);
+ * preparing/ready are never surfaced as actions. */
+function isOpenStatus(status: ServiceOrderStatus): boolean {
+  return status !== "delivered" && status !== "cancelled";
+}
 
 const PAGE_SIZE = 25;
 const ORDER_TYPES = ["room", "table"] as const;
@@ -122,6 +134,8 @@ const PAYMENT_METHODS: PaymentMethod[] = [
   "electronic",
   "other",
 ];
+/** Methods that take an electronic reference (shown on the settle/return forms). */
+const ELECTRONIC_METHODS: PaymentMethod[] = ["card", "bank_transfer", "electronic"];
 
 /** Cosmetic permission gate — every API re-checks server-side regardless. */
 function useCan() {
@@ -243,10 +257,13 @@ export function OrdersTab() {
     }
   }
 
-  async function advanceStatus(r: ServiceOrderListItem, next: ServiceOrderStatus) {
+  // The collapsed cycle's single advance: any open order jumps straight to
+  // delivered (the backend accepts submitted→delivered without the intermediate
+  // preparing/ready hops, which the surface no longer shows).
+  async function deliverOrder(r: ServiceOrderListItem) {
     setAdvancingId(r.id);
     try {
-      await setServiceOrderStatus(r.id, next);
+      await setServiceOrderStatus(r.id, "delivered");
       notify(t.services.saved);
       await reloadAfterAction();
     } catch (err) {
@@ -290,7 +307,13 @@ export function OrdersTab() {
       {
         key: "total",
         label: t.services.orders.total,
-        value: <bdi dir="ltr">{r.total ?? "—"}</bdi>,
+        // Currency now travels on the list row — show it with the amount (a null
+        // total means no active lines yet, rendered as an em dash).
+        value: (
+          <bdi dir="ltr">
+            {r.total !== null ? formatMoney(r.total, r.currency, locale) : "—"}
+          </bdi>
+        ),
         icon: Coins,
       },
     ];
@@ -302,16 +325,15 @@ export function OrdersTab() {
       });
     }
 
-    // ONE state-driven primary: the kitchen status advance. Terminal states
-    // (delivered/cancelled) have no advance, so the primary opens Details.
-    const advance = STATUS_ADVANCE[r.status];
-    let primary: OperationPrimaryAction | null;
-    if (advance) {
+    // ONE state-driven primary (collapsed cycle): an OPEN order delivers; a
+    // terminal order (delivered/cancelled) opens Details.
+    let primary: OperationPrimaryAction;
+    if (isOpenStatus(r.status)) {
       primary = {
-        label: t.services.orders[advance.labelKey],
-        icon: advance.icon,
+        label: t.services.orders.markDelivered,
+        icon: PackageCheck,
         loading: advancingId === r.id,
-        onClick: () => advanceStatus(r, advance.next),
+        onClick: () => deliverOrder(r),
       };
     } else {
       primary = {
@@ -373,6 +395,21 @@ export function OrdersTab() {
         label: t.services.orders.printReceipt,
         icon: ReceiptText,
         onSelect: () => openDetailWith(r.id, "receipt"),
+      });
+    }
+    // Return / exchange: only AFTER delivery on a SETTLED order (direct or folio),
+    // gated on the existing finance.refund permission (a return moves money back
+    // to — or collects a delta from — the customer).
+    if (
+      r.status === "delivered" &&
+      (r.settlement === "direct" || r.settlement === "folio") &&
+      can("finance.refund")
+    ) {
+      menu.push({
+        key: "return",
+        label: t.services.orders.returnExchange,
+        icon: Undo2,
+        onSelect: () => openDetailWith(r.id, "return"),
       });
     }
     if (r.settlement === "unsettled" && r.status !== "cancelled") {
@@ -601,9 +638,13 @@ export function OrderCreateModal({
   const [requestedTime, setRequestedTime] = useState("");
   const [notes, setNotes] = useState("");
   const [stays, setStays] = useState<Stay[]>([]);
+  const [residentQuery, setResidentQuery] = useState("");
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [catalog, setCatalog] = useState<ServiceItem[]>([]);
   const [lines, setLines] = useState<ServiceOrderLineInput[]>([]);
+  // The hotel BASE currency (D1a) — the order's single currency once created; used
+  // here only to label the client-side estimated total (server stays authoritative).
+  const [baseCurrency, setBaseCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -617,10 +658,16 @@ export function OrderCreateModal({
     setRequestedTime("");
     setNotes("");
     setLines([]);
+    setResidentQuery("");
     setError(null);
+    // Only IN-HOUSE residents are returned here, so ended/checked-out stays are
+    // already excluded (a room order needs a checked-in guest).
     listCurrentResidents()
       .then((r) => setStays(r.results))
       .catch(() => setStays([]));
+    getSettings()
+      .then((s) => setBaseCurrency((s.default_currency || "").toUpperCase()))
+      .catch(() => setBaseCurrency(""));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when (re)opened
   }, [open, initialOutlet, initialTable]);
 
@@ -688,7 +735,18 @@ export function OrderCreateModal({
 
   const typeOptions = ORDER_TYPES.map((v) => ({ value: v, label: t.services.orderTypes[v] }));
   const outletOptions = enabledOutlets.map((o) => ({ value: o, label: t.services.outlets[o] }));
-  const stayOptions = stays.map((s) => ({
+  // Resident search — by room number OR guest name (case-insensitive). NOTE: the
+  // current-residents payload carries no phone, so phone search is unavailable
+  // here (surfaced as a field note); ended/checked-out stays are already excluded.
+  const q = residentQuery.trim().toLowerCase();
+  const filteredStays = q
+    ? stays.filter(
+        (s) =>
+          String(s.room_number ?? s.room).toLowerCase().includes(q) ||
+          (s.primary_guest_name ?? "").toLowerCase().includes(q),
+      )
+    : stays;
+  const stayOptions = filteredStays.map((s) => ({
     value: String(s.id),
     label: `${s.room_number ?? s.room} — ${s.primary_guest_name ?? ""}`.trim(),
   }));
@@ -700,6 +758,32 @@ export function OrderCreateModal({
     value: String(i.id),
     label: `${i.name} (${formatMoney(i.unit_price, i.currency, locale)})`,
   }));
+
+  // LIVE estimated total (preview only — the server re-derives the authoritative
+  // total from the frozen line snapshots). Computed from the selected catalog
+  // items' unit_price × qty and tax_rate, in the hotel base currency.
+  const estimate = lines.reduce(
+    (acc, line) => {
+      const item = catalog.find((i) => i.id === line.service_item);
+      if (!item) return acc;
+      const qty = Number(line.quantity);
+      const unit = Number(item.unit_price);
+      const rate = Number(item.tax_rate);
+      if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(unit)) return acc;
+      const amount = unit * qty;
+      const tax = Number.isFinite(rate) ? (amount * rate) / 100 : 0;
+      acc.subtotal += amount;
+      acc.tax += tax;
+      acc.total += amount + tax;
+      return acc;
+    },
+    { subtotal: 0, tax: 0, total: 0 },
+  );
+  // Prefer the base currency; fall back to a selected item's own currency snapshot.
+  const estimateCurrency =
+    baseCurrency ||
+    catalog.find((i) => lines.some((l) => l.service_item === i.id) && i.currency)?.currency ||
+    "";
 
   return (
     <Modal
@@ -749,7 +833,21 @@ export function OrderCreateModal({
               />
             </FormField>
           ) : null}
+          <FormField
+            label={t.common.search}
+            htmlFor="o-resident-search"
+            hint={t.services.orders.residentSearchNote}
+          >
+            <Input
+              id="o-resident-search"
+              value={residentQuery}
+              placeholder={t.services.orders.residentSearchPlaceholder}
+              onChange={(e) => setResidentQuery(e.target.value)}
+            />
+          </FormField>
           <FormField label={t.services.orders.stay} htmlFor="o-stay">
+            {/* A table order may link a resident stay (room-linked path) so it can
+                later post to that guest's folio; leaving it blank is a walk-in. */}
             <Select
               id="o-stay"
               value={stayId ? String(stayId) : ""}
@@ -817,7 +915,31 @@ export function OrderCreateModal({
               </FormField>
             </div>
           ))}
-          <p className="muted small">{t.services.orders.totalAfterSave}</p>
+          {lines.length > 0 ? (
+            <div className="stack" style={{ gap: "0.25rem" }} aria-live="polite">
+              <span className="field__label">{t.services.orders.estimatedTotal}</span>
+              <StatusSummaryCard
+                items={[
+                  {
+                    label: t.services.orders.subtotal,
+                    value: formatMoney(estimate.subtotal, estimateCurrency, locale),
+                  },
+                  {
+                    label: t.services.orders.tax,
+                    value: formatMoney(estimate.tax, estimateCurrency, locale),
+                  },
+                  {
+                    label: t.services.orders.estimatedTotal,
+                    value: formatMoney(estimate.total, estimateCurrency, locale),
+                    emphasis: true,
+                  },
+                ]}
+              />
+              <span className="muted small">{t.services.orders.estimatedTotalHint}</span>
+            </div>
+          ) : (
+            <p className="muted small">{t.services.orders.totalAfterSave}</p>
+          )}
         </div>
 
         <FormField label={t.services.orders.notes} htmlFor="o-notes">
@@ -854,7 +976,7 @@ function OrderDetailsModal({
   const [itemCancel, setItemCancel] = useState<ServiceOrderItem | null>(null);
   const [itemCancelReason, setItemCancelReason] = useState("");
   const [settleOpen, setSettleOpen] = useState(false);
-  const [settleMethod, setSettleMethod] = useState<PaymentMethod>("cash");
+  const [returnOpen, setReturnOpen] = useState(false);
   const [ticket, setTicket] = useState<ServiceTicket | null>(null);
   const [receipt, setReceipt] = useState<{ hotel: HotelHeader; payment: Payment } | null>(null);
 
@@ -869,7 +991,7 @@ function OrderDetailsModal({
     setItemCancel(null);
     setItemCancelReason("");
     setSettleOpen(false);
-    setSettleMethod("cash");
+    setReturnOpen(false);
     setTicket(null);
     setReceipt(null);
     if (!order || !initialAction) return;
@@ -879,6 +1001,9 @@ function OrderDetailsModal({
         break;
       case "settle":
         setSettleOpen(true);
+        break;
+      case "return":
+        setReturnOpen(true);
         break;
       case "cancel":
         setCancelOpen(true);
@@ -950,9 +1075,21 @@ function OrderDetailsModal({
         ),
     },
     { key: "quantity", header: t.services.orders.quantity },
-    { key: "unit_price", header: t.services.catalog.price },
-    { key: "tax_amount", header: t.services.orders.tax },
-    { key: "total_amount", header: t.services.orders.total },
+    {
+      key: "unit_price",
+      header: t.services.catalog.price,
+      render: (r) => <bdi dir="ltr">{formatMoney(r.unit_price, r.currency, locale)}</bdi>,
+    },
+    {
+      key: "tax_amount",
+      header: t.services.orders.tax,
+      render: (r) => <bdi dir="ltr">{formatMoney(r.tax_amount, r.currency, locale)}</bdi>,
+    },
+    {
+      key: "total_amount",
+      header: t.services.orders.total,
+      render: (r) => <bdi dir="ltr">{formatMoney(r.total_amount, r.currency, locale)}</bdi>,
+    },
     ...(canCancelItems
       ? [
           {
@@ -975,7 +1112,7 @@ function OrderDetailsModal({
       : []),
   ];
 
-  const canAdvance = ["submitted", "preparing", "ready"].includes(order.status);
+  const canAdvance = isOpenStatus(order.status);
   const canCancel = order.settlement === "unsettled" && order.status !== "cancelled";
   const canPost =
     order.status === "delivered" &&
@@ -986,6 +1123,12 @@ function OrderDetailsModal({
     order.status === "delivered" &&
     order.settlement === "unsettled" &&
     can("service_orders.settle_direct");
+  // Return / exchange: a delivered, SETTLED order (direct or folio), gated on the
+  // existing finance.refund permission (money moves back to the customer).
+  const canReturn =
+    order.status === "delivered" &&
+    (order.settlement === "direct" || order.settlement === "folio") &&
+    can("finance.refund");
 
   return (
     <>
@@ -1007,16 +1150,6 @@ function OrderDetailsModal({
                 {t.services.orders.printReceipt}
               </Button>
             ) : null}
-            {order.status === "submitted" ? (
-              <Button icon={ChefHat} onClick={() => run(() => setServiceOrderStatus(order.id, "preparing"))} loading={busy}>
-                {t.services.orders.markPreparing}
-              </Button>
-            ) : null}
-            {["submitted", "preparing"].includes(order.status) ? (
-              <Button icon={BellRing} onClick={() => run(() => setServiceOrderStatus(order.id, "ready"))} loading={busy}>
-                {t.services.orders.markReady}
-              </Button>
-            ) : null}
             {canAdvance ? (
               <Button icon={PackageCheck} onClick={() => run(() => setServiceOrderStatus(order.id, "delivered"))} loading={busy}>
                 {t.services.orders.markDelivered}
@@ -1030,6 +1163,11 @@ function OrderDetailsModal({
             {canSettleDirect ? (
               <Button icon={HandCoins} onClick={() => setSettleOpen(true)} loading={busy}>
                 {t.services.orders.directPayment}
+              </Button>
+            ) : null}
+            {canReturn ? (
+              <Button variant="secondary" icon={Undo2} onClick={() => setReturnOpen(true)} disabled={busy}>
+                {t.services.orders.returnExchange}
               </Button>
             ) : null}
             {canCancel ? (
@@ -1062,6 +1200,15 @@ function OrderDetailsModal({
               ...(order.settlement === "direct" && order.settlement_receipt
                 ? [{ label: t.services.orders.settlementReceipt, value: order.settlement_receipt }]
                 : []),
+              ...(order.settlement === "direct" && order.amount_received
+                ? [{ label: t.services.orders.amountReceived, value: formatMoney(order.amount_received, order.currency, locale) }]
+                : []),
+              ...(order.settlement === "direct" && order.change_given
+                ? [{ label: t.services.orders.change, value: formatMoney(order.change_given, order.currency, locale) }]
+                : []),
+              ...(order.settlement === "direct" && order.settlement_reference
+                ? [{ label: t.services.orders.reference, value: order.settlement_reference }]
+                : []),
               ...(order.folio_number
                 ? [{ label: t.services.orders.folio, value: order.folio_number }]
                 : []),
@@ -1074,11 +1221,20 @@ function OrderDetailsModal({
           <StatusSummaryCard
             title={t.services.orders.totalsTitle}
             items={[
-              { label: t.services.orders.subtotal, value: order.totals.subtotal },
-              { label: t.services.orders.tax, value: order.totals.tax_total },
-              { label: t.services.orders.total, value: order.totals.total, emphasis: true },
+              { label: t.services.orders.subtotal, value: formatMoney(order.totals.subtotal, order.totals.currency, locale) },
+              { label: t.services.orders.tax, value: formatMoney(order.totals.tax_total, order.totals.currency, locale) },
+              { label: t.services.orders.total, value: formatMoney(order.totals.total, order.totals.currency, locale), emphasis: true },
             ]}
           />
+          {order.returns.length > 0 ? (
+            <StatusSummaryCard
+              title={t.services.returns.history}
+              items={order.returns.map((ret) => ({
+                label: `${t.services.returns.returnNumber} ${ret.return_number} · ${t.services.returns.kinds[ret.kind]}`,
+                value: ret.reason || "—",
+              }))}
+            />
+          ) : null}
           {order.status === "cancelled" && order.cancellation_reason ? (
             <Alert tone="warning">{`${t.services.orders.cancelReason}: ${order.cancellation_reason}`}</Alert>
           ) : null}
@@ -1148,38 +1304,25 @@ function OrderDetailsModal({
         </div>
       </Modal>
 
-      <Modal
+      <DirectPaymentModal
+        order={order}
         open={settleOpen}
         onClose={() => setSettleOpen(false)}
-        title={t.services.orders.directPayment}
-        closeLabel={t.common.close}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setSettleOpen(false)} disabled={busy}>{t.common.cancel}</Button>
-            <Button
-              loading={busy}
-              onClick={async () => {
-                await run(() => settleServiceOrderDirect(order.id, settleMethod));
-                setSettleOpen(false);
-              }}
-            >
-              {t.services.orders.directPaymentConfirmAction}
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <Alert tone="warning">{t.services.orders.directPaymentConfirm}</Alert>
-          <FormField label={t.services.orders.paymentMethod} htmlFor="o-settle-method">
-            <Select
-              id="o-settle-method"
-              value={settleMethod}
-              options={PAYMENT_METHODS.map((m) => ({ value: m, label: t.finance.methods[m] }))}
-              onChange={(e) => setSettleMethod(e.target.value as PaymentMethod)}
-            />
-          </FormField>
-        </div>
-      </Modal>
+        onSettled={(updated) => {
+          setSettleOpen(false);
+          onChanged(updated);
+        }}
+      />
+
+      <ReturnExchangeModal
+        order={order}
+        open={returnOpen}
+        onClose={() => setReturnOpen(false)}
+        onDone={(updated) => {
+          setReturnOpen(false);
+          onChanged(updated);
+        }}
+      />
 
       <ConfirmDialog
         open={postConfirm}
@@ -1229,9 +1372,9 @@ function OrderDetailsModal({
             totals={
               ticket.document === "guest_check" && ticket.totals
                 ? [
-                    { label: t.services.orders.subtotal, value: ticket.totals.subtotal },
-                    { label: t.services.orders.tax, value: ticket.totals.tax_total },
-                    { label: t.services.orders.total, value: <strong>{ticket.totals.total}</strong> },
+                    { label: t.services.orders.subtotal, value: formatMoney(ticket.totals.subtotal, ticket.order.currency, locale) },
+                    { label: t.services.orders.tax, value: formatMoney(ticket.totals.tax_total, ticket.order.currency, locale) },
+                    { label: t.services.orders.total, value: <strong>{formatMoney(ticket.totals.total, ticket.order.currency, locale)}</strong> },
                   ]
                 : undefined
             }
@@ -1258,8 +1401,8 @@ function OrderDetailsModal({
                     <td>{i.quantity}</td>
                     {ticket.document === "guest_check" ? (
                       <>
-                        <td>{i.unit_price ?? "—"}</td>
-                        <td>{i.total_amount ?? "—"}</td>
+                        <td>{i.unit_price != null ? formatMoney(i.unit_price, ticket.order.currency, locale) : "—"}</td>
+                        <td>{i.total_amount != null ? formatMoney(i.total_amount, ticket.order.currency, locale) : "—"}</td>
                       </>
                     ) : null}
                   </tr>
@@ -1290,6 +1433,14 @@ function OrderDetailsModal({
                   </strong>
                 ),
               },
+              // Cash-capture capture (D2a) lives on the ORDER, not the payment
+              // (which always records the exact total) — surface it on the receipt.
+              ...(order.amount_received
+                ? [{ label: t.services.orders.amountReceived, value: formatMoney(order.amount_received, order.currency, locale) }]
+                : []),
+              ...(order.change_given
+                ? [{ label: t.services.orders.change, value: formatMoney(order.change_given, order.currency, locale) }]
+                : []),
               { label: t.finance.print.folio, value: receipt.payment.folio_number },
               ...(receipt.payment.reference
                 ? [{ label: t.finance.print.reference, value: receipt.payment.reference }]
@@ -1303,5 +1454,533 @@ function OrderDetailsModal({
         ) : null}
       </PrintModal>
     </>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Direct payment (D2a — cash capture, live change, idempotent)                */
+/* ------------------------------------------------------------------------- */
+
+function DirectPaymentModal({
+  order,
+  open,
+  onClose,
+  onSettled,
+}: {
+  order: ServiceOrder;
+  open: boolean;
+  onClose: () => void;
+  onSettled: (order: ServiceOrder) => void;
+}) {
+  const { t, locale } = useI18n();
+  const { notify } = useToast();
+  const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [amountReceived, setAmountReceived] = useState("");
+  const [reference, setReference] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // ONE idempotency key per settle attempt: minted when the modal opens, REUSED
+  // across retries, regenerated only AFTER success — never inside submit(). A
+  // stable key makes a network-failure retry safe (replay returns the original
+  // settlement or fails closed on a 409), never a second payment.
+  const keyRef = useRef("");
+
+  useEffect(() => {
+    if (!open) return;
+    setMethod("cash");
+    setAmountReceived("");
+    setReference("");
+    setError(null);
+    keyRef.current = mintIdempotencyKey();
+  }, [open]);
+
+  const currency = order.totals.currency || order.currency;
+  const total = Number(order.totals.total);
+  const isCash = method === "cash";
+  const isElectronic = ELECTRONIC_METHODS.includes(method);
+  const receivedNum = Number(amountReceived);
+  const hasReceived = amountReceived.trim() !== "" && Number.isFinite(receivedNum);
+  const shortCash = isCash && hasReceived && receivedNum < total;
+  const change = isCash && hasReceived && receivedNum >= total ? receivedNum - total : null;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy || shortCash) return;
+    if (!keyRef.current) keyRef.current = mintIdempotencyKey();
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await settleServiceOrderDirect(order.id, {
+        method,
+        settlement_key: keyRef.current,
+        // Cash tender only when entered (the backend rejects a short tender and
+        // computes change); electronic reference only for electronic methods.
+        ...(isCash && hasReceived ? { amount_received: amountReceived } : {}),
+        ...(isElectronic && reference.trim() ? { reference: reference.trim() } : {}),
+      });
+      // Settled — the next attempt is a genuinely new request.
+      keyRef.current = mintIdempotencyKey();
+      if (updated.change_given && Number(updated.change_given) > 0) {
+        notify(
+          t.services.orders.paidWithChange.replace(
+            "{amount}",
+            formatMoney(updated.change_given, updated.currency, locale),
+          ),
+        );
+      } else {
+        notify(t.services.saved);
+      }
+      onSettled(updated);
+    } catch (err) {
+      // Leave the key untouched so the next click REPLAYS (never a 2nd payment).
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.services.orders.directPayment}
+      closeLabel={t.common.close}
+      preventClose={busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="svc-settle-form" type="submit" loading={busy} disabled={busy || shortCash}>
+            {t.services.orders.directPaymentConfirmAction}
+          </Button>
+        </>
+      }
+    >
+      <form id="svc-settle-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <Alert tone="warning">{t.services.orders.directPaymentConfirm}</Alert>
+        <StatusSummaryCard
+          items={[
+            {
+              label: t.services.orders.total,
+              value: formatMoney(order.totals.total, currency, locale),
+              emphasis: true,
+            },
+          ]}
+        />
+        <FormField label={t.services.orders.paymentMethod} htmlFor="o-settle-method">
+          <Select
+            id="o-settle-method"
+            value={method}
+            options={PAYMENT_METHODS.map((m) => ({ value: m, label: t.finance.methods[m] }))}
+            onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+          />
+        </FormField>
+        {isCash ? (
+          <div className="form-grid">
+            <FormField
+              label={t.services.orders.amountReceived}
+              htmlFor="o-settle-received"
+              hint={t.services.orders.amountReceivedHint}
+              error={shortCash ? t.services.orders.shortCash : undefined}
+            >
+              <Input
+                id="o-settle-received"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={amountReceived}
+                invalid={shortCash}
+                onChange={(e) => setAmountReceived(e.target.value)}
+              />
+            </FormField>
+            <FormField label={t.services.orders.change} htmlFor="o-settle-change">
+              <div className="cluster" id="o-settle-change" aria-live="polite">
+                {change !== null ? (
+                  <strong>
+                    <bdi dir="ltr">{formatMoney(change, currency, locale)}</bdi>
+                  </strong>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </div>
+            </FormField>
+          </div>
+        ) : null}
+        {isElectronic ? (
+          <FormField label={t.services.orders.reference} htmlFor="o-settle-ref">
+            <Input
+              id="o-settle-ref"
+              value={reference}
+              placeholder={t.services.orders.referencePlaceholder}
+              onChange={(e) => setReference(e.target.value)}
+            />
+          </FormField>
+        ) : null}
+      </form>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Return / exchange (after delivery only; gated finance.refund)               */
+/* ------------------------------------------------------------------------- */
+
+type ReturnAction = "return" | "exchange";
+
+function ReturnExchangeModal({
+  order,
+  open,
+  onClose,
+  onDone,
+}: {
+  order: ServiceOrder;
+  open: boolean;
+  onClose: () => void;
+  onDone: (order: ServiceOrder) => void;
+}) {
+  const { t, locale } = useI18n();
+  const { notify } = useToast();
+  const [action, setAction] = useState<ReturnAction>("return");
+  // Selected returned lines: lineId -> quantity string (presence = selected).
+  const [sel, setSel] = useState<Record<number, string>>({});
+  const [replacementId, setReplacementId] = useState<number | null>(null);
+  const [replacementQty, setReplacementQty] = useState("1");
+  const [reason, setReason] = useState("");
+  const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [amountReceived, setAmountReceived] = useState("");
+  const [reference, setReference] = useState("");
+  const [catalog, setCatalog] = useState<ServiceItem[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Same idempotency lifecycle as the settle modal (mint on open, reuse on retry,
+  // regenerate after success — never inside submit()).
+  const keyRef = useRef("");
+
+  useEffect(() => {
+    if (!open) return;
+    setAction("return");
+    setSel({});
+    setReplacementId(null);
+    setReplacementQty("1");
+    setReason("");
+    setMethod("cash");
+    setAmountReceived("");
+    setReference("");
+    setError(null);
+    keyRef.current = mintIdempotencyKey();
+    // Replacement items must belong to the order's outlet (the backend enforces it).
+    listServiceItems({ outlet: order.outlet, is_active: "true", is_available: "true", page: 1 })
+      .then((r) => setCatalog(r.results))
+      .catch(() => setCatalog([]));
+  }, [open, order.id, order.outlet]);
+
+  const currency = order.totals.currency || order.currency;
+  const isDirect = order.settlement === "direct";
+  const isExchange = action === "exchange";
+
+  // Remaining returnable quantity per line = ordered qty − already-returned qty.
+  function returnedQty(lineId: number): number {
+    let sum = 0;
+    for (const ret of order.returns) {
+      for (const it of ret.items) {
+        if (it.original_item === lineId) sum += Number(it.quantity);
+      }
+    }
+    return sum;
+  }
+  const returnable = order.items
+    .filter((i) => !i.is_cancelled)
+    .map((i) => ({ line: i, remaining: Number(i.quantity) - returnedQty(i.id) }))
+    .filter((r) => r.remaining > 0.00001);
+
+  function toggleLine(lineId: number, remaining: number) {
+    setSel((prev) => {
+      const next = { ...prev };
+      if (lineId in next) delete next[lineId];
+      else next[lineId] = String(remaining);
+      return next;
+    });
+  }
+
+  const selectedIds = Object.keys(sel).map(Number);
+
+  // Return total from the selected line snapshots (preview — server authoritative).
+  let returnTotal = 0;
+  for (const r of returnable) {
+    if (!(r.line.id in sel)) continue;
+    const q = Number(sel[r.line.id]);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    const amt = q * Number(r.line.unit_price);
+    returnTotal += amt + (amt * Number(r.line.tax_rate)) / 100;
+  }
+
+  const replacement = catalog.find((i) => i.id === replacementId) ?? null;
+  const repQtyNum = Number(replacementQty);
+  let replacementTotal = 0;
+  if (isExchange && replacement && Number.isFinite(repQtyNum) && repQtyNum > 0) {
+    const amt = repQtyNum * Number(replacement.unit_price);
+    replacementTotal = amt + (amt * Number(replacement.tax_rate)) / 100;
+  }
+  const delta = replacementTotal - returnTotal;
+
+  // The SERVER computes and verifies the kind; the client derives the same value
+  // from the numbers so the preview and the request agree.
+  let kind: ServiceReturnKind = "return";
+  if (isExchange) {
+    kind = delta === 0 ? "exchange_same" : delta > 0 ? "exchange_higher" : "exchange_lower";
+  }
+  // "out" = money back to the customer (cash refund on a direct sale, or a credit
+  // on the guest folio); "in" = collect an upgrade delta; "none" = equal exchange.
+  const direction: "out" | "in" | "none" =
+    kind === "exchange_same" ? "none" : kind === "exchange_higher" ? "in" : "out";
+  const moveAmount = kind === "return" ? returnTotal : Math.abs(delta);
+
+  let moneyMove: string;
+  if (direction === "none") moneyMove = t.services.returns.noChange;
+  else if (direction === "in")
+    moneyMove = t.services.returns.collect.replace("{amount}", formatMoney(moveAmount, currency, locale));
+  else if (isDirect)
+    moneyMove = t.services.returns.refund.replace("{amount}", formatMoney(moveAmount, currency, locale));
+  else moneyMove = t.services.returns.credit.replace("{amount}", formatMoney(moveAmount, currency, locale));
+
+  // Payment fields only for a DIRECT order that actually moves money; a FOLIO
+  // order's money runs on the guest folio (no method/tender collected here).
+  const showPayment = isDirect && direction !== "none";
+  const isCash = method === "cash";
+  const isElectronic = ELECTRONIC_METHODS.includes(method);
+  const receivedNum = Number(amountReceived);
+  const hasReceived = amountReceived.trim() !== "" && Number.isFinite(receivedNum);
+  // Only the COLLECT (upgrade) path tenders cash; refunds do not.
+  const collectCash = showPayment && direction === "in" && isCash;
+  const shortCash = collectCash && hasReceived && receivedNum < moveAmount;
+  const change =
+    collectCash && hasReceived && receivedNum >= moveAmount ? receivedNum - moveAmount : null;
+
+  const exchangeOneLine = isExchange && selectedIds.length !== 1;
+  const needsReplacement = isExchange && !replacement;
+  const canSubmit =
+    selectedIds.length > 0 &&
+    returnTotal > 0 &&
+    reason.trim() !== "" &&
+    !exchangeOneLine &&
+    !needsReplacement &&
+    !shortCash;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy || !canSubmit) return;
+    if (!keyRef.current) keyRef.current = mintIdempotencyKey();
+    const items: ServiceReturnItemInput[] = returnable
+      .filter((r) => r.line.id in sel)
+      .map((r) => ({
+        original_item: r.line.id,
+        quantity: sel[r.line.id],
+        ...(isExchange && replacement
+          ? { replacement_item: replacement.id, replacement_quantity: replacementQty }
+          : {}),
+      }));
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await returnServiceOrder(order.id, {
+        kind,
+        reason: reason.trim(),
+        items,
+        idempotency_key: keyRef.current,
+        ...(showPayment ? { method } : {}),
+        ...(collectCash && hasReceived ? { amount_received: amountReceived } : {}),
+        ...(showPayment && isElectronic && reference.trim() ? { reference: reference.trim() } : {}),
+      });
+      keyRef.current = mintIdempotencyKey();
+      notify(t.services.saved);
+      onDone(result.order);
+    } catch (err) {
+      // Leave the key untouched so the next click REPLAYS the same request.
+      setError(messageForError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.services.returns.title}
+      closeLabel={t.common.close}
+      preventClose={busy}
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>{t.common.cancel}</Button>
+          <Button form="svc-return-form" type="submit" loading={busy} disabled={busy || !canSubmit}>
+            {t.services.returns.submit}
+          </Button>
+        </>
+      }
+    >
+      <form id="svc-return-form" className="stack" onSubmit={submit} noValidate>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <p className="muted small">{t.services.returns.intro}</p>
+
+        <FormField label={t.services.returns.kindLabel} htmlFor="r-action">
+          <Select
+            id="r-action"
+            value={action}
+            options={[
+              { value: "return", label: t.services.returns.actionReturn },
+              { value: "exchange", label: t.services.returns.actionExchange },
+            ]}
+            onChange={(e) => setAction(e.target.value as ReturnAction)}
+          />
+        </FormField>
+
+        <div className="stack">
+          <span className="field__label">{t.services.returns.selectItems}</span>
+          {returnable.length === 0 ? (
+            <p className="muted">{t.services.returns.noItems}</p>
+          ) : (
+            returnable.map((r) => {
+              const selected = r.line.id in sel;
+              return (
+                <div className="form-grid" key={r.line.id}>
+                  <Switch
+                    id={`r-sel-${r.line.id}`}
+                    checked={selected}
+                    onChange={() => toggleLine(r.line.id, r.remaining)}
+                    label={`${r.line.item_name} · ${formatMoney(r.line.unit_price, r.line.currency || currency, locale)}`}
+                  />
+                  {selected ? (
+                    <FormField
+                      label={t.services.returns.quantity}
+                      htmlFor={`r-qty-${r.line.id}`}
+                      hint={t.services.returns.remaining.replace("{qty}", String(r.remaining))}
+                    >
+                      <Input
+                        id={`r-qty-${r.line.id}`}
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        max={String(r.remaining)}
+                        inputMode="decimal"
+                        value={sel[r.line.id]}
+                        onChange={(e) => setSel((prev) => ({ ...prev, [r.line.id]: e.target.value }))}
+                      />
+                    </FormField>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {isExchange ? (
+          <div className="form-grid">
+            <FormField
+              label={t.services.returns.replacement}
+              htmlFor="r-replacement"
+              error={exchangeOneLine ? t.services.returns.exchangeOneLine : undefined}
+            >
+              <Select
+                id="r-replacement"
+                value={replacementId ? String(replacementId) : ""}
+                placeholder={t.common.required}
+                options={catalog.map((i) => ({
+                  value: String(i.id),
+                  label: `${i.name} (${formatMoney(i.unit_price, i.currency || currency, locale)})`,
+                }))}
+                onChange={(e) => setReplacementId(e.target.value ? Number(e.target.value) : null)}
+              />
+            </FormField>
+            <FormField label={t.services.returns.replacementQty} htmlFor="r-rep-qty">
+              <Input
+                id="r-rep-qty"
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                value={replacementQty}
+                onChange={(e) => setReplacementQty(e.target.value)}
+              />
+            </FormField>
+          </div>
+        ) : null}
+
+        <FormField label={t.services.returns.reason} htmlFor="r-reason">
+          <Textarea
+            id="r-reason"
+            value={reason}
+            placeholder={t.services.returns.reasonPlaceholder}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </FormField>
+
+        {returnTotal > 0 ? (
+          <StatusSummaryCard
+            title={t.services.returns.moneyMove}
+            items={[{ label: t.services.returns.moneyMove, value: moneyMove, emphasis: true }]}
+          />
+        ) : null}
+
+        {showPayment ? (
+          <div className="stack">
+            <span className="field__label">{t.services.returns.paymentSection}</span>
+            <FormField label={t.services.orders.paymentMethod} htmlFor="r-method">
+              <Select
+                id="r-method"
+                value={method}
+                options={PAYMENT_METHODS.map((m) => ({ value: m, label: t.finance.methods[m] }))}
+                onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+              />
+            </FormField>
+            {collectCash ? (
+              <div className="form-grid">
+                <FormField
+                  label={t.services.orders.amountReceived}
+                  htmlFor="r-received"
+                  hint={t.services.orders.amountReceivedHint}
+                  error={shortCash ? t.services.orders.shortCash : undefined}
+                >
+                  <Input
+                    id="r-received"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={amountReceived}
+                    invalid={shortCash}
+                    onChange={(e) => setAmountReceived(e.target.value)}
+                  />
+                </FormField>
+                <FormField label={t.services.orders.change} htmlFor="r-change">
+                  <div className="cluster" id="r-change" aria-live="polite">
+                    {change !== null ? (
+                      <strong>
+                        <bdi dir="ltr">{formatMoney(change, currency, locale)}</bdi>
+                      </strong>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </div>
+                </FormField>
+              </div>
+            ) : null}
+            {isElectronic ? (
+              <FormField label={t.services.orders.reference} htmlFor="r-ref">
+                <Input
+                  id="r-ref"
+                  value={reference}
+                  placeholder={t.services.orders.referencePlaceholder}
+                  onChange={(e) => setReference(e.target.value)}
+                />
+              </FormField>
+            ) : null}
+          </div>
+        ) : null}
+      </form>
+    </Modal>
   );
 }
