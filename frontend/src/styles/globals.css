@@ -6345,6 +6345,142 @@ a {
   }
 }
 
+/* --- Service order DETAILS (view-only) window ------------------------------
+ * A compact, WIDE, view-only surface (owner points 2, 3, 8-10): a two-column
+ * grid — items + totals on the MAIN column, a single info card on the SIDE.
+ * No-scroll sizing MIRRORS the create form and is scoped to THIS modal via
+ * :has(), so the shared base .modal (90dvh + overflow-y:auto) is never touched.
+ * The modal is fixed-height + clipped; the layout fills it; and only the items
+ * list scrolls, and only on genuine overflow — never the whole modal. */
+.modal:has(.svc-detail) {
+  max-height: 90dvh;
+  height: 90dvh;
+  overflow: hidden;
+}
+.modal:has(.svc-detail) .modal__body {
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+.svc-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  gap: var(--space-4);
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.svc-detail__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto; /* safety net only */
+  padding-inline-end: var(--space-1);
+}
+.svc-detail__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* The ONLY scroll region in normal use: many items scroll here, never the modal. */
+.svc-detail__lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: var(--space-1);
+}
+.svc-detail__foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.svc-detail__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Compact read-only item line: name + qty×price·tax on the start, total on the
+ * end — flex so it WRAPS instead of forcing a horizontal scrollbar. */
+.svc-detail__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.svc-detail__line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.svc-detail__line-name {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.svc-detail__line-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+.svc-detail__line-total {
+  white-space: nowrap;
+}
+/* Emphasised grand total below the compact subtotal/tax rows. */
+.svc-detail__grand {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+@media (max-width: 760px) {
+  .svc-detail {
+    grid-template-columns: 1fr;
+    flex: 0 0 auto;
+  }
+  /* Full-screen sheet with ONE natural scroll: columns stack and NOTHING gets
+   * its own inner scrollbar box (mirrors the create-form mobile block). */
+  .modal:has(.svc-detail) {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+  }
+  .modal:has(.svc-detail) .modal__body {
+    overflow: visible;
+    flex: 1 1 auto;
+  }
+  .svc-detail__main,
+  .svc-detail__side,
+  .svc-detail__items,
+  .svc-detail__lines {
+    overflow: visible;
+    min-height: 0;
+    flex: 0 0 auto;
+    padding-inline-end: 0;
+  }
+  /* The who/where info card reads first on a phone. */
+  .svc-detail__side {
+    order: -1;
+  }
+}
+
 .svc-section {
   display: flex;
   flex-direction: column;

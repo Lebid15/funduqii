@@ -124,7 +124,6 @@ export function CatalogTab() {
       header: t.services.outlet,
       render: (r) => <Badge tone="neutral">{t.services.outlets[r.outlet]}</Badge>,
     },
-    { key: "code", header: t.services.catalog.categoryCode, render: (r) => r.code || "—" },
     { key: "item_count", header: t.services.catalog.itemCount },
     {
       key: "is_active",
@@ -375,11 +374,10 @@ function CategoryModal({
     if (open) {
       setForm(
         edit
-          ? { name: edit.name, code: edit.code, description: edit.description, is_active: edit.is_active }
+          ? { name: edit.name, description: edit.description, is_active: edit.is_active }
           : {
               outlet: enabledOutlets[0] ?? "restaurant",
               name: "",
-              code: "",
               description: "",
               is_active: true,
             },
@@ -441,9 +439,6 @@ function CategoryModal({
           <FormField label={t.services.catalog.categoryName} htmlFor="c-name">
             <Input id="c-name" value={form.name ?? ""} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
           </FormField>
-          <FormField label={t.services.catalog.categoryCode} htmlFor="c-code">
-            <Input id="c-code" value={form.code ?? ""} onChange={(e) => setForm((p) => ({ ...p, code: e.target.value }))} />
-          </FormField>
         </div>
         <FormField label={t.services.catalog.categoryDescription} htmlFor="c-desc">
           <Input id="c-desc" value={form.description ?? ""} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
@@ -495,7 +490,6 @@ function ItemModal({
           ? {
               category: edit.category,
               name: edit.name,
-              code: edit.code,
               description: edit.description,
               unit_price: edit.unit_price,
               tax_rate: edit.tax_rate,
@@ -505,7 +499,6 @@ function ItemModal({
           : {
               category: categories.filter((c) => enabledOutlets.includes(c.outlet))[0]?.id,
               name: "",
-              code: "",
               description: "",
               unit_price: "",
               tax_rate: "0",
@@ -590,9 +583,6 @@ function ItemModal({
           </FormField>
           <FormField label={t.services.catalog.taxRate} htmlFor="i-tax">
             <Input id="i-tax" type="number" step="0.01" min="0" value={form.tax_rate ?? ""} onChange={(e) => set("tax_rate", e.target.value)} />
-          </FormField>
-          <FormField label={t.services.catalog.itemCode} htmlFor="i-code">
-            <Input id="i-code" value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} />
           </FormField>
         </div>
         <FormField label={t.services.catalog.itemDescription} htmlFor="i-desc">

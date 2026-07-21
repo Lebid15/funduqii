@@ -24,13 +24,10 @@ import {
   CreditCard,
   DoorOpen,
   Eye,
-  FileInput,
-  HandCoins,
   Minus,
   PackageCheck,
   Plus,
   Printer,
-  ReceiptText,
   Trash2,
   Undo2,
   Utensils,
@@ -45,7 +42,6 @@ import {
   Button,
   Card,
   ConfirmDialog,
-  DataTable,
   Icon,
   IconButton,
   EmptyState,
@@ -63,11 +59,9 @@ import {
   Textarea,
   useToast,
   type BadgeTone,
-  type Column,
 } from "@/components/ui";
 import {
   cancelServiceOrder,
-  cancelServiceOrderItem,
   createServiceOrder,
   getServiceOrder,
   getServiceOrderTicket,
@@ -93,7 +87,6 @@ import type {
   RestaurantTable,
   ServiceItem,
   ServiceOrder,
-  ServiceOrderItem,
   ServiceOrderListItem,
   ServiceOrderSettlement,
   ServiceOrderStatus,
@@ -1860,12 +1853,28 @@ function OrderDetailsModal({
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [postConfirm, setPostConfirm] = useState(false);
-  const [itemCancel, setItemCancel] = useState<ServiceOrderItem | null>(null);
-  const [itemCancelReason, setItemCancelReason] = useState("");
   const [settleOpen, setSettleOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [ticket, setTicket] = useState<ServiceTicket | null>(null);
   const [receipt, setReceipt] = useState<{ hotel: HotelHeader; payment: Payment } | null>(null);
+
+  async function openTicket(variant: "kot" | "guest_check") {
+    try {
+      setTicket(await getServiceOrderTicket(order!.id, variant));
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
+
+  async function openReceipt() {
+    if (!order?.settlement_payment) return;
+    try {
+      const r = await getReceipt(order.settlement_payment);
+      setReceipt({ hotel: r.hotel, payment: r.payment });
+    } catch (err) {
+      notify(messageForError(err, t), "error");
+    }
+  }
 
   // Reset every sub-dialog whenever a DIFFERENT order is opened, then honour the
   // requested open-intent once. Keyed on order id (a same-id refetch via
@@ -1875,8 +1884,6 @@ function OrderDetailsModal({
     setCancelOpen(false);
     setCancelReason("");
     setPostConfirm(false);
-    setItemCancel(null);
-    setItemCancelReason("");
     setSettleOpen(false);
     setReturnOpen(false);
     setTicket(null);
@@ -1923,104 +1930,11 @@ function OrderDetailsModal({
     }
   }
 
-  async function openTicket(variant: "kot" | "guest_check") {
-    try {
-      setTicket(await getServiceOrderTicket(order!.id, variant));
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-    }
-  }
-
-  async function openReceipt() {
-    if (!order?.settlement_payment) return;
-    try {
-      const r = await getReceipt(order.settlement_payment);
-      setReceipt({ hotel: r.hotel, payment: r.payment });
-    } catch (err) {
-      notify(messageForError(err, t), "error");
-    }
-  }
-
-  const canCancelItems =
-    order.settlement === "unsettled" &&
-    order.status !== "cancelled" &&
-    can("service_orders.update");
-
-  const itemColumns: Column<ServiceOrder["items"][number]>[] = [
-    {
-      key: "item_name",
-      header: t.services.orders.item,
-      render: (r) =>
-        r.is_cancelled ? (
-          <span className="cluster">
-            <s className="muted">{r.item_name}</s>
-            <Badge tone="danger">{t.services.orders.itemCancelled}</Badge>
-            {r.cancel_reason ? <span className="muted small">{r.cancel_reason}</span> : null}
-          </span>
-        ) : (
-          r.item_name
-        ),
-    },
-    { key: "quantity", header: t.services.orders.quantity },
-    {
-      key: "unit_price",
-      header: t.services.catalog.price,
-      render: (r) => <bdi dir="ltr">{formatMoney(r.unit_price, r.currency, locale)}</bdi>,
-    },
-    {
-      key: "tax_amount",
-      header: t.services.orders.tax,
-      render: (r) => <bdi dir="ltr">{formatMoney(r.tax_amount, r.currency, locale)}</bdi>,
-    },
-    {
-      key: "total_amount",
-      header: t.services.orders.total,
-      render: (r) => <bdi dir="ltr">{formatMoney(r.total_amount, r.currency, locale)}</bdi>,
-    },
-    ...(canCancelItems
-      ? [
-          {
-            key: "actions",
-            header: t.common.actions,
-            align: "end",
-            render: (r) =>
-              r.is_cancelled ? null : (
-                <IconButton
-                  icon={XCircle}
-                  label={t.services.orders.cancelItem}
-                  onClick={() => {
-                    setItemCancelReason("");
-                    setItemCancel(r);
-                  }}
-                />
-              ),
-          } satisfies Column<ServiceOrder["items"][number]>,
-        ]
-      : []),
-  ];
-
-  const canAdvance = isOpenStatus(order.status);
-  // Cancel is a PRE-DELIVERY action for any NEW order. A settled order's cancel
-  // REVERSES money (refund/credit) and additionally needs finance.refund.
+  // The details modal is VIEW-ONLY (owner points 2 & 3): all order actions live on
+  // the card and open their sub-flows here via initialAction. Cancel, when the order
+  // is already settled/posted, REVERSES money — the cancel sub-modal reads this to
+  // show its reversal warning.
   const cancelReversesMoney = order.settlement !== "unsettled" || order.is_posted;
-  const canCancel =
-    isOpenStatus(order.status) &&
-    (!cancelReversesMoney || can("finance.refund"));
-  const canPost =
-    order.status === "delivered" &&
-    order.settlement === "unsettled" &&
-    !order.is_posted &&
-    order.stay !== null;
-  const canSettleDirect =
-    order.status === "delivered" &&
-    order.settlement === "unsettled" &&
-    can("service_orders.settle_direct");
-  // Return / exchange: a delivered, SETTLED order (direct or folio), gated on the
-  // existing finance.refund permission (money moves back to the customer).
-  const canReturn =
-    order.status === "delivered" &&
-    (order.settlement === "direct" || order.settlement === "folio") &&
-    can("finance.refund");
 
   return (
     <>
@@ -2029,113 +1943,168 @@ function OrderDetailsModal({
         onClose={onClose}
         title={`${t.services.orders.details} · ${order.order_number}`}
         closeLabel={t.common.close}
-        footer={
-          <>
-            <Button variant="secondary" icon={Printer} onClick={() => openTicket("kot")} disabled={busy}>
-              {t.services.ticket.title}
-            </Button>
-            <Button variant="secondary" icon={Printer} onClick={() => openTicket("guest_check")} disabled={busy}>
-              {t.services.ticket.guestCheckTitle}
-            </Button>
-            {order.settlement === "direct" && order.settlement_payment ? (
-              <Button variant="secondary" icon={ReceiptText} onClick={openReceipt} disabled={busy}>
-                {t.services.orders.printReceipt}
-              </Button>
-            ) : null}
-            {canAdvance ? (
-              <Button icon={PackageCheck} onClick={() => run(() => setServiceOrderStatus(order.id, "delivered"))} loading={busy}>
-                {t.services.orders.markDelivered}
-              </Button>
-            ) : null}
-            {canPost ? (
-              <Button icon={FileInput} onClick={() => setPostConfirm(true)} loading={busy}>
-                {t.services.orders.postToFolio}
-              </Button>
-            ) : null}
-            {canSettleDirect ? (
-              <Button icon={HandCoins} onClick={() => setSettleOpen(true)} loading={busy}>
-                {t.services.orders.directPayment}
-              </Button>
-            ) : null}
-            {canReturn ? (
-              <Button variant="secondary" icon={Undo2} onClick={() => setReturnOpen(true)} disabled={busy}>
-                {t.services.orders.returnExchange}
-              </Button>
-            ) : null}
-            {canCancel ? (
-              <Button variant="danger" icon={XCircle} onClick={() => setCancelOpen(true)} disabled={busy}>
-                {t.services.orders.cancel}
-              </Button>
-            ) : null}
-          </>
-        }
+        size="full"
+        footer={<Button onClick={onClose}>{t.common.close}</Button>}
       >
-        <div className="stack">
-          <div className="cluster">
-            <Badge tone={serviceOrderStatusTone(order.status)}>{t.services.status[order.status]}</Badge>
-            <Badge tone="neutral">{t.services.outlets[order.outlet]}</Badge>
-            <Badge tone="neutral">{t.services.orderTypes[order.order_type]}</Badge>
-            <Badge tone={settlementTone(order.settlement)}>{t.services.settlement[order.settlement]}</Badge>
-            {order.is_posted ? <Badge tone="success">{t.services.orders.postedYes}</Badge> : null}
+        {/* VIEW-ONLY (owner points 2 & 3): a compact, wide two-column window — the
+            items + totals on the MAIN column, a single info card on the SIDE. No
+            action buttons live here; the card owns every action (initialAction). */}
+        <div className="svc-detail">
+          <div className="svc-detail__main">
+            <div className="svc-detail__items">
+              <span className="svc-section__title">{t.services.orders.itemsSection}</span>
+              {/* Compact flex lines (no DataTable → no horizontal scroll). Numbers,
+                  money and quantities are LTR even inside Arabic. */}
+              <div className="svc-detail__lines">
+                {order.items.map((r) => (
+                  <div className="svc-detail__line" key={r.id}>
+                    <span className="svc-detail__line-main">
+                      <span className="svc-detail__line-name">
+                        {r.is_cancelled ? (
+                          <>
+                            <s className="muted">{r.item_name}</s>{" "}
+                            <Badge tone="danger">{t.services.orders.itemCancelled}</Badge>
+                          </>
+                        ) : (
+                          r.item_name
+                        )}
+                      </span>
+                      <span className="svc-detail__line-meta">
+                        <bdi dir="ltr">{r.quantity}</bdi>
+                        {" × "}
+                        <bdi dir="ltr">{formatMoney(r.unit_price, r.currency, locale)}</bdi>
+                        {" · "}
+                        {t.services.orders.tax}{" "}
+                        <bdi dir="ltr">{formatMoney(r.tax_amount, r.currency, locale)}</bdi>
+                      </span>
+                      {r.is_cancelled && r.cancel_reason ? (
+                        <span className="svc-detail__line-meta">{r.cancel_reason}</span>
+                      ) : null}
+                    </span>
+                    <strong className="svc-detail__line-total">
+                      <bdi dir="ltr">{formatMoney(r.total_amount, r.currency, locale)}</bdi>
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="svc-detail__foot">
+              {/* Totals — a small compact block, not a big card. */}
+              <div className="svc-detail__totals stack-tight">
+                <SvcSummaryRow
+                  label={t.services.orders.subtotal}
+                  value={<bdi dir="ltr">{formatMoney(order.totals.subtotal, order.totals.currency, locale)}</bdi>}
+                />
+                <SvcSummaryRow
+                  label={t.services.orders.tax}
+                  value={<bdi dir="ltr">{formatMoney(order.totals.tax_total, order.totals.currency, locale)}</bdi>}
+                />
+                <div className="svc-detail__grand">
+                  <span className="field__label">{t.services.orders.total}</span>
+                  <span className="svc-total">
+                    <bdi dir="ltr">{formatMoney(order.totals.total, order.totals.currency, locale)}</bdi>
+                  </span>
+                </div>
+              </div>
+
+              {order.returns.length > 0 ? (
+                <div className="svc-detail__returns stack-tight">
+                  <span className="svc-section__title">{t.services.returns.history}</span>
+                  {order.returns.map((ret) => (
+                    <SvcSummaryRow
+                      key={ret.id}
+                      label={`${t.services.returns.returnNumber} ${ret.return_number} · ${t.services.returns.kinds[ret.kind]}`}
+                      value={ret.reason || "—"}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {order.status === "cancelled" && order.cancellation_reason ? (
+                <Alert tone="warning">{`${t.services.orders.cancelReason}: ${order.cancellation_reason}`}</Alert>
+              ) : null}
+              {order.notes ? (
+                <p className="muted small">{`${t.services.orders.notes}: ${order.notes}`}</p>
+              ) : null}
+            </div>
           </div>
-          <StatusSummaryCard
-            items={[
-              ...(order.order_type === "room"
-                ? [{ label: t.services.orders.room, value: order.room_number || "—" }]
-                : [{ label: t.services.orders.table, value: order.table_number || "—" }]),
-              ...(order.customer_name
-                ? [{ label: t.services.orders.customerName, value: order.customer_name }]
-                : []),
-              { label: t.services.orders.guest, value: order.guest_name || "—" },
-              { label: t.services.orders.businessDate, value: formatDate(order.business_date, locale) },
-              { label: t.services.orders.orderedAt, value: formatDateTime(order.ordered_at, locale) },
-              ...(order.settlement === "direct" && order.settlement_receipt
-                ? [{ label: t.services.orders.settlementReceipt, value: order.settlement_receipt }]
-                : []),
-              ...(order.settlement === "direct" && order.amount_received
-                ? [{ label: t.services.orders.amountReceived, value: formatMoney(order.amount_received, order.currency, locale) }]
-                : []),
-              ...(order.settlement === "direct" && order.change_given
-                ? [{ label: t.services.orders.change, value: formatMoney(order.change_given, order.currency, locale) }]
-                : []),
-              // C2 — settlement_reference is finance-sensitive: shown only with
-              // finance.view (the server also blanks it otherwise — defense in depth).
-              ...(order.settlement === "direct" &&
-              order.settlement_reference &&
-              can("finance.view")
-                ? [{ label: t.services.orders.reference, value: order.settlement_reference }]
-                : []),
-              ...(order.folio_number
-                ? [{ label: t.services.orders.folio, value: order.folio_number }]
-                : []),
-              ...(order.posted_charge_number
-                ? [{ label: t.services.orders.chargeRef, value: order.posted_charge_number }]
-                : []),
-            ]}
-          />
-          <DataTable caption={t.services.orders.itemsSection} columns={itemColumns} rows={order.items} rowKey={(r) => r.id} />
-          <StatusSummaryCard
-            title={t.services.orders.totalsTitle}
-            items={[
-              { label: t.services.orders.subtotal, value: formatMoney(order.totals.subtotal, order.totals.currency, locale) },
-              { label: t.services.orders.tax, value: formatMoney(order.totals.tax_total, order.totals.currency, locale) },
-              { label: t.services.orders.total, value: formatMoney(order.totals.total, order.totals.currency, locale), emphasis: true },
-            ]}
-          />
-          {order.returns.length > 0 ? (
-            <StatusSummaryCard
-              title={t.services.returns.history}
-              items={order.returns.map((ret) => ({
-                label: `${t.services.returns.returnNumber} ${ret.return_number} · ${t.services.returns.kinds[ret.kind]}`,
-                value: ret.reason || "—",
-              }))}
-            />
-          ) : null}
-          {order.status === "cancelled" && order.cancellation_reason ? (
-            <Alert tone="warning">{`${t.services.orders.cancelReason}: ${order.cancellation_reason}`}</Alert>
-          ) : null}
-          {canPost ? <Alert tone="warning">{t.services.orders.postHint}</Alert> : null}
-          {order.notes ? <p className="muted">{`${t.services.orders.notes}: ${order.notes}`}</p> : null}
+
+          <aside className="svc-detail__side">
+            {/* ONE compact info card — status/settlement + the order's who/where. */}
+            <Card className="stack">
+              <div className="cluster">
+                <Badge tone={serviceOrderStatusTone(order.status)}>{t.services.status[order.status]}</Badge>
+                <Badge tone={settlementTone(order.settlement)}>{t.services.settlement[order.settlement]}</Badge>
+                <Badge tone="neutral" variant="outline">{t.services.outlets[order.outlet]}</Badge>
+                <Badge tone="neutral" variant="outline">{t.services.orderTypes[order.order_type]}</Badge>
+                {order.is_posted ? <Badge tone="success">{t.services.orders.postedYes}</Badge> : null}
+              </div>
+              <div className="stack-tight">
+                {order.order_type === "room" ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.room}
+                    value={<bdi dir="ltr">{order.room_number || "—"}</bdi>}
+                  />
+                ) : (
+                  <SvcSummaryRow
+                    label={t.services.orders.table}
+                    value={<bdi dir="ltr">{order.table_number || "—"}</bdi>}
+                  />
+                )}
+                {order.customer_name ? (
+                  <SvcSummaryRow label={t.services.orders.customerName} value={order.customer_name} />
+                ) : null}
+                <SvcSummaryRow label={t.services.orders.guest} value={order.guest_name || "—"} />
+                <SvcSummaryRow
+                  label={t.services.orders.orderedAt}
+                  value={<bdi dir="ltr">{formatDateTime(order.ordered_at, locale)}</bdi>}
+                />
+                <SvcSummaryRow
+                  label={t.services.orders.businessDate}
+                  value={<bdi dir="ltr">{formatDate(order.business_date, locale)}</bdi>}
+                />
+                {order.settlement === "direct" && order.settlement_receipt ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.settlementReceipt}
+                    value={<bdi dir="ltr">{order.settlement_receipt}</bdi>}
+                  />
+                ) : null}
+                {order.settlement === "direct" && order.amount_received ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.amountReceived}
+                    value={<bdi dir="ltr">{formatMoney(order.amount_received, order.currency, locale)}</bdi>}
+                  />
+                ) : null}
+                {order.settlement === "direct" && order.change_given ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.change}
+                    value={<bdi dir="ltr">{formatMoney(order.change_given, order.currency, locale)}</bdi>}
+                  />
+                ) : null}
+                {/* C2 — settlement_reference is finance-sensitive: shown only with
+                    finance.view (the server also blanks it otherwise). */}
+                {order.settlement === "direct" && order.settlement_reference && can("finance.view") ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.reference}
+                    value={<bdi dir="ltr">{order.settlement_reference}</bdi>}
+                  />
+                ) : null}
+                {order.folio_number || order.posted_charge_number ? (
+                  <SvcSummaryRow
+                    label={t.services.orders.folio}
+                    value={
+                      <span>
+                        {order.folio_number ? <bdi dir="ltr">{order.folio_number}</bdi> : null}
+                        {order.folio_number && order.posted_charge_number ? " · " : null}
+                        {order.posted_charge_number ? <bdi dir="ltr">{order.posted_charge_number}</bdi> : null}
+                      </span>
+                    }
+                  />
+                ) : null}
+              </div>
+            </Card>
+          </aside>
         </div>
       </Modal>
 
@@ -2167,38 +2136,6 @@ function OrderDetailsModal({
           ) : null}
           <FormField label={t.services.orders.cancelReason} htmlFor="o-cancel-reason">
             <Textarea id="o-cancel-reason" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
-          </FormField>
-        </div>
-      </Modal>
-
-      <Modal
-        open={itemCancel !== null}
-        onClose={() => setItemCancel(null)}
-        title={t.services.orders.cancelItemTitle}
-        closeLabel={t.common.close}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setItemCancel(null)} disabled={busy}>{t.common.cancel}</Button>
-            <Button
-              variant="danger"
-              loading={busy}
-              onClick={async () => {
-                if (!itemCancel || !itemCancelReason.trim()) return;
-                await run(() =>
-                  cancelServiceOrderItem(order.id, itemCancel.id, itemCancelReason.trim()),
-                );
-                setItemCancel(null);
-              }}
-            >
-              {t.services.orders.cancelConfirm}
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          {itemCancel ? <p>{itemCancel.item_name}</p> : null}
-          <FormField label={t.services.orders.cancelReason} htmlFor="o-item-cancel-reason">
-            <Textarea id="o-item-cancel-reason" value={itemCancelReason} onChange={(e) => setItemCancelReason(e.target.value)} />
           </FormField>
         </div>
       </Modal>

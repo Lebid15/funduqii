@@ -70,7 +70,7 @@ export function listServiceCategories(params?: {
 export type ServiceCategoryBody = Partial<
   Pick<
     ServiceCategory,
-    "outlet" | "name" | "code" | "description" | "sort_order" | "is_active"
+    "outlet" | "name" | "description" | "sort_order" | "is_active"
   >
 >;
 
@@ -118,7 +118,6 @@ export type ServiceItemBody = Partial<
     ServiceItem,
     | "category"
     | "name"
-    | "code"
     | "description"
     | "unit_price"
     | "currency"
