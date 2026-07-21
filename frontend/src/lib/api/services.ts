@@ -290,10 +290,17 @@ export function cancelServiceOrder(id: number, reason: string): Promise<ServiceO
   });
 }
 
-export function postServiceOrderToFolio(id: number): Promise<ServiceOrder> {
+/** Post a delivered, stay-linked order to the guest folio (once only). The
+ * optional `settlement_key` is the reused idempotency key (see
+ * {@link mintIdempotencyKey}); the backend already accepts it and returns the
+ * original posting on replay, so a retry never posts a second charge. */
+export function postServiceOrderToFolio(
+  id: number,
+  body?: { settlement_key?: string },
+): Promise<ServiceOrder> {
   return hotelJson<ServiceOrder>(`${B}/orders/${id}/post-to-folio`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(body ?? {}),
   });
 }
 
