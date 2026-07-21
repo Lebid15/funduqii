@@ -11,6 +11,7 @@ from .views import (
     OrderItemCancelView,
     OrderListCreateView,
     OrderPostToFolioView,
+    OrderReturnView,
     OrderSettleDirectView,
     OrderStatusView,
     OrderTicketView,
@@ -50,6 +51,11 @@ urlpatterns = [
         "services/orders/<int:pk>/settle-direct/",
         OrderSettleDirectView.as_view(),
         name="order-settle-direct",
+    ),
+    path(
+        "services/orders/<int:pk>/return/",
+        OrderReturnView.as_view(),
+        name="order-return",
     ),
     path("services/orders/<int:pk>/ticket/", OrderTicketView.as_view(), name="order-ticket"),
 ]

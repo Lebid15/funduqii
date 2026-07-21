@@ -34,13 +34,16 @@ from .models import (
 from .serializers import (
     OrderCancelSerializer,
     OrderCreateSerializer,
+    OrderPostToFolioSerializer,
     OrderSettleDirectSerializer,
     OrderStatusSerializer,
     OrderUpdateSerializer,
     RestaurantTableSerializer,
+    ReturnSerializer,
     ServiceCategorySerializer,
     ServiceItemSerializer,
     ServiceOrderListSerializer,
+    ServiceOrderReturnSerializer,
     ServiceOrderSerializer,
     TableStatusSerializer,
 )
@@ -58,6 +61,11 @@ OrdersCancel = HasHotelPermission("service_orders.cancel")
 OrdersStatus = HasHotelPermission("service_orders.status_update")
 OrdersPost = HasHotelPermission("service_orders.post_to_folio")
 OrdersSettleDirect = HasHotelPermission("service_orders.settle_direct")
+# A return/exchange moves money BACK to (or collects a delta from) the customer —
+# gated on the EXISTING finance refund permission (§37: a real payout to the
+# guest), NOT a new code and NOT an RBAC-registry change. This is the most
+# defensible reuse: a return is fundamentally a guest refund.
+OrdersReturn = HasHotelPermission("finance.refund")
 
 #: The "open order" predicate — one per table; occupancy is DERIVED from it.
 OPEN_ORDER_Q = Q(settled_at__isnull=True) & ~Q(status=OrderStatus.CANCELLED)
@@ -498,7 +506,17 @@ class OrderPostToFolioView(APIView):
     def post(self, request: Request, pk: int) -> Response:
         _guard_write(request)
         order = _get(ServiceOrder, request, pk)
-        order = services.post_order_to_folio(order, user=request.user)
+        serializer = OrderPostToFolioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        key = serializer.validated_data.get("idempotency_key", "")
+        # The fingerprint is server-derived (only the order identity is salient).
+        fingerprint = (
+            services.build_folio_post_fingerprint(order_id=order.id) if key else ""
+        )
+        order = services.post_order_to_folio(
+            order, user=request.user,
+            settlement_key=key, settlement_fingerprint=fingerprint,
+        )
         return Response(ServiceOrderSerializer(order).data)
 
 
@@ -512,10 +530,93 @@ class OrderSettleDirectView(APIView):
         order = _get(ServiceOrder, request, pk)
         serializer = OrderSettleDirectSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        d = serializer.validated_data
+        # D5 — the fingerprint is computed server-side from the salient request
+        # fields (mirrors the guest_services idempotency wiring).
+        fingerprint = services.build_settlement_fingerprint(
+            order_id=order.id,
+            method=d["method"],
+            amount_received=d.get("amount_received"),
+            reference=d.get("reference", ""),
+        )
         order = services.settle_order_direct(
-            order, method=serializer.validated_data["method"], user=request.user
+            order,
+            method=d["method"],
+            user=request.user,
+            amount_received=d.get("amount_received"),
+            settlement_reference=d.get("reference", ""),
+            settlement_key=d.get("idempotency_key", ""),
+            settlement_fingerprint=fingerprint,
         )
         return Response(ServiceOrderSerializer(order).data)
+
+
+def _resolve_return_items(request: Request, order, items: list) -> list:
+    """Turn the return body's original_item / replacement_item ids into
+    hotel-scoped instances (a cross-hotel or non-order line is a 404)."""
+    resolved = []
+    for entry in items:
+        orig = generics.get_object_or_404(
+            ServiceOrderItem, pk=entry["original_item"], order=order,
+            hotel=request.hotel,
+        )
+        rep = None
+        if entry.get("replacement_item"):
+            rep = _get(
+                ServiceItem.objects.select_related("category"), request,
+                entry["replacement_item"],
+            )
+        resolved.append(
+            {
+                "original_item": orig,
+                "quantity": entry["quantity"],
+                "replacement_item": rep,
+                "replacement_quantity": entry.get("replacement_quantity"),
+            }
+        )
+    return resolved
+
+
+class OrderReturnView(APIView):
+    """Return / exchange a DELIVERED, SETTLED order (after delivery only).
+
+    Gated on ``finance.refund`` (the §37 payout-to-guest permission) — a return
+    moves money back to (or collects a delta from) the customer. All money runs
+    through finance; the order's original settlement is never rewritten."""
+
+    permission_classes = [OrdersReturn]
+
+    def post(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        order = _get(ServiceOrder, request, pk)
+        serializer = ReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        d = serializer.validated_data
+        # D5 — build the fingerprint from the RAW request ids BEFORE resolving.
+        fingerprint = services.build_return_fingerprint(
+            order_id=order.id, kind=d["kind"], items=d["items"], reason=d["reason"],
+        )
+        items = _resolve_return_items(request, order, d["items"])
+        ret = services.return_order(
+            order,
+            kind=d["kind"],
+            items=items,
+            reason=d["reason"],
+            user=request.user,
+            idempotency_key=d.get("idempotency_key", ""),
+            request_fingerprint=fingerprint,
+            method=d.get("method"),
+            amount_received=d.get("amount_received"),
+            settlement_reference=d.get("reference", ""),
+        )
+        order.refresh_from_db()
+        return Response(
+            {
+                "return": ServiceOrderReturnSerializer(ret).data,
+                "order": ServiceOrderSerializer(order).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class OrderItemCancelView(APIView):
@@ -562,6 +663,7 @@ class OrderTicketView(APIView):
                 "outlet": order.outlet,
                 "status": order.status,
                 "settlement": order.settlement,
+                "currency": order.currency or services._base_currency(request.hotel),
                 "room_number": order.room.number if order.room else "",
                 "table_number": order.table.number if order.table else "",
                 "customer_name": order.customer_name,

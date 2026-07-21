@@ -14,13 +14,23 @@ from .models import (
     OrderStatus,
     OrderType,
     RestaurantTable,
+    ReturnKind,
     ServiceCategory,
     ServiceItem,
     ServiceOrder,
     ServiceOrderItem,
+    ServiceOrderReturn,
+    ServiceOrderReturnItem,
     ServiceOrderStatusLog,
     TableStatus,
 )
+
+
+def _payment_method_choices():
+    """PaymentMethod choices, imported lazily (finance model access at call time)."""
+    from apps.finance.models import PaymentMethod
+
+    return PaymentMethod.choices
 
 
 def _reject_fields(serializer, *names):
@@ -160,12 +170,65 @@ class OrderCancelSerializer(serializers.Serializer):
 
 
 class OrderSettleDirectSerializer(serializers.Serializer):
-    def _method_choices():  # noqa: N805 — evaluated at class-body time
-        from apps.finance.models import PaymentMethod
+    method = serializers.ChoiceField(choices=_payment_method_choices())
+    # D2a — optional cash tender (a short tender is rejected server-side) and an
+    # optional electronic reference (passed to the receipt). The client never
+    # sends price/currency; the total is server-derived.
+    amount_received = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal("0"),
+    )
+    reference = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    # D5 — optional idempotency key; the fingerprint is computed server-side.
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
 
-        return PaymentMethod.choices
 
-    method = serializers.ChoiceField(choices=_method_choices())
+class OrderPostToFolioSerializer(serializers.Serializer):
+    # D5 — optional idempotency key for the folio-post settlement.
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
+
+
+class ReturnItemInputSerializer(serializers.Serializer):
+    original_item = serializers.IntegerField()
+    quantity = serializers.DecimalField(
+        max_digits=8, decimal_places=2, min_value=Decimal("0.01")
+    )
+    # Exchange only: the replacement catalog item + its quantity (defaults to the
+    # returned quantity when omitted).
+    replacement_item = serializers.IntegerField(required=False, allow_null=True)
+    replacement_quantity = serializers.DecimalField(
+        max_digits=8, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal("0.01"),
+    )
+
+
+class ReturnSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=ReturnKind.choices)
+    # ``allow_blank`` so the SERVICE stays the single authoritative reason guard
+    # (``return_reason_required``); a whitespace-only reason reaches it and is
+    # rejected there with a stable domain code.
+    reason = serializers.CharField(max_length=255, allow_blank=True)
+    items = ReturnItemInputSerializer(many=True, allow_empty=False)
+    # Optional, for a DIRECT order's refund/collect money movement.
+    method = serializers.ChoiceField(
+        choices=_payment_method_choices(), required=False, allow_null=True
+    )
+    amount_received = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal("0"),
+    )
+    reference = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
 
 
 # --- Tables ---------------------------------------------------------------------
@@ -234,8 +297,36 @@ class ServiceOrderItemSerializer(serializers.ModelSerializer):
         model = ServiceOrderItem
         fields = [
             "id", "service_item", "item_name", "quantity", "unit_price",
-            "tax_rate", "amount", "tax_amount", "total_amount", "notes",
-            "is_cancelled", "cancelled_at", "cancelled_by_name", "cancel_reason",
+            "currency", "tax_rate", "amount", "tax_amount", "total_amount",
+            "notes", "is_cancelled", "cancelled_at", "cancelled_by_name",
+            "cancel_reason",
+        ]
+        read_only_fields = fields
+
+
+class ServiceOrderReturnItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceOrderReturnItem
+        fields = [
+            "id", "original_item", "item_name", "quantity", "unit_price",
+            "currency", "tax_rate", "amount", "tax_amount", "total_amount",
+            "replacement_item", "replacement_name", "replacement_quantity",
+            "replacement_unit_price", "replacement_currency",
+            "replacement_tax_rate", "replacement_amount", "replacement_tax_amount",
+            "replacement_total_amount",
+        ]
+        read_only_fields = fields
+
+
+class ServiceOrderReturnSerializer(serializers.ModelSerializer):
+    items = ServiceOrderReturnItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ServiceOrderReturn
+        fields = [
+            "id", "return_number", "kind", "reason", "business_date",
+            "reversal_charge", "refund_payment", "refund_folio",
+            "delta_charge", "delta_payment", "created_at", "items",
         ]
         read_only_fields = fields
 
@@ -265,8 +356,8 @@ class ServiceOrderListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "order_number", "order_type", "outlet", "status",
             "settlement", "stay", "room", "room_number", "table",
-            "table_number", "customer_name", "business_date", "ordered_at",
-            "requested_delivery_time", "delivered_at", "is_posted",
+            "table_number", "customer_name", "business_date", "currency",
+            "ordered_at", "requested_delivery_time", "delivered_at", "is_posted",
             "posted_at", "settled_at", "total",
         ]
         read_only_fields = fields
@@ -274,6 +365,7 @@ class ServiceOrderListSerializer(serializers.ModelSerializer):
 
 class ServiceOrderSerializer(serializers.ModelSerializer):
     items = ServiceOrderItemSerializer(many=True, read_only=True)
+    returns = serializers.SerializerMethodField()
     status_logs = serializers.SerializerMethodField()
     totals = serializers.SerializerMethodField()
     room_number = serializers.CharField(source="room.number", read_only=True, default="")
@@ -298,21 +390,30 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         fields = [
             "id", "order_number", "order_type", "outlet", "status",
             "settlement", "stay", "room", "room_number", "table",
-            "table_number", "customer_name", "business_date", "guest_name",
-            "folio", "folio_number",
+            "table_number", "customer_name", "business_date", "currency",
+            "guest_name", "folio", "folio_number",
             "ordered_at", "requested_delivery_time", "delivered_at",
             "cancelled_at", "cancellation_reason", "notes", "internal_notes",
             "is_posted", "posted_at", "posted_charge", "posted_charge_number",
             "settled_at", "settlement_payment", "settlement_receipt",
-            "items", "totals", "status_logs", "created_at", "updated_at",
+            "settlement_method", "amount_received", "change_given",
+            "settlement_reference",
+            "items", "returns", "totals", "status_logs",
+            "created_at", "updated_at",
         ]
         read_only_fields = fields
 
     def get_totals(self, order):
-        from .services import order_totals
+        from .services import _base_currency, order_totals
 
         totals = order_totals(order)
-        return {k: str(v) for k, v in totals.items()}
+        data = {k: str(v) for k, v in totals.items()}
+        data["currency"] = order.currency or _base_currency(order.hotel)
+        return data
+
+    def get_returns(self, order):
+        returns = order.returns.all().prefetch_related("items")[:20]
+        return ServiceOrderReturnSerializer(returns, many=True).data
 
     def get_status_logs(self, order):
         logs = order.status_logs.select_related("changed_by")[:10]
