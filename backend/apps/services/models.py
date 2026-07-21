@@ -636,6 +636,13 @@ class ServiceOrderReturn(models.Model):
         blank=True,
         related_name="+",
     )
+    # D2a consistency — cash capture on the CASH exchange_higher COLLECT path only
+    # (a delta collected via a transient folio). Mirrors the order's direct-cash
+    # capture: the finance Payment still records the EXACT delta; these persist the
+    # tender + computed change for the receipt/audit. NULL on every other kind /
+    # path (folio-charge collect, and all refund/money-out paths have no tender).
+    amount_received = models.DecimalField(**MONEY_KW, null=True, blank=True)
+    change_given = models.DecimalField(**MONEY_KW, null=True, blank=True)
     # D5 idempotency: a non-blank key is unique per hotel (constraint below).
     idempotency_key = models.CharField(max_length=64, blank=True, default="")
     request_fingerprint = models.CharField(max_length=64, blank=True, default="")
@@ -661,6 +668,22 @@ class ServiceOrderReturn(models.Model):
                 fields=["hotel", "idempotency_key"],
                 condition=~models.Q(idempotency_key=""),
                 name="uniq_service_order_return_idempotency",
+            ),
+            # D2a: captured amounts are never negative when present (mirrors the
+            # order's cash-capture check constraints).
+            models.CheckConstraint(
+                condition=(
+                    models.Q(amount_received__isnull=True)
+                    | models.Q(amount_received__gte=0)
+                ),
+                name="service_order_return_amount_received_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(change_given__isnull=True)
+                    | models.Q(change_given__gte=0)
+                ),
+                name="service_order_return_change_non_negative",
             ),
         ]
 

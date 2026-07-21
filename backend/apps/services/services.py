@@ -1026,17 +1026,25 @@ def _refund_amount(order, *, amount, reason, payer, user, method=None,
 
 
 def _collect_amount(order, *, amount, reason, payer, user, method=None,
-                    reference="") -> dict:
+                    reference="", amount_received=None) -> dict:
     """Collect an exchange UPGRADE delta from the customer — reusing finance only.
     A FOLIO order adds a SERVICE charge to the guest's OPEN folio (``delta_charge``,
-    the customer now owes more). A DIRECT order runs a small transient settlement
-    (folio → charge → full payment → close), linking ``delta_charge`` /
-    ``delta_payment`` / the transient ``refund_folio``."""
+    the customer now owes more — no tender/change there). A DIRECT order (or a
+    checked-out guest's closed folio) runs a small transient settlement (folio →
+    charge → full payment → close), linking ``delta_charge`` / ``delta_payment`` /
+    the transient ``refund_folio``.
+
+    D2a consistency — on the transient (cash) COLLECT path only, an optional
+    ``amount_received`` tender is captured: a short tender (received < delta) is
+    refused (``InsufficientCashReceived``); ``change`` is server-computed; the
+    finance Payment still records the EXACT delta. The captured tender/change are
+    returned so the caller persists them on the ServiceOrderReturn."""
     amount = money(amount)
     if amount <= ZERO:
         raise InvalidReturnComposition({"reason": "zero_delta"})
     folio = _reusable_open_folio(order)
     if folio is not None:
+        # Guest-folio collect: the delta is a charge on the open folio — no tender.
         charge = finance_services.add_charge(
             folio,
             charge_type=ChargeType.SERVICE,
@@ -1049,7 +1057,17 @@ def _collect_amount(order, *, amount, reason, payer, user, method=None,
         )
         return {"delta_charge": charge}
     # No reusable OPEN folio (DIRECT sale, or a checked-out guest's CLOSED folio):
-    # a small transient settlement collects the delta.
+    # a small transient settlement collects the delta. D2a — capture the tender.
+    received = money(amount_received) if amount_received is not None else None
+    change = None
+    if received is not None:
+        # A cash tender must cover the delta; change is server-computed. Checked
+        # BEFORE any finance write, so a short tender creates NO folio/charge/payment.
+        if received < amount:
+            raise InsufficientCashReceived(
+                {"received": str(received), "total": str(amount)}
+            )
+        change = money(received - amount)
     cfolio = finance_services.create_folio(
         order.hotel,
         customer_name=payer,
@@ -1074,7 +1092,11 @@ def _collect_amount(order, *, amount, reason, payer, user, method=None,
     if finance_services.folio_balance(cfolio)["balance"] != ZERO:
         raise InvalidAmount({"field": "balance", "reason": "not_zero_after_payment"})
     finance_services.close_folio(cfolio, user=user)
-    return {"delta_charge": charge, "delta_payment": payment, "refund_folio": cfolio}
+    links = {"delta_charge": charge, "delta_payment": payment, "refund_folio": cfolio}
+    if received is not None:
+        links["amount_received"] = received
+        links["change_given"] = change
+    return links
 
 
 @transaction.atomic
@@ -1234,6 +1256,7 @@ def return_order(order: ServiceOrder, *, kind, items, reason, user=None,
         links = _collect_amount(
             order, amount=delta_total, reason=reason, payer=payer, user=user,
             method=method, reference=settlement_reference,
+            amount_received=amount_received,
         )
     else:  # EXCHANGE_LOWER — refund the absolute delta.
         links = _refund_amount(

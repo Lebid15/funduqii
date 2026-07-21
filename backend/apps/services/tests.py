@@ -1875,6 +1875,62 @@ class ExchangeTests(ReturnBase):
         self.assertEqual(str(Payment.objects.get(pk=ret.delta_payment_id).amount), "34.00")
         self.assertEqual(str(FolioCharge.objects.get(pk=ret.delta_charge_id).total_amount), "34.00")
 
+    def test_exchange_higher_direct_cash_capture(self):
+        # D2a consistency — a CASH delta collection captures received + change on
+        # the ServiceOrderReturn; the finance Payment records the EXACT delta.
+        oid, lines = self._direct_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        order = ServiceOrder.objects.get(pk=oid)
+        original_folio = Folio.objects.get(pk=order.folio_id)
+        original_charge = FolioCharge.objects.get(pk=order.posted_charge_id)
+        res = self._return(
+            oid, kind="exchange_higher", method="cash", amount_received="50.00",
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        ret = ServiceOrderReturn.objects.get(pk=res.data["return"]["id"])
+        # Delta = 44 - 10 = 34; tender 50 -> change 16.
+        self.assertEqual(str(ret.amount_received), "50.00")
+        self.assertEqual(str(ret.change_given), "16.00")
+        self.assertEqual(res.data["return"]["amount_received"], "50.00")
+        self.assertEqual(res.data["return"]["change_given"], "16.00")
+        # The Payment records the EXACT delta (not the tender).
+        self.assertEqual(str(Payment.objects.get(pk=ret.delta_payment_id).amount), "34.00")
+        collect_folio = Folio.objects.get(pk=ret.refund_folio_id)
+        self.assertEqual(collect_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(folio_balance(collect_folio)["balance"]), "0.00")
+        # The ORIGINAL closed transient folio + charge are untouched.
+        original_folio.refresh_from_db()
+        original_charge.refresh_from_db()
+        self.assertEqual(original_folio.status, FolioStatus.CLOSED)
+        self.assertEqual(str(original_charge.total_amount), "10.00")
+        order.refresh_from_db()
+        self.assertEqual(order.settlement, OrderSettlement.DIRECT)
+
+    def test_exchange_higher_direct_short_tender_rejected(self):
+        oid, lines = self._direct_order(
+            items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10
+        )
+        payments_before = Payment.objects.count()
+        folios_before = Folio.objects.count()
+        res = self._return(
+            oid, kind="exchange_higher", method="cash", amount_received="20.00",  # < 34
+            items=[{
+                "original_item": lines[0]["id"], "quantity": "1",
+                "replacement_item": self.item.id, "replacement_quantity": "1",
+            }],
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "insufficient_cash_received")
+        # No side effect: no return, no collect folio, no payment.
+        self.assertEqual(ServiceOrderReturn.objects.filter(order_id=oid).count(), 0)
+        self.assertEqual(Payment.objects.count(), payments_before)
+        self.assertEqual(Folio.objects.count(), folios_before)
+
     def test_exchange_kind_mismatch_rejected(self):
         oid, lines = self._folio_order(
             items=[{"service_item": self.item2.id, "quantity": "1"}]  # 10

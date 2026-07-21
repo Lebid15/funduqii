@@ -326,7 +326,8 @@ class ServiceOrderReturnSerializer(serializers.ModelSerializer):
         fields = [
             "id", "return_number", "kind", "reason", "business_date",
             "reversal_charge", "refund_payment", "refund_folio",
-            "delta_charge", "delta_payment", "created_at", "items",
+            "delta_charge", "delta_payment", "amount_received", "change_given",
+            "created_at", "items",
         ]
         read_only_fields = fields
 
