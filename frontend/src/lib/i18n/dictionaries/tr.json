@@ -2199,7 +2199,12 @@
       "successTitle": "Sipariş oluşturuldu",
       "successMessage": "{number} numaralı sipariş başarıyla oluşturuldu.",
       "printInvoice": "Fatura yazdır",
-      "viewOrder": "Siparişi gör"
+      "viewOrder": "Siparişi gör",
+      "print": "Yazdır",
+      "residentTypeHint": "Aramak için oda numarası veya misafir adı yazın.",
+      "itemTypeHint": "Aramak için ürün adı yazın.",
+      "electronicReceivedHint": "Ödenecek tutara eşit olmalıdır.",
+      "mustMatchDue": "Alınan tutar, ödenecek tutara eşit olmalıdır."
     },
     "returns": {
       "title": "İade / değişim",

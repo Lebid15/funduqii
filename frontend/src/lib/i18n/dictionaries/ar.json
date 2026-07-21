@@ -2199,7 +2199,12 @@
       "successTitle": "تم إنشاء الطلب",
       "successMessage": "تم إنشاء الطلب {number} بنجاح.",
       "printInvoice": "طباعة الفاتورة",
-      "viewOrder": "عرض الطلب"
+      "viewOrder": "عرض الطلب",
+      "print": "طباعة",
+      "residentTypeHint": "اكتب رقم الغرفة أو اسم النزيل للبحث.",
+      "itemTypeHint": "اكتب اسم الصنف للبحث.",
+      "electronicReceivedHint": "يجب أن يساوي المبلغ المستحق.",
+      "mustMatchDue": "يجب أن يساوي المبلغ المستلم المبلغ المستحق."
     },
     "returns": {
       "title": "إرجاع / استبدال",

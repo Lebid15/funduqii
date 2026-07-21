@@ -5,6 +5,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -63,14 +64,9 @@ import {
   Switch,
   Textarea,
   useToast,
+  type BadgeTone,
   type Column,
 } from "@/components/ui";
-import {
-  OperationCard,
-  type OperationFact,
-  type OperationMenuItem,
-  type OperationPrimaryAction,
-} from "@/components/hotel/operations/OperationCard";
 import {
   cancelServiceOrder,
   cancelServiceOrderItem,
@@ -157,6 +153,19 @@ const PAYMENT_METHODS: PaymentMethod[] = [
 ];
 /** Methods that take an electronic reference (shown on the settle/return forms). */
 const ELECTRONIC_METHODS: PaymentMethod[] = ["card", "bank_transfer", "electronic"];
+
+/** Maps a badge tone onto the order card's left-rail accent variable. Mirrors
+ * OperationCard's own map so the card keeps identical chrome while its action row
+ * is rendered directly here (owner correction 1+2 — no folded "More" menu). */
+const ACCENT_VAR: Record<BadgeTone, string> = {
+  success: "var(--color-success)",
+  warning: "var(--color-warning)",
+  danger: "var(--color-danger)",
+  info: "var(--color-info)",
+  primary: "var(--color-primary)",
+  vip: "var(--color-vip)",
+  neutral: "var(--color-border-strong)",
+};
 
 /** Cosmetic permission gate — every API re-checks server-side regardless. */
 function useCan() {
@@ -318,7 +327,12 @@ export function OrdersTab() {
         </span>
       );
 
-    const facts: OperationFact[] = [
+    const facts: {
+      key: string;
+      label: string;
+      value: ReactNode;
+      icon?: LucideIcon;
+    }[] = [
       {
         key: "orderedAt",
         label: t.services.orders.orderedAt,
@@ -346,125 +360,104 @@ export function OrdersTab() {
       });
     }
 
-    // ONE state-driven primary (collapsed cycle): an OPEN order delivers; a
-    // terminal order (delivered/cancelled) opens Details.
-    let primary: OperationPrimaryAction;
-    if (isOpenStatus(r.status)) {
-      primary = {
-        label: t.services.orders.markDelivered,
-        icon: PackageCheck,
-        loading: advancingId === r.id,
-        onClick: () => deliverOrder(r),
-      };
-    } else {
-      primary = {
-        label: t.services.orders.details,
-        icon: Eye,
-        variant: "secondary",
-        onClick: () => openDetailWith(r.id, null),
-      };
-    }
-
-    const menu: OperationMenuItem[] = [
-      {
-        key: "details",
-        label: t.services.orders.details,
-        icon: Eye,
-        onSelect: () => openDetailWith(r.id, null),
-      },
-    ];
-    const isPostable =
-      r.status === "delivered" &&
-      r.settlement === "unsettled" &&
-      !r.is_posted &&
-      r.stay !== null;
-    if (isPostable) {
-      menu.push({
-        key: "post",
-        label: t.services.orders.postToFolio,
-        icon: FileInput,
-        onSelect: () => openDetailWith(r.id, "post"),
-      });
-    }
-    if (
-      r.status === "delivered" &&
-      r.settlement === "unsettled" &&
-      can("service_orders.settle_direct")
-    ) {
-      menu.push({
-        key: "settle",
-        label: t.services.orders.directPayment,
-        icon: HandCoins,
-        onSelect: () => openDetailWith(r.id, "settle"),
-      });
-    }
-    menu.push({
-      key: "kot",
-      label: t.services.ticket.title,
-      icon: Printer,
-      onSelect: () => openDetailWith(r.id, "kot"),
-    });
-    menu.push({
-      key: "guest_check",
-      label: t.services.ticket.guestCheckTitle,
-      icon: Printer,
-      onSelect: () => openDetailWith(r.id, "guest_check"),
-    });
-    if (r.settlement === "direct") {
-      menu.push({
-        key: "receipt",
-        label: t.services.orders.printReceipt,
-        icon: ReceiptText,
-        onSelect: () => openDetailWith(r.id, "receipt"),
-      });
-    }
-    // Return / exchange: only AFTER delivery on a SETTLED order (direct or folio),
-    // gated on the existing finance.refund permission (a return moves money back
-    // to — or collects a delta from — the customer).
-    if (
+    // Owner correction 1+2: NO folded "More" menu — every action is a directly
+    // visible control. The card's action set is EXACTLY: View details + Print
+    // (always), Mark delivered + Cancel (a NEW/open order only), and
+    // Return/exchange (a DELIVERED order only). Post-to-folio and direct settle are
+    // gone from the card — settlement now runs inside the create form. Each action
+    // reuses an EXISTING detail sub-flow (openDetailWith / deliverOrder); no order
+    // mutation is duplicated here.
+    const isOpen = isOpenStatus(r.status);
+    // A settled order's cancel REVERSES money → also needs finance.refund; an
+    // unsettled NEW cancel needs no extra permission.
+    const canCancel = isOpen && (r.settlement === "unsettled" || can("finance.refund"));
+    // Return/exchange: a DELIVERED, SETTLED order (direct or folio), gated on refund.
+    const canReturn =
       r.status === "delivered" &&
       (r.settlement === "direct" || r.settlement === "folio") &&
-      can("finance.refund")
-    ) {
-      menu.push({
-        key: "return",
-        label: t.services.orders.returnExchange,
-        icon: Undo2,
-        onSelect: () => openDetailWith(r.id, "return"),
-      });
-    }
-    // Cancel is a PRE-DELIVERY action (any NEW order). A settled order's cancel
-    // REVERSES money, so it also needs finance.refund; an unsettled cancel does not.
-    if (isOpenStatus(r.status) && (r.settlement === "unsettled" || can("finance.refund"))) {
-      menu.push({
-        key: "cancel",
-        label: t.services.orders.cancel,
-        icon: XCircle,
-        danger: true,
-        onSelect: () => openDetailWith(r.id, "cancel"),
-      });
-    }
+      can("finance.refund");
 
+    // Keeps the OperationCard chrome (badges, id row, fact row) but renders the
+    // actions as an accessible DIRECT row instead of one primary + a More menu.
     return (
-      <OperationCard
-        accent={serviceOrderStatusTone(r.status)}
-        number={r.order_number}
-        title={location}
-        ariaLabel={`${t.services.tabs.orders} ${r.order_number}`}
-        moreLabel={t.services.orders.more}
-        badges={
-          <>
+      <article
+        className="op-card"
+        aria-label={`${t.services.tabs.orders} ${r.order_number}`}
+        style={{ "--op-accent": ACCENT_VAR[serviceOrderStatusTone(r.status)] } as CSSProperties}
+      >
+        <div className="op-card__header">
+          <div className="op-card__badges">
             <Badge tone={serviceOrderStatusTone(r.status)}>{t.services.status[r.status]}</Badge>
             <Badge tone={settlementTone(r.settlement)}>{t.services.settlement[r.settlement]}</Badge>
             <Badge tone="neutral" variant="outline">
               {t.services.outlets[r.outlet]}
             </Badge>
-          </>
-        }
-        facts={facts}
-        primary={primary}
-        menu={menu}
-      />
+          </div>
+          <div className="op-card__idrow">
+            <span className="op-card__title">{location}</span>
+            <span className="op-card__number">
+              <bdi dir="ltr">{r.order_number}</bdi>
+            </span>
+          </div>
+        </div>
+
+        <dl className="op-card__facts">
+          {facts.map((fact) => (
+            <div className="op-card__fact" key={fact.key}>
+              <dt>
+                {fact.icon ? <Icon icon={fact.icon} size="sm" /> : null}
+                {fact.label}
+              </dt>
+              <dd>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="op-card__actions">
+          {isOpen ? (
+            <Button
+              className="op-card__primary"
+              size="sm"
+              icon={PackageCheck}
+              loading={advancingId === r.id}
+              onClick={() => deliverOrder(r)}
+            >
+              {t.services.orders.markDelivered}
+            </Button>
+          ) : null}
+          {canReturn ? (
+            <Button
+              className="op-card__primary"
+              size="sm"
+              variant="secondary"
+              icon={Undo2}
+              onClick={() => openDetailWith(r.id, "return")}
+            >
+              {t.services.orders.returnExchange}
+            </Button>
+          ) : null}
+          {canCancel ? (
+            <Button
+              size="sm"
+              variant="danger"
+              icon={XCircle}
+              onClick={() => openDetailWith(r.id, "cancel")}
+            >
+              {t.services.orders.cancel}
+            </Button>
+          ) : null}
+          <IconButton
+            icon={Eye}
+            label={t.services.orders.details}
+            onClick={() => openDetailWith(r.id, null)}
+          />
+          <IconButton
+            icon={Printer}
+            label={t.services.orders.print}
+            onClick={() => openDetailWith(r.id, "kot")}
+          />
+        </div>
+      </article>
     );
   }
 
@@ -782,17 +775,30 @@ export function OrderCreateModal({
 
   const [source, setSource] = useState<ServiceOrderType>("room");
   const [outlet, setOutlet] = useState<ServiceOutlet>("restaurant");
-  const [linkedStayId, setLinkedStayId] = useState<number | null>(null);
+  // The linked stay is now stored as the whole object (owner correction #4): the
+  // room picker is server-side, so the selected resident must survive the search
+  // results clearing between queries. `linkedStayId` is derived from it.
+  const [selectedStay, setSelectedStay] = useState<Stay | null>(null);
   const [tableId, setTableId] = useState<number | null>(null);
   const [chargeToRoom, setChargeToRoom] = useState(false);
   const [customerName, setCustomerName] = useState("");
 
-  const [stays, setStays] = useState<Stay[]>([]);
+  // Room picker (owner correction #4): SERVER-SIDE search — nothing loads on mount,
+  // a debounced query fetches only matching in-house stays, and results are capped.
   const [residentQuery, setResidentQuery] = useState("");
+  const [residentMatches, setResidentMatches] = useState<Stay[]>([]);
+  const [residentLoading, setResidentLoading] = useState(false);
+
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [catalog, setCatalog] = useState<ServiceItem[]>([]);
   const [itemQuery, setItemQuery] = useState("");
   const [lines, setLines] = useState<ServiceOrderLineInput[]>([]);
+  // Snapshot every ADDED item (owner correction #5): the added-line cards and the
+  // live estimate read from here, so they never depend on the full (now hidden
+  // until typed) outlet catalog list.
+  const [itemSnapshots, setItemSnapshots] = useState<Map<number, ServiceItem>>(
+    () => new Map(),
+  );
 
   const [paymentMethod, setPaymentMethod] = useState<PayMethod>("cash");
   const [electronicMethod, setElectronicMethod] = useState<PaymentMethod>("card");
@@ -818,13 +824,16 @@ export function OrderCreateModal({
     if (!open) return;
     setSource(initialTable ? "table" : "room");
     setOutlet(initialOutlet ?? enabledOutlets[0] ?? "restaurant");
-    setLinkedStayId(null);
+    setSelectedStay(null);
+    setResidentMatches([]);
+    setResidentLoading(false);
     setTableId(initialTable ?? null);
     setChargeToRoom(false);
     setCustomerName("");
     setResidentQuery("");
     setItemQuery("");
     setLines([]);
+    setItemSnapshots(new Map());
     setPaymentMethod("cash");
     setElectronicMethod("card");
     setReference("");
@@ -834,18 +843,47 @@ export function OrderCreateModal({
     setInvoice(null);
     createdOrderRef.current = null;
     settleKeyRef.current = null;
-    // Only IN-HOUSE residents are returned here, so ended/checked-out stays are
-    // already excluded (a room order needs a checked-in guest).
-    listCurrentResidents()
-      .then((r) => setStays(r.results))
-      .catch(() => setStays([]));
+    // Residents are NO LONGER loaded on mount (owner correction #4) — the picker
+    // stays empty until the user types (see the debounced search effect below).
     getSettings()
       .then((s) => setBaseCurrency((s.default_currency || "").toUpperCase()))
       .catch(() => setBaseCurrency(""));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when (re)opened
   }, [open, initialOutlet, initialTable]);
 
-  // The catalog follows the outlet — items must belong to the order's outlet.
+  // Debounced SERVER-SIDE resident search (owner correction #4): fetch only after
+  // the user types; an empty query clears results (a hint is shown instead); the
+  // server returns only matching in-house stays and we cap the list at 10.
+  useEffect(() => {
+    if (!open) return;
+    const q = residentQuery.trim();
+    if (q === "") {
+      setResidentMatches([]);
+      setResidentLoading(false);
+      return;
+    }
+    setResidentLoading(true);
+    let active = true;
+    const handle = setTimeout(() => {
+      listCurrentResidents(q)
+        .then((r) => {
+          if (active) setResidentMatches(r.results.slice(0, 10));
+        })
+        .catch(() => {
+          if (active) setResidentMatches([]);
+        })
+        .finally(() => {
+          if (active) setResidentLoading(false);
+        });
+    }, 280);
+    return () => {
+      active = false;
+      clearTimeout(handle);
+    };
+  }, [open, residentQuery]);
+
+  // The catalog follows the outlet — items must belong to the order's outlet. It
+  // is loaded for client-side filtering but is NOT shown until the user types.
   useEffect(() => {
     if (!open) return;
     listServiceItems({ is_active: "true", is_available: "true", outlet, page: 1 })
@@ -861,7 +899,8 @@ export function OrderCreateModal({
       .catch(() => setTables([]));
   }, [open, source, outlet]);
 
-  const isResidentLinked = linkedStayId !== null;
+  const linkedStayId = selectedStay?.id ?? null;
+  const isResidentLinked = selectedStay !== null;
 
   // "On room account" only exists while a stay is linked; drop back to cash when
   // the link is lost so an impossible payment can never be submitted.
@@ -874,6 +913,7 @@ export function OrderCreateModal({
     setOutlet(next);
     // Lines reference items of the previous outlet; a mixed order is invalid.
     setLines([]);
+    setItemSnapshots(new Map());
     setItemQuery("");
     setTableId(null);
   }
@@ -882,28 +922,45 @@ export function OrderCreateModal({
     setSource(next);
     setTableId(null);
     setChargeToRoom(false);
-    setLinkedStayId(null);
+    setSelectedStay(null);
     setResidentQuery("");
+    setResidentMatches([]);
     dropRoomAccountIfUnlinked();
   }
 
   function unlinkStay() {
-    setLinkedStayId(null);
+    setSelectedStay(null);
     dropRoomAccountIfUnlinked();
   }
 
   function toggleChargeToRoom(on: boolean) {
     setChargeToRoom(on);
     if (!on) {
-      setLinkedStayId(null);
+      setSelectedStay(null);
       setResidentQuery("");
+      setResidentMatches([]);
       dropRoomAccountIfUnlinked();
     }
   }
 
+  // Switching payment method starts a clean money entry (a cash tender vs. an
+  // electronic amount that must EQUAL the total) — never carry a stale value over.
+  function changePaymentMethod(next: PayMethod) {
+    setPaymentMethod(next);
+    setAmountReceived("");
+    setReference("");
+  }
+
   // Add an item from the search results: MERGE a duplicate into the SAME line
-  // (increment its quantity) rather than appending a second line.
+  // (increment its quantity) rather than appending a second line. The item's
+  // snapshot is stored so the line + estimate survive without the full catalog.
   function addItem(item: ServiceItem) {
+    setItemSnapshots((prev) => {
+      if (prev.has(item.id)) return prev;
+      const next = new Map(prev);
+      next.set(item.id, item);
+      return next;
+    });
     setLines((prev) => {
       const existing = prev.find((l) => l.service_item === item.id);
       if (existing) {
@@ -936,35 +993,33 @@ export function OrderCreateModal({
     setLines((prev) => prev.filter((l) => l.service_item !== itemId));
   }
 
-  // Resident search — by room number OR guest name (case-insensitive). The
-  // current-residents payload carries no phone, so phone search is unavailable
-  // (surfaced as a field note); ended/checked-out stays are already excluded.
-  const rq = residentQuery.trim().toLowerCase();
-  const filteredStays = (rq
-    ? stays.filter(
-        (s) =>
-          String(s.room_number ?? s.room).toLowerCase().includes(rq) ||
-          (s.primary_guest_name ?? "").toLowerCase().includes(rq),
-      )
-    : stays
-  ).slice(0, 8);
-
-  // Item smart-search filters the loaded catalog client-side (name or category).
+  // Item smart-search (owner correction #5): nothing shows until the user types;
+  // then the loaded OUTLET catalog is filtered client-side (name or category) and
+  // capped at 10. An added item's own snapshot is what keeps its line + the
+  // estimate working even though the full catalog is never displayed.
   const iq = itemQuery.trim().toLowerCase();
-  const filteredItems = (iq
-    ? catalog.filter(
-        (i) =>
-          i.name.toLowerCase().includes(iq) ||
-          (i.category_name ?? "").toLowerCase().includes(iq),
-      )
-    : catalog
-  ).slice(0, 12);
+  const filteredItems =
+    iq === ""
+      ? []
+      : catalog
+          .filter(
+            (i) =>
+              i.name.toLowerCase().includes(iq) ||
+              (i.category_name ?? "").toLowerCase().includes(iq),
+          )
+          .slice(0, 10);
+
+  // Resolve an added line's item from its stored snapshot first (the catalog list
+  // is no longer guaranteed to contain it), falling back to the loaded catalog.
+  const lineItem = (id: number): ServiceItem | undefined =>
+    itemSnapshots.get(id) ?? catalog.find((i) => i.id === id);
 
   // LIVE estimate (preview only — the server re-derives the authoritative total
-  // from the frozen line snapshots). Computed from unit_price × qty and tax_rate.
+  // from the frozen line snapshots). Computed from unit_price × qty and tax_rate,
+  // read from the per-line snapshots (owner correction #5).
   const estimate = lines.reduce(
     (acc, line) => {
-      const item = catalog.find((i) => i.id === line.service_item);
+      const item = lineItem(line.service_item);
       if (!item) return acc;
       const qty = Number(line.quantity);
       const unit = Number(item.unit_price);
@@ -980,14 +1035,13 @@ export function OrderCreateModal({
     },
     { subtotal: 0, tax: 0, total: 0, count: 0 },
   );
-  // Prefer the base currency; fall back to a selected item's own currency snapshot.
+  // Prefer the base currency; fall back to an added item's own currency snapshot.
   const estimateCurrency =
     baseCurrency ||
-    catalog.find((i) => lines.some((l) => l.service_item === i.id) && i.currency)?.currency ||
+    lines.map((l) => lineItem(l.service_item)).find((i) => i?.currency)?.currency ||
     "";
   const money = (amount: number) => formatMoney(amount, estimateCurrency, locale);
 
-  const selectedStay = stays.find((s) => s.id === linkedStayId) ?? null;
   const selectedTable = tables.find((row) => row.id === tableId) ?? null;
 
   const receivedNum = Number(amountReceived);
@@ -998,6 +1052,15 @@ export function OrderCreateModal({
     paymentMethod === "cash" && hasReceived && receivedNum >= estimate.total
       ? receivedNum - estimate.total
       : null;
+  // Electronic (owner corrections 6-8): the amount received MUST equal the amount
+  // due (the total) — there is no change. Compared within a cent to absorb the
+  // client-side float estimate; the backend records the exact total and change 0.
+  const electronicMatches =
+    paymentMethod === "electronic" &&
+    hasReceived &&
+    Math.abs(receivedNum - estimate.total) <= 0.005;
+  const electronicMismatch =
+    paymentMethod === "electronic" && hasReceived && !electronicMatches;
 
   // Create is enabled only when the source, items and payment are all valid.
   const sourceValid =
@@ -1013,7 +1076,7 @@ export function OrderCreateModal({
       ? isResidentLinked
       : paymentMethod === "cash"
         ? hasReceived && receivedNum >= estimate.total
-        : true; // electronic — reference optional
+        : electronicMatches; // electronic — received must EQUAL the total
   const canCreate =
     !busy && result === null && sourceValid && itemsValid && paymentValid;
 
@@ -1106,9 +1169,13 @@ export function OrderCreateModal({
       // Delivery is NOT part of this form — it is a later, card-only action. The
       // backend permits settling a NEW (undelivered) order.
       if (paymentMethod === "cash" || paymentMethod === "electronic") {
+        // amount_received travels for BOTH shapes now (owner corrections 6-8): the
+        // cash tender (may exceed the total → change) or the electronic amount,
+        // which is validated to EQUAL the total (change 0). Reference stays
+        // electronic-only; method is "cash" or the chosen electronic method.
         order = await settleServiceOrderDirect(order.id, {
           method: paymentMethod === "cash" ? "cash" : electronicMethod,
-          amount_received: paymentMethod === "cash" ? amountReceived : undefined,
+          amount_received: amountReceived,
           reference:
             paymentMethod === "electronic" ? reference.trim() || undefined : undefined,
           settlement_key: settleKey,
@@ -1141,33 +1208,69 @@ export function OrderCreateModal({
     }
   }
 
+  // Server-side room picker body (owner correction #4): the linked stay stays
+  // visible as a pressed chip once chosen; otherwise a subtle "type to search"
+  // hint, a loading line, a no-matches note, or the (≤10) matches are shown — but
+  // NEVER a resident list before the user has typed.
   function residentResults() {
-    if (filteredStays.length === 0) {
-      return <p className="muted small">{t.services.orders.noResidents}</p>;
-    }
+    const typed = residentQuery.trim() !== "";
     return (
-      <div className="svc-results" role="group" aria-label={t.services.orders.searchResults}>
-        {filteredStays.map((s) => {
-          const selected = s.id === linkedStayId;
-          return (
+      <div className="stack-tight">
+        {selectedStay && !typed ? (
+          <div className="svc-results" role="group" aria-label={t.services.orders.searchResults}>
             <button
-              key={s.id}
               type="button"
               className="svc-result"
-              aria-pressed={selected}
-              onClick={() => (selected ? unlinkStay() : setLinkedStayId(s.id))}
+              aria-pressed
+              onClick={unlinkStay}
             >
               <span className="svc-result__main">
                 <span className="svc-result__name">
-                  {t.services.orders.room} <bdi dir="ltr">{s.room_number || s.room}</bdi>
-                  {` · ${s.primary_guest_name || "—"}`}
+                  {t.services.orders.room}{" "}
+                  <bdi dir="ltr">{selectedStay.room_number || selectedStay.room}</bdi>
+                  {` · ${selectedStay.primary_guest_name || "—"}`}
                 </span>
-                <span className="svc-result__meta">{stayStatusLabel(s.status, t)}</span>
+                <span className="svc-result__meta">
+                  {stayStatusLabel(selectedStay.status, t)}
+                </span>
               </span>
-              {selected ? <Icon icon={CheckCircle2} /> : null}
+              <Icon icon={CheckCircle2} />
             </button>
-          );
-        })}
+          </div>
+        ) : null}
+        {residentLoading ? (
+          <p className="muted small">{t.common.loading}</p>
+        ) : !typed ? (
+          selectedStay ? null : (
+            <p className="muted small">{t.services.orders.residentTypeHint}</p>
+          )
+        ) : residentMatches.length === 0 ? (
+          <p className="muted small">{t.services.orders.noResidents}</p>
+        ) : (
+          <div className="svc-results" role="group" aria-label={t.services.orders.searchResults}>
+            {residentMatches.map((s) => {
+              const selected = s.id === linkedStayId;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="svc-result"
+                  aria-pressed={selected}
+                  onClick={() => (selected ? unlinkStay() : setSelectedStay(s))}
+                >
+                  <span className="svc-result__main">
+                    <span className="svc-result__name">
+                      {t.services.orders.room} <bdi dir="ltr">{s.room_number || s.room}</bdi>
+                      {` · ${s.primary_guest_name || "—"}`}
+                    </span>
+                    <span className="svc-result__meta">{stayStatusLabel(s.status, t)}</span>
+                  </span>
+                  {selected ? <Icon icon={CheckCircle2} /> : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -1388,7 +1491,8 @@ export function OrderCreateModal({
                 ) : null}
               </section>
 
-              {/* (3) Items — big search, instant results, added lines with steppers. */}
+              {/* (3) Items — search-first (owner correction #5): nothing shows
+                  until the user types; matches are outlet-scoped and capped at 10. */}
               <section className="svc-section">
                 <span className="svc-section__title">{t.services.orders.itemsSection}</span>
                 {catalog.length === 0 ? (
@@ -1403,7 +1507,9 @@ export function OrderCreateModal({
                         onChange={(e) => setItemQuery(e.target.value)}
                       />
                     </FormField>
-                    {filteredItems.length === 0 ? (
+                    {itemQuery.trim() === "" ? (
+                      <p className="muted small">{t.services.orders.itemTypeHint}</p>
+                    ) : filteredItems.length === 0 ? (
                       <p className="muted small">{t.services.orders.noItemsFound}</p>
                     ) : (
                       <div
@@ -1443,7 +1549,7 @@ export function OrderCreateModal({
                   ) : (
                     <div className="svc-lines">
                       {lines.map((line) => {
-                        const item = catalog.find((i) => i.id === line.service_item);
+                        const item = lineItem(line.service_item);
                         if (!item) return null;
                         const qty = Number(line.quantity) || 1;
                         const lineTotal = Number(item.unit_price) * qty;
@@ -1517,7 +1623,7 @@ export function OrderCreateModal({
                 <RadioCardGroup
                   label={t.services.orders.paymentMethod}
                   value={paymentMethod}
-                  onChange={(v) => setPaymentMethod(v)}
+                  onChange={changePaymentMethod}
                   options={paymentOptions}
                 />
 
@@ -1567,6 +1673,27 @@ export function OrderCreateModal({
                         <bdi dir="ltr">{money(estimate.total)}</bdi>
                       </strong>
                     </div>
+                    {/* Owner corrections 6-8: electronic ALSO captures the amount
+                        received (in the base currency), which must EQUAL the amount
+                        due — Create is blocked on any mismatch, and there is no
+                        change (received === total). */}
+                    <FormField
+                      label={t.services.orders.amountReceived}
+                      htmlFor="o-e-received"
+                      hint={t.services.orders.electronicReceivedHint}
+                      error={electronicMismatch ? t.services.orders.mustMatchDue : undefined}
+                    >
+                      <Input
+                        id="o-e-received"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={amountReceived}
+                        invalid={electronicMismatch}
+                        onChange={(e) => setAmountReceived(e.target.value)}
+                      />
+                    </FormField>
                     <FormField label={t.services.orders.electronicMethod} htmlFor="o-emethod">
                       <Select
                         id="o-emethod"
@@ -1655,7 +1782,8 @@ export function OrderCreateModal({
                 </div>
                 <div className="stack-tight">
                   <SvcSummaryRow label={t.services.orders.paymentMethod} value={paymentLabel} />
-                  {paymentMethod === "cash" && hasReceived ? (
+                  {(paymentMethod === "cash" || paymentMethod === "electronic") &&
+                  hasReceived ? (
                     <SvcSummaryRow
                       label={t.services.orders.amountReceivedLabel}
                       value={<bdi dir="ltr">{money(receivedNum)}</bdi>}

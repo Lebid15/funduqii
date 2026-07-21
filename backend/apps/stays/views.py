@@ -287,9 +287,24 @@ class CurrentResidentsView(generics.ListAPIView):
         return {**super().get_serializer_context(), "with_folio": True}
 
     def get_queryset(self):
-        return _stay_qs(self.request.hotel, with_folio=True).filter(
+        qs = _stay_qs(self.request.hotel, with_folio=True).filter(
             status=StayStatus.IN_HOUSE
         )
+        # Optional server-side search (used by the order form's room picker):
+        # match on room number / guest name / phone. When a term is given the
+        # caller shows only these matches (never the whole in-house list); an
+        # absent term keeps the full list for the other callers (front desk,
+        # housekeeping) — backward-compatible.
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            from django.db.models import Q
+
+            qs = qs.filter(
+                Q(primary_guest__full_name__icontains=search)
+                | Q(room__number__icontains=search)
+                | Q(primary_guest__phone__icontains=search)
+            )
+        return qs
 
 
 class StaysOverviewView(APIView):

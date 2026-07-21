@@ -196,39 +196,28 @@ describe("OrdersTab — visible cycle (new → delivered)", () => {
       page([listItem({ status: "delivered", settlement: "unsettled" })]),
     );
     renderWithProviders(<OrdersTab />);
-    await screen.findByRole("button", { name: "More" });
+    // The card always renders Details + Print directly (no "More" menu anymore).
+    await screen.findByRole("button", { name: "Details" });
     expect(
       screen.queryByRole("button", { name: "Mark delivered" }),
     ).not.toBeInTheDocument();
   });
 });
 
-describe("OrdersTab — financial permission gating on the surface", () => {
-  async function openMore() {
-    fireEvent.click(await screen.findByRole("button", { name: "More" }));
-  }
-
-  it("offers Direct payment only with service_orders.settle_direct", async () => {
+describe("OrdersTab — direct card actions + financial permission gating", () => {
+  it("every action is a DIRECT button — there is no 'More' menu", async () => {
     vi.mocked(listServiceOrders).mockResolvedValue(
-      page([listItem({ status: "delivered", settlement: "unsettled" })]),
+      page([listItem({ status: "submitted", settlement: "direct" })]),
     );
-    access.set(["service_orders.view"]); // no settle_direct
-    const { unmount } = renderWithProviders(<OrdersTab />);
-    await openMore();
-    expect(
-      screen.queryByRole("menuitem", { name: "Direct payment" }),
-    ).not.toBeInTheDocument();
-    unmount();
-
-    access.set(["service_orders.view", "service_orders.settle_direct"]);
     renderWithProviders(<OrdersTab />);
-    await openMore();
-    expect(
-      await screen.findByRole("menuitem", { name: "Direct payment" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "Details" });
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+    // A NEW order shows Mark delivered + Details + Print directly.
+    expect(screen.getByRole("button", { name: "Mark delivered" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Print" })).toBeInTheDocument();
   });
 
-  it("offers Return / exchange only with finance.refund", async () => {
+  it("offers Return / exchange (direct button) only with finance.refund", async () => {
     vi.mocked(listServiceOrders).mockResolvedValue(
       page([
         listItem({
@@ -240,17 +229,37 @@ describe("OrdersTab — financial permission gating on the surface", () => {
     );
     access.set(["service_orders.view"]); // no finance.refund
     const { unmount } = renderWithProviders(<OrdersTab />);
-    await openMore();
+    await screen.findByRole("button", { name: "Details" });
     expect(
-      screen.queryByRole("menuitem", { name: "Return / exchange" }),
+      screen.queryByRole("button", { name: "Return / exchange" }),
     ).not.toBeInTheDocument();
     unmount();
 
     access.set(["service_orders.view", "finance.refund"]);
     renderWithProviders(<OrdersTab />);
-    await openMore();
     expect(
-      await screen.findByRole("menuitem", { name: "Return / exchange" }),
+      await screen.findByRole("button", { name: "Return / exchange" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers Cancel for a NEW order only (not after delivery)", async () => {
+    // A delivered order: no Cancel (return/exchange instead).
+    vi.mocked(listServiceOrders).mockResolvedValue(
+      page([listItem({ status: "delivered", settlement: "direct", settled_at: "2026-07-21T10:05:00Z" })]),
+    );
+    access.set(["service_orders.view", "finance.refund"]);
+    const { unmount } = renderWithProviders(<OrdersTab />);
+    await screen.findByRole("button", { name: "Details" });
+    expect(screen.queryByRole("button", { name: "Cancel order" })).not.toBeInTheDocument();
+    unmount();
+
+    // A NEW settled order: Cancel is offered (with finance.refund for the reversal).
+    vi.mocked(listServiceOrders).mockResolvedValue(
+      page([listItem({ status: "submitted", settlement: "direct" })]),
+    );
+    renderWithProviders(<OrdersTab />);
+    expect(
+      await screen.findByRole("button", { name: "Cancel order" }),
     ).toBeInTheDocument();
   });
 });
@@ -292,7 +301,7 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
     expect(screen.getByLabelText("Customer name")).toBeInTheDocument();
   });
 
-  it("4) item smart-search filters the loaded catalog", async () => {
+  it("4) items show only AFTER typing, and the search filters (by outlet)", async () => {
     vi.mocked(listServiceItems).mockResolvedValue(
       page([
         serviceItem({ id: 1, name: "Espresso" }),
@@ -300,22 +309,30 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
       ]),
     );
     open();
-    expect(await screen.findByRole("button", { name: /Espresso/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Latte/ })).toBeInTheDocument();
+    const box = await screen.findByLabelText("Find an item");
+    // Nothing is shown before the user types (owner correction 5).
+    expect(screen.queryByRole("button", { name: /Espresso/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Latte/ })).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("Find an item"), {
-      target: { value: "esp" },
-    });
-    expect(screen.getByRole("button", { name: /Espresso/ })).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: "esp" } });
+    expect(await screen.findByRole("button", { name: /Espresso/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Latte/ })).toBeNull();
   });
+
+  // Items appear only after typing (owner correction 5); type, then click the result.
+  async function selectItem(label = "Espresso", query = "esp") {
+    fireEvent.change(await screen.findByLabelText("Find an item"), {
+      target: { value: query },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(label) }));
+  }
 
   it("5) adding an item, stepping quantity, and re-adding merges one line", async () => {
     vi.mocked(listServiceItems).mockResolvedValue(
       page([serviceItem({ id: 1, name: "Espresso" })]),
     );
     open();
-    fireEvent.click(await screen.findByRole("button", { name: /Espresso/ }));
+    await selectItem();
     expect(
       screen.getAllByRole("button", { name: "Increase quantity" }),
     ).toHaveLength(1);
@@ -338,7 +355,7 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
       page([serviceItem({ id: 1, name: "Espresso", unit_price: "8.00" })]),
     );
     open();
-    fireEvent.click(await screen.findByRole("button", { name: /Espresso/ }));
+    await selectItem();
     const line = screen
       .getByRole("button", { name: "Increase quantity" })
       .closest(".svc-line") as HTMLElement;
@@ -350,12 +367,29 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
       page([serviceItem({ id: 1, name: "Espresso", unit_price: "8.00", tax_rate: "0" })]),
     );
     open();
-    fireEvent.click(await screen.findByRole("button", { name: /Espresso/ }));
+    await selectItem();
     // Cash is the default method; enter more than the $8.00 total.
     fireEvent.change(screen.getByLabelText("Amount received"), {
       target: { value: "20" },
     });
     expect(screen.getAllByText("$12.00").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("electronic requires the received amount to equal the total", async () => {
+    vi.mocked(listServiceItems).mockResolvedValue(
+      page([serviceItem({ id: 1, name: "Espresso", unit_price: "8.00", tax_rate: "0" })]),
+    );
+    open();
+    fireEvent.click(await screen.findByRole("radio", { name: /Direct customer/ }));
+    await selectItem();
+    // Switch to electronic.
+    fireEvent.click(screen.getByRole("radio", { name: /Electronic/ }));
+    // A mismatched received amount blocks Create…
+    fireEvent.change(screen.getByLabelText("Amount received"), { target: { value: "5" } });
+    expect(screen.getByRole("button", { name: "Create order" })).toBeDisabled();
+    // …matching the total enables it.
+    fireEvent.change(screen.getByLabelText("Amount received"), { target: { value: "8" } });
+    expect(screen.getByRole("button", { name: "Create order" })).toBeEnabled();
   });
 
   it("8) 'On room account' is hidden until a stay is linked", async () => {
@@ -364,6 +398,10 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
     // Default room source, no stay linked yet.
     expect(screen.queryByRole("radio", { name: /On room account/ })).toBeNull();
 
+    // Rooms show only after a (server-side) search — type, then pick the resident.
+    fireEvent.change(await screen.findByPlaceholderText(RESIDENT_SEARCH), {
+      target: { value: "jane" },
+    });
     fireEvent.click(await screen.findByRole("button", { name: /Jane Doe/ }));
     expect(
       await screen.findByRole("radio", { name: /On room account/ }),
@@ -407,7 +445,7 @@ describe("OrderCreateModal — single-page form (source / items / payment)", () 
 
     // Direct customer — no stay/table required.
     fireEvent.click(await screen.findByRole("radio", { name: /Direct customer/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Espresso/ }));
+    await selectItem();
     fireEvent.change(screen.getByLabelText("Amount received"), {
       target: { value: "8" },
     });
