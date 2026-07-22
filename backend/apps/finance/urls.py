@@ -1,12 +1,20 @@
 """Finance API URLs (mounted under /api/v1/hotel/finance/)."""
 from django.urls import path
 
+from .expense_attachment_views import (
+    ExpenseAttachmentSignedUrlView,
+    ExpenseAttachmentStreamView,
+    ExpenseAttachmentView,
+)
 from .views import (
     ChargeAdjustView,
     ChargeVoidView,
     ExpenseDetailView,
     ExpenseListCreateView,
+    ExpenseMetaView,
     ExpenseReverseView,
+    ExpenseTypeDetailView,
+    ExpenseTypeListCreateView,
     ExpenseVoidView,
     ExpenseVoucherView,
     FinanceOverviewView,
@@ -86,10 +94,18 @@ urlpatterns = [
     path("finance/invoices/<int:pk>/issue/", InvoiceIssueView.as_view(), name="invoice-issue"),
     path("finance/invoices/<int:pk>/void/", InvoiceVoidView.as_view(), name="invoice-void"),
     path("finance/invoices/<int:pk>/print/", InvoicePrintView.as_view(), name="invoice-print"),
+    # Expense types (manageable per-hotel categories)
+    path("finance/expense-types/", ExpenseTypeListCreateView.as_view(), name="expense-type-list"),
+    path("finance/expense-types/<int:pk>/", ExpenseTypeDetailView.as_view(), name="expense-type-detail"),
     # Expenses
     path("finance/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
+    path("finance/expenses/meta/", ExpenseMetaView.as_view(), name="expense-meta"),
     path("finance/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),
     path("finance/expenses/<int:pk>/void/", ExpenseVoidView.as_view(), name="expense-void"),
     path("finance/expenses/<int:pk>/reverse/", ExpenseReverseView.as_view(), name="expense-reverse"),
     path("finance/expenses/<int:pk>/voucher/", ExpenseVoucherView.as_view(), name="expense-voucher"),
+    # Expense attachment (one optional private receipt)
+    path("finance/expenses/<int:pk>/attachment/", ExpenseAttachmentView.as_view(), name="expense-attachment"),
+    path("finance/expenses/<int:pk>/attachment/url/", ExpenseAttachmentSignedUrlView.as_view(), name="expense-attachment-url"),
+    path("finance/expenses/<int:pk>/attachment/file/", ExpenseAttachmentStreamView.as_view(), name="expense-attachment-stream"),
 ]

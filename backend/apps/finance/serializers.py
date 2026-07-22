@@ -6,10 +6,12 @@ from rest_framework import serializers
 from .models import (
     ChargeType,
     Expense,
+    ExpenseType,
     Folio,
     FolioCharge,
     Invoice,
     InvoiceLine,
+    PaymentMethod,
     Payment,
     RefundableInsurance,
 )
@@ -185,10 +187,28 @@ class InvoiceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ExpenseTypeSerializer(serializers.ModelSerializer):
+    """Read shape for a manageable per-hotel expense type."""
+
+    class Meta:
+        model = ExpenseType
+        fields = ["id", "name", "is_active", "created_at", "updated_at"]
+        read_only_fields = fields
+
+
+class ExpenseTypeWriteSerializer(serializers.Serializer):
+    """Create/rename/(de)activate — normalization + uniqueness live in the
+    service. ``name`` is required on create; both fields optional on edit."""
+
+    name = serializers.CharField(max_length=80, required=False, allow_blank=False)
+    is_active = serializers.BooleanField(required=False)
+
+
 class ExpenseSerializer(serializers.ModelSerializer):
-    """Read + CREATE shape. The execution timestamp, financial date, and
-    currency are backend-decided (expenses closure); the descriptive-edit
-    path uses ``ExpenseUpdateSerializer``."""
+    """READ representation only. All writes go through
+    ``ExpenseCreateSerializer`` / ``ExpenseUpdateSerializer`` so the service is
+    the single money path. ``amount``/``currency`` are the HOTEL BASE values;
+    the FX snapshot exposes what was actually entered."""
 
     created_by = serializers.SerializerMethodField()
     voided_by = serializers.SerializerMethodField()
@@ -199,23 +219,25 @@ class ExpenseSerializer(serializers.ModelSerializer):
         source="reverses.expense_number", read_only=True, default=None
     )
     reversed_by_number = serializers.SerializerMethodField()
+    expense_type_name = serializers.CharField(
+        source="expense_type.name", read_only=True, default=None
+    )
+    has_attachment = serializers.SerializerMethodField()
 
     class Meta:
         model = Expense
         fields = [
-            "id", "expense_number", "category", "description", "amount", "currency",
+            "id", "expense_number", "category", "expense_type", "expense_type_name",
+            "description", "amount", "currency",
+            "original_currency", "original_amount", "exchange_rate", "rate_basis",
+            "rate_captured_at",
             "method", "paid_at", "business_date", "shift", "shift_number",
             "reverses", "reverses_number", "reversed_by_number",
-            "vendor_name", "reference", "notes", "status",
+            "vendor_name", "reference", "notes", "has_attachment", "status",
             "void_reason", "voided_at", "voided_by", "created_by",
             "created_at", "updated_at",
         ]
-        read_only_fields = [
-            "id", "expense_number", "currency", "paid_at", "business_date",
-            "shift", "shift_number", "reverses", "reverses_number",
-            "reversed_by_number", "status", "void_reason", "voided_at",
-            "voided_by", "created_by", "created_at", "updated_at",
-        ]
+        read_only_fields = fields
 
     def get_created_by(self, obj):
         return obj.created_by.email if obj.created_by_id else None
@@ -227,29 +249,87 @@ class ExpenseSerializer(serializers.ModelSerializer):
         posted = [r for r in obj.reversals.all() if r.status == "posted"]
         return posted[0].expense_number if posted else None
 
-    def validate_amount(self, value):
-        if value is not None and value <= 0:
-            raise serializers.ValidationError("Amount must be positive.")
-        return value
+    def get_has_attachment(self, obj):
+        return bool(obj.attachment)
+
+
+def _validate_currency_code(value):
+    code = (value or "").strip().upper()
+    if code and len(code) != 3:
+        raise serializers.ValidationError("Currency must be a 3-letter code.")
+    return code
+
+
+class ExpenseCreateSerializer(serializers.Serializer):
+    """CREATE payload. The base currency, timestamp, financial date, and shift
+    are backend-decided; ``currency`` here is the ENTRY currency (base or a
+    hotel-accepted foreign one). Foreign entry requires ``original_amount`` +
+    ``exchange_rate`` (validated + derived by the service)."""
+
+    expense_type = serializers.IntegerField()
+    description = serializers.CharField(max_length=255)
+    method = serializers.ChoiceField(choices=PaymentMethod.choices)
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    currency = serializers.CharField(
+        max_length=3, required=False, allow_blank=True, default=""
+    )
+    original_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    exchange_rate = serializers.DecimalField(
+        max_digits=18, decimal_places=8, required=False, allow_null=True
+    )
+    rate_basis = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, default=""
+    )
+    notes = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    idempotency_key = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default=""
+    )
+
+    def validate_currency(self, value):
+        return _validate_currency_code(value)
 
     def validate(self, attrs):
-        _reject_fields(self, "paid_at", "business_date", "currency", "shift", "reverses")
+        _reject_fields(
+            self, "paid_at", "business_date", "shift", "reverses", "status",
+            "vendor_name", "reference", "category", "hotel",
+        )
         return attrs
 
 
 class ExpenseUpdateSerializer(serializers.Serializer):
-    """The ONLY editable voucher fields — descriptive text, same open
-    business date (enforced by the service)."""
+    """Atomic financial-edit payload (only inside the open business date). Any
+    subset of the fields; money fields present → the service re-derives the base
+    amount + FX. Immutable fields are refused outright."""
 
     description = serializers.CharField(max_length=255, required=False)
     notes = serializers.CharField(max_length=255, required=False, allow_blank=True)
-    reference = serializers.CharField(max_length=120, required=False, allow_blank=True)
-    vendor_name = serializers.CharField(max_length=180, required=False, allow_blank=True)
+    method = serializers.ChoiceField(choices=PaymentMethod.choices, required=False)
+    expense_type = serializers.IntegerField(required=False)
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    currency = serializers.CharField(max_length=3, required=False, allow_blank=True)
+    original_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    exchange_rate = serializers.DecimalField(
+        max_digits=18, decimal_places=8, required=False, allow_null=True
+    )
+    rate_basis = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_currency(self, value):
+        return _validate_currency_code(value)
 
     def validate(self, attrs):
         _reject_fields(
-            self, "amount", "category", "method", "currency", "paid_at",
-            "business_date", "shift", "hotel", "status", "reverses",
+            self, "paid_at", "business_date", "shift", "hotel", "status",
+            "reverses", "category", "vendor_name", "reference",
         )
         return attrs
 

@@ -28,6 +28,7 @@ from . import services
 from .constants import SERVICE_LINE_SOURCES
 from .models import (
     Expense,
+    ExpenseType,
     Folio,
     FolioCharge,
     FolioStatus,
@@ -39,7 +40,10 @@ from .models import (
 )
 from .serializers import (
     ChargeCreateSerializer,
+    ExpenseCreateSerializer,
     ExpenseSerializer,
+    ExpenseTypeSerializer,
+    ExpenseTypeWriteSerializer,
     ExpenseUpdateSerializer,
     FolioCreateSerializer,
     FolioListSerializer,
@@ -77,6 +81,7 @@ ExpCreate = HasHotelPermission("expenses.create")
 ExpUpdate = HasHotelPermission("expenses.update")
 ExpVoid = HasHotelPermission("expenses.void")
 ExpReverse = HasHotelPermission("expenses.reverse")
+ExpManageTypes = HasHotelPermission("expenses.manage_types")
 
 
 def _guard_write(request: Request) -> None:
@@ -708,6 +713,29 @@ class InvoicePrintView(APIView):
 # --- Expenses ---------------------------------------------------------------
 
 
+def _expense_ack(expense) -> dict:
+    """The minimal, non-leaking acknowledgement for a WRITE action."""
+    return {
+        "id": expense.id,
+        "expense_number": expense.expense_number,
+        "status": expense.status,
+        "voided_at": expense.voided_at,
+    }
+
+
+def _expense_write_response(request: Request, expense) -> dict:
+    """Response body for a write action (edit / corrective movement).
+
+    SEC: a WRITE permission must never widen READ access (owner §7). Only a
+    caller who also holds ``expenses.view`` receives the full voucher; everyone
+    else gets the minimal ack — otherwise ``expenses.update``-only or
+    ``expenses.reverse``-only staff could read records they cannot GET.
+    """
+    if has_hotel_permission(request.user, request.hotel, "expenses.view"):
+        return ExpenseSerializer(expense).data
+    return _expense_ack(expense)
+
+
 class ExpenseListCreateView(generics.ListCreateAPIView):
     serializer_class = ExpenseSerializer
 
@@ -715,10 +743,20 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
         return [ExpCreate()] if self.request.method == "POST" else [ExpView()]
 
     def get_queryset(self):
-        qs = Expense.objects.filter(hotel=self.request.hotel)
+        qs = Expense.objects.filter(hotel=self.request.hotel).select_related(
+            "expense_type", "shift"
+        )
         p = self.request.query_params
         if p.get("status") in {c for c, _ in PostingStatus.choices}:
             qs = qs.filter(status=p["status"])
+        # EXPENSES-CLOSURE: filter by the manageable type (legacy ``category``
+        # filter retained as a fallback for pre-migration rows / callers).
+        if p.get("expense_type"):
+            # A non-numeric filter must be a clean empty result, never a 500.
+            try:
+                qs = qs.filter(expense_type_id=int(p["expense_type"]))
+            except (TypeError, ValueError):
+                return qs.none()
         if p.get("category"):
             qs = qs.filter(category=p["category"])
         if p.get("method"):
@@ -738,30 +776,54 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
         search = p.get("search")
         if search:
             qs = (
-                qs.filter(vendor_name__icontains=search)
-                | qs.filter(description__icontains=search)
-                | qs.filter(reference__icontains=search)
+                qs.filter(description__icontains=search)
                 | qs.filter(expense_number__icontains=search)
+                | qs.filter(vendor_name__icontains=search)
+                | qs.filter(reference__icontains=search)
             )
         return qs.distinct()
 
     def create(self, request: Request, *args, **kwargs) -> Response:
         _guard_write(request)
-        s = ExpenseSerializer(data=request.data)
+        s = ExpenseCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
+        # Server-derived fingerprint over the SALIENT inputs — a replayed
+        # idempotency key with a matching fingerprint returns the same voucher;
+        # a different payload for the same key is a 409 (never a double post).
+        fingerprint = services.build_expense_fingerprint(
+            hotel_id=request.hotel.id,
+            expense_type_id=d["expense_type"],
+            description=d["description"],
+            amount=d.get("amount"),
+            method=d["method"],
+            currency=d.get("currency", ""),
+            original_amount=d.get("original_amount"),
+            exchange_rate=d.get("exchange_rate"),
+            rate_basis=d.get("rate_basis", ""),
+            notes=d.get("notes", ""),
+        )
         expense = services.create_expense(
             request.hotel,
-            category=d.get("category", "other"),
+            expense_type=d["expense_type"],
             description=d["description"],
-            amount=d["amount"],
-            method=d.get("method", "cash"),
-            vendor_name=d.get("vendor_name", ""),
-            reference=d.get("reference", ""),
+            amount=d.get("amount"),
+            method=d["method"],
+            currency=d.get("currency", ""),
+            original_amount=d.get("original_amount"),
+            exchange_rate=d.get("exchange_rate"),
+            rate_basis=d.get("rate_basis", ""),
             notes=d.get("notes", ""),
+            idempotency_key=d.get("idempotency_key", ""),
+            request_fingerprint=fingerprint,
             user=request.user,
         )
-        return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
+        # SEC: on an idempotent REPLAY this returns an EXISTING voucher, which
+        # may carry fields the caller never supplied — so it is gated the same
+        # way as the other write responses.
+        return Response(
+            _expense_write_response(request, expense), status=status.HTTP_201_CREATED
+        )
 
 
 class ExpenseDetailView(generics.RetrieveUpdateAPIView):
@@ -772,21 +834,28 @@ class ExpenseDetailView(generics.RetrieveUpdateAPIView):
         return [ExpUpdate()] if self.request.method == "PATCH" else [ExpView()]
 
     def get_queryset(self):
-        return Expense.objects.filter(hotel=self.request.hotel)
+        return Expense.objects.filter(hotel=self.request.hotel).select_related(
+            "expense_type", "shift"
+        )
 
     def update(self, request: Request, *args, **kwargs) -> Response:
-        # Expenses closure (P0 fix): only the DESCRIPTIVE fields, only inside
-        # the voucher's own open business date — through the central service.
+        # EXPENSES-CLOSURE: atomic financial edit (reverse-old-then-apply-new,
+        # inherent in the derived-sum model) inside the voucher's own open
+        # business date — through the central service.
         _guard_write(request)
         expense = self.get_object()
         s = ExpenseUpdateSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         expense = services.update_expense(expense, user=request.user, **s.validated_data)
-        return Response(ExpenseSerializer(expense).data)
+        # SEC: an `expenses.update`-only caller must NOT read the voucher (an
+        # empty PATCH would otherwise be a silent `expenses.view` bypass).
+        return Response(_expense_write_response(request, expense))
 
 
 class ExpenseReverseView(APIView):
-    """Full counter-voucher for an expense whose void window has closed."""
+    """Full corrective counter-voucher for an expense whose void window has
+    closed (owner: a distinct 'corrective movement', never an auto void→reverse
+    fallback)."""
 
     def get_permissions(self):
         return [ExpReverse()]
@@ -799,7 +868,12 @@ class ExpenseReverseView(APIView):
         reversal = services.reverse_expense(
             expense, reason=s.validated_data["reason"], user=request.user
         )
-        return Response(ExpenseSerializer(reversal).data, status=status.HTTP_201_CREATED)
+        # SEC: the counter-voucher MIRRORS the original (amount, vendor,
+        # reference, FX), so returning it in full would disclose the original to
+        # an `expenses.reverse`-only caller (owner §7).
+        return Response(
+            _expense_write_response(request, reversal), status=status.HTTP_201_CREATED
+        )
 
 
 class ExpenseVoidView(APIView):
@@ -813,7 +887,28 @@ class ExpenseVoidView(APIView):
         s.is_valid(raise_exception=True)
         services.void_expense(expense, reason=s.validated_data["reason"], user=request.user)
         expense.refresh_from_db()
-        return Response(ExpenseSerializer(expense).data)
+        # Hardened (S3): a caller with expenses.void but NOT expenses.view must
+        # not read the full voucher — return a minimal ack only.
+        return Response(
+            {
+                "id": expense.id,
+                "expense_number": expense.expense_number,
+                "status": expense.status,
+                "voided_at": expense.voided_at,
+            }
+        )
+
+
+class ExpenseMetaView(APIView):
+    """Base + accepted currencies for the expense form, gated on
+    ``expenses.view`` so the multi-currency entry does not require the separate
+    ``settings.view`` permission."""
+
+    def get_permissions(self):
+        return [ExpView()]
+
+    def get(self, request: Request) -> Response:
+        return Response(services.expense_currency_options(request.hotel))
 
 
 class ExpenseVoucherView(APIView):
@@ -829,6 +924,57 @@ class ExpenseVoucherView(APIView):
                 "expense": ExpenseSerializer(expense).data,
             }
         )
+
+
+# --- Expense types (manageable per-hotel categories) ------------------------
+
+
+class ExpenseTypeListCreateView(generics.ListCreateAPIView):
+    serializer_class = ExpenseTypeSerializer
+
+    def get_permissions(self):
+        return [ExpManageTypes()] if self.request.method == "POST" else [ExpView()]
+
+    def get_queryset(self):
+        qs = ExpenseType.objects.filter(hotel=self.request.hotel)
+        # The create-form dropdown (expenses.view/create) only ever sees ACTIVE
+        # types. Inactive types surface ONLY to the management tab, i.e. a caller
+        # holding expenses.manage_types who explicitly asks (``?all=1``).
+        wants_all = self.request.query_params.get("all") in {"1", "true", "True"}
+        if wants_all and has_hotel_permission(
+            self.request.user, self.request.hotel, "expenses.manage_types"
+        ):
+            return qs
+        return qs.filter(is_active=True)
+
+    def create(self, request: Request, *args, **kwargs) -> Response:
+        _guard_write(request)
+        s = ExpenseTypeWriteSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        etype = services.create_expense_type(
+            request.hotel, name=s.validated_data.get("name"), user=request.user
+        )
+        return Response(ExpenseTypeSerializer(etype).data, status=status.HTTP_201_CREATED)
+
+
+class ExpenseTypeDetailView(APIView):
+    """Rename / (de)activate a type — never a hard delete."""
+
+    def get_permissions(self):
+        return [ExpManageTypes()]
+
+    def patch(self, request: Request, pk: int) -> Response:
+        _guard_write(request)
+        etype = _get(ExpenseType, request, pk)
+        s = ExpenseTypeWriteSerializer(data=request.data, partial=True)
+        s.is_valid(raise_exception=True)
+        etype = services.update_expense_type(
+            etype,
+            name=s.validated_data.get("name"),
+            is_active=s.validated_data.get("is_active"),
+            user=request.user,
+        )
+        return Response(ExpenseTypeSerializer(etype).data)
 
 
 # --- Overview ---------------------------------------------------------------
