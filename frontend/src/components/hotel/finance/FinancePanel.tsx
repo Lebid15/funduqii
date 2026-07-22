@@ -5,7 +5,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   FileText,
   LayoutDashboard,
-  PiggyBank,
   Receipt,
   ReceiptText,
   ShieldAlert,
@@ -18,17 +17,15 @@ import { OverviewTab } from "./OverviewTab";
 import { FoliosTab } from "./FoliosTab";
 import { PaymentsTab } from "./PaymentsTab";
 import { InvoicesTab } from "./InvoicesTab";
-import { ExpensesTab } from "./ExpensesTab";
 
-/** Which EXISTING permission gates each tab (Phase 11 codes): the financial
- * console tabs belong to `finance.view`, expenses to `expenses.view` — the
- * same split as the sidebar entries. */
+/** Which EXISTING permission gates each tab (Phase 11 codes). Expenses moved to
+ * the standalone `/hotel/expenses` section (EXPENSES-CLOSURE) and is no longer a
+ * finance tab. */
 const TAB_ACCESS: Record<string, string[]> = {
   overview: ["finance.view"],
   folios: ["finance.view"],
   payments: ["finance.view"],
   invoices: ["finance.view"],
-  expenses: ["expenses.view"],
 };
 const TAB_KEYS = Object.keys(TAB_ACCESS);
 
@@ -83,7 +80,6 @@ export function FinancePanel() {
     { key: "folios", label: t.finance.tabs.folios, icon: FileText },
     { key: "payments", label: t.finance.tabs.payments, icon: Receipt },
     { key: "invoices", label: t.finance.tabs.invoices, icon: ReceiptText },
-    { key: "expenses", label: t.finance.tabs.expenses, icon: PiggyBank },
   ];
   const tabs = allTabs.filter((item) => allowedKeys.includes(item.key));
 
@@ -98,7 +94,6 @@ export function FinancePanel() {
       {tab === "folios" ? <FoliosTab /> : null}
       {tab === "payments" ? <PaymentsTab /> : null}
       {tab === "invoices" ? <InvoicesTab /> : null}
-      {tab === "expenses" ? <ExpensesTab /> : null}
     </>
   );
 }
