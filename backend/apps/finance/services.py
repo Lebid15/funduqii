@@ -19,6 +19,8 @@ Finality rules (folio final closure round):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
@@ -35,6 +37,7 @@ from apps.common.exceptions import (
     FolioCurrencyMismatch,
     FolioHasPostings,
     FolioNotBalanced,
+    IdempotencyKeyConflict,
     InvalidAmount,
     InvalidFinanceOperation,
     MissingAgreedNightlyRate,
@@ -49,8 +52,10 @@ from apps.common.exceptions import (
 from .constants import ChargeSource
 from .models import (
     CREDIT_CHARGE_TYPES,
+    DEFAULT_EXPENSE_TYPE_NAMES,
     ChargeType,
     Expense,
+    ExpenseType,
     FinancialNumberSequence,
     Folio,
     FolioCharge,
@@ -61,6 +66,7 @@ from .models import (
     NumberKind,
     Payment,
     PostingStatus,
+    normalize_expense_type_name,
 )
 
 TWO = Decimal("0.01")
@@ -1709,47 +1715,365 @@ def _expense_business_date(expense):
     return timezone.localtime(expense.paid_at).date()
 
 
-#: The ONLY fields a posted voucher may still change — descriptive text,
-#: inside its own open business date. Money/date/shift are immutable.
-EXPENSE_EDITABLE_FIELDS = ("description", "notes", "reference", "vendor_name")
+# --- Expense types (manageable per-hotel categories) ------------------------
+
+
+def create_expense_type(hotel, *, name, is_active=True, user=None) -> ExpenseType:
+    """Add a hotel-scoped expense type. Name is required and unique within the
+    hotel after normalization (trim + collapse whitespace + lower-case)."""
+    clean = " ".join((name or "").split())
+    if not clean:
+        raise InvalidFinanceOperation({"reason": "name_required"})
+    normalized = normalize_expense_type_name(clean)
+    actor = _actor(user)
+    try:
+        with transaction.atomic():
+            etype = ExpenseType.objects.create(
+                hotel=hotel,
+                name=clean,
+                name_normalized=normalized,
+                is_active=bool(is_active),
+                created_by=actor,
+                updated_by=actor,
+            )
+    except IntegrityError:
+        raise InvalidFinanceOperation({"reason": "duplicate_name", "name": clean})
+    _record_event(
+        hotel,
+        event_type="expense_type.created",
+        severity="info",
+        title=f"Expense type '{etype.name}' created",
+        message=etype.name,
+        user=user,
+        obj=etype,
+    )
+    return etype
 
 
 @transaction.atomic
-def create_expense(hotel, *, category, description, amount, method,
-                   vendor_name="", reference="", notes="", user=None) -> Expense:
-    """Record an expense voucher stamped to NOW and to the current open
-    hotel business date, in the HOTEL currency (the caller never chooses
-    the timestamp, the financial date, or the currency)."""
+def update_expense_type(expense_type, *, name=None, is_active=None, user=None) -> ExpenseType:
+    """Rename and/or (de)activate a type — NEVER a hard delete. A deactivated
+    type is hidden from the create form but stays on historical rows/reports."""
+    etype = ExpenseType.objects.select_for_update().get(pk=expense_type.pk)
+    before = (etype.name, etype.is_active)
+    if name is not None:
+        clean = " ".join((name or "").split())
+        if not clean:
+            raise InvalidFinanceOperation({"reason": "name_required"})
+        etype.name = clean
+        etype.name_normalized = normalize_expense_type_name(clean)
+    if is_active is not None:
+        etype.is_active = bool(is_active)
+    etype.updated_by = _actor(user)
+    try:
+        # A SAVEPOINT so a duplicate-name violation does not poison the
+        # surrounding transaction on PostgreSQL.
+        with transaction.atomic():
+            etype.save(
+                update_fields=["name", "name_normalized", "is_active", "updated_by", "updated_at"]
+            )
+    except IntegrityError:
+        raise InvalidFinanceOperation({"reason": "duplicate_name", "name": etype.name})
+    after = (etype.name, etype.is_active)
+    if before != after:
+        _record_event(
+            etype.hotel,
+            event_type="expense_type.updated",
+            severity="info",
+            title=f"Expense type '{etype.name}' updated",
+            message=f"name: '{before[0]}' → '{after[0]}' · active: {before[1]} → {after[1]}",
+            user=user,
+            obj=etype,
+        )
+    return etype
+
+
+def ensure_default_expense_types(hotel, *, user=None) -> int:
+    """Seed the default expense-type catalogue for ``hotel``. Returns how many
+    types were actually created.
+
+    Called from the central hotel-creation path so a hotel provisioned AFTER the
+    expenses migrations is immediately usable: the type is REQUIRED on an
+    expense, so a hotel with an empty catalogue could not record one at all
+    until someone with ``expenses.manage_types`` added the first type.
+
+    IDEMPOTENT — matches on the normalized name, so calling it again (or on a
+    hotel the backfill already seeded) creates nothing and never raises on the
+    per-hotel uniqueness constraint.
+    """
+    actor = _actor(user)
+    created = 0
+    for name in DEFAULT_EXPENSE_TYPE_NAMES:
+        _, was_created = ExpenseType.objects.get_or_create(
+            hotel=hotel,
+            name_normalized=normalize_expense_type_name(name),
+            defaults={
+                "name": name,
+                "is_active": True,
+                "created_by": actor,
+                "updated_by": actor,
+            },
+        )
+        created += int(was_created)
+    return created
+
+
+def expense_currency_options(hotel) -> dict:
+    """Base + accepted currencies for the expense entry form.
+
+    Exposed through an ``expenses.view``-gated endpoint so an expenses clerk can
+    enter a foreign-currency expense WITHOUT holding ``settings.view`` (the hotel
+    settings resource) — otherwise the multi-currency feature is unusable for
+    exactly the role that needs it.
+    """
+    return {
+        "base_currency": _hotel_currency(hotel).upper(),
+        "accepted_currencies": _accepted_currencies(hotel),
+    }
+
+
+def _resolve_expense_type_for_write(hotel, expense_type):
+    """Resolve a type id/instance to an ACTIVE type belonging to ``hotel``.
+
+    Rejects a foreign-hotel type (tenant isolation) and a deactivated type (you
+    cannot file a new/edited expense under a retired category)."""
+    etype_id = getattr(expense_type, "pk", expense_type)
+    try:
+        etype = ExpenseType.objects.get(pk=etype_id, hotel=hotel)
+    except (ExpenseType.DoesNotExist, ValueError, TypeError):
+        raise InvalidFinanceOperation({"reason": "expense_type_invalid"})
+    if not etype.is_active:
+        raise InvalidFinanceOperation({"reason": "expense_type_inactive", "expense_type": etype.id})
+    return etype
+
+
+# --- Expense FX (multi-currency; mirrors the payment FX resolver) ------------
+
+
+def _resolve_expense_fx(hotel, *, amount, currency, original_amount,
+                        exchange_rate, rate_basis, user):
+    """Resolve an expense's BASE amount + FX snapshot (mirrors
+    ``_resolve_payment_fx``). Same currency as the hotel base → ``amount`` IS the
+    base amount, no rate stored. Foreign currency → a manual ``exchange_rate`` AND
+    the spent ``original_amount`` are required and the base is DERIVED (never
+    client-trusted). Returns ``(base_amount, fx_dict)`` keyed for Expense fields."""
+    base_currency = _hotel_currency(hotel).upper()
+    resolved_currency = (currency or base_currency).strip().upper()
+    accepted = _accepted_currencies(hotel)
+    if resolved_currency not in accepted:
+        raise InvalidFinanceOperation(
+            {"reason": "currency_not_accepted", "currency": resolved_currency,
+             "accepted": accepted}
+        )
+    if resolved_currency == base_currency:
+        if amount is None or money(amount) <= ZERO:
+            raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+        base_amount = money(amount)
+        fx = dict(original_currency=base_currency, original_amount=base_amount,
+                  exchange_rate=None, rate_basis="", rate_captured_at=None,
+                  rate_entered_by=None)
+    else:
+        resolved_basis = _resolve_rate_basis(rate_basis)
+        if exchange_rate is None or Decimal(str(exchange_rate)) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "exchange_rate_required", "currency": resolved_currency}
+            )
+        if original_amount is None or money(original_amount) <= ZERO:
+            raise InvalidFinanceOperation(
+                {"reason": "original_amount_required", "currency": resolved_currency}
+            )
+        rate = Decimal(str(exchange_rate))
+        original = money(original_amount)
+        if resolved_basis == RateBasis.PAYMENT_PER_BASE:
+            base_amount = money(original / rate)
+        else:
+            base_amount = money(original * rate)
+        fx = dict(original_currency=resolved_currency, original_amount=original,
+                  exchange_rate=rate, rate_basis=resolved_basis,
+                  rate_captured_at=timezone.now(), rate_entered_by=user)
+    if base_amount <= ZERO:
+        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    if base_amount.copy_abs() >= MONEY_MAX_ABS:
+        raise InvalidFinanceOperation({"reason": "amount_out_of_range"})
+    return base_amount, fx
+
+
+# --- Expense idempotency (mirrors the reservation creation key) --------------
+
+
+def build_expense_fingerprint(*, hotel_id, expense_type_id, description, amount,
+                              method, currency, original_amount, exchange_rate,
+                              rate_basis, notes) -> str:
+    """A stable sha256 over the SALIENT creation inputs (never server-derived
+    values). A replayed idempotency key with a matching fingerprint is the same
+    request (returns the same voucher); a different fingerprint is a 409."""
+    def _s(v):
+        return "" if v is None else str(v)
+
+    payload = json.dumps(
+        {
+            "hotel": _s(hotel_id),
+            "expense_type": _s(expense_type_id),
+            "description": (description or "").strip(),
+            "amount": _s(amount),
+            "method": (method or "").strip(),
+            "currency": (currency or "").strip().upper(),
+            "original_amount": _s(original_amount),
+            "exchange_rate": _s(exchange_rate),
+            "rate_basis": (rate_basis or "").strip(),
+            "notes": (notes or "").strip(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _assert_same_expense_request(existing, fingerprint) -> None:
+    """Replaying a key with a materially DIFFERENT payload is a 409 — the
+    original voucher is never returned as the result of a different request."""
+    stored = existing.creation_request_fingerprint or ""
+    if stored and fingerprint and stored != fingerprint:
+        raise IdempotencyKeyConflict({"expense": existing.id})
+
+
+#: Fields the atomic financial edit may change on a posted voucher, inside its
+#: own open business date. business_date / paid_at / shift / status / reverses /
+#: hotel / currency-base are never client-editable.
+EXPENSE_EDITABLE_FIELDS = (
+    "description", "notes", "method", "expense_type",
+    "amount", "currency", "original_amount", "exchange_rate", "rate_basis",
+)
+
+#: Salient fields compared before/after an edit to build the audit diff.
+_EXPENSE_DIFF_FIELDS = (
+    "description", "notes", "method", "expense_type_id",
+    "amount", "currency", "original_currency", "original_amount",
+    "exchange_rate", "rate_basis",
+)
+
+#: Money inputs — presence of ANY re-resolves the base amount + FX snapshot.
+_EXPENSE_MONEY_FIELDS = frozenset(
+    {"amount", "currency", "original_amount", "exchange_rate", "rate_basis"}
+)
+
+#: Fields whose change moves the SHIFT CASH DRAWER (``method`` flips an expense
+#: between cash and non-cash, so it counts too).
+_EXPENSE_CASH_AFFECTING_FIELDS = _EXPENSE_MONEY_FIELDS | {"method"}
+
+
+def _require_live_shift_for_money(expense) -> None:
+    """Money may not change once the assigned shift has left OPEN.
+
+    Closing a shift FREEZES its cash reconciliation (``expected_cash_amount``
+    and ``cash_difference`` are stored at close, and the daily close snapshots
+    them). Re-pricing an expense that belongs to a closed shift would silently
+    invalidate that frozen record: cash would appear to have left the drawer
+    with no trace, inside an immutable close. The correction after a shift has
+    closed is a corrective movement posted to the CURRENT shift — never an edit
+    of the settled one.
+    """
+    from apps.shifts.models import ShiftStatus
+
+    shift = expense.shift
+    if shift is not None and shift.status != ShiftStatus.OPEN:
+        raise InvalidFinanceOperation(
+            {"reason": "shift_not_open", "shift": shift.id, "status": shift.status}
+        )
+
+
+def _expense_snapshot(expense) -> dict:
+    return {f: getattr(expense, f) for f in _EXPENSE_DIFF_FIELDS}
+
+
+@transaction.atomic
+def create_expense(hotel, *, expense_type, description, amount, method,
+                   currency="", original_amount=None, exchange_rate=None,
+                   rate_basis="", notes="",
+                   idempotency_key="", request_fingerprint="", user=None) -> Expense:
+    """Record an expense voucher stamped to NOW and to the current open hotel
+    business date. ``amount`` is stored in the HOTEL BASE currency (derived for a
+    foreign ``currency`` via a manual rate). The caller never chooses the
+    timestamp, the financial date, or the base currency. A repeated submit with
+    the same ``idempotency_key`` returns the SAME voucher (no double cash-out).
+
+    The attachment is NOT set here — it is uploaded through the validated
+    endpoint once the voucher exists (the file path needs the row's id).
+    """
     from apps.shifts.services import get_open_shift_for
 
-    if money(amount) <= ZERO:
-        raise InvalidAmount({"field": "amount", "reason": "must_be_positive"})
+    key = (idempotency_key or "").strip()
+    fingerprint = (request_fingerprint or "").strip()
+    # A keyed create ALWAYS carries a fingerprint: the replay guard skips its
+    # comparison when either side is blank, so a caller that supplied a key but
+    # no fingerprint would silently lose the 409-on-different-payload guarantee.
+    if key and not fingerprint:
+        fingerprint = build_expense_fingerprint(
+            hotel_id=hotel.id,
+            expense_type_id=getattr(expense_type, "pk", expense_type),
+            description=description,
+            amount=amount,
+            method=method,
+            currency=currency,
+            original_amount=original_amount,
+            exchange_rate=exchange_rate,
+            rate_basis=rate_basis,
+            notes=notes,
+        )
+    # Fast-path replay before doing any work.
+    if key:
+        existing = Expense.objects.filter(
+            hotel=hotel, creation_idempotency_key=key
+        ).first()
+        if existing is not None:
+            _assert_same_expense_request(existing, fingerprint)
+            return existing
+
+    etype = _resolve_expense_type_for_write(hotel, expense_type)
+    base_amount, fx = _resolve_expense_fx(
+        hotel, amount=amount, currency=currency, original_amount=original_amount,
+        exchange_rate=exchange_rate, rate_basis=rate_basis, user=user,
+    )
     actor = _actor(user)
     business_date = _business_date(hotel)
     _ensure_day_open(hotel, business_date)
-    expense = Expense.objects.create(
-        hotel=hotel,
-        expense_number=next_number(hotel, NumberKind.EXPENSE),
-        category=category,
-        description=description,
-        amount=money(amount),
-        currency=_hotel_currency(hotel),
-        method=method,
-        paid_at=timezone.now(),
-        business_date=business_date,
-        shift=get_open_shift_for(user, hotel),
-        vendor_name=vendor_name or "",
-        reference=reference or "",
-        notes=notes or "",
-        created_by=actor,
-        updated_by=actor,
-    )
+    try:
+        with transaction.atomic():
+            expense = Expense.objects.create(
+                hotel=hotel,
+                expense_number=next_number(hotel, NumberKind.EXPENSE),
+                expense_type=etype,
+                description=description,
+                amount=base_amount,
+                currency=_hotel_currency(hotel).upper(),
+                method=method,
+                paid_at=timezone.now(),
+                business_date=business_date,
+                shift=get_open_shift_for(user, hotel),
+                notes=notes or "",
+                creation_idempotency_key=key,
+                creation_request_fingerprint=fingerprint,
+                created_by=actor,
+                updated_by=actor,
+                **fx,
+            )
+    except IntegrityError:
+        # A concurrent submit with the same key won the race — return its result
+        # (idempotent) or 409 when the payloads differ. No second voucher.
+        if key:
+            existing = Expense.objects.filter(
+                hotel=hotel, creation_idempotency_key=key
+            ).first()
+            if existing is not None:
+                _assert_same_expense_request(existing, fingerprint)
+                return existing
+        raise
     _record_event(
         hotel,
         event_type="expense.created",
         severity="info",
         title=f"Expense {expense.expense_number} recorded",
-        message=f"{expense.category} · {expense.amount} {expense.currency} · {expense.method}",
+        message=f"{expense.expense_type.name} · {expense.amount} {expense.currency} · {expense.method}",
         user=user,
         obj=expense,
     )
@@ -1758,31 +2082,86 @@ def create_expense(hotel, *, category, description, amount, method,
 
 @transaction.atomic
 def update_expense(expense, *, user=None, **fields) -> Expense:
-    """Edit the DESCRIPTIVE fields of a posted voucher — only inside its own
-    open business date. Money, category, method, currency, dates, and the
-    shift are immutable; corrections are void (same day) or a reversal."""
+    """Atomic financial edit of a posted voucher, ONLY inside its own open
+    business date. Locks the row + business day, applies the new descriptive AND
+    money values (re-deriving the base amount + FX snapshot from scratch — the
+    drawer/reports re-sum the new ``amount``, so the old effect is reversed and
+    the new one applied within one transaction), and records a full before→after
+    diff. A reversal row cannot be edited. Nothing changed → no write."""
+    unknown = [f for f in fields if f not in EXPENSE_EDITABLE_FIELDS]
+    if unknown:
+        raise InvalidFinanceOperation({"reason": "field_not_editable", "field": unknown[0]})
     expense = Expense.objects.select_for_update().get(pk=expense.pk)
     if expense.status != PostingStatus.POSTED:
         raise InvalidFinanceOperation({"reason": "not_editable", "status": expense.status})
-    for field in fields:
-        if field not in EXPENSE_EDITABLE_FIELDS:
-            raise InvalidFinanceOperation({"reason": "field_not_editable", "field": field})
+    if expense.reverses_id is not None:
+        raise InvalidFinanceOperation({"reason": "cannot_edit_reversal"})
     _require_void_window(expense.hotel, _expense_business_date(expense))
-    changes = {}
-    for field, value in fields.items():
-        value = (value or "").strip() if isinstance(value, str) else value
-        old = getattr(expense, field)
-        if value != old:
-            changes[field] = (old, value)
-            setattr(expense, field, value)
-    if not changes:
-        # Nothing actually changed — no write, no activity (owner rule).
+    # A settled (non-open) shift has a FROZEN cash reconciliation — refuse any
+    # change that would move its drawer.
+    if _EXPENSE_CASH_AFFECTING_FIELDS & set(fields):
+        _require_live_shift_for_money(expense)
+    before = _expense_snapshot(expense)
+
+    # Descriptive / classification.
+    if "description" in fields:
+        expense.description = (fields["description"] or "").strip()
+    if "notes" in fields:
+        expense.notes = (fields["notes"] or "").strip()
+    if "method" in fields:
+        expense.method = fields["method"]
+    if "expense_type" in fields:
+        expense.expense_type = _resolve_expense_type_for_write(
+            expense.hotel, fields["expense_type"]
+        )
+
+    # Money/FX: any money input re-resolves the base amount + FX snapshot from
+    # the NEW effective values (a full money re-specification, like create).
+    saved_money_fields = []
+    if _EXPENSE_MONEY_FIELDS & set(fields):
+        # An omitted ``currency`` defaults to the voucher's CURRENT entry
+        # currency — never blindly to the base. Otherwise a partial payload
+        # (e.g. only ``amount``) would silently re-interpret a FOREIGN voucher
+        # as base currency and WIPE its FX snapshot. Keeping the current
+        # currency means such a payload is either correct (base voucher) or
+        # cleanly rejected as ``original_amount_required`` (foreign voucher).
+        current_currency = expense.original_currency or expense.currency
+        base_amount, fx = _resolve_expense_fx(
+            expense.hotel,
+            amount=fields.get("amount"),
+            currency=fields.get("currency", current_currency),
+            original_amount=fields.get("original_amount"),
+            exchange_rate=fields.get("exchange_rate"),
+            rate_basis=fields.get("rate_basis", ""),
+            user=user,
+        )
+        expense.amount = base_amount
+        expense.currency = _hotel_currency(expense.hotel).upper()
+        for k, v in fx.items():
+            setattr(expense, k, v)
+        saved_money_fields = [
+            "amount", "currency", "original_currency", "original_amount",
+            "exchange_rate", "rate_basis", "rate_captured_at", "rate_entered_by",
+        ]
+
+    after = _expense_snapshot(expense)
+    changed = {
+        f: (before[f], after[f]) for f in _EXPENSE_DIFF_FIELDS if before[f] != after[f]
+    }
+    if not changed:
+        # Nothing actually changed — no write, no activity (owner rule). Drop the
+        # in-memory re-derivation (e.g. a fresh ``rate_captured_at``) so the
+        # caller never sees a value that was not persisted.
+        expense.refresh_from_db()
         return expense
     expense.updated_by = _actor(user)
-    expense.save(update_fields=[*changes.keys(), "updated_by", "updated_at"])
-    diff = " · ".join(
-        f"{field}: '{old}' → '{new}'" for field, (old, new) in changes.items()
+    update_fields = sorted(
+        ({"description", "notes", "method", "expense_type"} & set(fields))
+        | set(saved_money_fields)
+        | {"updated_by", "updated_at"}
     )
+    expense.save(update_fields=update_fields)
+    diff = " · ".join(f"{f}: '{o}' → '{n}'" for f, (o, n) in changed.items())
     _record_event(
         expense.hotel,
         event_type="expense.updated",
@@ -1847,9 +2226,20 @@ def reverse_expense(expense, *, reason, user=None) -> Expense:
             hotel=expense.hotel,
             expense_number=next_number(expense.hotel, NumberKind.EXPENSE),
             category=expense.category,
+            expense_type=expense.expense_type,
             description=f"Reversal ({expense.expense_number}): {reason}",
             amount=-expense.amount,
             currency=expense.currency,
+            # Mirror the original's FX snapshot (the counter-voucher offsets the
+            # same base amount; original_amount is negated for symmetry).
+            original_currency=expense.original_currency,
+            original_amount=(
+                -expense.original_amount if expense.original_amount is not None else None
+            ),
+            exchange_rate=expense.exchange_rate,
+            rate_basis=expense.rate_basis,
+            rate_captured_at=expense.rate_captured_at,
+            rate_entered_by=expense.rate_entered_by,
             method=expense.method,
             paid_at=timezone.now(),
             business_date=business_date,
@@ -1876,6 +2266,96 @@ def reverse_expense(expense, *, reason, user=None) -> Expense:
         obj=reversal,
     )
     return reversal
+
+
+# --- Expense attachment (ONE optional private receipt) ----------------------
+
+
+def _delete_stored_file_after_commit(storage, name) -> None:
+    """Physically remove a replaced/removed attachment ONLY after the enclosing
+    transaction COMMITS.
+
+    A filesystem delete cannot be rolled back: doing it inline would destroy the
+    receipt while a later failure rolled the row back to still reference it —
+    a dangling pointer AND a lost financial document. Best-effort on failure.
+    """
+    if not name:
+        return
+
+    def _remove():
+        try:
+            storage.delete(name)
+        except (OSError, ValueError):  # pragma: no cover - best-effort cleanup
+            pass
+
+    transaction.on_commit(_remove)
+
+
+@transaction.atomic
+def set_expense_attachment(expense, file, *, user=None) -> Expense:
+    """Attach or REPLACE the single receipt scan — only on a posted voucher
+    inside its own open business date (locked post-close). A replaced file is
+    deleted first so nothing orphans. The file must already be validated by the
+    caller (serializer/endpoint) via ``validate_expense_attachment``."""
+    expense = Expense.objects.select_for_update().get(pk=expense.pk)
+    if expense.status != PostingStatus.POSTED:
+        raise InvalidFinanceOperation({"reason": "not_editable", "status": expense.status})
+    if expense.reverses_id is not None:
+        raise InvalidFinanceOperation({"reason": "cannot_edit_reversal"})
+    _require_void_window(expense.hotel, _expense_business_date(expense))
+    # Defence in depth: a FileField's ``validators`` run under ``full_clean()``,
+    # NOT on ``save()`` — so without this a direct service call would store an
+    # unvalidated file. The endpoint validates too; this makes the SERVICE safe
+    # on its own.
+    from .expense_validators import validate_expense_attachment
+
+    validate_expense_attachment(file)
+    old_storage = old_name = None
+    if expense.attachment:
+        old_storage, old_name = expense.attachment.storage, expense.attachment.name
+    expense.attachment = file
+    expense.updated_by = _actor(user)
+    expense.save(update_fields=["attachment", "updated_by", "updated_at"])
+    _delete_stored_file_after_commit(old_storage, old_name)
+    _record_event(
+        expense.hotel,
+        event_type="expense.attachment_set",
+        severity="info",
+        title=f"Expense {expense.expense_number} attachment updated",
+        message=f"{expense.expense_number}",
+        user=user,
+        obj=expense,
+    )
+    return expense
+
+
+@transaction.atomic
+def remove_expense_attachment(expense, *, user=None) -> Expense:
+    """Remove the receipt scan — only on a posted voucher inside its own open
+    business date. Deletes the underlying file (no orphan)."""
+    expense = Expense.objects.select_for_update().get(pk=expense.pk)
+    if expense.status != PostingStatus.POSTED:
+        raise InvalidFinanceOperation({"reason": "not_editable", "status": expense.status})
+    if expense.reverses_id is not None:
+        raise InvalidFinanceOperation({"reason": "cannot_edit_reversal"})
+    _require_void_window(expense.hotel, _expense_business_date(expense))
+    if not expense.attachment:
+        return expense
+    old_storage, old_name = expense.attachment.storage, expense.attachment.name
+    expense.attachment = None
+    expense.updated_by = _actor(user)
+    expense.save(update_fields=["attachment", "updated_by", "updated_at"])
+    _delete_stored_file_after_commit(old_storage, old_name)
+    _record_event(
+        expense.hotel,
+        event_type="expense.attachment_removed",
+        severity="info",
+        title=f"Expense {expense.expense_number} attachment removed",
+        message=f"{expense.expense_number}",
+        user=user,
+        obj=expense,
+    )
+    return expense
 
 
 # --- Refundable insurance (STAYS-ARRIVALS-DEPARTURES §35 / owner D2) ---------

@@ -1665,13 +1665,35 @@ export interface Invoice {
   created_at: string;
 }
 
+/** A manageable per-hotel expense category (EXPENSES-CLOSURE). */
+export interface ExpenseType {
+  id: number;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Expense {
   id: number;
   expense_number: string;
+  /** Legacy fixed category — kept for historical rows only. */
   category: ExpenseCategory;
+  /** The manageable type (source of truth for new expenses). */
+  expense_type: number;
+  expense_type_name: string | null;
   description: string;
+  /** ALWAYS the hotel BASE-currency equivalent. */
   amount: string;
+  /** The hotel BASE currency of `amount`. */
   currency: string;
+  /** Multi-currency snapshot — what was actually entered (empty/null when the
+   * expense was entered in the base currency). */
+  original_currency: string;
+  original_amount: string | null;
+  exchange_rate: string | null;
+  rate_basis: string;
+  rate_captured_at: string | null;
   method: PaymentMethod;
   /** Execution timestamp — the financial date is `business_date`. */
   paid_at: string;
@@ -1684,9 +1706,12 @@ export interface Expense {
   reverses_number: string | null;
   /** Set when this voucher has been reversed by a later voucher. */
   reversed_by_number: string | null;
+  /** Legacy fields — read-only display of historical values (never written by
+   * the standalone section). */
   vendor_name: string;
   reference: string;
   notes: string;
+  has_attachment: boolean;
   status: PostingStatus;
   void_reason: string;
   voided_at: string | null;

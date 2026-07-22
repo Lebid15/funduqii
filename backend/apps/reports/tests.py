@@ -18,10 +18,12 @@ from apps.accounts.models import AccountType, User
 from apps.finance.models import (
     ChargeType,
     Expense,
+    ExpenseType,
     Folio,
     Payment,
     PaymentMethod,
     PostingStatus,
+    normalize_expense_type_name,
 )
 from apps.finance.services import (
     add_charge,
@@ -48,6 +50,17 @@ STRONG = "StrongPass!234"
 
 def make_hotel(slug="hotel", status=HotelStatus.ACTIVE):
     return Hotel.objects.create(name="Hotel", slug=slug, status=status)
+
+
+def expense_type(hotel, name="Supplies"):
+    """EXPENSES-CLOSURE: new expenses reference a manageable ExpenseType instead
+    of the legacy fixed ``category`` enum. Idempotent per (hotel, normalized name)."""
+    et, _ = ExpenseType.objects.get_or_create(
+        hotel=hotel,
+        name_normalized=normalize_expense_type_name(name),
+        defaults={"name": name},
+    )
+    return et
 
 
 def add_member(hotel, email, *, kind=MembershipType.STAFF, perms=()):
@@ -284,7 +297,7 @@ class OverviewTests(APITestCase, ReportsMixin):
         folio = create_folio(self.hotel, customer_name="W")
         record_payment(folio, amount="100.00", method=PaymentMethod.CASH, user=self.manager)
         create_expense(
-            self.hotel, category="supplies", description="Soap",
+            self.hotel, expense_type=expense_type(self.hotel), description="Soap",
             amount="30.00", method=PaymentMethod.CASH, user=self.manager,
         )
         data = self.get_report("overview").data
@@ -417,7 +430,7 @@ class FinanceReportTests(APITestCase, ReportsMixin):
         )
         void_payment(voided, reason="entry error", user=self.manager)
         create_expense(
-            self.hotel, category="supplies", description="Soap",
+            self.hotel, expense_type=expense_type(self.hotel), description="Soap",
             amount="25.00", method=PaymentMethod.CASH, user=self.manager,
         )
         data = self.get_report("finance").data
@@ -431,6 +444,30 @@ class FinanceReportTests(APITestCase, ReportsMixin):
         self.assertNotIn("profit", str(data).lower())
         # Money is serialized as strings (Decimal-safe), never float.
         self.assertIsInstance(data["total_payments"], str)
+
+    def test_expenses_grouped_by_manageable_type_name(self):
+        """EXPENSES-CLOSURE: the expense breakdown keys on the MANAGEABLE type's
+        NAME (not the legacy category enum), while the money totals are
+        unchanged. Without this the grouping-key change is unprotected."""
+        create_expense(
+            self.hotel, expense_type=expense_type(self.hotel, name="Utilities"),
+            description="Power", amount="30.00", method=PaymentMethod.CASH,
+            user=self.manager,
+        )
+        create_expense(
+            self.hotel, expense_type=expense_type(self.hotel, name="Supplies"),
+            description="Soap", amount="20.00", method=PaymentMethod.CASH,
+            user=self.manager,
+        )
+        data = self.get_report("finance").data
+        rows = {row["key"]: row["total"] for row in data["expenses_by_category"]}
+        self.assertEqual(rows["Utilities"], "30.00")
+        self.assertEqual(rows["Supplies"], "20.00")
+        # The legacy enum value is no longer the grouping key.
+        self.assertNotIn("utilities", rows)
+        self.assertNotIn("supplies", rows)
+        # Money is unaffected by the key change.
+        self.assertEqual(data["total_expenses"], "50.00")
 
     def test_per_day_series(self):
         record_payment(self.folio, amount="10.00", method=PaymentMethod.CASH, user=self.manager)
@@ -712,10 +749,12 @@ class FinanceEngineTests(APITestCase, ReportsMixin):
         self.assertEqual(p["net"], "0.00")
 
     def test_expenses_reversals_separated(self):
-        e = create_expense(self.hotel, category="supplies", description="x",
+        et = expense_type(self.hotel)
+        e = create_expense(self.hotel, expense_type=et, description="x",
                            amount="20.00", method=PaymentMethod.CASH, user=self.manager)
         Expense.objects.create(
-            hotel=self.hotel, expense_number="EXRU1", category="supplies",
+            hotel=self.hotel, expense_number="EXRU1", expense_type=et,
+            category="supplies",
             description="rev", amount=Decimal("-20.00"), currency="USD",
             method=PaymentMethod.CASH, paid_at=e.paid_at, business_date=self.today,
             reverses=e,

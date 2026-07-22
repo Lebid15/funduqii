@@ -60,7 +60,7 @@ export function hotelNavItems(t: Dictionary): HotelNavItem[] {
       access: ["service_orders.create", "services.view", "finance.view"],
     },
     {
-      href: "/hotel/finance?tab=expenses",
+      href: "/hotel/expenses",
       label: t.sidebar.expenses,
       icon: Wallet,
       access: ["expenses.view"],

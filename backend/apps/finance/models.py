@@ -17,8 +17,26 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
+from apps.finance.expense_storage import (
+    expense_attachment_upload_to,
+    private_expense_storage,
+)
+from apps.finance.expense_validators import (
+    validate_attachment_extension,
+    validate_attachment_signature,
+    validate_attachment_size,
+)
+
 MONEY_KW = dict(max_digits=12, decimal_places=2)
 ZERO = Decimal("0.00")
+
+
+def normalize_expense_type_name(name: str) -> str:
+    """Canonical form used for per-hotel uniqueness: trimmed, collapsed inner
+    whitespace, lower-cased. Kept portable (a stored column, not a functional
+    index) so uniqueness holds identically on PostgreSQL and the SQLite test DB.
+    """
+    return " ".join((name or "").split()).lower()
 
 
 class NumberKind(models.TextChoices):
@@ -672,6 +690,84 @@ class ExpenseCategory(models.TextChoices):
     OTHER = "other", "Other"
 
 
+#: The seven legacy ``ExpenseCategory`` values, with the English label used to
+#: seed the per-hotel :class:`ExpenseType` rows during the backfill migration.
+#: New expenses reference an ``ExpenseType`` (manageable); the enum stays only to
+#: preserve historical rows and the seed mapping.
+LEGACY_EXPENSE_CATEGORY_LABELS = {
+    ExpenseCategory.OPERATIONS: "Operations",
+    ExpenseCategory.MAINTENANCE: "Maintenance",
+    ExpenseCategory.SUPPLIES: "Supplies",
+    ExpenseCategory.MARKETING: "Marketing",
+    ExpenseCategory.SALARY: "Salary",
+    ExpenseCategory.UTILITIES: "Utilities",
+    ExpenseCategory.OTHER: "Other",
+}
+
+#: The default catalogue seeded for EVERY hotel — the SINGLE runtime source of
+#: truth, derived from the mapping above so the list exists in one place only
+#: (`finance.services.ensure_default_expense_types` is its one consumer).
+#:
+#: Migrations 0012/0013 deliberately keep their own frozen copy: a historical
+#: migration must reproduce the SAME result forever and must never change
+#: behaviour because this constant was later edited.
+DEFAULT_EXPENSE_TYPE_NAMES = tuple(LEGACY_EXPENSE_CATEGORY_LABELS.values())
+
+
+class ExpenseType(models.Model):
+    """A hotel-managed expense category (EXPENSES-CLOSURE). Replaces the fixed
+    ``ExpenseCategory`` enum as the source of truth for NEW expenses. Types are
+    added / renamed / activated / deactivated — NEVER hard-deleted: a
+    deactivated type is hidden from the create form but stays visible on the
+    historical vouchers and reports that reference it."""
+
+    hotel = models.ForeignKey(
+        "tenancy.Hotel", on_delete=models.CASCADE, related_name="expense_types"
+    )
+    name = models.CharField(max_length=80)
+    #: Trimmed/lower-cased ``name`` — the value the per-hotel uniqueness key uses.
+    #: Derived in ``save()`` so the invariant cannot be broken by any writer.
+    #: Sized 2x ``name`` because case-folding can EXPAND a string (e.g. Turkish
+    #: "İ" -> "i̇" is 2 chars), which would otherwise overflow on PostgreSQL.
+    name_normalized = models.CharField(max_length=160, editable=False)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_types_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_types_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "expense_types"
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["hotel", "name_normalized"],
+                name="unique_expense_type_name_per_hotel",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Derive the uniqueness key on EVERY write so no caller can desync it
+        # from ``name`` (the per-hotel unique constraint depends on it).
+        self.name_normalized = normalize_expense_type_name(self.name)
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.name} (hotel={self.hotel_id})"
+
+
 class Expense(models.Model):
     """A hotel expense / payment voucher. Internal record only — no payroll,
     no ledger, no bank reconciliation."""
@@ -680,12 +776,56 @@ class Expense(models.Model):
         "tenancy.Hotel", on_delete=models.CASCADE, related_name="expenses"
     )
     expense_number = models.CharField(max_length=32)
+    # Legacy fixed category — RETAINED for historical rows and the seed mapping.
+    # The source of truth for NEW expenses is ``expense_type`` (a manageable
+    # per-hotel row). Not written for new expenses; kept nullable-in-spirit.
     category = models.CharField(
-        max_length=16, choices=ExpenseCategory.choices, default=ExpenseCategory.OTHER
+        max_length=16,
+        choices=ExpenseCategory.choices,
+        default=ExpenseCategory.OTHER,
+        blank=True,
+    )
+    # EXPENSES-CLOSURE: the manageable expense category — the source of truth for
+    # new expenses. Added nullable (0011) → backfilled (0012) → enforced NOT NULL
+    # (0013). PROTECT because a type is never hard-deleted while referenced.
+    expense_type = models.ForeignKey(
+        ExpenseType,
+        on_delete=models.PROTECT,
+        related_name="expenses",
     )
     description = models.CharField(max_length=255)
+    # ``amount`` is ALWAYS the equivalent in the HOTEL BASE currency — the ONLY
+    # value the shift drawer and reports read, so their math is unchanged by
+    # multi-currency expenses (owner decision: no base_amount rename).
     amount = models.DecimalField(**MONEY_KW)
+    # The hotel BASE currency of ``amount``.
     currency = models.CharField(max_length=3, default="USD")
+    # --- Multi-currency snapshot (EXPENSES-CLOSURE) -------------------------
+    # All nullable/blank so legacy rows are valid unchanged. When the expense is
+    # entered in a currency other than the hotel base currency, the FX snapshot
+    # is captured; ``amount`` still holds the base equivalent. An empty
+    # ``original_currency`` means "same as the base currency".
+    original_currency = models.CharField(max_length=3, blank=True, default="")
+    # The amount actually spent, expressed in ``original_currency`` (informational).
+    original_amount = models.DecimalField(**MONEY_KW, null=True, blank=True)
+    # Manual, high-precision rate (no external gateway/API). Canonical direction:
+    # base ``amount`` = ``original_amount`` * ``exchange_rate`` (base-currency
+    # units per 1 unit of ``original_currency``); NULL when same-currency.
+    exchange_rate = models.DecimalField(
+        max_digits=18, decimal_places=8, null=True, blank=True
+    )
+    # Direction label (default canonical "base_per_payment"); math uses multiply.
+    rate_basis = models.CharField(max_length=32, blank=True, default="")
+    # When the rate was captured (stamped by the service at creation).
+    rate_captured_at = models.DateTimeField(null=True, blank=True)
+    # Who entered the manual rate.
+    rate_entered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_rates_entered",
+    )
     method = models.CharField(
         max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
@@ -713,9 +853,36 @@ class Expense(models.Model):
         blank=True,
         related_name="expenses",
     )
+    # RETAINED for legacy rows only — no longer written by the new create/edit
+    # path (owner: no supplier/payee/reference on the standalone section). Kept
+    # nullable-in-DB so historical values survive; not exposed for new input.
     vendor_name = models.CharField(max_length=180, blank=True, default="")
     reference = models.CharField(max_length=120, blank=True, default="")
     notes = models.CharField(max_length=255, blank=True, default="")
+    # EXPENSES-CLOSURE: ONE optional private receipt/voucher scan. Stored under
+    # PRIVATE_MEDIA_ROOT (never URL-addressable); read only through the gated
+    # streaming view. Validated (extension + content-type + size + magic bytes)
+    # by the upload ENDPOINT and again in the service — these validators are
+    # declared here for documentation/forms, but Django only runs them under
+    # ``full_clean()``, NOT on ``save()``, so they are not the enforcement point.
+    attachment = models.FileField(
+        storage=private_expense_storage,
+        upload_to=expense_attachment_upload_to,
+        validators=[
+            validate_attachment_extension,
+            validate_attachment_size,
+            validate_attachment_signature,
+        ],
+        null=True,
+        blank=True,
+    )
+    # EXPENSES-CLOSURE: strong idempotency on creation (mirrors the reservation
+    # creation key). The client mints the key once per money-moving attempt and
+    # reuses it across retries; the server derives the fingerprint from salient
+    # fields. A partial unique constraint on (hotel, key) makes a double-submit
+    # return the SAME voucher instead of posting a second cash-out.
+    creation_idempotency_key = models.CharField(max_length=64, blank=True, default="")
+    creation_request_fingerprint = models.CharField(max_length=64, blank=True, default="")
     status = models.CharField(
         max_length=16, choices=PostingStatus.choices, default=PostingStatus.POSTED
     )
@@ -764,6 +931,14 @@ class Expense(models.Model):
             models.CheckConstraint(
                 condition=models.Q(reverses__isnull=False) | models.Q(amount__gt=0),
                 name="expense_amount_sign",
+            ),
+            # Idempotent creation: at most ONE expense per (hotel, key) when the
+            # key is set. A replayed key returns the existing voucher; a reused
+            # key with a different fingerprint is a 409 (never a second cash-out).
+            models.UniqueConstraint(
+                fields=["hotel", "creation_idempotency_key"],
+                condition=~models.Q(creation_idempotency_key=""),
+                name="unique_expense_creation_idempotency_key_per_hotel",
             ),
         ]
         indexes = [

@@ -10,6 +10,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import User
 from apps.finance.models import (
     Expense,
+    ExpenseType,
     Folio,
     FolioCharge,
     Invoice,
@@ -26,7 +27,7 @@ ALL_FINANCE = [
     "finance.payment_create", "finance.payment_void", "finance.invoice_create",
     "finance.invoice_issue", "finance.invoice_void",
     "expenses.view", "expenses.create", "expenses.update", "expenses.void",
-    "expenses.reverse",
+    "expenses.reverse", "expenses.manage_types",
 ]
 
 
@@ -404,9 +405,15 @@ class ExpenseTests(APITestCase):
         self.hotel = make_hotel()
         self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE)
         self.client.force_authenticate(self.manager)
+        # EXPENSES-CLOSURE: new expenses reference a manageable ExpenseType, not
+        # the legacy fixed category enum.
+        self.expense_type = self.client.post(
+            reverse("finance:expense-type-list"), {"name": "Supplies"},
+            format="json", **HDR(self.hotel),
+        ).data["id"]
 
     def _create(self, **body):
-        body.setdefault("category", "supplies")
+        body.setdefault("expense_type", self.expense_type)
         body.setdefault("description", "Towels")
         body.setdefault("amount", "80.00")
         body.setdefault("method", "cash")
@@ -414,8 +421,10 @@ class ExpenseTests(APITestCase):
 
     def test_create_and_voucher_number(self):
         res = self._create()
-        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.status_code, 201, res.data)
         self.assertTrue(res.data["expense_number"].startswith("EXP"))
+        self.assertEqual(res.data["expense_type"], self.expense_type)
+        self.assertEqual(res.data["expense_type_name"], "Supplies")
 
     def test_positive_amount(self):
         self.assertEqual(self._create(amount="0.00").status_code, 400)
@@ -423,7 +432,14 @@ class ExpenseTests(APITestCase):
     def test_scoped_by_hotel(self):
         self._create()
         other = make_hotel(slug="o")
-        Expense.objects.create(hotel=other, expense_number="EXP00001", category="other", description="X", amount=Decimal("5.00"), method="cash", paid_at="2030-01-01T00:00:00Z")
+        other_type = ExpenseType.objects.create(
+            hotel=other, name="Other", name_normalized="other"
+        )
+        Expense.objects.create(
+            hotel=other, expense_number="EXP00001", expense_type=other_type,
+            category="other", description="X", amount=Decimal("5.00"),
+            method="cash", paid_at="2030-01-01T00:00:00Z",
+        )
         self.assertEqual(self.client.get(reverse("finance:expense-list"), **HDR(self.hotel)).data["count"], 1)
 
     def test_void_requires_reason(self):
@@ -432,7 +448,9 @@ class ExpenseTests(APITestCase):
         self.assertEqual(no.status_code, 400)
         ok = self.client.post(reverse("finance:expense-void", args=[eid]), {"reason": "wrong"}, format="json", **HDR(self.hotel))
         self.assertEqual(ok.status_code, 200)
+        # The void response is a MINIMAL ack (not the full serializer).
         self.assertEqual(ok.data["status"], "voided")
+        self.assertEqual(set(ok.data.keys()), {"id", "expense_number", "status", "voided_at"})
 
 
 class NumberingTests(APITestCase, FinanceMixin):
@@ -460,7 +478,11 @@ class OverviewTests(APITestCase, FinanceMixin):
         fid = self.create_folio(customer_name="A").data["id"]
         self.add_charge(fid, unit_amount="200.00")
         self.add_payment(fid, amount="120.00")  # paid_at defaults to now -> today
-        self.client.post(reverse("finance:expense-list"), {"category": "supplies", "description": "X", "amount": "50.00", "method": "cash"}, format="json", **HDR(self.hotel))
+        etype = self.client.post(
+            reverse("finance:expense-type-list"), {"name": "Supplies"},
+            format="json", **HDR(self.hotel),
+        ).data["id"]
+        self.client.post(reverse("finance:expense-list"), {"expense_type": etype, "description": "X", "amount": "50.00", "method": "cash"}, format="json", **HDR(self.hotel))
         ov = self.client.get(reverse("finance:overview"), **HDR(self.hotel)).data
         self.assertEqual(ov["open_folios"], 1)
         self.assertEqual(ov["outstanding_balance"], "80.00")
@@ -1209,9 +1231,21 @@ class ExpensesClosureBase(APITestCase, ClosureMixin):
         HotelSettings.objects.create(hotel=self.hotel, default_currency="SAR")
         self.manager = add_member(self.hotel, "m@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE)
         self.client.force_authenticate(self.manager)
+        # EXPENSES-CLOSURE: a manageable per-hotel ExpenseType is the source of
+        # truth for new expenses (replaces the fixed ``category`` enum). The id is
+        # posted as ``expense_type=<id>`` by ``create_exp``.
+        self.expense_type = self.new_type("Supplies")
+
+    def new_type(self, name):
+        r = self.client.post(
+            reverse("finance:expense-type-list"), {"name": name},
+            format="json", **HDR(self.hotel),
+        )
+        assert r.status_code == 201, r.data
+        return r.data["id"]
 
     def create_exp(self, **body):
-        body.setdefault("category", "supplies")
+        body.setdefault("expense_type", self.expense_type)
         body.setdefault("description", "Towels")
         body.setdefault("amount", "80.00")
         body.setdefault("method", "cash")
@@ -1251,11 +1285,13 @@ class ExpenseStampingTests(ExpensesClosureBase):
         self.assertIsNotNone(res.data["paid_at"])
         self.assertEqual(res.data["currency"], "SAR")
 
-    def test_client_paid_at_business_date_currency_rejected(self):
+    def test_client_paid_at_and_business_date_rejected(self):
+        # EXPENSES-CLOSURE: ``currency`` is now a VALID entry-currency input (see
+        # ExpenseFXTests); only the backend-decided timestamp/financial date are
+        # refused outright by the create serializer.
         for payload in (
             {"paid_at": "2020-01-01T00:00:00Z"},
             {"business_date": "2020-01-01"},
-            {"currency": "EUR"},
         ):
             res = self.create_exp(**payload)
             self.assertEqual(res.status_code, 400, payload)
@@ -1276,24 +1312,43 @@ class ExpenseStampingTests(ExpensesClosureBase):
 
 
 class ExpensePatchGuardTests(ExpensesClosureBase):
-    """The P0 fix: money is immutable; only descriptive fields, same open day."""
+    """EXPENSES-CLOSURE FLIP: the atomic financial edit now lets money AND
+    classification change (amount / method / expense_type / currency + FX) inside
+    the voucher's own open business date, recording a before→after activity diff.
+    The truly immutable fields (paid_at / business_date / shift / status / reverses
+    / hotel / category) are STILL rejected outright."""
 
     def setUp(self):
         super().setUp()
         self.eid = self.create_exp().data["id"]
 
     def test_descriptive_fields_editable_same_day_with_activity_diff(self):
-        res = self.patch_exp(
-            self.eid, description="Bath towels", notes="urgent",
-            reference="INV-77", vendor_name="Al Amal",
-        )
-        self.assertEqual(res.status_code, 200)
+        res = self.patch_exp(self.eid, description="Bath towels", notes="urgent")
+        self.assertEqual(res.status_code, 200, res.data)
         self.assertEqual(res.data["description"], "Bath towels")
+        self.assertEqual(res.data["notes"], "urgent")
         event = ActivityEvent.objects.filter(
             hotel=self.hotel, event_type="expense.updated"
         ).latest("id")
         self.assertIn("Towels", event.message)       # old value
         self.assertIn("Bath towels", event.message)  # new value
+
+    def test_money_and_classification_editable_with_activity_diff(self):
+        other_type = self.new_type("Maintenance")
+        res = self.patch_exp(
+            self.eid, amount="15.00", method="electronic", expense_type=other_type,
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["amount"], "15.00")
+        self.assertEqual(res.data["method"], "electronic")
+        self.assertEqual(res.data["expense_type"], other_type)
+        self.assertEqual(res.data["expense_type_name"], "Maintenance")
+        event = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).latest("id")
+        # The diff carries the old and new money values.
+        self.assertIn("80.00", event.message)
+        self.assertIn("15.00", event.message)
 
     def test_no_activity_when_nothing_changes(self):
         before = ActivityEvent.objects.filter(
@@ -1306,10 +1361,10 @@ class ExpensePatchGuardTests(ExpensesClosureBase):
         ).count()
         self.assertEqual(before, after)
 
-    def test_every_financial_field_rejected(self):
+    def test_immutable_fields_rejected(self):
+        original_category = ExpenseModel.objects.get(pk=self.eid).category
         for payload in (
-            {"amount": "999.00"}, {"category": "salary"}, {"method": "card"},
-            {"currency": "EUR"}, {"paid_at": "2020-01-01T00:00:00Z"},
+            {"category": "salary"}, {"paid_at": "2020-01-01T00:00:00Z"},
             {"business_date": "2020-01-01"}, {"shift": 1}, {"status": "voided"},
             {"reverses": 1}, {"hotel": 999},
         ):
@@ -1317,7 +1372,7 @@ class ExpensePatchGuardTests(ExpensesClosureBase):
             self.assertEqual(res.status_code, 400, payload)
         expense = ExpenseModel.objects.get(pk=self.eid)
         self.assertEqual(str(expense.amount), "80.00")
-        self.assertEqual(expense.category, "supplies")
+        self.assertEqual(expense.category, original_category)
 
     def test_edit_refused_after_record_day_passed(self):
         self.age_exp(self.eid)
@@ -1373,14 +1428,15 @@ class ExpenseReversalTests(ExpensesClosureBase):
         return eid
 
     def test_reverse_full_linked_negative(self):
-        eid = self._aged(amount="80.00", vendor_name="Al Amal", reference="INV-9")
+        eid = self._aged(amount="80.00")
         res = self.reverse_exp(eid)
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data["amount"], "-80.00")
         self.assertEqual(res.data["reverses"], eid)
         self.assertEqual(res.data["business_date"], str(self.bd()))
-        self.assertEqual(res.data["vendor_name"], "Al Amal")
-        self.assertEqual(res.data["reference"], "INV-9")
+        # The counter-voucher copies the original's expense_type (classification).
+        self.assertEqual(res.data["expense_type"], self.expense_type)
+        self.assertEqual(res.data["expense_type_name"], "Supplies")
         original = ExpenseModel.objects.get(pk=eid)
         self.assertEqual(original.status, "posted")
 
@@ -1455,6 +1511,7 @@ class ExpenseReversalTests(ExpensesClosureBase):
             with db_transaction.atomic():
                 ExpenseModel.objects.create(
                     hotel=self.hotel, expense_number="EXPX9999",
+                    expense_type=original.expense_type,
                     category="other", description="dup", amount=Decimal("-80.00"),
                     method="cash", paid_at=timezone.now(), reverses=original,
                 )
@@ -1464,6 +1521,7 @@ class ExpenseReversalTests(ExpensesClosureBase):
             with db_transaction.atomic():
                 ExpenseModel.objects.create(
                     hotel=self.hotel, expense_number="EXPX9998",
+                    expense_type_id=self.expense_type,
                     category="other", description="neg", amount=Decimal("-5.00"),
                     method="cash", paid_at=timezone.now(),
                 )
@@ -1499,7 +1557,8 @@ class ExpenseDerivationTests(ExpensesClosureBase):
 
     def test_legacy_fallback_paid_at_date(self):
         legacy = ExpenseModel.objects.create(
-            hotel=self.hotel, expense_number="EXPLEG01", category="other",
+            hotel=self.hotel, expense_number="EXPLEG01",
+            expense_type_id=self.expense_type, category="other",
             description="legacy", amount=Decimal("11.00"), method="cash",
             paid_at=timezone.now(), business_date=None,
         )
@@ -1518,6 +1577,744 @@ class ExpenseDerivationTests(ExpensesClosureBase):
             **HDR(self.hotel),
         )
         self.assertEqual(res.data["count"], 1)
+
+
+# --------------------------------------------------------------------------- #
+# EXPENSES-CLOSURE — new coverage (idempotency, FX, types, permissions,        #
+# tenant isolation, atomic edit, attachment, migration/backfill)               #
+# --------------------------------------------------------------------------- #
+
+import importlib
+import uuid
+from unittest import mock
+from urllib.parse import parse_qs, urlparse
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TransactionTestCase, override_settings
+
+# A real, minimal 1x1 PNG (valid signature + IHDR + IDAT + IEND) — enough to
+# pass the extension + content-type + size + magic-byte signature checks.
+_PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def _rows(response):
+    """List responses may be paginated ({count, results}) or a bare list."""
+    data = response.data
+    return data["results"] if isinstance(data, dict) and "results" in data else data
+
+
+class ExpenseIdempotencyTests(ExpensesClosureBase):
+    """Strong creation idempotency: same key + same salient body → the SAME
+    voucher (one row); same key + materially different body → 409."""
+
+    def test_same_key_same_body_returns_same_row(self):
+        r1 = self.create_exp(amount="10.00", idempotency_key="k1")
+        r2 = self.create_exp(amount="10.00", idempotency_key="k1")
+        self.assertEqual(r1.status_code, 201, r1.data)
+        self.assertEqual(r2.status_code, 201, r2.data)
+        self.assertEqual(r1.data["id"], r2.data["id"])
+        self.assertEqual(ExpenseModel.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_same_key_different_body_conflict(self):
+        self.create_exp(amount="10.00", idempotency_key="k2")
+        r = self.create_exp(amount="99.00", idempotency_key="k2")
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertEqual(r.data["code"], "idempotency_key_conflict")
+        self.assertEqual(ExpenseModel.objects.filter(hotel=self.hotel).count(), 1)
+
+    def test_distinct_keys_create_distinct_rows(self):
+        self.create_exp(amount="10.00", idempotency_key="a")
+        self.create_exp(amount="10.00", idempotency_key="b")
+        self.assertEqual(ExpenseModel.objects.filter(hotel=self.hotel).count(), 2)
+
+    def test_no_key_always_creates(self):
+        self.create_exp(amount="10.00")
+        self.create_exp(amount="10.00")
+        self.assertEqual(ExpenseModel.objects.filter(hotel=self.hotel).count(), 2)
+
+
+class ExpenseFXTests(ExpensesClosureBase):
+    """Multi-currency FX (mirrors payments). Base currency stores no rate; a
+    foreign entry derives base = original × rate (ROUND_HALF_UP); a non-accepted
+    currency or a foreign entry missing the rate/original is a clean 400."""
+
+    def setUp(self):
+        super().setUp()
+        s = self.hotel.settings
+        s.accepted_currencies = ["USD"]
+        s.save(update_fields=["accepted_currencies"])
+
+    def test_base_currency_stores_no_rate(self):
+        r = self.create_exp(amount="80.00")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["amount"], "80.00")
+        self.assertEqual(r.data["currency"], "SAR")
+        self.assertIsNone(r.data["exchange_rate"])
+
+    def test_explicit_base_currency_stores_no_rate(self):
+        r = self.create_exp(currency="SAR", amount="50.00")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertIsNone(r.data["exchange_rate"])
+        self.assertEqual(r.data["original_currency"], "SAR")
+
+    def test_foreign_base_is_original_times_rate(self):
+        r = self.create_exp(
+            currency="USD", original_amount="20.00", exchange_rate="3.75",
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["amount"], "75.00")
+        self.assertEqual(r.data["currency"], "SAR")
+        self.assertEqual(r.data["original_currency"], "USD")
+        self.assertEqual(r.data["original_amount"], "20.00")
+        self.assertEqual(r.data["exchange_rate"], "3.75000000")
+
+    def test_foreign_rounds_half_up(self):
+        # 1.00 * 2.125 = 2.125 -> ROUND_HALF_UP at 2 dp = 2.13 (HALF_EVEN = 2.12).
+        r = self.create_exp(
+            currency="USD", original_amount="1.00", exchange_rate="2.125",
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["amount"], "2.13")
+
+    def test_non_accepted_currency_rejected(self):
+        r = self.create_exp(
+            currency="EUR", original_amount="5.00", exchange_rate="4.00",
+        )
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_finance_operation")
+
+    def test_foreign_missing_rate_rejected(self):
+        r = self.create_exp(currency="USD", original_amount="10.00")
+        self.assertEqual(r.status_code, 400, r.data)
+
+    def test_foreign_missing_original_rejected(self):
+        r = self.create_exp(currency="USD", exchange_rate="3.75")
+        self.assertEqual(r.status_code, 400, r.data)
+
+
+class ExpenseAmountTests(ExpensesClosureBase):
+    """A zero OR negative base amount is refused through the API."""
+
+    def test_zero_amount_rejected(self):
+        r = self.create_exp(amount="0.00")
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_amount")
+
+    def test_negative_amount_rejected(self):
+        r = self.create_exp(amount="-5.00")
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_amount")
+
+
+class ExpenseTypeManagementTests(ExpensesClosureBase):
+    """Manageable per-hotel expense types: create/rename/(de)activate, normalized
+    uniqueness, active-only on create, inactive hidden from create but kept on
+    history, and tenant isolation on list/detail."""
+
+    def _list(self, all_=False):
+        params = {"all": "1"} if all_ else {}
+        return self.client.get(
+            reverse("finance:expense-type-list"), params, **HDR(self.hotel)
+        )
+
+    def _type_ids(self, all_=False):
+        return [t["id"] for t in _rows(self._list(all_))]
+
+    def _patch(self, tid, **body):
+        return self.client.patch(
+            reverse("finance:expense-type-detail", args=[tid]), body,
+            format="json", **HDR(self.hotel),
+        )
+
+    def test_create_type(self):
+        r = self.client.post(
+            reverse("finance:expense-type-list"), {"name": "Utilities"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["name"], "Utilities")
+        self.assertTrue(r.data["is_active"])
+
+    def test_duplicate_normalized_name_rejected(self):
+        # ``Supplies`` already exists (base setUp); case/space variants collide.
+        for name in ("Supplies", "  supplies ", "SUPPLIES"):
+            r = self.client.post(
+                reverse("finance:expense-type-list"), {"name": name},
+                format="json", **HDR(self.hotel),
+            )
+            self.assertEqual(r.status_code, 400, (name, r.data))
+
+    def test_rename_type(self):
+        r = self._patch(self.expense_type, name="Cleaning Supplies")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["name"], "Cleaning Supplies")
+
+    def test_deactivate_hides_from_create_but_keeps_history(self):
+        eid = self.create_exp().data["id"]  # posted under the active type
+        r = self._patch(self.expense_type, is_active=False)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertFalse(r.data["is_active"])
+        # A NEW expense can no longer be filed under a retired type.
+        create = self.create_exp()
+        self.assertEqual(create.status_code, 400, create.data)
+        # But the historical voucher still shows the (now inactive) type name.
+        detail = self.client.get(
+            reverse("finance:expense-detail", args=[eid]), **HDR(self.hotel)
+        ).data
+        self.assertEqual(detail["expense_type_name"], "Supplies")
+
+    def test_inactive_hidden_from_default_list_visible_with_all(self):
+        self._patch(self.expense_type, is_active=False)
+        self.assertNotIn(self.expense_type, self._type_ids())
+        self.assertIn(self.expense_type, self._type_ids(all_=True))
+
+    def test_all_flag_ignored_without_manage_types(self):
+        self._patch(self.expense_type, is_active=False)
+        staff = add_member(self.hotel, "vv@x.com", perms=["expenses.view"])
+        self.client.force_authenticate(staff)
+        self.assertNotIn(self.expense_type, self._type_ids(all_=True))
+
+    def test_foreign_hotel_type_on_create_rejected(self):
+        other = make_hotel(slug="o")
+        other_type = ExpenseType.objects.create(
+            hotel=other, name="X", name_normalized="x"
+        )
+        r = self.create_exp(expense_type=other_type.id)
+        self.assertEqual(r.status_code, 400, r.data)
+
+    def test_type_list_is_tenant_scoped(self):
+        other = make_hotel(slug="o")
+        ExpenseType.objects.create(
+            hotel=other, name="Foreign", name_normalized="foreign"
+        )
+        names = [t["name"] for t in _rows(self._list(all_=True))]
+        self.assertNotIn("Foreign", names)
+
+    def test_type_detail_cross_hotel_isolated(self):
+        other = make_hotel(slug="o")
+        other_type = ExpenseType.objects.create(
+            hotel=other, name="Foreign", name_normalized="foreign"
+        )
+        self.assertEqual(self._patch(other_type.id, name="Hijack").status_code, 404)
+
+
+class ExpensePermissionMatrixTests(ExpensesClosureBase):
+    """Per-permission gating (positive + negative) for EACH of the six expense
+    permission codes. A STAFF member holding ONLY the target code succeeds; a
+    STAFF member holding a DIFFERENT single code is refused (403)."""
+
+    def _staff(self, perms):
+        user = add_member(self.hotel, f"{uuid.uuid4().hex[:10]}@x.com", perms=perms)
+        self.client.force_authenticate(user)
+        return user
+
+    def _manager_expense(self, **body):
+        self.client.force_authenticate(self.manager)
+        return self.create_exp(**body).data["id"]
+
+    def _post_create(self):
+        return self.client.post(
+            reverse("finance:expense-list"),
+            {"expense_type": self.expense_type, "description": "X",
+             "amount": "10.00", "method": "cash"},
+            format="json", **HDR(self.hotel),
+        )
+
+    def _patch(self, eid):
+        return self.client.patch(
+            reverse("finance:expense-detail", args=[eid]),
+            {"description": "edited"}, format="json", **HDR(self.hotel),
+        )
+
+    def test_view_permission(self):
+        self._staff(["expenses.view"])
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-list"), **HDR(self.hotel)).status_code, 200
+        )
+        self._staff(["expenses.create"])  # a different single code, not view
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-list"), **HDR(self.hotel)).status_code, 403
+        )
+
+    def test_create_permission(self):
+        self._staff(["expenses.create"])
+        self.assertEqual(self._post_create().status_code, 201)
+        self._staff(["expenses.view"])
+        self.assertEqual(self._post_create().status_code, 403)
+
+    def test_update_permission(self):
+        eid = self._manager_expense()
+        self._staff(["expenses.update"])
+        self.assertEqual(self._patch(eid).status_code, 200)
+        eid2 = self._manager_expense()
+        self._staff(["expenses.view"])
+        self.assertEqual(self._patch(eid2).status_code, 403)
+
+    def test_void_permission(self):
+        eid = self._manager_expense()
+        self._staff(["expenses.void"])
+        self.assertEqual(self.void_exp(eid).status_code, 200)
+        eid2 = self._manager_expense()
+        self._staff(["expenses.view"])
+        self.assertEqual(self.void_exp(eid2).status_code, 403)
+
+    def test_reverse_permission(self):
+        eid = self._manager_expense()
+        self.age_exp(eid)
+        self._staff(["expenses.reverse"])
+        self.assertEqual(self.reverse_exp(eid).status_code, 201)
+        eid2 = self._manager_expense()
+        self.age_exp(eid2)
+        self._staff(["expenses.view"])
+        self.assertEqual(self.reverse_exp(eid2).status_code, 403)
+
+    def test_manage_types_permission(self):
+        self._staff(["expenses.manage_types"])
+        r = self.client.post(
+            reverse("finance:expense-type-list"), {"name": "New Type"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 201, r.data)
+        self._staff(["expenses.view"])
+        r2 = self.client.post(
+            reverse("finance:expense-type-list"), {"name": "Another"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(r2.status_code, 403)
+
+
+class ExpenseTenantIsolationTests(ExpensesClosureBase):
+    """A foreign-hotel object id is a 404 on EVERY expense endpoint — list,
+    detail GET/PATCH, void, reverse, voucher, attachment upload/url/stream, and
+    type list/detail."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = make_hotel(slug="other")
+        HotelSettings.objects.create(hotel=self.other, default_currency="SAR")
+        self.other_type = ExpenseType.objects.create(
+            hotel=self.other, name="Foreign", name_normalized="foreign"
+        )
+        self.other_exp = ExpenseModel.objects.create(
+            hotel=self.other, expense_number="EXPF0001",
+            expense_type=self.other_type, description="foreign",
+            amount=Decimal("9.00"), currency="SAR", method="cash",
+            paid_at=timezone.now(), business_date=self.bd(),
+            attachment=SimpleUploadedFile(
+                "r.png", _PNG_1x1, content_type="image/png"
+            ),
+        )
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            if self.other_exp.attachment:
+                self.other_exp.attachment.delete(save=False)
+        except Exception:  # pragma: no cover - best-effort disk cleanup
+            pass
+
+    @property
+    def _pk(self):
+        return self.other_exp.id
+
+    def test_list_excludes_foreign(self):
+        data = self.client.get(reverse("finance:expense-list"), **HDR(self.hotel)).data
+        self.assertNotIn(self._pk, [e["id"] for e in _rows_from(data)])
+
+    def test_detail_get_foreign_404(self):
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-detail", args=[self._pk]), **HDR(self.hotel)).status_code, 404
+        )
+
+    def test_detail_patch_foreign_404(self):
+        self.assertEqual(
+            self.client.patch(
+                reverse("finance:expense-detail", args=[self._pk]),
+                {"description": "x"}, format="json", **HDR(self.hotel),
+            ).status_code, 404
+        )
+
+    def test_void_foreign_404(self):
+        self.assertEqual(
+            self.client.post(
+                reverse("finance:expense-void", args=[self._pk]),
+                {"reason": "x"}, format="json", **HDR(self.hotel),
+            ).status_code, 404
+        )
+
+    def test_reverse_foreign_404(self):
+        self.assertEqual(
+            self.client.post(
+                reverse("finance:expense-reverse", args=[self._pk]),
+                {"reason": "x"}, format="json", **HDR(self.hotel),
+            ).status_code, 404
+        )
+
+    def test_voucher_foreign_404(self):
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-voucher", args=[self._pk]), **HDR(self.hotel)).status_code, 404
+        )
+
+    def test_attachment_upload_foreign_404(self):
+        upload = SimpleUploadedFile("r.png", _PNG_1x1, content_type="image/png")
+        r = self.client.post(
+            reverse("finance:expense-attachment", args=[self._pk]),
+            {"file": upload}, format="multipart", **HDR(self.hotel),
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_attachment_url_foreign_404(self):
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-attachment-url", args=[self._pk]), **HDR(self.hotel)).status_code, 404
+        )
+
+    def test_attachment_stream_foreign_404(self):
+        self.assertEqual(
+            self.client.get(reverse("finance:expense-attachment-stream", args=[self._pk]), **HDR(self.hotel)).status_code, 404
+        )
+
+    def test_type_detail_foreign_404(self):
+        self.assertEqual(
+            self.client.patch(
+                reverse("finance:expense-type-detail", args=[self.other_type.id]),
+                {"name": "x"}, format="json", **HDR(self.hotel),
+            ).status_code, 404
+        )
+
+    def test_type_list_excludes_foreign(self):
+        data = self.client.get(
+            reverse("finance:expense-type-list"), {"all": "1"}, **HDR(self.hotel)
+        ).data
+        self.assertNotIn("Foreign", [t["name"] for t in _rows_from(data)])
+
+
+def _rows_from(data):
+    return data["results"] if isinstance(data, dict) and "results" in data else data
+
+
+class ExpenseAtomicEditTests(ExpensesClosureBase):
+    """The atomic financial edit reverses the old effect and applies the new one
+    within one transaction (the drawer/reports re-sum the new ``amount``); it is
+    refused after the record's day passes/closes; a no-op writes nothing; a
+    reversal row is never editable."""
+
+    def test_amount_change_reflects_in_shift_drawer(self):
+        from apps.shifts.services import open_shift, shift_cash_summary
+
+        shift = open_shift(self.hotel, user=self.manager, opening_cash_amount="100.00")
+        eid = self.create_exp(amount="20.00", method="cash").data["id"]
+        self.assertEqual(str(shift_cash_summary(shift)["expected_cash"]), "80.00")
+        r = self.patch_exp(eid, amount="50.00")
+        self.assertEqual(r.status_code, 200, r.data)
+        # 100 opening - 50 cash-out = 50 expected in the drawer.
+        self.assertEqual(str(shift_cash_summary(shift)["expected_cash"]), "50.00")
+
+    def test_currency_to_foreign_and_back(self):
+        s = self.hotel.settings
+        s.accepted_currencies = ["USD"]
+        s.save(update_fields=["accepted_currencies"])
+        eid = self.create_exp(amount="80.00").data["id"]
+        r = self.patch_exp(
+            eid, currency="USD", original_amount="20.00", exchange_rate="3.75",
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["amount"], "75.00")
+        self.assertEqual(r.data["original_currency"], "USD")
+        self.assertEqual(r.data["exchange_rate"], "3.75000000")
+        # ...and back to base clears the FX snapshot.
+        r2 = self.patch_exp(eid, currency="SAR", amount="80.00")
+        self.assertEqual(r2.status_code, 200, r2.data)
+        self.assertEqual(r2.data["amount"], "80.00")
+        self.assertEqual(r2.data["currency"], "SAR")
+        self.assertIsNone(r2.data["exchange_rate"])
+        self.assertEqual(r2.data["original_currency"], "SAR")
+
+    def test_edit_refused_after_day_passed(self):
+        eid = self.create_exp().data["id"]
+        self.age_exp(eid)
+        self.assertEqual(self.patch_exp(eid, amount="5.00").status_code, 409)
+
+    def test_edit_refused_after_close(self):
+        eid = self.create_exp().data["id"]
+        self.close_day()
+        self.assertEqual(self.patch_exp(eid, amount="5.00").status_code, 409)
+
+    def test_no_op_edit_writes_nothing(self):
+        eid = self.create_exp(amount="80.00").data["id"]
+        before = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).count()
+        stamp = ExpenseModel.objects.get(pk=eid).updated_at
+        r = self.patch_exp(eid, amount="80.00", description="Towels")
+        self.assertEqual(r.status_code, 200, r.data)
+        after = ActivityEvent.objects.filter(
+            hotel=self.hotel, event_type="expense.updated"
+        ).count()
+        self.assertEqual(before, after)
+        self.assertEqual(ExpenseModel.objects.get(pk=eid).updated_at, stamp)
+
+    def test_reversal_row_not_editable(self):
+        eid = self.create_exp().data["id"]
+        self.age_exp(eid)
+        rid = self.reverse_exp(eid).data["id"]
+        r = self.patch_exp(rid, description="edit reversal")
+        self.assertEqual(r.status_code, 400, r.data)
+
+
+class ExpenseAttachmentTests(ExpensesClosureBase):
+    """ONE optional private receipt scan: valid PNG uploads; wrong-extension /
+    oversize / spoofed-signature / SVG are 400 ``invalid_media_file``; replace
+    deletes the old file; remove clears it; upload is refused after close; a
+    signed-url token streams the bytes while a forged/expired token is 403."""
+
+    def setUp(self):
+        super().setUp()
+        self.eid = self.create_exp().data["id"]
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        # Best-effort disk cleanup. This runs as an ``addCleanup`` hook, i.e.
+        # AFTER the test's transaction/connection has been torn down — on
+        # PostgreSQL the query itself raises "the connection is closed", and an
+        # exception in a cleanup marks an otherwise-passing test as ERROR. So the
+        # LOOKUP must be guarded too, not just the per-file delete.
+        try:
+            expenses = list(ExpenseModel.objects.filter(hotel=self.hotel))
+        except Exception:  # pragma: no cover - connection already gone
+            return
+        for exp in expenses:
+            try:
+                if exp.attachment:
+                    exp.attachment.delete(save=False)
+            except Exception:  # pragma: no cover - best-effort disk cleanup
+                pass
+
+    def _upload(self, eid=None, name="receipt.png", data=None, content_type="image/png"):
+        upload = SimpleUploadedFile(
+            name, data if data is not None else _PNG_1x1, content_type=content_type
+        )
+        return self.client.post(
+            reverse("finance:expense-attachment", args=[eid or self.eid]),
+            {"file": upload}, format="multipart", **HDR(self.hotel),
+        )
+
+    def test_upload_png_sets_has_attachment(self):
+        r = self._upload()
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertTrue(r.data["has_attachment"])
+        detail = self.client.get(
+            reverse("finance:expense-detail", args=[self.eid]), **HDR(self.hotel)
+        ).data
+        self.assertTrue(detail["has_attachment"])
+
+    def test_wrong_extension_rejected(self):
+        r = self._upload(name="receipt.txt", content_type="text/plain")
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_media_file")
+
+    def test_spoofed_signature_rejected(self):
+        # A ``.png`` name + image/png content type but NON-image bytes.
+        r = self._upload(data=b"this is definitely not a real image", content_type="image/png")
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_media_file")
+
+    def test_svg_rejected(self):
+        r = self._upload(
+            name="logo.svg", data=b"<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+            content_type="image/svg+xml",
+        )
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_media_file")
+
+    @override_settings(EXPENSE_ATTACH_MAX_BYTES=8)
+    def test_oversize_rejected(self):
+        r = self._upload()  # _PNG_1x1 is well over 8 bytes
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertEqual(r.data["code"], "invalid_media_file")
+
+    def test_replace_deletes_old_file(self):
+        self._upload()
+        exp = ExpenseModel.objects.get(pk=self.eid)
+        old_name = exp.attachment.name
+        storage = exp.attachment.storage
+        self.assertTrue(storage.exists(old_name))
+        # The physical delete of the REPLACED file is deferred to
+        # ``transaction.on_commit`` (a filesystem delete must not happen inside a
+        # transaction that can still roll back), so run the callbacks here.
+        with self.captureOnCommitCallbacks(execute=True):
+            self._upload()  # replace
+        exp.refresh_from_db()
+        new_name = exp.attachment.name
+        self.assertNotEqual(old_name, new_name)
+        self.assertFalse(storage.exists(old_name))
+        self.assertTrue(storage.exists(new_name))
+
+    def test_remove_clears_attachment(self):
+        self._upload()
+        exp = ExpenseModel.objects.get(pk=self.eid)
+        name = exp.attachment.name
+        storage = exp.attachment.storage
+        # The physical delete is deferred to ``transaction.on_commit``.
+        with self.captureOnCommitCallbacks(execute=True):
+            r = self.client.delete(
+                reverse("finance:expense-attachment", args=[self.eid]), **HDR(self.hotel)
+            )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertFalse(r.data["has_attachment"])
+        exp.refresh_from_db()
+        self.assertFalse(bool(exp.attachment))
+        self.assertFalse(storage.exists(name))
+
+    def test_upload_refused_after_close(self):
+        self.close_day()
+        r = self._upload()
+        self.assertEqual(r.status_code, 409, r.data)
+
+    def test_stream_via_signed_url_token(self):
+        self._upload()
+        url = self.client.get(
+            reverse("finance:expense-attachment-url", args=[self.eid]), **HDR(self.hotel)
+        ).data["url"]
+        token = parse_qs(urlparse(url).query)["token"][0]
+        stream = reverse("finance:expense-attachment-stream", args=[self.eid])
+        self.client.force_authenticate(None)  # the token alone authorizes
+        resp = self.client.get(stream, {"token": token})
+        self.assertEqual(resp.status_code, 200)
+        content = b"".join(resp.streaming_content)
+        # Do NOT call ``resp.close()``: closing a response fires Django's
+        # ``request_finished`` signal, whose ``close_old_connections`` receiver
+        # closes the DB connection — which destroys the transaction wrapping this
+        # TestCase and makes EVERY later test in the class fail in setUp with
+        # "the connection is closed". Release the file handle directly instead.
+        handle = getattr(resp, "file_to_stream", None)
+        if handle is not None:
+            handle.close()
+        self.assertEqual(content[:8], _PNG_1x1[:8])
+
+    def test_forged_token_rejected(self):
+        self._upload()
+        stream = reverse("finance:expense-attachment-stream", args=[self.eid])
+        self.client.force_authenticate(None)
+        resp = self.client.get(stream, {"token": "forged.garbage.value"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_expired_token_rejected(self):
+        self._upload()
+        url = self.client.get(
+            reverse("finance:expense-attachment-url", args=[self.eid]), **HDR(self.hotel)
+        ).data["url"]
+        token = parse_qs(urlparse(url).query)["token"][0]
+        stream = reverse("finance:expense-attachment-stream", args=[self.eid])
+        self.client.force_authenticate(None)
+        with mock.patch(
+            "apps.finance.expense_attachment_views.STREAM_TOKEN_MAX_AGE", -1
+        ):
+            resp = self.client.get(stream, {"token": token})
+        self.assertEqual(resp.status_code, 403)
+
+
+class ExpenseTypeBackfillMigrationTests(TransactionTestCase):
+    """Data-integrity proof of the backfill chain (0011 nullable → 0012 seed +
+    backfill → 0013 enforce NOT NULL): every legacy ``category`` row gains a
+    matching non-null ``expense_type``, and 0013's guard refuses to enforce
+    NOT NULL while any null remains."""
+
+    migrate_from = ("finance", "0010_foliocharge_snapshots_and_wide_source")
+    migrate_backfill = ("finance", "0012_expense_type_backfill")
+    migrate_to = ("finance", "0013_expense_type_enforce")
+
+    _LABELS = {
+        "operations": "Operations", "maintenance": "Maintenance",
+        "supplies": "Supplies", "marketing": "Marketing", "salary": "Salary",
+        "utilities": "Utilities", "other": "Other",
+    }
+
+    def setUp(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        executor.loader.build_graph()
+
+    def tearDown(self):
+        # Restore the DB to the latest migration state for the rest of the suite.
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+    def _state(self, target):
+        return MigrationExecutor(connection).loader.project_state([target]).apps
+
+    def test_backfill_assigns_matching_type(self):
+        old = self._state(self.migrate_from)
+        Hotel = old.get_model("tenancy", "Hotel")
+        Expense = old.get_model("finance", "Expense")
+        hotel = Hotel.objects.create(name="H", slug="mig-hotel", status="active")
+        created = {}
+        for i, cat in enumerate(self._LABELS):
+            e = Expense.objects.create(
+                hotel=hotel, expense_number=f"EXP{i:05d}", category=cat,
+                description=f"legacy {cat}", amount=Decimal("10.00"),
+                method="cash", paid_at=timezone.now(),
+            )
+            created[e.id] = cat
+        # A blank/unknown legacy category must fall to the "Other" type.
+        blank = Expense.objects.create(
+            hotel=hotel, expense_number="EXPBLANK", category="",
+            description="blank", amount=Decimal("5.00"), method="cash",
+            paid_at=timezone.now(),
+        )
+        created[blank.id] = ""
+
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate([self.migrate_to])  # 0011 -> 0012 -> 0013
+
+        new = self._state(self.migrate_to)
+        Expense2 = new.get_model("finance", "Expense")
+        for e in Expense2.objects.filter(hotel_id=hotel.id):
+            self.assertIsNotNone(e.expense_type_id, e.expense_number)
+            cat = created[e.id]
+            expected = self._LABELS[cat] if cat in self._LABELS else "Other"
+            self.assertEqual(e.expense_type.name, expected, e.expense_number)
+        self.assertEqual(
+            Expense2.objects.filter(hotel_id=hotel.id, expense_type__isnull=True).count(),
+            0,
+        )
+
+    def test_enforce_guard_heals_late_rows_before_enforcing(self):
+        """A row written AFTER 0012 — e.g. by the PREVIOUS release still serving
+        traffic during a rolling deploy — is healed by 0013's guard (mapped from
+        its legacy ``category``) instead of hard-failing the release. The guard
+        still refuses to enforce if anything remains unassigned."""
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_backfill])  # 0011 + 0012 only
+        state = self._state(self.migrate_backfill)
+        Hotel = state.get_model("tenancy", "Hotel")
+        Expense = state.get_model("finance", "Expense")
+        hotel = Hotel.objects.create(name="H", slug="mig-guard", status="active")
+        Expense.objects.create(
+            hotel=hotel, expense_number="EXPNULL", category="utilities",
+            description="late row", amount=Decimal("1.00"), method="cash",
+            paid_at=timezone.now(), expense_type=None,
+        )
+        mod = importlib.import_module(
+            "apps.finance.migrations.0013_expense_type_enforce"
+        )
+        with connection.schema_editor(atomic=False) as se:
+            mod.heal_then_assert(state, se)  # heals, does NOT raise
+
+        healed = Expense.objects.get(expense_number="EXPNULL")
+        self.assertIsNotNone(healed.expense_type_id)
+        self.assertEqual(healed.expense_type.name, "Utilities")
+        # Nothing left unassigned, so NOT NULL can now be enforced safely.
+        self.assertEqual(
+            Expense.objects.filter(expense_type__isnull=True).count(), 0
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1994,3 +2791,130 @@ class ChargeDTOEnrichmentTests(APITestCase, ClosureMixin):
         # The existing folio print still works unchanged.
         self.assertEqual(r.data["document"], "statement")
         self.assertEqual(len(r.data["folio"]["charges"]), 3)
+
+
+class ExpenseWriteResponseDisclosureTests(ExpensesClosureBase):
+    """SEC regression: a WRITE permission must NEVER widen READ access.
+
+    An ``expenses.update``-only caller is refused on GET, so an (even empty)
+    PATCH must not hand back the full voucher — that would be a silent
+    ``expenses.view`` bypass. Same for an ``expenses.reverse``-only caller
+    (owner §7: void/reverse must not return data wider than the permission).
+    """
+
+    ACK_KEYS = {"id", "expense_number", "status", "voided_at"}
+
+    def _staff(self, perms):
+        user = add_member(self.hotel, f"{uuid.uuid4().hex[:10]}@x.com", perms=perms)
+        self.client.force_authenticate(user)
+        return user
+
+    def test_update_only_caller_gets_ack_not_the_voucher(self):
+        eid = self.create_exp(amount="777.77").data["id"]
+        self._staff(["expenses.update"])
+        # It cannot READ the record...
+        got = self.client.get(
+            reverse("finance:expense-detail", args=[eid]), **HDR(self.hotel)
+        )
+        self.assertEqual(got.status_code, 403)
+        # ...so an empty PATCH must not disclose it either.
+        res = self.client.patch(
+            reverse("finance:expense-detail", args=[eid]), {},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(set(res.data), self.ACK_KEYS)
+        self.assertNotIn("amount", res.data)
+        self.assertNotIn("description", res.data)
+
+    def test_update_caller_holding_view_still_gets_the_voucher(self):
+        eid = self.create_exp(amount="12.00").data["id"]
+        self._staff(["expenses.update", "expenses.view"])
+        res = self.client.patch(
+            reverse("finance:expense-detail", args=[eid]),
+            {"description": "New text"}, format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["amount"], "12.00")
+
+    def test_reverse_only_caller_gets_ack_not_the_voucher(self):
+        eid = self.create_exp(amount="55.00").data["id"]
+        self.age_exp(eid)  # void window passed -> the corrective path applies
+        self._staff(["expenses.reverse"])
+        res = self.client.post(
+            reverse("finance:expense-reverse", args=[eid]), {"reason": "fix"},
+            format="json", **HDR(self.hotel),
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(set(res.data), self.ACK_KEYS)
+        self.assertNotIn("amount", res.data)
+
+
+class NewHotelExpenseTypeBootstrapTests(APITestCase):
+    """A hotel provisioned AFTER the expenses migrations must be usable at once.
+
+    The expense TYPE is required, so a hotel created later (the backfill
+    migration only reaches hotels that existed when it ran) would otherwise have
+    an EMPTY dropdown and an ``expenses.create``-only clerk could never record an
+    expense. The central ``create_hotel`` path seeds the default catalogue.
+    """
+
+    def test_new_hotel_gets_default_types_isolated_and_immediately_usable(self):
+        from apps.finance.models import DEFAULT_EXPENSE_TYPE_NAMES
+        from apps.platform.services import create_hotel
+
+        other = create_hotel(name="Other Hotel", slug="bootstrap-other")
+        hotel = create_hotel(name="Fresh Hotel", slug="bootstrap-fresh")
+        HotelSettings.objects.create(hotel=hotel, default_currency="SAR")
+        manager = add_member(
+            hotel, "boot@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+
+        # 1) the default catalogue exists, complete and active
+        types = ExpenseType.objects.filter(hotel=hotel)
+        self.assertEqual(types.count(), len(DEFAULT_EXPENSE_TYPE_NAMES))
+        self.assertEqual(
+            sorted(types.values_list("name", flat=True)),
+            sorted(DEFAULT_EXPENSE_TYPE_NAMES),
+        )
+        self.assertTrue(all(t.is_active for t in types))
+
+        # 2) strictly isolated per hotel (no sharing, no cross-tenant row)
+        self.assertEqual(
+            ExpenseType.objects.filter(hotel=other).count(),
+            len(DEFAULT_EXPENSE_TYPE_NAMES),
+        )
+        self.assertEqual({t.hotel_id for t in types}, {hotel.id})
+        self.assertFalse(
+            ExpenseType.objects.filter(hotel=other, id__in=types.values("id")).exists()
+        )
+
+        # 3) an expense can be recorded IMMEDIATELY, with no manual setup
+        self.client.force_authenticate(manager)
+        res = self.client.post(
+            reverse("finance:expense-list"),
+            {
+                "expense_type": types.order_by("name").first().id,
+                "description": "Power bill",
+                "amount": "40.00",
+                "method": "cash",
+            },
+            format="json",
+            **HDR(hotel),
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data["amount"], "40.00")
+
+    def test_bootstrap_is_idempotent(self):
+        from apps.finance.models import DEFAULT_EXPENSE_TYPE_NAMES
+        from apps.finance.services import ensure_default_expense_types
+        from apps.platform.services import create_hotel
+
+        hotel = create_hotel(name="Twice", slug="bootstrap-twice")
+        # A second run must create nothing and must not violate the per-hotel
+        # normalized-name uniqueness constraint.
+        self.assertEqual(ensure_default_expense_types(hotel), 0)
+        self.assertEqual(
+            ExpenseType.objects.filter(hotel=hotel).count(),
+            len(DEFAULT_EXPENSE_TYPE_NAMES),
+        )

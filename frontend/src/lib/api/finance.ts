@@ -5,7 +5,6 @@
  */
 import { hotelJson } from "./hotelFetch";
 import type {
-  Expense,
   FinanceOverview,
   Folio,
   FolioListItem,
@@ -307,56 +306,5 @@ export function getInvoicePrint(id: number): Promise<{ document: string; hotel: 
   return hotelJson(`${B}/invoices/${id}/print`);
 }
 
-// --- Expenses ---------------------------------------------------------------
-
-export interface ExpenseListParams {
-  status?: string;
-  category?: string;
-  method?: string;
-  date_from?: string;
-  date_to?: string;
-  search?: string;
-  page?: number;
-}
-
-export function listExpenses(params?: ExpenseListParams): Promise<PaginatedResponse<Expense>> {
-  return hotelJson<PaginatedResponse<Expense>>(`${B}/expenses${toQuery(params)}`);
-}
-
-export interface ExpenseBody {
-  category?: string;
-  description: string;
-  amount: string;
-  method?: string;
-  vendor_name?: string;
-  reference?: string;
-  notes?: string;
-}
-
-/** PATCH accepts ONLY these descriptive fields (server rejects anything else). */
-export interface ExpenseUpdateBody {
-  description?: string;
-  notes?: string;
-  reference?: string;
-  vendor_name?: string;
-}
-
-export function createExpense(body: ExpenseBody): Promise<Expense> {
-  return hotelJson<Expense>(`${B}/expenses`, { method: "POST", body: JSON.stringify(body) });
-}
-
-export function updateExpense(id: number, body: ExpenseUpdateBody): Promise<Expense> {
-  return hotelJson<Expense>(`${B}/expenses/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-}
-
-export function voidExpense(id: number, reason: string): Promise<Expense> {
-  return hotelJson<Expense>(`${B}/expenses/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
-}
-
-export function reverseExpense(id: number, reason: string): Promise<Expense> {
-  return hotelJson<Expense>(`${B}/expenses/${id}/reverse`, { method: "POST", body: JSON.stringify({ reason }) });
-}
-
-export function getExpenseVoucher(id: number): Promise<{ document: string; hotel: import("./types").HotelHeader; expense: Expense }> {
-  return hotelJson(`${B}/expenses/${id}/voucher`);
-}
+// Expenses moved to the standalone section — see `@/lib/api/expenses`
+// (EXPENSES-CLOSURE). The finance console no longer owns expense endpoints.

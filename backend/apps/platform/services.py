@@ -34,6 +34,15 @@ def create_hotel(*, name: str, slug: str, status: str | None = None) -> Hotel:
     if status:
         fields["status"] = status
     hotel = Hotel.objects.create(**fields)
+    # EXPENSES-CLOSURE: provision the default expense-type catalogue so the new
+    # hotel can record an expense immediately. The type is REQUIRED on an
+    # expense, so without this a freshly created hotel would have an EMPTY
+    # dropdown and an `expenses.create`-only clerk could not proceed at all
+    # (the backfill migration only reaches hotels that existed when it ran).
+    # Idempotent, and the single source of the default list lives in finance.
+    from apps.finance.services import ensure_default_expense_types
+
+    ensure_default_expense_types(hotel)
     # Notifications closure: the platform owner is notified of a new hotel. Kept
     # to the platform scope only (hotel staff — who may not exist yet — are not
     # notified); dedup_key prevents a duplicate registration notification.

@@ -53,9 +53,12 @@ const ACTIONS: QuickAction[] = [
   },
   {
     key: "addExpense",
-    href: "/hotel/finance?tab=expenses&action=new",
+    // EXPENSES-CLOSURE: expenses moved OUT of the finance console into their own
+    // section; the old `/hotel/finance?tab=expenses` target no longer exists (and
+    // /hotel/finance now requires finance.view, which an expenses clerk lacks).
+    href: "/hotel/expenses?action=new",
     icon: Wallet,
-    access: ["expenses.view"],
+    access: ["expenses.create"],
   },
   {
     key: "serviceOrder",
