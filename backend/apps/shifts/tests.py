@@ -19,7 +19,13 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import AccountType, User
 from apps.common.exceptions import BusinessDateMismatch, BusinessDayClosed
 from apps.finance.models import PaymentMethod
-from apps.finance.services import create_expense, create_folio, record_payment, void_payment
+from apps.finance.services import (
+    create_expense,
+    create_expense_type,
+    create_folio,
+    record_payment,
+    void_payment,
+)
 from apps.hotels.models import HotelSettings
 from apps.rbac.services import grant_permission
 from apps.shifts.models import (
@@ -373,8 +379,9 @@ class FinanceIntegrationTests(APITestCase, ShiftsMixin):
 
     def test_expense_attaches_to_open_shift(self):
         shift = self.open_shift().data
+        etype = create_expense_type(self.hotel, name="Supplies", user=self.manager)
         expense = create_expense(
-            self.hotel, category="supplies", description="Water",
+            self.hotel, expense_type=etype, description="Water",
             amount="20.00", method=PaymentMethod.CASH, user=self.manager,
         )
         self.assertEqual(expense.shift_id, shift["id"])
@@ -383,8 +390,9 @@ class FinanceIntegrationTests(APITestCase, ShiftsMixin):
         shift = self.open_shift().data  # opening 100
         record_payment(self.folio, amount="50.00", method=PaymentMethod.CASH, user=self.manager)
         record_payment(self.folio, amount="80.00", method=PaymentMethod.CARD, user=self.manager)
+        etype = create_expense_type(self.hotel, name="Supplies", user=self.manager)
         create_expense(
-            self.hotel, category="supplies", description="Water",
+            self.hotel, expense_type=etype, description="Water",
             amount="20.00", method=PaymentMethod.CASH, user=self.manager,
         )
         summary = self.client.get(

@@ -31,8 +31,9 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.finance import services as fin
-from apps.finance.models import ChargeType, FolioCharge, PostingStatus
+from apps.finance.models import ChargeType, Expense, FolioCharge, PostingStatus
 from apps.guests.models import Guest
+from apps.hotels.models import HotelSettings
 from apps.rooms.models import Floor, Room, RoomType
 from apps.stays.models import Stay, StayRatePeriod
 from apps.tenancy.models import Hotel, HotelMembership, HotelStatus, MembershipType
@@ -321,3 +322,131 @@ class ConcurrentExtendRatePeriodTests(TransactionTestCase):
         self.assertEqual(len(periods), 2)  # booking + ONE extension
         for a, b in zip(periods, periods[1:]):
             self.assertLessEqual(a.end_date, b.start_date)  # disjoint
+
+
+_EXP_PG_SKIP = (
+    "Real two-connection expense concurrency (idempotency partial unique + "
+    "posted-reversal partial unique + savepoint rollback + HotelSettings row "
+    "lock) is only meaningful on PostgreSQL. SQLite serialises writers with a "
+    "process-wide lock and has different threading semantics; skipped to avoid "
+    "a false green on SQLite."
+)
+
+
+class _ExpenseConcurrencyBase(TransactionTestCase):
+    """Committed fixtures so the two worker threads (each on its own
+    connection) can see the hotel/settings/type — see RoomNight base."""
+
+    def setUp(self):
+        self.hotel = Hotel.objects.create(
+            name="Hotel", slug="exp-conc", status=HotelStatus.ACTIVE
+        )
+        HotelSettings.objects.create(hotel=self.hotel, default_currency="SAR")
+        self.user = User.objects.create_user(
+            email="expconc@x.com", password="StrongPass!234", full_name="Conc"
+        )
+        HotelMembership.objects.create(
+            user=self.user, hotel=self.hotel,
+            membership_type=MembershipType.MANAGER, is_active=True,
+        )
+        self.etype = fin.create_expense_type(self.hotel, name="Supplies", user=self.user)
+
+    def _run_two(self, target):
+        barrier = threading.Barrier(2)
+        results = ["", ""]
+        threads = [
+            threading.Thread(target=target, args=(barrier, results, i)) for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        for t in threads:
+            self.assertFalse(t.is_alive(), "a worker thread deadlocked or timed out")
+        for r in results:
+            self.assertFalse(str(r).startswith("unexpected:"), f"leaked error: {r}")
+        return results
+
+
+class ExpenseIdempotencyConcurrencyTests(_ExpenseConcurrencyBase):
+    """Two concurrent creates with the SAME idempotency key post exactly ONE
+    voucher (F-7 fix): the unique (hotel, creation_idempotency_key) index +
+    savepoint rollback are the backstop; no second cash-out is ever created."""
+
+    def _create_same_key(self, barrier, results, index):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                exp = fin.create_expense(
+                    self.hotel, expense_type=self.etype, description="Water",
+                    amount="10.00", method="cash",
+                    idempotency_key="SAME-KEY-1", request_fingerprint="fp-1",
+                    user=self.user,
+                )
+                results[index] = f"ok:{exp.id}"
+            except Exception as exc:  # noqa: BLE001
+                results[index] = f"unexpected:{type(exc).__name__}:{exc}"
+        finally:
+            connections["default"].close()
+
+    def test_same_key_creates_exactly_one_voucher(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_EXP_PG_SKIP)
+        results = self._run_two(self._create_same_key)
+        # Both calls succeed and resolve to the SAME voucher id.
+        ids = sorted({r.split(":", 1)[1] for r in results})
+        self.assertEqual(len(ids), 1, f"expected one voucher id, got {results}")
+        # Exactly ONE expense row exists for this key.
+        self.assertEqual(
+            Expense.objects.filter(
+                hotel=self.hotel, creation_idempotency_key="SAME-KEY-1"
+            ).count(),
+            1,
+            results,
+        )
+
+
+class ExpenseReversalConcurrencyTests(_ExpenseConcurrencyBase):
+    """Two concurrent reversals of the SAME expense post exactly ONE reversal:
+    the ``unique_posted_reversal_per_expense`` index + the row lock are the
+    backstop; the loser gets ExpenseAlreadyReversed, never a second counter."""
+
+    def setUp(self):
+        super().setUp()
+        self.expense = fin.create_expense(
+            self.hotel, expense_type=self.etype, description="Water",
+            amount="30.00", method="cash", user=self.user,
+        )
+        # Age the voucher so its void window has passed (reverse is now the path).
+        from datetime import timedelta
+
+        from apps.shifts.services import get_business_date
+
+        Expense.objects.filter(pk=self.expense.pk).update(
+            business_date=get_business_date(self.hotel) - timedelta(days=1)
+        )
+
+    def _reverse_same(self, barrier, results, index):
+        try:
+            barrier.wait(timeout=15)
+            try:
+                rev = fin.reverse_expense(self.expense, reason="correction", user=self.user)
+                results[index] = f"ok:{rev.id}"
+            except Exception as exc:  # noqa: BLE001
+                # ExpenseAlreadyReversed (the expected loser) is fine; anything
+                # else surfaces as "unexpected:".
+                name = type(exc).__name__
+                results[index] = ("expected_reject" if name == "ExpenseAlreadyReversed"
+                                  else f"unexpected:{name}:{exc}")
+        finally:
+            connections["default"].close()
+
+    def test_double_reverse_posts_exactly_one(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(_EXP_PG_SKIP)
+        results = self._run_two(self._reverse_same)
+        # Exactly ONE posted reversal for the original.
+        posted = Expense.objects.filter(
+            reverses=self.expense, status=PostingStatus.POSTED
+        ).count()
+        self.assertEqual(posted, 1, f"expected one posted reversal, got {results}")
