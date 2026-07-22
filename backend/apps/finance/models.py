@@ -704,6 +704,15 @@ LEGACY_EXPENSE_CATEGORY_LABELS = {
     ExpenseCategory.OTHER: "Other",
 }
 
+#: The default catalogue seeded for EVERY hotel — the SINGLE runtime source of
+#: truth, derived from the mapping above so the list exists in one place only
+#: (`finance.services.ensure_default_expense_types` is its one consumer).
+#:
+#: Migrations 0012/0013 deliberately keep their own frozen copy: a historical
+#: migration must reproduce the SAME result forever and must never change
+#: behaviour because this constant was later edited.
+DEFAULT_EXPENSE_TYPE_NAMES = tuple(LEGACY_EXPENSE_CATEGORY_LABELS.values())
+
 
 class ExpenseType(models.Model):
     """A hotel-managed expense category (EXPENSES-CLOSURE). Replaces the fixed

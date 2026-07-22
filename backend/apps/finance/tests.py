@@ -2848,3 +2848,73 @@ class ExpenseWriteResponseDisclosureTests(ExpensesClosureBase):
         self.assertEqual(res.status_code, 201, res.data)
         self.assertEqual(set(res.data), self.ACK_KEYS)
         self.assertNotIn("amount", res.data)
+
+
+class NewHotelExpenseTypeBootstrapTests(APITestCase):
+    """A hotel provisioned AFTER the expenses migrations must be usable at once.
+
+    The expense TYPE is required, so a hotel created later (the backfill
+    migration only reaches hotels that existed when it ran) would otherwise have
+    an EMPTY dropdown and an ``expenses.create``-only clerk could never record an
+    expense. The central ``create_hotel`` path seeds the default catalogue.
+    """
+
+    def test_new_hotel_gets_default_types_isolated_and_immediately_usable(self):
+        from apps.finance.models import DEFAULT_EXPENSE_TYPE_NAMES
+        from apps.platform.services import create_hotel
+
+        other = create_hotel(name="Other Hotel", slug="bootstrap-other")
+        hotel = create_hotel(name="Fresh Hotel", slug="bootstrap-fresh")
+        HotelSettings.objects.create(hotel=hotel, default_currency="SAR")
+        manager = add_member(
+            hotel, "boot@x.com", kind=MembershipType.MANAGER, perms=ALL_FINANCE
+        )
+
+        # 1) the default catalogue exists, complete and active
+        types = ExpenseType.objects.filter(hotel=hotel)
+        self.assertEqual(types.count(), len(DEFAULT_EXPENSE_TYPE_NAMES))
+        self.assertEqual(
+            sorted(types.values_list("name", flat=True)),
+            sorted(DEFAULT_EXPENSE_TYPE_NAMES),
+        )
+        self.assertTrue(all(t.is_active for t in types))
+
+        # 2) strictly isolated per hotel (no sharing, no cross-tenant row)
+        self.assertEqual(
+            ExpenseType.objects.filter(hotel=other).count(),
+            len(DEFAULT_EXPENSE_TYPE_NAMES),
+        )
+        self.assertEqual({t.hotel_id for t in types}, {hotel.id})
+        self.assertFalse(
+            ExpenseType.objects.filter(hotel=other, id__in=types.values("id")).exists()
+        )
+
+        # 3) an expense can be recorded IMMEDIATELY, with no manual setup
+        self.client.force_authenticate(manager)
+        res = self.client.post(
+            reverse("finance:expense-list"),
+            {
+                "expense_type": types.order_by("name").first().id,
+                "description": "Power bill",
+                "amount": "40.00",
+                "method": "cash",
+            },
+            format="json",
+            **HDR(hotel),
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data["amount"], "40.00")
+
+    def test_bootstrap_is_idempotent(self):
+        from apps.finance.models import DEFAULT_EXPENSE_TYPE_NAMES
+        from apps.finance.services import ensure_default_expense_types
+        from apps.platform.services import create_hotel
+
+        hotel = create_hotel(name="Twice", slug="bootstrap-twice")
+        # A second run must create nothing and must not violate the per-hotel
+        # normalized-name uniqueness constraint.
+        self.assertEqual(ensure_default_expense_types(hotel), 0)
+        self.assertEqual(
+            ExpenseType.objects.filter(hotel=hotel).count(),
+            len(DEFAULT_EXPENSE_TYPE_NAMES),
+        )

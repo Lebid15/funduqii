@@ -52,6 +52,7 @@ from apps.common.exceptions import (
 from .constants import ChargeSource
 from .models import (
     CREDIT_CHARGE_TYPES,
+    DEFAULT_EXPENSE_TYPE_NAMES,
     ChargeType,
     Expense,
     ExpenseType,
@@ -1785,6 +1786,36 @@ def update_expense_type(expense_type, *, name=None, is_active=None, user=None) -
             obj=etype,
         )
     return etype
+
+
+def ensure_default_expense_types(hotel, *, user=None) -> int:
+    """Seed the default expense-type catalogue for ``hotel``. Returns how many
+    types were actually created.
+
+    Called from the central hotel-creation path so a hotel provisioned AFTER the
+    expenses migrations is immediately usable: the type is REQUIRED on an
+    expense, so a hotel with an empty catalogue could not record one at all
+    until someone with ``expenses.manage_types`` added the first type.
+
+    IDEMPOTENT — matches on the normalized name, so calling it again (or on a
+    hotel the backfill already seeded) creates nothing and never raises on the
+    per-hotel uniqueness constraint.
+    """
+    actor = _actor(user)
+    created = 0
+    for name in DEFAULT_EXPENSE_TYPE_NAMES:
+        _, was_created = ExpenseType.objects.get_or_create(
+            hotel=hotel,
+            name_normalized=normalize_expense_type_name(name),
+            defaults={
+                "name": name,
+                "is_active": True,
+                "created_by": actor,
+                "updated_by": actor,
+            },
+        )
+        created += int(was_created)
+    return created
 
 
 def expense_currency_options(hotel) -> dict:
