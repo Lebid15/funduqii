@@ -1717,7 +1717,7 @@ def _expense_business_date(expense):
 # --- Expense types (manageable per-hotel categories) ------------------------
 
 
-def create_expense_type(hotel, *, name, user=None) -> ExpenseType:
+def create_expense_type(hotel, *, name, is_active=True, user=None) -> ExpenseType:
     """Add a hotel-scoped expense type. Name is required and unique within the
     hotel after normalization (trim + collapse whitespace + lower-case)."""
     clean = " ".join((name or "").split())
@@ -1731,12 +1731,21 @@ def create_expense_type(hotel, *, name, user=None) -> ExpenseType:
                 hotel=hotel,
                 name=clean,
                 name_normalized=normalized,
-                is_active=True,
+                is_active=bool(is_active),
                 created_by=actor,
                 updated_by=actor,
             )
     except IntegrityError:
         raise InvalidFinanceOperation({"reason": "duplicate_name", "name": clean})
+    _record_event(
+        hotel,
+        event_type="expense_type.created",
+        severity="info",
+        title=f"Expense type '{etype.name}' created",
+        message=etype.name,
+        user=user,
+        obj=etype,
+    )
     return etype
 
 
@@ -1745,6 +1754,7 @@ def update_expense_type(expense_type, *, name=None, is_active=None, user=None) -
     """Rename and/or (de)activate a type — NEVER a hard delete. A deactivated
     type is hidden from the create form but stays on historical rows/reports."""
     etype = ExpenseType.objects.select_for_update().get(pk=expense_type.pk)
+    before = (etype.name, etype.is_active)
     if name is not None:
         clean = " ".join((name or "").split())
         if not clean:
@@ -1755,9 +1765,25 @@ def update_expense_type(expense_type, *, name=None, is_active=None, user=None) -
         etype.is_active = bool(is_active)
     etype.updated_by = _actor(user)
     try:
-        etype.save(update_fields=["name", "name_normalized", "is_active", "updated_by", "updated_at"])
+        # A SAVEPOINT so a duplicate-name violation does not poison the
+        # surrounding transaction on PostgreSQL.
+        with transaction.atomic():
+            etype.save(
+                update_fields=["name", "name_normalized", "is_active", "updated_by", "updated_at"]
+            )
     except IntegrityError:
         raise InvalidFinanceOperation({"reason": "duplicate_name", "name": etype.name})
+    after = (etype.name, etype.is_active)
+    if before != after:
+        _record_event(
+            etype.hotel,
+            event_type="expense_type.updated",
+            severity="info",
+            title=f"Expense type '{etype.name}' updated",
+            message=f"name: '{before[0]}' → '{after[0]}' · active: {before[1]} → {after[1]}",
+            user=user,
+            obj=etype,
+        )
     return etype
 
 
@@ -1932,17 +1958,37 @@ def _expense_snapshot(expense) -> dict:
 @transaction.atomic
 def create_expense(hotel, *, expense_type, description, amount, method,
                    currency="", original_amount=None, exchange_rate=None,
-                   rate_basis="", notes="", attachment=None,
+                   rate_basis="", notes="",
                    idempotency_key="", request_fingerprint="", user=None) -> Expense:
     """Record an expense voucher stamped to NOW and to the current open hotel
     business date. ``amount`` is stored in the HOTEL BASE currency (derived for a
     foreign ``currency`` via a manual rate). The caller never chooses the
     timestamp, the financial date, or the base currency. A repeated submit with
-    the same ``idempotency_key`` returns the SAME voucher (no double cash-out)."""
+    the same ``idempotency_key`` returns the SAME voucher (no double cash-out).
+
+    The attachment is NOT set here — it is uploaded through the validated
+    endpoint once the voucher exists (the file path needs the row's id).
+    """
     from apps.shifts.services import get_open_shift_for
 
     key = (idempotency_key or "").strip()
     fingerprint = (request_fingerprint or "").strip()
+    # A keyed create ALWAYS carries a fingerprint: the replay guard skips its
+    # comparison when either side is blank, so a caller that supplied a key but
+    # no fingerprint would silently lose the 409-on-different-payload guarantee.
+    if key and not fingerprint:
+        fingerprint = build_expense_fingerprint(
+            hotel_id=hotel.id,
+            expense_type_id=getattr(expense_type, "pk", expense_type),
+            description=description,
+            amount=amount,
+            method=method,
+            currency=currency,
+            original_amount=original_amount,
+            exchange_rate=exchange_rate,
+            rate_basis=rate_basis,
+            notes=notes,
+        )
     # Fast-path replay before doing any work.
     if key:
         existing = Expense.objects.filter(
@@ -1974,7 +2020,6 @@ def create_expense(hotel, *, expense_type, description, amount, method,
                 business_date=business_date,
                 shift=get_open_shift_for(user, hotel),
                 notes=notes or "",
-                attachment=attachment or None,
                 creation_idempotency_key=key,
                 creation_request_fingerprint=fingerprint,
                 created_by=actor,
@@ -2227,6 +2272,13 @@ def set_expense_attachment(expense, file, *, user=None) -> Expense:
     if expense.reverses_id is not None:
         raise InvalidFinanceOperation({"reason": "cannot_edit_reversal"})
     _require_void_window(expense.hotel, _expense_business_date(expense))
+    # Defence in depth: a FileField's ``validators`` run under ``full_clean()``,
+    # NOT on ``save()`` — so without this a direct service call would store an
+    # unvalidated file. The endpoint validates too; this makes the SERVICE safe
+    # on its own.
+    from .expense_validators import validate_expense_attachment
+
+    validate_expense_attachment(file)
     old_storage = old_name = None
     if expense.attachment:
         old_storage, old_name = expense.attachment.storage, expense.attachment.name
@@ -2253,6 +2305,8 @@ def remove_expense_attachment(expense, *, user=None) -> Expense:
     expense = Expense.objects.select_for_update().get(pk=expense.pk)
     if expense.status != PostingStatus.POSTED:
         raise InvalidFinanceOperation({"reason": "not_editable", "status": expense.status})
+    if expense.reverses_id is not None:
+        raise InvalidFinanceOperation({"reason": "cannot_edit_reversal"})
     _require_void_window(expense.hotel, _expense_business_date(expense))
     if not expense.attachment:
         return expense

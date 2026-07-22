@@ -852,8 +852,10 @@ class Expense(models.Model):
     notes = models.CharField(max_length=255, blank=True, default="")
     # EXPENSES-CLOSURE: ONE optional private receipt/voucher scan. Stored under
     # PRIVATE_MEDIA_ROOT (never URL-addressable); read only through the gated
-    # streaming view. Validated on write (extension + content-type + size +
-    # magic bytes) at the FileField AND in the upload serializer.
+    # streaming view. Validated (extension + content-type + size + magic bytes)
+    # by the upload ENDPOINT and again in the service — these validators are
+    # declared here for documentation/forms, but Django only runs them under
+    # ``full_clean()``, NOT on ``save()``, so they are not the enforcement point.
     attachment = models.FileField(
         storage=private_expense_storage,
         upload_to=expense_attachment_upload_to,

@@ -113,8 +113,9 @@ class ExpenseAttachmentView(APIView):
         upload = request.FILES.get("file") or request.FILES.get("attachment")
         if upload is None:
             raise InvalidMediaFile({"reason": "no_file"})
-        # Defence in depth: validate BEFORE writing anything to storage (the
-        # FileField validators run again on save).
+        # Validate BEFORE anything reaches storage. NOTE: a FileField's
+        # ``validators`` only run under ``full_clean()``, never on ``save()`` —
+        # so this call (and the matching one in the service) is the real gate.
         validate_expense_attachment(upload)
         services.set_expense_attachment(expense, upload, user=request.user)
         return Response({"id": expense.id, "has_attachment": True})

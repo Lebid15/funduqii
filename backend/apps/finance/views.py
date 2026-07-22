@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Q, Sum
+from django.utils.dateparse import parse_date
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.request import Request
@@ -743,8 +744,13 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
         return [ExpCreate()] if self.request.method == "POST" else [ExpView()]
 
     def get_queryset(self):
-        qs = Expense.objects.filter(hotel=self.request.hotel).select_related(
-            "expense_type", "shift"
+        # PERF: the serializer reads created_by/voided_by emails, the reversed-by
+        # number (``reversals``) and ``reverses.expense_number`` — without these
+        # the list is ~2 extra queries PER ROW (a full page ran ~205).
+        qs = (
+            Expense.objects.filter(hotel=self.request.hotel)
+            .select_related("expense_type", "shift", "created_by", "voided_by", "reverses")
+            .prefetch_related("reversals")
         )
         p = self.request.query_params
         if p.get("status") in {c for c, _ in PostingStatus.choices}:
@@ -762,16 +768,24 @@ class ExpenseListCreateView(generics.ListCreateAPIView):
         if p.get("method"):
             qs = qs.filter(method=p["method"])
         # Expenses closure: date filters run on the BUSINESS date (legacy
-        # rows without one fall back to their paid_at calendar date).
+        # rows without one fall back to their paid_at calendar date). A
+        # malformed date must be a clean empty result — raising from inside
+        # get_queryset() escapes the DRF exception handler as a 500.
         if p.get("date_from"):
+            date_from = parse_date(p["date_from"])
+            if date_from is None:
+                return qs.none()
             qs = qs.filter(
-                Q(business_date__gte=p["date_from"])
-                | Q(business_date__isnull=True, paid_at__date__gte=p["date_from"])
+                Q(business_date__gte=date_from)
+                | Q(business_date__isnull=True, paid_at__date__gte=date_from)
             )
         if p.get("date_to"):
+            date_to = parse_date(p["date_to"])
+            if date_to is None:
+                return qs.none()
             qs = qs.filter(
-                Q(business_date__lte=p["date_to"])
-                | Q(business_date__isnull=True, paid_at__date__lte=p["date_to"])
+                Q(business_date__lte=date_to)
+                | Q(business_date__isnull=True, paid_at__date__lte=date_to)
             )
         search = p.get("search")
         if search:
@@ -952,7 +966,11 @@ class ExpenseTypeListCreateView(generics.ListCreateAPIView):
         s = ExpenseTypeWriteSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         etype = services.create_expense_type(
-            request.hotel, name=s.validated_data.get("name"), user=request.user
+            request.hotel,
+            name=s.validated_data.get("name"),
+            # Honour an explicit is_active instead of silently ignoring it.
+            is_active=s.validated_data.get("is_active", True),
+            user=request.user,
         )
         return Response(ExpenseTypeSerializer(etype).data, status=status.HTTP_201_CREATED)
 
