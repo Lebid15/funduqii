@@ -445,6 +445,30 @@ class FinanceReportTests(APITestCase, ReportsMixin):
         # Money is serialized as strings (Decimal-safe), never float.
         self.assertIsInstance(data["total_payments"], str)
 
+    def test_expenses_grouped_by_manageable_type_name(self):
+        """EXPENSES-CLOSURE: the expense breakdown keys on the MANAGEABLE type's
+        NAME (not the legacy category enum), while the money totals are
+        unchanged. Without this the grouping-key change is unprotected."""
+        create_expense(
+            self.hotel, expense_type=expense_type(self.hotel, name="Utilities"),
+            description="Power", amount="30.00", method=PaymentMethod.CASH,
+            user=self.manager,
+        )
+        create_expense(
+            self.hotel, expense_type=expense_type(self.hotel, name="Supplies"),
+            description="Soap", amount="20.00", method=PaymentMethod.CASH,
+            user=self.manager,
+        )
+        data = self.get_report("finance").data
+        rows = {row["key"]: row["total"] for row in data["expenses_by_category"]}
+        self.assertEqual(rows["Utilities"], "30.00")
+        self.assertEqual(rows["Supplies"], "20.00")
+        # The legacy enum value is no longer the grouping key.
+        self.assertNotIn("utilities", rows)
+        self.assertNotIn("supplies", rows)
+        # Money is unaffected by the key change.
+        self.assertEqual(data["total_expenses"], "50.00")
+
     def test_per_day_series(self):
         record_payment(self.folio, amount="10.00", method=PaymentMethod.CASH, user=self.manager)
         data = self.get_report("finance").data
