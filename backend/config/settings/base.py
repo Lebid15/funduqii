@@ -358,3 +358,25 @@ RESERVATION_DOC_ALLOWED_CONTENT_TYPES = [
     "image/webp",
     "application/pdf",
 ]
+
+# ===========================================================================
+# Expense attachments — PRIVATE storage (EXPENSES-CLOSURE)
+#
+# One optional receipt/voucher scan per expense. Same privacy model as the
+# reservation documents above: stored under ``PRIVATE_MEDIA_ROOT`` (never
+# routed through ``static()``/WhiteNoise), read ONLY through an authenticated,
+# ``expenses.view``-gated streaming view. Allowed types are raster images
+# (jpg/jpeg/png/webp) AND PDF, confirmed by a magic-byte sniff; SVG and every
+# other markup/executable/unknown type are rejected. The size cap mirrors the
+# reservation-document limit and is overridable via env.
+# ===========================================================================
+EXPENSE_ATTACH_MAX_BYTES = env.int(
+    "EXPENSE_ATTACH_MAX_BYTES", default=10 * 1024 * 1024
+)
+EXPENSE_ATTACH_ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "pdf"]
+EXPENSE_ATTACH_ALLOWED_CONTENT_TYPES = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+]
