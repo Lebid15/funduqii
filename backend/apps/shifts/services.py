@@ -690,9 +690,11 @@ def _movements_block(hotel, business_date, model, *, with_category=False):
         ),
     }
     if with_category:
+        # EXPENSES-CLOSURE: key on the manageable type name (== legacy category
+        # label on backfilled rows); counts/totals are unchanged.
         block["posted_by_category"] = {
-            row["category"]: {"count": row["n"], "total": _money_str(row["t"])}
-            for row in originals.values("category").annotate(n=Count("id"), t=Sum("amount"))
+            row["expense_type__name"]: {"count": row["n"], "total": _money_str(row["t"])}
+            for row in originals.values("expense_type__name").annotate(n=Count("id"), t=Sum("amount"))
         }
     return block
 

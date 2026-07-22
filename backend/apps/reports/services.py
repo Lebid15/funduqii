@@ -415,7 +415,9 @@ def finance_report(hotel, date_from, date_to) -> dict:
         "date_to": str(date_to),
         "payments_by_method": _by(payments, "method", amount=True),
         "payments_by_day": _per_day_bd(payments),
-        "expenses_by_category": _by(expenses, "category", amount=True),
+        # EXPENSES-CLOSURE: grouped by the manageable type (its name equals the
+        # legacy category label on backfilled rows). Money totals are unchanged.
+        "expenses_by_category": _by(expenses, "expense_type__name", amount=True),
         "expenses_by_day": _per_day_bd(expenses),
         "total_payments": str(total_payments),
         "total_expenses": str(total_expenses),
@@ -762,9 +764,11 @@ def _mv_live(model, hotel, d, *, with_category=False):
         },
     }
     if with_category:
+        # EXPENSES-CLOSURE: key on the manageable type name (== legacy category
+        # label on backfilled rows); the amount math is unchanged.
         block["by_category"] = {
-            r["category"]: money(r["t"] or 0)
-            for r in originals.values("category").annotate(t=Sum("amount"))
+            r["expense_type__name"]: money(r["t"] or 0)
+            for r in originals.values("expense_type__name").annotate(t=Sum("amount"))
         }
     return block
 
